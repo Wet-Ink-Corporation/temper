@@ -1,15 +1,14 @@
 # Weekly, grouped update PRs. Each one runs the full gate and gets reviewed like any change.
-# Major versions stay out of the groups: each arrives as its own PR, because a major bump is
-# an H-16 decision. Dependabot reads x.y.z as major.minor.patch, so a 0.x bump such as
-# 0.3 -> 0.4 lands in the minor group although Cargo treats it as breaking: review it as a major.
+# Cargo updates move only Cargo.lock: requirement floors never move automatically (ARC-12),
+# and a major-version bump stays a manual, human-approved change (H-16).
+# Action majors are left out of the group, so each arrives as its own PR for the same review.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
-    # ARC-12: keep caret floors; move only Cargo.lock unless the new version needs a new floor.
-    versioning-strategy: increase-if-necessary
+    versioning-strategy: lockfile-only
     groups:
       cargo:
         patterns: ["*"]

@@ -12,6 +12,9 @@ Checks:
      A lint whose sentence marks it as off while the template enables it is a stale claim.
   3. Scanner keys cited in Detect paragraphs and Enforced-by cells exist in scan.mjs
      (a `key: '...'` entry, in RULES or pushed directly by scanSource).
+  4. Scanner claims agree at the rule-ID level: every registry row whose Enforced-by says
+     `scan` has a RULES entry carrying its ID, and every RULES entry's ID is a row whose
+     Enforced-by says `scan`. A mismatch means retagging the rule or the row.
 
 Conventions:
   * A lint is `clippy::name` or a bare backticked snake_case name that is a clippy or
@@ -28,6 +31,7 @@ Conventions:
 Exit 0 when every claim holds, 1 otherwise, 2 when the toolchain cannot be queried.
 """
 import bisect
+import json
 import os
 import re
 import subprocess
@@ -116,6 +120,22 @@ def resolve(token, default):
 
 
 # ---------------------------------------------------------------- scanner
+
+def scanner_rules():
+    """(key, id) of every RULES entry: imported through node, or read as text when a
+    half-edited scan.mjs does not load."""
+    js = ("import(process.argv[1]).then((m) => process.stdout.write(JSON.stringify("
+          "m.RULES.map((r) => [r.key, r.id]))))")
+    try:
+        r = subprocess.run(['node', '-e', js, (ROOT / 'scripts/lib/scan.mjs').as_uri()], capture_output=True,
+                           text=True, timeout=60, stdin=subprocess.DEVNULL)
+        if r.returncode == 0:
+            return [tuple(x) for x in json.loads(r.stdout)]
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    text = (ROOT / 'scripts/lib/scan.mjs').read_text()
+    return re.findall(r"\bkey:\s*'([a-z0-9-]+)'\s*,\s*id:\s*'([A-Z]{1,4}-\d{2})'", text)
+
 
 def scanner_keys():
     """Scanner keys, read as text so a half-edited scan.mjs still yields its keys."""
@@ -216,6 +236,23 @@ def main():
             counts['keys'] += 1
             if key not in scan:
                 bad.append((where, f'cites scanner key `{key}`, which scan.mjs does not define'))
+
+    # 4: scanner claims at the rule-ID level, both directions
+    rows = registry_rows()
+    claims_scan = {rid: bool(re.search(r'\bscan\b', enforced)) for _, rid, enforced in rows}
+    rule_ids = {}
+    for key, rid in scanner_rules():
+        rule_ids.setdefault(rid, []).append(key)
+    for n, rid, enforced in rows:
+        if claims_scan[rid] and rid not in rule_ids:
+            bad.append((f'references/rules.md:{n} {rid}', 'Enforced-by says scan, but no scan.mjs RULES entry '
+                        'carries this ID'))
+    for rid, keys in sorted(rule_ids.items()):
+        where = 'scripts/lib/scan.mjs ' + ', '.join(f'`{k}`' for k in keys)
+        if rid not in claims_scan:
+            bad.append((where, f'tagged {rid}, which is not in rules.md'))
+        elif not claims_scan[rid]:
+            bad.append((where, f'tagged {rid}, but that rule\'s Enforced-by does not mention scan'))
 
     # 2 + 3: Detect paragraphs
     for path in [SKILL / 'SKILL.md'] + sorted(p for p in REFS.glob('*.md') if p.name != 'rules.md'):

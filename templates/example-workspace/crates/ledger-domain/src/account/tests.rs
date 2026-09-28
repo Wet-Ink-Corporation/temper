@@ -150,6 +150,39 @@ fn evolve_ignores_events_decide_cannot_produce() {
     assert_eq!(state, State::NotOpened);
 }
 
+#[test]
+fn evolve_leaves_a_closed_account_closed() {
+    let closed = State::Closed { owner: ada() };
+
+    let state = evolve(closed.clone(), &Event::Opened { owner: ada() });
+
+    assert_eq!(state, closed);
+}
+
+#[test]
+fn evolve_saturates_a_deposit_decide_would_refuse() {
+    let state = evolve(
+        open_with(u64::MAX - 1),
+        &Event::Deposited {
+            amount: Cents::new(2),
+        },
+    );
+
+    assert_eq!(state, open_with(u64::MAX));
+}
+
+#[test]
+fn evolve_saturates_a_withdrawal_decide_would_refuse() {
+    let state = evolve(
+        open_with(5),
+        &Event::Withdrew {
+            amount: Cents::new(6),
+        },
+    );
+
+    assert_eq!(state, open_with(0));
+}
+
 fn fold_onto(state: State, events: &[Event]) -> State {
     events.iter().fold(state, evolve)
 }

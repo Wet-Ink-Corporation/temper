@@ -178,6 +178,8 @@ pub enum ErrorKind {
     NotFound,
     /// The caller's expected version is stale.
     Conflict,
+    /// The key's version counter cannot advance any further.
+    Exhausted,
 }
 
 /// Error from [`Store`]. Match on [`StoreError::kind`], not on internals.
@@ -192,6 +194,8 @@ enum Repr {
     NotFound { key: String },
     #[error("version conflict on `{key}`: expected {expected}, found {actual}")]
     Conflict { key: String, expected: u64, actual: u64 },
+    #[error("version of `{key}` is at its maximum")]
+    Exhausted { key: String },
 }
 
 impl StoreError {
@@ -201,6 +205,7 @@ impl StoreError {
         match *self.0 {
             Repr::NotFound { .. } => ErrorKind::NotFound,
             Repr::Conflict { .. } => ErrorKind::Conflict,
+            Repr::Exhausted { .. } => ErrorKind::Exhausted,
         }
     }
 
@@ -208,7 +213,7 @@ impl StoreError {
     #[must_use]
     pub fn key(&self) -> &str {
         match &*self.0 {
-            Repr::NotFound { key } | Repr::Conflict { key, .. } => key,
+            Repr::NotFound { key } | Repr::Conflict { key, .. } | Repr::Exhausted { key } => key,
         }
     }
 }
@@ -225,7 +230,8 @@ impl Store {
     /// # Errors
     ///
     /// [`ErrorKind::NotFound`] if `key` is absent, [`ErrorKind::Conflict`] if
-    /// another writer bumped the version first.
+    /// another writer bumped the version first, [`ErrorKind::Exhausted`] if the
+    /// version cannot advance.
     pub fn update(&mut self, key: &str, expected: u64, value: String) -> Result<u64, StoreError> {
         let Some((version, slot)) = self.entries.get_mut(key) else {
             return Err(StoreError(Box::new(Repr::NotFound { key: key.to_owned() })));
@@ -234,8 +240,11 @@ impl Store {
             let conflict = Repr::Conflict { key: key.to_owned(), expected, actual: *version };
             return Err(StoreError(Box::new(conflict)));
         }
-        // 2^64 updates to one key cannot happen; wrapping keeps this total (ERR-09).
-        *version = version.wrapping_add(1);
+        // A wrapped version could match a stale `expected`: overflow is an error (ERR-09).
+        let Some(next) = version.checked_add(1) else {
+            return Err(StoreError(Box::new(Repr::Exhausted { key: key.to_owned() })));
+        };
+        *version = next;
         *slot = value;
         Ok(*version)
     }
@@ -670,8 +679,9 @@ impl<T> NonEmpty<T> {
 ```
 A send that returns the value on failure:
 ```rust
-//! Channel send without `unwrap` (H-02, H-13).
+//! Channel send without `unwrap` (H-02, H-13, ERR-14).
 
+use std::fmt;
 use std::sync::mpsc::SyncSender;
 
 /// A unit of work.
@@ -679,9 +689,23 @@ use std::sync::mpsc::SyncSender;
 pub struct Job(pub u64);
 
 /// The pool stopped. The job comes back so the caller can retry or report it.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 #[error("worker pool has shut down")]
-pub struct PoolClosed(pub Job);
+pub struct PoolClosed(Job);
+
+impl PoolClosed {
+    /// Returns the job that was not queued.
+    pub fn into_inner(self) -> Job {
+        self.0
+    }
+}
+
+impl fmt::Debug for PoolClosed {
+    // By hand: the job stays out of logs (ERR-14).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PoolClosed").finish_non_exhaustive()
+    }
+}
 
 /// Queues `job` on a bounded channel.
 ///
@@ -754,7 +778,7 @@ Err(e) => { tracing::error!(?e); return Err(e.into()); }                     // 
 
 ### ERR-09 · Checked, saturating or wrapping, chosen on purpose
 
-**Why.** `a * b` on external values panics in debug builds and silently wraps in release: a crash in tests and a wrong invoice in production. Decide per operation: overflow is an error (`checked_*` + variant), a documented cap (`saturating_*`), or modular by specification (`wrapping_*` for hashes, checksums, sequence numbers). `strict_*` (1.91) panics on overflow in every build, so it is a panic (H-03) and not allowed in production code.
+**Why.** `a * b` on external values panics in debug builds and silently wraps in release: a crash in tests and a wrong invoice in production. Decide per operation: overflow is an error (`checked_*` + variant), documented saturation (`saturating_*`), or wrapping that the specification defines (`wrapping_*` for hashes, checksums, protocol sequence numbers). A version or id that must stay unique never wraps: a wrapped value can match a stale one. `strict_*` (1.91) panics on overflow in every build, so it is a panic (H-03) and not allowed in production code.
 
 The operators are not the only arithmetic:
 - `/` and `%` panic on a zero divisor, and signed `MIN / -1` overflows, in release too. Use `checked_div`/`checked_rem`, or take the divisor as `NonZeroU*`: `u64 / NonZeroU64` cannot fail. Signed `NonZero` types have no division impl, so signed code uses `checked_*`.
@@ -847,7 +871,7 @@ let n = header.len as usize;                   // H-11
 # }
 ```
 
-**Detect.** `clippy::as_conversions`. Review: `+ - * / %`, `sum` and `product` on values that came from a request, file, or environment, and `fetch_add`/`fetch_sub` on counters whose values must stay unique. `clippy::arithmetic_side_effects` flags every unchecked operator, but it is not in the template, and a member crate cannot add lints next to `[lints] workspace = true`. To opt a parser, codec or money crate in, the human copies the workspace lint table into that crate's own `[lints]` (dropping `workspace = true`) and adds the lint. That is an H-05 decision, recorded in the charter.
+**Detect.** `clippy::as_conversions`. Review: `+ - * / %`, `sum` and `product` on values that came from a request, file, or environment, and `fetch_add`/`fetch_sub` on counters whose values must stay unique. `clippy::arithmetic_side_effects` flags every unchecked operator, but it is not in the template, and a member crate cannot add lints next to `[lints] workspace = true`. Opting a parser, codec or money crate in is an H-05 decision, recorded in the charter. The human lists the crate in `.claude/temper.json` under `"manifests": { "ownLints": ["crates/<name>"] }`, the human-approved list of members that carry their own full `[lints]` table, which the gate and hooks honour. That table copies the workspace lints and adds the opt-in `arithmetic_side_effects`, because Cargo cannot combine `workspace = true` with overrides.
 
 ## Domain rejections vs infrastructure failures
 
@@ -1074,60 +1098,30 @@ pub fn reply_again(to: &SyncSender<u64>, value: u64) {
 
 ### ERR-13 · Fallible teardown is an explicit call; `Drop` is the fallback
 
-**Why.** `Drop` cannot return an error, so a flush, commit or sync that runs there fails invisibly: by design, `BufWriter` ignores errors from the flush it attempts on drop, and `File` ignores errors from closing. `Drop` is not even guaranteed to run. `process::exit` skips it (`clippy::exit` denies that call), `panic = "abort"` skips it, and a destructor that panics while another panic unwinds aborts the process. So a type whose teardown can fail exposes a consuming `finish(self)` or `close(self) -> Result`, and the success path calls it. `Drop` stays as a best-effort fallback for early returns and unwinding. It never panics, never blocks or awaits (H-14), and logs a failure instead of discarding it (H-10). A type with async teardown exposes `async fn close(self)`; its `Drop` only signals, for example by cancelling a token.
+**Why.** `Drop` cannot return an error, so a flush, commit or sync that runs there fails invisibly: by design, `BufWriter` ignores errors from the flush it attempts on drop, and `File` ignores errors from closing. `Drop` is not even guaranteed to run. `process::exit` skips it (`clippy::exit` denies that call), `panic = "abort"` skips it, and a destructor that panics while another panic unwinds aborts the process. So a type whose teardown can fail exposes a consuming `finish(self)` or `close(self) -> Result`, and the success path calls it. `Drop` is only the fallback for early returns and unwinding. It does no blocking work of its own (no flush, sync, commit, join or `block_on`; H-14), never panics, and only logs with `tracing::warn!` that `finish` was skipped (H-10). Inner std types still run their own drop (`BufWriter` attempts a flush), so the log says the buffered tail may be lost. A type with async teardown exposes `async fn close(self)`; its `Drop` only logs or signals, for example by cancelling a token.
 
-**Do.** Hold the resource in an `Option`: `finish(self)` cannot move a field out of a type that implements `Drop` (E0509), but it can `take()` it.
+**Do.** Hold the resource in an `Option`: `finish(self)` cannot move a field out of a type that implements `Drop` (E0509), but it can `take()` it. The full sketch, with `create` and `append`, is patterns.md #23.
 ```rust
-//! Explicit `finish`, best-effort `Drop` (ERR-13).
-
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
-
-/// An append-only event journal. Call [`Journal::finish`] to learn whether
-/// the tail reached the disk; dropping it only tries.
-#[derive(Debug)]
+# use std::fs::File;
+# use std::io::{self, BufWriter};
+# /// An append-only journal.
+# #[derive(Debug)]
 pub struct Journal {
-    // `None` only once `finish` or `drop` has taken it.
-    out: Option<BufWriter<File>>,
+    out: Option<BufWriter<File>>, // `None` once `finish` has run
 }
 
 impl Journal {
-    /// Wraps an open file.
-    pub fn new(file: File) -> Self {
-        Self { out: Some(BufWriter::new(file)) }
-    }
-
-    /// Buffers one event line.
-    ///
-    /// # Errors
-    ///
-    /// Returns the I/O error from the write.
-    pub fn append(&mut self, event: &str) -> io::Result<()> {
-        let out = self.out.as_mut().ok_or(io::ErrorKind::NotConnected)?;
-        writeln!(out, "{event}")
-    }
-
-    /// Flushes buffered events and syncs them to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns the flush or sync failure, the only place a lost write is visible.
+    /// Flushes and syncs: the only place a failed write-back is visible.
     pub fn finish(mut self) -> io::Result<()> {
-        let Some(out) = self.out.take() else {
-            return Ok(());
-        };
+        let Some(out) = self.out.take() else { return Ok(()) };
         out.into_inner().map_err(io::IntoInnerError::into_error)?.sync_all()
     }
 }
 
 impl Drop for Journal {
-    // Runs with `out` still present only when `finish` was skipped: an early
-    // return, a `?`, or unwinding.
     fn drop(&mut self) {
-        if let Some(mut out) = self.out.take()
-            && let Err(error) = out.flush()
-        {
-            tracing::warn!(%error, "journal dropped without finish; its tail may be lost");
+        if self.out.is_some() {
+            tracing::warn!("journal dropped without finish; its buffered tail may be lost");
         }
     }
 }
@@ -1145,7 +1139,7 @@ pub struct Journal {
 
 impl Drop for Journal {
     fn drop(&mut self) {
-        self.out.flush().unwrap(); // a panic here during unwinding aborts the process
+        self.out.flush().unwrap(); // blocks in `Drop`, and a panic during unwinding aborts
     }
 }
 
@@ -1158,93 +1152,50 @@ pub fn save(events: &[String], path: &Path) -> io::Result<()> {
 }
 ```
 
-**Detect.** `clippy::empty_drop` rejects an empty `Drop` impl. Review: a `Drop` that flushes, syncs, commits, sends, joins or calls `block_on`; a `BufWriter` that leaves scope without `flush` or `into_inner`; a type with a `Drop` impl and no consuming `finish`/`close`.
+**Detect.** `clippy::empty_drop` rejects an empty `Drop` impl. Review: a `Drop` that does blocking work itself (flushes, syncs, commits, sends, joins, calls `block_on`) instead of only logging; a `BufWriter` that leaves scope without `finish` or `into_inner`; a type with a `Drop` impl and no consuming `finish`/`close`.
 
 ## Handing back consumed arguments
 
 ### ERR-14 · A fallible call that consumes its argument returns it on failure
 
-**Why.** When `push(item)` fails and the item is gone, a caller that needs it for a retry or a fallback has to clone it before every call, even though failure is rare. That clone is forced by the API, so it is a finding against the callee (H-08), not the caller. Put the argument back in the error with an `into_inner(self) -> T` accessor (API-01), as std does: `FromUtf8Error::into_bytes`, `mpsc::SendError<T>` (field `.0`), `<[T; N]>::try_from(Vec<T>)` returning the `Vec`, `Rc::try_unwrap` returning the `Rc`, and `IntoInnerError::into_inner`. Write the error's `Debug` by hand so it omits the payload: that avoids a `T: Debug` bound and keeps payloads, which may be secrets (OUT-08), out of logs. The error is still `Error + Send + Sync + 'static` whenever `T` is (ERR-01).
+**Why.** When `push(job)` fails and the job is gone, a caller that needs it for a retry or a fallback has to clone it before every call, even though failure is rare. That clone is forced by the API, so it is a finding against the callee (H-08), not the caller. Put the argument back in the error with an `into_inner(self) -> T` accessor (API-01), as std does: `FromUtf8Error::into_bytes`, `mpsc::SendError<T>` (field `.0`), `<[T; N]>::try_from(Vec<T>)` returning the `Vec`, `Rc::try_unwrap` returning the `Rc`, and `IntoInnerError::into_inner`. Write the error's `Debug` by hand so it omits the payload: that avoids a `T: Debug` bound and keeps payloads, which may be secrets (OUT-08), out of logs. The error is still `Error + Send + Sync + 'static` whenever `T` is (ERR-01).
 
-**Do.**
+**Do.** The error type; patterns.md #24 has the queue that returns it. A caller writes `if let Err(full) = queue.push(job) { overflow.push(full.into_inner()); }`.
 ```rust
-//! Hand back a consumed argument on failure (ERR-14).
-
-use std::fmt;
-
-/// The outbox is at capacity. Holds the rejected message.
+# use std::fmt;
+/// The job was not queued. [`Full::into_inner`] returns it.
 #[derive(thiserror::Error)]
-#[error("outbox is full ({capacity} messages)")]
-pub struct OutboxFull<T> {
-    message: T,
+#[error("queue is full ({capacity} jobs)")]
+pub struct Full<T> {
+    job: T,
     capacity: usize,
 }
 
-impl<T> OutboxFull<T> {
-    /// Returns the message that was not queued, without a clone.
+impl<T> Full<T> {
+    /// The rejected job, without a clone.
     pub fn into_inner(self) -> T {
-        self.message
+        self.job
     }
 }
 
-// By hand: no `T: Debug` bound, and the payload never reaches a log.
-impl<T> fmt::Debug for OutboxFull<T> {
+impl<T> fmt::Debug for Full<T> {
+    // By hand: no `T: Debug` bound, and the payload never reaches a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OutboxFull").field("capacity", &self.capacity).finish_non_exhaustive()
+        f.debug_struct("Full").field("capacity", &self.capacity).finish_non_exhaustive()
     }
 }
 # const _: () = {
 #     const fn is_error<E: std::error::Error + Send + Sync + 'static>() {}
-#     is_error::<OutboxFull<String>>();
+#     is_error::<Full<String>>();
 # };
-
-/// A bounded queue of outgoing messages.
-#[derive(Debug)]
-pub struct Outbox<T> {
-    messages: Vec<T>,
-    capacity: usize,
-}
-
-impl<T> Outbox<T> {
-    /// Creates an empty outbox that holds at most `capacity` messages.
-    pub fn new(capacity: usize) -> Self {
-        Self { messages: Vec::new(), capacity }
-    }
-
-    /// Queues `message`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OutboxFull`], holding `message`, when the outbox is at capacity.
-    pub fn push(&mut self, message: T) -> Result<(), OutboxFull<T>> {
-        if self.messages.len() >= self.capacity {
-            return Err(OutboxFull { message, capacity: self.capacity });
-        }
-        self.messages.push(message);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Outbox;
-
-    #[test]
-    fn full_outbox_hands_the_message_back() {
-        let mut outbox = Outbox::new(1);
-        outbox.push(String::from("first")).expect("an empty outbox has room");
-        let full = outbox.push(String::from("second")).unwrap_err();
-        assert_eq!(full.into_inner(), "second");
-    }
-}
 ```
 
 **Don't.**
 ```rust,ignore
-pub fn push(&mut self, message: T) -> Result<(), OutboxFull>; // the message is dropped on failure
+pub fn push(&mut self, job: T) -> Result<(), Full>; // the job is dropped on failure
 
-if outbox.push(message.clone()).is_err() {                    // every caller clones, just in case
-    retry_later(message);
+if queue.push(job.clone()).is_err() {              // every caller clones, just in case
+    retry_later(job);
 }
 ```
 
@@ -1265,6 +1216,6 @@ if outbox.push(message.clone()).is_err() {                    // every caller cl
 - [ ] Do tests assert variants and fields, not `Display` strings or bare `is_err()`? (ERR-11)
 - [ ] Is any failure hidden by `Err(_) => {}`, `unwrap_or_default()`, `.parse().unwrap_or(..)` or `filter_map(Result::ok)`? (H-10)
 - [ ] Is any `#[must_use]` value silenced with `let _ =` or `.ok();`? (ERR-12)
-- [ ] Does every type whose teardown can fail expose `finish`/`close`, called on the success path, with a `Drop` that never panics, blocks or discards the error? (ERR-13)
+- [ ] Does every type whose teardown can fail expose `finish`/`close`, called on the success path, with a `Drop` that only logs that it was skipped? (ERR-13)
 - [ ] Does every fallible function that consumes a non-`Copy` argument hand it back in its error? (ERR-14)
 - [ ] Is there any `unwrap`, `expect`, `unwrap_err` or `expect_err` outside tests? (H-02)

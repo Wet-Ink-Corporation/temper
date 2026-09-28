@@ -95,6 +95,10 @@ export const DEFAULT_CONFIG = {
     '.githooks/**', 'CLAUDE.md', 'AGENTS.md',
   ],
   scanner: { exempt: [] },         // [{ rule: 'H-01', paths: ['crates/ffi-sys/**'] }]
+  // Members (dirs relative to the project root, globs allowed) that a human approved to carry
+  // their own full [lints] table instead of `[lints] workspace = true`: the H-01 FFI exception,
+  // the ERR-09 arithmetic opt-in. Any change to their [lints] still asks (H-05).
+  manifests: { ownLints: [] },
 };
 
 export function loadConfig(root) {
@@ -106,6 +110,7 @@ export function loadConfig(root) {
       ...DEFAULT_CONFIG, ...user,
       gate: { ...DEFAULT_CONFIG.gate, ...(user.gate ?? {}) },
       scanner: { ...DEFAULT_CONFIG.scanner, ...(user.scanner ?? {}) },
+      manifests: { ...DEFAULT_CONFIG.manifests, ...(user.manifests ?? {}) },
       protected: user.protected ?? DEFAULT_CONFIG.protected,
     };
   } catch {

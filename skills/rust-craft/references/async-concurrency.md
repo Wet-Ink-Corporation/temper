@@ -675,7 +675,7 @@ Every ordering carries a comment: `Relaxed` says why no other memory depends on 
 | Unsure | not an ordering: a `Mutex`, `OnceLock`, channel or `Barrier` | none |
 
 - A counter is a statistic only if no decision about other memory is made from its value. A "last one out cleans up" or "all workers done" counter synchronizes: `Release` on the decrement, `Acquire` where zero is observed.
-- Use the dedicated RMW first (`fetch_add`, `fetch_max`, `fetch_or`, `swap`). For a computed update use `update`, for a conditional one `try_update` (both 1.95), not `fetch_update` (deprecated in 1.99 as a rename of `try_update`, MOD-07) and not a hand-written CAS loop. If a CAS loop is unavoidable, use `compare_exchange_weak` inside it and `compare_exchange` for a single attempt.
+- Use the dedicated RMW first (`fetch_add`, `fetch_max`, `fetch_or`, `swap`). For a computed update use `update`, for a conditional one `try_update` (both 1.95), not `fetch_update` (a rename of `try_update`, deprecated from 1.99; no warning on 1.98.1; MOD-07) and not a hand-written CAS loop. If a CAS loop is unavoidable, use `compare_exchange_weak` inside it and `compare_exchange` for a single attempt.
 - `fetch_add` and `fetch_sub` wrap silently in every build. Ids, balances and capacities use `try_update(.., |n| n.checked_add(1))` (ERR-09).
 - A CAS or `try_update` on a value that can return to an earlier state (a slot index, a free-list head, a recycled id) documents why ABA cannot happen, packs a generation counter into the value, or uses a `Mutex`.
 - Pass orderings as literal `Ordering::X` constants. rustc's `invalid_atomic_ordering` (deny by default) rejects invalid constants such as a `Release` load; an `Ordering` passed at run time skips that check and panics instead (H-03).
@@ -913,7 +913,7 @@ pub fn wait_for_item(items: &Mutex<Vec<u64>>, not_empty: &Condvar) -> Option<u64
     guard.pop()
 }
 ```
-**Detect.** `clippy::missing_spin_loop` fires on an empty loop over a load of a local or static atomic, but not through a `&AtomicBool` parameter or on a CAS loop, and its `spin_loop()` hint does not remove the spin. Review for `Condvar::wait(`, and `try_lock` or `yield_now` inside loops.
+**Detect.** `clippy::missing_spin_loop` fires on an empty loop over a load of a local or static atomic, but not through a `&AtomicBool` parameter or on a CAS loop. Its suggested fix, adding `std::hint::spin_loop()`, silences the lint but does not comply: replace the loop with a blocking primitive (`Condvar`, a channel, `JoinHandle::join`). Review for `Condvar::wait(`, and `try_lock` or `yield_now` inside loops.
 
 ### ASY-17 · Use std's synchronization primitives; never build your own
 **Why.** A lock, once-cell, semaphore or channel built from atomic flags compiles in safe code and passes tests on x86-64, then loses wakeups, misses an `Acquire` or spins under contention on other hardware. std's primitives are tuned per platform (futexes, SRW locks, queue locks).
@@ -926,7 +926,7 @@ pub fn wait_for_item(items: &Mutex<Vec<u64>>, not_empty: &Condvar) -> Option<u64
 | Wait for N threads | `Barrier`, or join the handles |
 | Hand work to a thread | `mpsc::sync_channel(n)` (ASY-07) |
 | Limit concurrency in async code | `tokio::sync::Semaphore` (PERF-10) |
-| Read-mostly shared data | an `Arc` snapshot swap (below) |
+| Read-mostly shared data | `Mutex<Arc<T>>` snapshot swap (below; patterns.md #30) |
 
 `parking_lot`, `crossbeam`, `arc-swap` and similar crates are H-16 decisions with a benchmark (PERF-01).
 
@@ -1054,26 +1054,26 @@ pub async fn get_bounded(
 ## Sharing patterns
 
 ### Snapshot swap (read-copy-update)
-Read-mostly data (configuration, routing tables) sits behind `RwLock<Arc<T>>`. Readers clone the `Arc` in one statement and work on the snapshot with no lock held; writers build the new value outside the lock and swap the `Arc`. A reader never holds the lock across a request, and poison cannot tear a single assignment. `arc-swap` is the lock-free upgrade (H-16); the full pattern is patterns.md #30.
+Read-mostly data (configuration, routing tables) sits behind `Mutex<Arc<T>>`: `Mutex`, not `RwLock`, because readers hold it only to copy a pointer (PERF-12). Readers clone the `Arc` in one statement and work on the snapshot with no lock held; writers build the new value outside the lock and swap the `Arc`. A reader never holds the lock across a request, and poison cannot tear a single assignment. `arc-swap` is the lock-free upgrade (H-16); the full pattern is patterns.md #30.
 ```rust
-# use std::sync::{Arc, PoisonError, RwLock};
+# use std::sync::{Arc, Mutex, PoisonError};
 # pub struct Config;
 /// The live configuration.
 pub struct Live {
-    current: RwLock<Arc<Config>>,
+    current: Mutex<Arc<Config>>,
 }
 
 impl Live {
-    /// The current configuration; the read lock ends at the `;`.
+    /// The current configuration; the lock ends at the `;`.
     pub fn snapshot(&self) -> Arc<Config> {
         // Poison: writers only replace the `Arc` in one assignment.
-        Arc::clone(&self.current.read().unwrap_or_else(PoisonError::into_inner))
+        Arc::clone(&self.current.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     /// Replaces the configuration; readers keep the snapshot they hold.
     pub fn replace(&self, config: Config) {
         let next = Arc::new(config);
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = next;
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = next;
     }
 }
 ```

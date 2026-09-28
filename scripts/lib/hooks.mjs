@@ -12,6 +12,7 @@ import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './s
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
+  ownLintsMember, splitProblems, dependencyNames, majorOf,
 } from './manifest.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
@@ -32,23 +33,24 @@ const block = (reason) => ({ json: { decision: 'block', reason } });
 const notice = (msg) => ({ json: { systemMessage: msg } });
 const none = () => ({});
 
+// Compact form of the Iron rules table in skills/rust-craft/SKILL.md; keep the two in step.
 export const IRON_RULES = [
   'H-01 no unsafe',
-  'H-02 no unwrap/expect in production code',
-  'H-03 no panic!/todo!/unimplemented!/unreachable!',
-  'H-04 no panicking index/slice on unproven bounds',
+  'H-02 no unwrap/expect in production code or doctests',
+  'H-03 no panic!/todo!/unimplemented!/unreachable!, and no std call that panics on input you do not control (integer / and %, thread::spawn, env::args, Duration::from_secs_f64, ...)',
+  'H-04 no panicking index/slice on unproven bounds, including map[&k] and deque[i]',
   'H-05 no #[allow]; #[expect(lint, reason)] needs human approval; never weaken lint/CI/hook config',
-  'H-06 no dbg!, no print macros in production code, no commented-out code, no untracked TODOs',
-  'H-07 no Box::leak/mem::forget/transmute/static mut/\'static-to-silence-lifetimes',
+  'H-06 no dbg!, no print macros in production code (binaries: writeln! on a locked handle), no commented-out code, no untracked TODOs',
+  'H-07 no Box::leak/mem::forget/transmute/static mut/\'static-to-silence-lifetimes; shared mutable state is justified',
   'H-08 no clones to appease the borrow checker',
   'H-09 no String/Box<dyn Error>/anyhow errors in public library signatures',
-  'H-10 no silently discarded failures',
+  'H-10 no silently discarded failures (let _ =, .ok();, empty Err arms, masking defaults)',
   'H-11 no lossy `as` numeric casts',
-  'H-12 never weaken tests or checks to get green',
-  'H-13 bounded channels/buffers, timeouts, owned tasks',
-  'H-14 no blocking in async, no lock guard across .await',
+  'H-12 never weaken tests or checks to get green: no deleted or #[ignore]d tests, --no-verify, --ignore-rust-version or manifest switches that stop tests (test, doctest, harness, autotests)',
+  'H-13 bounded channels/buffers, timeouts, owned tasks and threads',
+  'H-14 no blocking in async; no lock guard, RefCell borrow, entered span or watch::Ref across .await; Drop never blocks',
   'H-15 zero warnings; public items documented',
-  'H-16 new deps, API breaks, exceptions, crate boundaries, migrations, test rewrites are human decisions',
+  'H-16 new deps, major bumps, [patch], rust-version raises, API breaks, exceptions, crate boundaries, migrations, test rewrites are human decisions',
 ];
 
 function discoverFor(input, file) {
@@ -151,17 +153,21 @@ export function lintConfigChanged(before, after) {
 const short = (v) => (v === undefined ? 'unset' : v.length > 80 ? `${v.slice(0, 77)}...` : v);
 
 /**
- * Cargo.toml rules beyond lints and dependencies: member lint inheritance and
- * member profiles (deny), test and toolchain switches (ask), non-caret
- * requirements (advice).
+ * Cargo.toml rules beyond lints and new dependencies. Denies a member that
+ * newly lacks lint inheritance or newly has a profile (a ratchet: problems the
+ * manifest already had only advise); asks on test and toolchain switches and
+ * major-version bumps; advises on non-caret requirements.
  */
-export function manifestChecks(file, rel, before, after) {
+export function manifestChecks(file, rel, before, after, proj) {
   const out = { denies: [], asks: [], advice: [] };
   const a = parseToml(after);
   if (!a) return out; // invalid TOML: cargo rejects it on its own
   const b = before === '' ? {} : parseToml(before);
   const root = a.package ? workspaceRootFor(file, a) : null;
-  for (const p of memberProblems(a, root)) out.denies.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
+  const opts = { ownLints: proj ? ownLintsMember(proj.config, proj.root, file) : false };
+  const { fresh, legacy } = splitProblems(b ? memberProblems(b, root, opts) : [], memberProblems(a, root, opts));
+  for (const p of fresh) out.denies.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
+  for (const p of legacy) out.advice.push(`${p.id} ${rel} (already the case before this edit): ${p.msg}.\n    fix: ${p.fix}`);
   if (before === '' && a.package && root && !root.self) {
     out.asks.push(`${rel}: new crate \`${a.package.name ?? rel}\` in the workspace. Crate boundaries are a human decision (H-16, ARC-07).`);
   }
@@ -173,25 +179,32 @@ export function manifestChecks(file, rel, before, after) {
       const y = wb.get(label);
       if (x?.value === y?.value) continue;
       if (before === '' && x && benignWhenNew(label, x)) continue;
-      const id = (x ?? y).id;
-      const why = id === 'H-12'
-        ? 'this switch can stop tests, doctests or targets from running (H-12)'
-        : 'dependency overrides, MSRV, edition, resolver and default features are human decisions (H-16)';
-      out.asks.push(`${rel}: \`${label}\` changes (${short(y?.value)} -> ${short(x?.value)}); ${why}.`);
+      out.asks.push(`${rel}: \`${label}\` changes (${short(y?.value)} -> ${short(x?.value)}); ${(x ?? y).why}.`);
     }
   }
   const ra = depRequirements(a);
   const rb = b ? depRequirements(b) : new Map();
   for (const [k, req] of ra) {
-    if (rb.get(k) === req) continue;
+    const old = rb.get(k);
+    if (old === req) continue;
+    const name = k.slice(k.lastIndexOf(':') + 1);
+    if (old !== undefined && majorOf(old) !== null && majorOf(req) !== null && majorOf(old) !== majorOf(req)) {
+      out.asks.push(`${rel}: \`${name}\` moves to a new major version ("${old}" -> "${req}"). Major-version bumps are a human decision (H-16, ARC-12).`);
+    }
     const why = nonCaretRequirement(req);
-    if (why) out.advice.push(`ARC-12 ${rel}: \`${k.slice(k.lastIndexOf(':') + 1)} = "${req}"\` is ${why}.\n    fix: declare a caret floor at the oldest version whose API you use (\`"1.4"\`), never \`=\`, \`~\`, \`*\` or an upper bound.`);
+    if (why) out.advice.push(`ARC-12 ${rel}: \`${name} = "${req}"\` is ${why}.\n    fix: declare a caret floor at the oldest version whose API you use (\`"1.4"\`), never \`=\`, \`~\`, \`*\` or an upper bound.`);
   }
   return out;
 }
 
-/** Dependency names declared in Cargo.toml (all dependency tables). */
+/** Dependency names declared in Cargo.toml (all dependency tables), as "kind:name". */
 export function depNames(toml) {
+  const m = parseToml(toml);
+  return m ? dependencyNames(m) : depNamesByLine(toml);
+}
+
+/** Line-based fallback for manifests that are not valid TOML. */
+function depNamesByLine(toml) {
   const names = new Set();
   let table = null;
   for (const line of toml.split(/\r?\n/)) {
@@ -253,7 +266,7 @@ export function preEdit(input) {
     asks.push(`${rel} is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.`);
   }
   if (isManifest) {
-    const mc = manifestChecks(file, rel, before, after);
+    const mc = manifestChecks(file, rel, before, after, proj);
     denies.push(...mc.denies);
     asks.push(...mc.asks);
     advice.push(...mc.advice);
@@ -287,6 +300,8 @@ export function preEdit(input) {
       else advice.push(formatHit(h, rel));
     }
     if (a.tests < b.tests) asks.push(`${rel}: this edit removes ${b.tests - a.tests} test(s) (H-12). Approve only if the test is being moved or intentionally retired.`);
+    const ignored = a.ignores - b.ignores - Math.max(0, a.tests - b.tests);
+    if (ignored > 0) asks.push(`${rel}: this edit adds \`#[ignore]\` to ${ignored} existing test(s) (H-12). Approve only if you asked for the test to stop running.`);
     if (a.clones > b.clones) advice.push(`H-08 ${rel}: ${a.clones - b.clones} new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).`);
   }
 
@@ -311,18 +326,53 @@ export function preEdit(input) {
 
 const LOCKFILE_DENY = (rel) => `temper: ${rel} is maintained by Cargo and is never edited by hand (PROC-13). Change it with cargo: \`cargo update -p <crate> --precise <version>\` to pin or roll back one dependency, \`cargo update --workspace\` after a manifest edit, \`cargo update --dry-run\` to preview. For a merge conflict, check out one side's Cargo.lock and re-run a cargo command.`;
 
-/** Shell commands that write a file whose name ends with `target` (a regex source). */
-const shellWrites = (target) => [
-  new RegExp(`(?:^|[^>&0-9])>>?\\s*["']?[^\\s"'|;&<>]*${target}\\b`),
-  new RegExp(`\\btee\\s+(?:-a\\s+)?["']?[^\\s"'|;&]*${target}\\b`),
-  new RegExp(`\\bsed\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${target}\\b`),
-  new RegExp(`\\bsed\\b[^|;&]*--in-place[^|;&]*${target}\\b`),
-  new RegExp(`\\bperl\\b[^|;&]*-[a-zA-Z]*i[^|;&]*${target}\\b`),
-  new RegExp(`\\bopen\\s*\\([^)]*${target}["']\\s*,\\s*["'][wa+]`),
-  new RegExp(`\\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\\b[^|;&]*${target}\\b`),
-];
+const MANIFEST_SHELL_DENY = 'temper: edit Cargo.toml with the Edit or Write tools, not the shell, so the manifest checks run on it (MOD-09, PERF-09, H-12, H-16). Use the Edit tool for this change.';
+
+/**
+ * Shell commands that write a file whose name ends with `target` (a regex source).
+ * `copies` also treats the file as the destination of cp/mv/install.
+ */
+const shellWrites = (target, { copies = false } = {}) => {
+  const t = `${target}(?![\\w.])`;
+  const res = [
+    new RegExp(`(?:&>>?|(?:^|[^>&0-9])>>?\\|?)\\s*["']?[^\\s"'|;&<>]*${t}`),
+    new RegExp(`\\btee\\s+(?:-a\\s+)?["']?[^\\s"'|;&]*${t}`),
+    new RegExp(`\\bsed\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${t}`),
+    new RegExp(`\\bsed\\b[^|;&]*--in-place[^|;&]*${t}`),
+    new RegExp(`\\bperl\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${t}`),
+    new RegExp(`\\bopen\\s*\\([^)]*${target}["']\\s*,\\s*["'][wa+]`),
+    new RegExp(`\\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\\b[^|;&]*${t}`),
+  ];
+  if (copies) res.push(new RegExp(`\\b(?:cp|mv|install|Copy-Item|Move-Item)\\b[^|;&]*\\s["']?[^\\s"'|;&<>]*${t}["']?\\s*(?:$|[|;&)])`, 'm'));
+  return res;
+};
 const SHELL_WRITE_RS = shellWrites('\\.rs');
-const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock');
+const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock', { copies: true });
+const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
+
+/** Command segments with quoted strings blanked, so flags inside messages do not count. */
+const segments = (cmd) => cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''").split(/&&|\|\||[;|\n]/);
+const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
+
+// cargo add/remove options that take a separate value.
+const CARGO_VALUE_FLAGS = new Set(['-p', '--package', '-F', '--features', '--rename', '--registry', '--path', '--git', '--branch', '--tag', '--rev', '--manifest-path', '--target', '--lockfile-path', '--config', '-Z', '--color']);
+
+/** `cargo add`/`cargo remove` invocations and the crate names they touch. */
+export function cargoDependencyCommands(cmd) {
+  const out = [];
+  for (const seg of segments(cmd)) {
+    const m = /(?:^|\s)cargo\s+(?:\+\S+\s+)?(add|remove|rm)(?:\s+(.*))?$/.exec(seg.trim());
+    if (!m) continue;
+    const toks = (m[2] ?? '').trim().split(/\s+/).filter(Boolean);
+    const crates = [];
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i].startsWith('-')) { if (CARGO_VALUE_FLAGS.has(toks[i])) i++; continue; }
+      crates.push(toks[i].split('@')[0]);
+    }
+    out.push({ op: m[1] === 'rm' ? 'remove' : m[1], crates });
+  }
+  return out;
+}
 
 export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
@@ -336,7 +386,11 @@ export function preBash(input) {
     telemetry(proj, input, 'deny-lockfile', { via: 'shell' });
     return deny(LOCKFILE_DENY('Cargo.lock'));
   }
-  if (/(?:^|\s)--ignore-rust-version\b/.test(cmd)) {
+  if (SHELL_WRITE_TOML.some((re) => re.test(cmd))) {
+    telemetry(proj, input, 'deny-shell-write', { file: 'Cargo.toml' });
+    return deny(MANIFEST_SHELL_DENY);
+  }
+  if (segments(cmd).some((seg) => isCargo(seg) && /(?:^|\s)--ignore-rust-version(?![\w-])/.test(seg))) {
     telemetry(proj, input, 'deny-ignore-rust-version', {});
     return deny('temper: --ignore-rust-version bypasses the MSRV check, so green would not mean the declared rust-version builds (MOD-01, H-12). If a dependency needs a newer Rust, raising rust-version is a human decision (H-16): say so and ask.');
   }
@@ -345,6 +399,15 @@ export function preBash(input) {
   }
   if (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)) {
     return deny('temper: lowering lint levels on the command line is not allowed (H-05). Fix the code the lint points at.');
+  }
+  if (proj.config.askOnNewDependency) {
+    const approved = new Set(proj.config.preapprovedDependencies ?? []);
+    const changes = cargoDependencyCommands(cmd).filter((c) => !c.crates.length || c.crates.some((n) => !approved.has(n)));
+    if (changes.length) {
+      telemetry(proj, input, 'ask', { via: 'cargo-deps' });
+      const what = changes.map((c) => `cargo ${c.op} ${c.crates.join(' ') || '(no crate named)'}`).join('; ');
+      return ask(`temper: \`${what}\` changes the dependency graph without the manifest checks. Adding or removing a dependency is a human decision (H-16, ARC-12). Approve only if you asked for it.`);
+    }
   }
   if (/\bcargo\s+insta\s+(?:accept|test\b[^|;&]*--accept)/.test(cmd)) {
     return ask('temper: accepting all snapshot changes at once can hide regressions (H-12). Approve only after reviewing the snapshot diffs (cargo insta review).');

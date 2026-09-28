@@ -74,14 +74,14 @@ Use these unless the plan states a reason to deviate.
 | Parameter the callee stores | Owned `String` or `Vec<T>` (`impl Into<String>` for constructors and builders) | OWN-02 |
 | Usually borrows, sometimes allocates | `Cow<'_, str>` | OWN-10 |
 | Exposing contents | `impl Iterator<Item = &T> + '_` or `&[T]`, not a fresh `Vec` | OWN-13 |
-| Sharing | Single owner, then borrow, then move into the task, then `Arc<T>` immutable, then `Arc<Mutex<T>>` (justified). For graphs, use an arena with index handles. Never expose `Arc`/`Mutex` in `pub` signatures: wrap them in a handle type. | OWN-11, API-23 |
+| Sharing | Single owner, then borrow, then move into the task, then `Arc<T>` immutable, then `Arc<Mutex<T>>` (justified). For graphs, use an arena with index handles. Keep `Arc`/`Mutex` out of `pub` signatures: wrap them in a handle type. | OWN-11, API-23 |
 | Validated value | Newtype with private field, `TryFrom`/`FromStr` constructor ("parse, don't validate"), in its own module | API-02, API-03 |
 | Generic type | No bounds on the `struct`/`enum`; bounds on the `impl` blocks | API-21 |
-| Value-object arithmetic | `checked_add` returning `Option`/`Result`; `impl Add` only when it cannot overflow | API-22, ERR-09 |
+| Value-object arithmetic | `checked_add` returning `Option`/`Result`; `impl Add` only when it cannot overflow or its wrapping or saturation is documented | API-22, ERR-09 |
 | Closed set of cases | `enum`, never bool flags or `Option<bool>` | API-02, API-10 |
 | Many optional parameters | Params struct with `Default`, or a builder. Typestate when call order matters. | API-10, API-13 |
 | Polymorphism | Generics by default. `dyn Trait` for heterogeneity or plug-ins. `enum` for a closed set. | API-09 |
-| Library error | `thiserror` enum per operation or module, `#[non_exhaustive]`, typed context fields. A consuming fallible function hands its argument back in the error. | ERR-01..04, ERR-14 |
+| Library error | `thiserror` enum per operation or module, typed context fields, `#[non_exhaustive]` only in published crates. A consuming fallible function hands its argument back in the error. | ERR-01..04, ERR-14 |
 | Teardown that can fail | `finish(self) -> Result`; `Drop` only logs as a fallback | ERR-13 |
 | Binary error | `anyhow` with `.context()` at each boundary; `main` returns `Result` or `ExitCode` | ERR-06 |
 | Visibility | Private, then `pub(crate)`, then deliberate `pub` re-exported from `lib.rs` | API-14, ARC-05 |
@@ -125,7 +125,7 @@ Style preferences are not findings unless they break a rule. Label them as nits.
 
 ## 6. Where to read more
 
-Read the reference that matches the task before starting it. Read `references/rules.md` whenever you need a rule you have not seen yet.
+Read the reference that matches the task before starting it. To look up a rule you have not seen yet, grep its row in `references/rules.md` (`grep '^| ERR-13' references/rules.md`) rather than reading the whole registry.
 
 | Task | Read |
 |---|---|

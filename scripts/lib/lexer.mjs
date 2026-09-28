@@ -71,7 +71,7 @@ export function maskRust(src) {
     // char literal vs lifetime / label
     if (c === "'") {
       if (d === '\\') {
-        let j = i + 2;
+        let j = i + 3; // skip the escaped character, which may itself be a quote: '\''
         while (j < n && src[j] !== "'" && src[j] !== '\n') j++;
         if (src[j] === "'") { blank(i + 1, j); i = j + 1; continue; }
       } else if (d !== undefined) {
@@ -223,17 +223,19 @@ export function testRegions(code) {
       const inner = m[2];
       if (!/\btest\b/.test(inner) || /\bnot\s*\(\s*test\b/.test(inner)) continue;
     }
-    // find the item body that follows: next `{` before a `;` at depth 0
-    let k = attr.lastIndex;
-    let open = -1;
-    while (k < code.length) {
+    // The item that follows: its body (the next `{` at depth 0), or up to its `;`
+    // for bodiless items such as `#[cfg(test)] static A: T = T;` or `mod tests;`.
+    let depth = 0;
+    let end = -1;
+    for (let k = attr.lastIndex; k < code.length; k++) {
       const ch = code[k];
-      if (ch === '{') { open = k; break; }
-      if (ch === ';') break;
-      k++;
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      else if (ch === '{' && depth <= 0) { end = matchBrace(code, k); break; }
+      else if (ch === ';' && depth <= 0) { end = k; break; }
     }
-    if (open === -1) continue;
-    regions.push([m.index, matchBrace(code, open)]);
+    if (end === -1) continue;
+    regions.push([m.index, end]);
   }
   const pt = /\bproptest\s*!\s*\{/g;
   while ((m = pt.exec(code))) {
@@ -244,6 +246,36 @@ export function testRegions(code) {
 }
 
 export const inRegions = (regions, offset) => regions.some(([a, b]) => offset >= a && offset <= b);
+
+/**
+ * Count `#[ignore]` attributes, reasoned or not, including `cfg_attr(.., ignore)`.
+ * `cfg_attr(miri, ignore = ..)` is excluded: TST-17 requires it for tests Miri cannot run.
+ */
+export function countIgnored(code) {
+  let n = 0;
+  const re = /#\s*\[\s*(?:ignore\b|cfg_attr\s*\(([^\]]*?),\s*ignore\b)/g;
+  let m;
+  while ((m = re.exec(code))) {
+    if (m[1] === undefined) n++;
+    else if (topLevelCfgAttrArg(m[0]) && m[1].trim() !== 'miri') n++;
+  }
+  return n;
+}
+
+/**
+ * For matched text `#[cfg_attr(<pred>, .., ignore`: is `ignore` a top-level
+ * argument of `cfg_attr`, not nested in another attribute (`educe(Debug, ignore)`)?
+ */
+export function topLevelCfgAttrArg(text) {
+  const at = text.indexOf('cfg_attr');
+  if (at < 0) return true;
+  let depth = 0;
+  for (const ch of text.slice(text.indexOf('(', at) + 1)) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+  }
+  return depth === 0;
+}
 
 /** Count test functions (used to detect test deletion, H-12). */
 export function countTests(code) {

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scanSource, newHits, classifyPath, isBuildScript, isRustFence, RULES } from '../scripts/lib/scan.mjs';
-import { maskRust, countTests } from '../scripts/lib/lexer.mjs';
+import { maskRust, countTests, countIgnored } from '../scripts/lib/lexer.mjs';
 
 const keys = (src, kind = 'prod', sev) => scanSource(src, { kind }).hits.filter((h) => !sev || h.severity === sev).map((h) => `${h.key}:${h.severity}`);
 
@@ -156,7 +156,7 @@ test('ignore-no-reason: also catches cfg_attr(.., ignore)', () => {
   for (const s of ['#[ignore]\n#[test]\nfn slow() {}', '#[cfg_attr(miri, ignore)]\n#[test]\nfn spawns() {}', '#[cfg_attr(any(miri, all(unix, not(target_os = "linux"))), ignore)]\n#[test]\nfn t() {}']) {
     assert.deepEqual(sevOf(s, 'ignore-no-reason', 'test'), ['hard'], s);
   }
-  for (const s of ['#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]\n#[test]\nfn cli() {}', '#[ignore = "needs a network"]\n#[test]\nfn net() {}']) {
+  for (const s of ['#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]\n#[test]\nfn cli() {}', '#[ignore = "needs a network"]\n#[test]\nfn net() {}', '#[derive(Debug)]\n#[cfg_attr(feature = "educe", educe(Debug, ignore))]\nstruct S;']) {
     assert.deepEqual(has(s, 'ignore-no-reason', 'test'), [], s);
   }
 });
@@ -192,6 +192,11 @@ pub fn parse() {}
   assert.deepEqual(sevOf('//! ```no_run\n//! if bad { panic!("boom") }\n//! ```\n', 'doc-unwrap'), ['hard']);
   assert.deepEqual(sevOf('/**\n * ```\n * let v = f().unwrap();\n * ```\n */\npub fn g() {}', 'doc-unwrap'), ['hard']);
   assert.deepEqual(sevOf('#[cfg(test)]\nmod tests {\n    /// ```\n    /// x.unwrap();\n    /// ```\n    fn helper() {}\n}', 'doc-unwrap'), ['soft']);
+  // rustdoc runs no doctests in binaries or examples
+  assert.deepEqual(sevOf('//! ```\n//! let cfg = Config::load().unwrap();\n//! ```\nfn main() {}', 'doc-unwrap', 'bin'), ['soft']);
+  assert.deepEqual(sevOf('//! ```\n//! let cfg = Config::load().unwrap();\n//! ```\nfn main() {}', 'doc-unwrap', 'example'), ['soft']);
+  // a should_panic fence shows a panic on purpose
+  assert.deepEqual(has('/// ```should_panic\n/// let v: Vec<u8> = Vec::new();\n/// v.first().unwrap();\n/// ```\npub fn f() {}', 'doc-unwrap'), []);
   // CRLF sources
   assert.deepEqual(has(bad.replace(/\n/g, '\r\n'), 'doc-unwrap').map((h) => h.line), [5, 6]);
 });
@@ -237,6 +242,37 @@ pub struct AccountId(String);
   assert.deepEqual(has(good, 'doc-unwrap'), []);
   assert.ok(isRustFence('') && isRustFence('rust') && isRustFence('no_run') && isRustFence('rust,edition2024'));
   assert.ok(!isRustFence('text') && !isRustFence('ignore') && !isRustFence('rust,ignore') && !isRustFence('compile_fail') && !isRustFence('sh'));
+});
+
+test('empty-if-let-err finds the body brace by depth; empty-err-arm allows keep-first-error', () => {
+  assert.deepEqual(has('fn f() { if let Err(_) = tx.try_send(Event::Tick {}) { tracing::warn!("queue full"); } }', 'empty-if-let-err'), []);
+  assert.deepEqual(has('fn f() -> Result<(), E> { if let Err(_) = retry(|| {}) { return Err(E::Gave); } Ok(()) }', 'empty-if-let-err'), []);
+  assert.deepEqual(sevOf('fn f() { if let Err(_) = retry(|| { work() }) {} }', 'empty-if-let-err'), ['hard']);
+  assert.deepEqual(sevOf('fn f() { if let Err(_) = map[&k].send(1) {   } }', 'empty-if-let-err'), ['hard']);
+  const firstError = `
+fn parse_all(items: &[&str]) -> Result<(), ParseError> {
+    let mut first = None;
+    for item in items {
+        match parse(item) {
+            Ok(v) => keep(v),
+            Err(e) if first.is_none() => first = Some(e),
+            Err(_) => {}
+        }
+    }
+    first.map_or(Ok(()), Err)
+}`;
+  assert.deepEqual(has(firstError, 'empty-err-arm'), []);
+  // a binding in a nested match does not excuse the outer arm
+  const nested = 'fn f() {\n    match a() {\n        Ok(v) => match b(v) { Err(e) => log(e), Ok(()) => {} },\n        Err(_) => {}\n    }\n}';
+  assert.deepEqual(sevOf(nested, 'empty-err-arm'), ['hard']);
+});
+
+test('lexer: escaped quote char literal; ignore counting', () => {
+  const { code } = maskRust("let q = ['\\'', ',', 'a']; let s = \".unwrap()\";");
+  assert.equal(code, "let q = ['  ', ' ', ' ']; let s = \"         \";");
+  const src = '#[test]\n#[ignore = "slow"]\nfn a() {}\n#[test]\n#[cfg_attr(miri, ignore = "spawns a process")]\nfn b() {}\n#[test]\n#[cfg_attr(windows, ignore = "unix sockets")]\nfn c() {}\n#[test]\n#[ignore]\nfn d() {}';
+  assert.equal(countIgnored(maskRust(src).code), 3);
+  assert.equal(scanSource(src, { kind: 'test' }).ignores, 3);
 });
 
 test('empty-err-arm and empty-if-let-err: silent discards', () => {
@@ -286,8 +322,12 @@ pub fn parallel_sum(parts: &[Vec<u64>]) -> io::Result<u64> {
 });
 
 test('compiler-fence and global-allocator', () => {
-  assert.deepEqual(sevOf('fn f() { compiler_fence(Ordering::SeqCst); }', 'compiler-fence'), ['hard']);
+  assert.deepEqual(sevOf('fn f() { atomic::compiler_fence(Ordering::SeqCst); }', 'compiler-fence'), ['hard']);
+  assert.deepEqual(sevOf('use std::sync::atomic::{compiler_fence, Ordering};\nfn f() { compiler_fence(Ordering::SeqCst); }', 'compiler-fence'), ['hard']);
+  assert.deepEqual(sevOf('fn f() { core::sync::atomic::compiler_fence(Ordering::Release); }', 'compiler-fence'), ['hard']);
   assert.deepEqual(has('fn f() { fence(Ordering::Acquire); }', 'compiler-fence'), []);
+  // a user function of the same name (divan's time/fence.rs shape)
+  assert.deepEqual(has('/// Keeps the timer reads ordered.\npub fn compiler_fence() { black_box(()); }\nfn g(t: &Timer) { compiler_fence(); t.fence.compiler_fence(); }', 'compiler-fence'), []);
   const alloc = '#[global_allocator]\nstatic ALLOC: Counting = Counting;';
   assert.deepEqual(sevOf(alloc, 'global-allocator'), ['hard']);
   assert.deepEqual(has(alloc, 'global-allocator', 'bin'), []);
@@ -295,6 +335,9 @@ test('compiler-fence and global-allocator', () => {
   const dhat = '#[cfg(feature = "dhat-heap")]\n#[global_allocator]\nstatic ALLOC: dhat::Alloc = dhat::Alloc;\n\nfn main() {\n    #[cfg(feature = "dhat-heap")]\n    let _profiler = dhat::Profiler::new_heap();\n}';
   assert.deepEqual(has(dhat, 'global-allocator'), []);
   assert.deepEqual(has('#[cfg(test)]\nmod tests {\n    #[global_allocator]\n    static A: dhat::Alloc = dhat::Alloc;\n}', 'global-allocator'), []);
+  // a bodiless #[cfg(test)] item is a test region too (a counting allocator for unit tests)
+  const counting = '#[cfg(test)]\n#[global_allocator]\nstatic COUNTING: CountingAlloc = CountingAlloc::new();\n\npub fn f() -> u8 { 1 }\n#[global_allocator]\nstatic REAL: System = System;';
+  assert.deepEqual(has(counting, 'global-allocator').map((h) => h.line), [6]);
 });
 
 test('map-index: map[&key] is advisory; slices of references are not indexing', () => {

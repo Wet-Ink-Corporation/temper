@@ -129,9 +129,9 @@ pub fn report(names: &[&str], log: &mut dyn Write) -> io::Result<Vec<u8>> {
 ### OWN-10 · Return `Cow` when you usually borrow
 **Why.** `expand_tabs` above returns the input untouched in the common case. `Cow<'_, str>` makes that free and still owns when it must. Do not return `Cow` when you always allocate (return `String`) or never do (return `&str`).
 
-### OWN-17 · Return results; `&mut` only to modify or fill caller data
-Return results by value, as a tuple or a named struct when there are several. A `&mut` parameter only modifies the caller's data in place or fills a caller-owned buffer for reuse; such a function is named `*_into` and documents whether it appends or clears.
-**Why.** An out-parameter hides a second result, makes the caller build a placeholder first, and cannot be chained or matched. The legitimate `&mut` case is reuse: `read_line(&mut buf)` lets a loop keep one allocation. Appending is the std convention (`read_line`, `read_to_end`, `Extend`), so say so when you clear instead. On a hot path the allocating form is a thin wrapper over the `_into` form (PERF-02).
+### OWN-17 · Return results; `&mut` never returns an extra value
+Return results by value, as a tuple or a named struct when there are several. A function that fills a caller-owned buffer is named `*_into` and documents whether it appends or clears. Never use a `&mut` parameter to return an extra value.
+**Why.** An out-parameter hides a second result, makes the caller build a placeholder first, and cannot be chained or matched. `&mut` is for mutating the caller's data in place (`Vec::sort`, `Inventory::record` below) and for filling a buffer the caller reuses: `read_line(&mut buf)` lets a loop keep one allocation. Appending is the std convention (`read_line`, `read_to_end`, `Extend`), so say so when you clear instead. On a hot path the allocating form is a thin wrapper over the `_into` form (PERF-02).
 **Do.**
 ```rust
 use std::fmt::{self, Write as _};
@@ -181,7 +181,7 @@ pub fn bounds(values: &[u32], min: &mut u32, max: &mut u32) -> bool { .. } // ou
 pub fn parse(input: &str, warnings: &mut Vec<Warning>) -> Config { .. }    // hidden second result: return (Config, Vec<Warning>)
 pub fn encode(pairs: &[(&str, u32)], out: &mut String) { .. }              // fills a buffer: name it encode_into, say append or clear
 ```
-**Detect.** Review: a `&mut` parameter that the function only writes to; `bool` or `()` returns beside `&mut` scalars; buffer-filling functions not named `*_into` or silent about append versus clear.
+**Detect.** Review: a `&mut` parameter written only to return a second result; buffer-filling functions not named `*_into` or silent about append versus clear.
 
 ## Lifetimes and elision
 
@@ -191,8 +191,8 @@ pub fn encode(pairs: &[(&str, u32)], out: &mut String) { .. }              // fi
 ```rust
 /// Elision ties the output to the only input.
 #[must_use]
-pub fn first_word(text: &str) -> &str {
-    text.split_whitespace().next().unwrap_or_default()
+pub fn first_word(text: &str) -> Option<&str> {
+    text.split_whitespace().next()
 }
 
 /// The result borrows only from `haystack`; `needle` may be a temporary.
@@ -213,13 +213,13 @@ pub fn longer<'a>(left: &'a str, right: &'a str) -> &'a str {
 
 /// Queued items.
 #[derive(Debug, Default)]
-pub struct Queue {
+pub(crate) struct Queue {
     items: Vec<u32>,
 }
 
 impl Queue {
     /// Write `'_` in the path type: the borrow of `self` is visible.
-    pub fn iter(&self) -> std::slice::Iter<'_, u32> {
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, u32> {
         self.items.iter()
     }
 }
@@ -233,10 +233,11 @@ impl<'a> IntoIterator for &'a Queue {
     }
 }
 ```
+`Queue` is crate-private, so exposing `std::slice::Iter` is fine. API-01 applies to `pub` surfaces: a public type returns a named iterator newtype.
 **Don't.**
 ```rust,ignore,expect=clippy::needless_lifetimes+mismatched_lifetime_syntaxes+elided_lifetimes_in_paths
 # use std::fmt;
-pub fn first_word<'a>(text: &'a str) -> &'a str { text.split_whitespace().next().unwrap_or_default() } // needless_lifetimes
+pub fn first_word<'a>(text: &'a str) -> Option<&'a str> { text.split_whitespace().next() } // needless_lifetimes
 # struct Queue { items: Vec<u32> }
 # impl Queue {
 pub fn iter(&self) -> std::slice::Iter<u32> { self.items.iter() } // hidden lifetime: mismatched_lifetime_syntaxes
@@ -367,7 +368,8 @@ impl Inventory {
         }
     }
 
-    // Takes only the field it needs, not `&mut self`.
+    // Takes only the field it needs, not `&mut self`. It appends to the
+    // inventory's own log in place, which is not a buffer fill, so no `_into`.
     fn record(log: &mut Vec<String>, qty: u32) {
         log.push(format!("restocked to {qty}"));
     }
@@ -702,7 +704,7 @@ pub fn active(&self) -> Box<dyn Iterator<Item = &User> + '_> { .. } // heap + dy
 ## Sharing
 
 ### OWN-11 · Walk the sharing ladder
-**Why.** Each rung adds runtime cost, failure modes (poisoning, deadlock, `BorrowMutError` panics, leaks through `Rc` cycles) and coupling. Stop at the first rung that works, and write the justification in the type's doc comment.
+**Why.** Each rung adds runtime cost, failure modes (poisoning, deadlock, `BorrowMutError` panics, leaks through `Rc` cycles) and coupling. Stop at the first rung that works, and justify it in a `//` why-comment at the field, in the present tense. Rustdoc describes the contract; history and rejected alternatives go in the plan or the decisions log (CRF-11).
 
 | Rung | Use when | Justification required |
 |---|---|---|
@@ -712,7 +714,7 @@ pub fn active(&self) -> Box<dyn Iterator<Item = &User> + '_> { .. } // heap + dy
 | `thread::scope` borrow | Parallel work finishes before the owner continues | none |
 | `Arc<T>` (immutable) | Several threads/tasks read the same data with independent lifetimes | "shared read-only, owners outlive each other unpredictably" |
 | Actor / channel | Shared mutable state with request/response or ordering | preferred over a lock for async (ASY-09) |
-| `Arc<Mutex<T>>` / `Arc<RwLock<T>>` | Several threads mutate one state; short critical sections | doc comment: who writes, who reads, why an actor was rejected |
+| `Arc<Mutex<T>>` / `Arc<RwLock<T>>` | Several threads mutate one state; short critical sections | why-comment (`//`) at the field: who writes, who reads, why message passing does not fit |
 | Atomics | A single counter or flag | the chosen `Ordering` and why |
 | `Rc<T>` | Single-threaded shared ownership (UI trees, persistent structures) | why an owner plus borrows or an arena does not fit |
 | `Rc<RefCell<T>>` | Single-threaded shared mutation | as `Rc`, plus why `&mut` cannot be threaded through; prefer an arena |
@@ -726,11 +728,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 /// Per-path hit counts shared by all request workers.
-///
-/// Shared mutable state (OWN-11): every worker increments and the reporter
-/// reads concurrently. An actor was rejected because callers need no reply.
 #[derive(Debug, Default)]
 pub struct HitCounter {
+    // Every request worker writes and the reporter reads. A lock, not an actor:
+    // each update is one short increment from synchronous code, and the
+    // reporter needs a consistent snapshot on demand.
     counts: Mutex<HashMap<String, u64>>,
 }
 
@@ -784,7 +786,7 @@ pub struct App { state: Arc<Mutex<AppState>> } // no justification; every field 
 let shared = Rc::new(RefCell::new(node));    // tree with parent links: use an arena
 let totals = (*shared).clone();              // H-08: after the fan-out, `Arc::into_inner(shared)`
 ```
-**Detect.** scan (advisory) and review: every new `Arc<Mutex`, `Arc<RwLock`, `Rc<RefCell`, `Rc<` needs the doc-comment justification; strong parent links; `try_unwrap(..).unwrap()` or a deep clone out of an `Arc`; `clippy::rc_mutex`, `arc_with_non_send_sync`.
+**Detect.** scan (advisory) and review: every new `Arc<Mutex`, `Arc<RwLock`, `Rc<RefCell`, `Rc<` needs the why-comment; strong parent links; `try_unwrap(..).unwrap()` or a deep clone out of an `Arc`; `clippy::rc_mutex`, `arc_with_non_send_sync`.
 
 ### OWN-12 · Interior mutability is a documented design decision
 
@@ -806,12 +808,11 @@ A `Mutex` owns what it protects. A free-standing `Mutex<()>` beside the data it 
 use std::cell::OnceCell;
 
 /// A document with a lazily computed word count.
-///
-/// Interior mutability (OWN-12): the cache fills on first read through
-/// `&self`; observable state never changes.
 #[derive(Debug)]
 pub struct Document {
     text: String,
+    // Interior mutability: the cache fills on the first read through `&self`,
+    // and the observable state never changes.
     words: OnceCell<usize>,
 }
 
@@ -831,7 +832,7 @@ pub struct Device {
     port: Port,
 }
 ```
-**Detect.** scan (advisory: `Mutex<()>`); review: `Cell`/`RefCell`/`Mutex` field without a doc line saying why; `RefCell` introduced in the same diff as a borrow error.
+**Detect.** scan (advisory: `Mutex<()>`); review: `Cell`/`RefCell`/`Mutex` field without a why-comment; `RefCell` introduced in the same diff as a borrow error.
 
 ### OWN-15 · Frozen data: `Box<str>`, `Box<[T]>`, `Arc<str>`, `Arc<[T]>`
 **Why.** `String`/`Vec` carry a capacity word and invite mutation. `Arc<String>` is a double indirection (`clippy::rc_buffer`). For data that never grows, the boxed slice forms are one word smaller and `Arc<str>` clones are a refcount bump. Build them with `String::into_boxed_str`, `Vec::into_boxed_slice`, `Arc::from(s)` or `.collect::<Arc<[T]>>()`; an interned `Symbol(Arc<str>)` newtype is the common shape.
@@ -867,13 +868,13 @@ Values drop at the end of their scope in a fixed order. It matters for guards an
 | Temporaries | at the end of the enclosing statement; a block's tail-expression temporaries before its locals (edition 2024) |
 | `let _ = expr;` | a temporary at once; a named place is not moved at all |
 
-Order guard fields deliberately (declare `tx` before `conn` so the transaction drops first) and end a guard early with `drop(guard)`. `let _guard = m.lock()` holds the lock to the end of the scope; `let _ = m.lock()` releases it at once (`clippy::let_underscore_lock`, denied).
+Order guard fields deliberately (declare `tx` before `conn` so the transaction drops first) and end a guard early with `drop(guard)`. `let _guard = m.lock()` holds the lock to the end of the scope; `let _ = m.lock()` releases it at once (rustc's `let_underscore_lock`, deny by default).
 
 ## Clone audit (H-08)
 
 ### H-08 · No clones to appease the borrow checker
 Every clone has an ownership reason, visible from the code or a comment. A clone forced by a fallible API that consumes its argument is a finding against that API, which should hand the argument back in its error (ERR-14). The table and procedure below are the audit.
-**Detect.** `clippy::redundant_clone`, `clone_on_ref_ptr`; scan (advisory); review with the table below.
+**Detect.** `clippy::redundant_clone`, `clone_on_ref_ptr`; review with the table below.
 
 Every `.clone()`, `.to_owned()`, `.to_string()`, `.to_vec()` and `String::from`/`Vec::from` on borrowed data in a diff needs one of these reasons, visible from the code or a comment.
 
@@ -1012,7 +1013,9 @@ impl<T> Arena<T> {
     /// Looks a handle up; `None` if it is not from this arena.
     #[must_use]
     pub fn get(&self, handle: Handle) -> Option<&T> {
-        usize::try_from(handle.0).ok().and_then(|i| self.items.get(i))
+        usize::try_from(handle.0)
+            .ok()
+            .and_then(|i| self.items.get(i))
     }
 }
 

@@ -70,8 +70,10 @@ Output: one line per failing block and check,
     references/errors.md:170: rust@161 lint: clippy::unwrap_used: used `unwrap()` ... (+2 more)
 i.e. the location of the first diagnostic, the block kind and fence line, the
 check, and the first diagnostic. -v prints every diagnostic. A summary follows:
-blocks by kind, failures per file and check, and Don't blocks without expect=
-(reported, not failing).
+blocks by kind, failures per file and check, and two lists that do not fail: Don't
+blocks without expect=, and Do blocks whose `#[expect(.., reason)]` the scanner
+reports as an exception request ("ask"). When `cargo test` exits non-zero (a test
+aborted the process), every tested block with no reported result fails.
 
 Exit codes: 0 all checks pass; 1 at least one block failed; 2 the harness could
 not run (usage, missing toolchain or node, offline resolution failed, or a
@@ -154,6 +156,7 @@ class Block:
     src: list = field(default_factory=list)  # processed lines (rust kinds)
     mod: str = ''
     module: str = ''   # generated module source
+    asks: list = field(default_factory=list)  # md lines of scanner "ask" hits (`#[expect]` exceptions)
     failures: dict = field(default_factory=dict)  # check -> [Diag]
 
     @property
@@ -560,7 +563,9 @@ def run_tests(ws, env, target_dir, blocks, timeout, log):
                       ws, env, target_dir, timeout)
         log(f'  doc-examples tests: {len(active)} blocks, {time.monotonic() - t0:.0f}s')
         if any(TEST_LINE.match(x) for x in r.stdout.splitlines()):
-            parse_test_output(r.stdout, by_mod)
+            failed = parse_test_output(r.stdout, by_mod)
+            if r.returncode != 0:
+                check_test_process(r, active, failed)
             return
         per_block, unmapped = compile_diags(r.stdout, ws, 'doc-examples', active)
         errs = {m: [d for d in ds if d.level == 'error'] for m, ds in per_block.items()}
@@ -575,6 +580,30 @@ def run_tests(ws, env, target_dir, blocks, timeout, log):
         for m, ds in errs.items():
             by_mod[m].fail('test', Diag(ds[0].line, ds[0].code, f'test build: {ds[0].text}', ds[0].rendered))
         active = [b for b in active if b.mod not in errs]
+
+
+def check_test_process(r, blocks, failed):
+    """cargo test exited non-zero: a test may have killed the process (stack overflow,
+    abort), leaving later tests unrun. Fail every block with no reported test result."""
+    reported = {m.group(1).split('::')[0] for x in r.stdout.splitlines() if (m := TEST_LINE.match(x))}
+    output = r.stdout + '\n' + r.stderr
+    died = re.search(r"\(signal: [^)]*\)|exit (?:status|code): ?\d+", r.stderr)
+    how = died.group(0) if died else f'cargo exit {r.returncode}'
+    culprits = {}
+    for m in re.finditer(r"thread '([^']+)'(?: \(\d+\))? (has overflowed its stack|panicked while [^\n]*)", output):
+        culprits.setdefault(m.group(1).split('::')[0], (m.group(1), m.group(2)))
+    attributed = 0
+    for b in blocks:
+        if b.mod in culprits:
+            name, what = culprits[b.mod]
+            b.fail('test', Diag(b.line, name.split('::', 1)[-1], f'test process died: {what} {how}'))
+            attributed += 1
+        elif b.mod not in reported:
+            b.fail('test', Diag(b.line, 'no-result', f'no test result: the test process died first {how}'))
+            attributed += 1
+    if not attributed and not failed:
+        tail = '\n'.join(r.stderr.strip().splitlines()[-8:])
+        raise HarnessError(f'cargo test exited {r.returncode} but no block can be blamed:\n{tail}')
 
 
 def parse_test_output(stdout, by_mod):
@@ -607,6 +636,7 @@ def parse_test_output(stdout, by_mod):
                 msg = 'panicked: ' + ' '.join(rest[:3]) if rest else 'panicked'
                 break
         b.fail('test', Diag(line, name.split('::', 1)[-1], msg[:300], '\n'.join(text)))
+    return failed
 
 
 # ---------------------------------------------------------------- scanner
@@ -643,6 +673,7 @@ def check_scan(blocks, keys, results):
     for b in blocks:
         hits = results.get(b.mod, [])
         if b.kind in ('do', 'fragment'):
+            b.asks = [b.md_line(h['line']) for h in hits if h['severity'] == 'ask']
             for h in hits:
                 if h['severity'] == 'hard':
                     b.fail('scan', Diag(b.md_line(h['line']), f'scan:{h["key"]}', f'{h["id"]} {h["msg"]}'))
@@ -729,6 +760,15 @@ def report(blocks, verbose, elapsed):
     if no_expect:
         print(f'Don\'t blocks without expect= (reported, not failing): {sum(map(len, no_expect.values()))}')
         for f, ls in sorted(no_expect.items()):
+            print(f'  {f}: ' + ', '.join(ls))
+    asks = {}
+    for b in blocks:
+        if b.asks:
+            asks.setdefault(b.file, []).append(f'{b.line} (line {", ".join(map(str, sorted(set(b.asks))))})')
+    if asks:
+        print(f'Do blocks with `#[expect]` exception requests (scanner "ask" hits; reported, not failing): '
+              f'{sum(map(len, asks.values()))}')
+        for f, ls in sorted(asks.items()):
             print(f'  {f}: ' + ', '.join(ls))
     print(f'{len(failing)} failing block(s) of {len(blocks)} in {elapsed:.0f}s')
     return 1 if failing else 0

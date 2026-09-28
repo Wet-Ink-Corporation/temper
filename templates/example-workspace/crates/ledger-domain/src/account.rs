@@ -201,8 +201,9 @@ fn close(balance: Cents) -> Result<Vec<Event>, Rejection> {
 /// Apply one event to the state.
 ///
 /// Total and infallible: events are facts that [`decide`] already checked, so
-/// replaying history can never fail. An event that [`decide`] could not have
-/// produced in this state leaves the state unchanged.
+/// replaying history can never fail. An event of a kind [`decide`] never
+/// produces in this state (a deposit before opening, anything after closing)
+/// leaves the state unchanged, and amounts saturate instead of overflowing.
 #[must_use]
 pub fn evolve(state: State, event: &Event) -> State {
     match (state, event) {
@@ -213,14 +214,25 @@ pub fn evolve(state: State, event: &Event) -> State {
         },
         (State::Open { owner, balance }, Event::Deposited { amount }) => State::Open {
             owner,
-            balance: balance.checked_add(*amount).unwrap_or(balance),
+            // Never saturates on decided history: `decide` refuses a deposit that would overflow.
+            balance: Cents::new(balance.get().saturating_add(amount.get())),
         },
         (State::Open { owner, balance }, Event::Withdrew { amount }) => State::Open {
             owner,
-            balance: balance.checked_sub(*amount).unwrap_or(balance),
+            // Never saturates on decided history: `decide` refuses a withdrawal over the balance.
+            balance: Cents::new(balance.get().saturating_sub(amount.get())),
         },
         (State::Open { owner, .. }, Event::Closed) => State::Closed { owner },
-        (state @ (State::NotOpened | State::Open { .. } | State::Closed { .. }), _) => state,
+        // Pairs `decide` never produces, listed so a new variant must be placed here.
+        (
+            state @ State::NotOpened,
+            Event::Deposited { .. } | Event::Withdrew { .. } | Event::Closed,
+        )
+        | (state @ State::Open { .. }, Event::Opened { .. })
+        | (
+            state @ State::Closed { .. },
+            Event::Opened { .. } | Event::Deposited { .. } | Event::Withdrew { .. } | Event::Closed,
+        ) => state,
     }
 }
 

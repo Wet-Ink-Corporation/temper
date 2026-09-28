@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../scripts/lib/toml.mjs';
-import { workspaceRootFor, memberProblems, watchedKeys, nonCaretRequirement, depRequirements } from '../scripts/lib/manifest.mjs';
+import { workspaceRootFor, memberProblems, watchedKeys, nonCaretRequirement, depRequirements, majorOf, cleanRel, membersFromToml, dependencyNames } from '../scripts/lib/manifest.mjs';
 
 test('parses the Cargo manifest shapes temper reads', () => {
   const m = parseToml(`# comment
@@ -122,4 +122,22 @@ test('watched manifest switches carry their rule id', () => {
     '[lib] doctest': 'H-12',
     '[[example]] demo required-features': 'H-12',
   });
+});
+
+test('major versions, path normalization, members without cargo, dependency names', () => {
+  assert.deepEqual(['1', '^1.4', '=1.0.3', '2', '0.8', '0.9.1', '~0.0.3', '*'].map(majorOf), ['1', '1', '1', '2', '0.8', '0.9', '0.0.3', null]);
+  assert.deepEqual(['./tools/gen/', 'tools//gen', 'crates/x/../y', 'a\\b'].map(cleanRel), ['tools/gen', 'tools/gen', 'crates/y', 'a/b']);
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-members-'));
+  try {
+    for (const d of ['crates/a', 'crates/b', 'crates/skip', 'tools/x', 'crates/nomanifest']) fs.mkdirSync(path.join(ws, ...d.split('/')), { recursive: true });
+    for (const d of ['crates/a', 'crates/b', 'crates/skip', 'tools/x']) fs.writeFileSync(path.join(ws, ...d.split('/'), 'Cargo.toml'), '[package]\nname = "x"\n');
+    fs.writeFileSync(path.join(ws, 'Cargo.toml'), '[package]\nname = "root"\n[workspace]\nmembers = ["crates/*", "./tools/x"]\nexclude = ["crates/skip/"]\n');
+    const rel = membersFromToml(ws).map((p) => path.relative(ws, p).split(path.sep).join('/')).sort();
+    assert.deepEqual(rel, ['Cargo.toml', 'crates/a/Cargo.toml', 'crates/b/Cargo.toml', 'tools/x/Cargo.toml']);
+    assert.equal(membersFromToml(path.join(ws, 'crates', 'nomanifest')), null);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+  const names = dependencyNames(parseToml('[dependencies]\nnix.workspace = true\n[dev-dependencies]\nproptest = "1"\n[[bench]]\nname = "b"\nharness = false\n[target.\'cfg(unix)\'.build-dependencies]\ncc = "1"\n[workspace.dependencies]\nserde = "1"\n'));
+  assert.deepEqual([...names].sort(), ['build-dependencies:cc', 'dependencies:nix', 'dependencies:serde', 'dev-dependencies:proptest']);
 });

@@ -63,9 +63,9 @@ RUSTFLAGS="-Dwarnings" cargo clippy --workspace   # full rebuild whenever RUSTFL
 ```
 **Gotcha.** It needs the Cargo in the *toolchain* to be 1.97 or newer, whatever `rust-version` says. Older Cargo ignores both the config key and `CARGO_BUILD_WARNINGS` silently, so an MSRV job on 1.96 passes with warnings. The template's MSRV job therefore uses `RUSTFLAGS=-Dwarnings`, where the cache cost doesn't matter.
 
-`build.warnings = "deny"` also covers rustdoc lints under `cargo doc` (a broken intra-doc link fails it), so `RUSTDOCFLAGS=-D warnings` is redundant on Cargo 1.97+. Pass `--keep-going` to `cargo check` and `cargo clippy` in CI so one run reports every crate's failures, not just the first.
+`build.warnings = "deny"` also covers rustdoc lints under `cargo doc` (a broken intra-doc link fails it). A `RUSTDOCFLAGS=-D warnings` beside it is redundant but harmless, and it also works on older Cargo: not a finding. CI SHOULD pass `--keep-going` to `cargo check` and `cargo clippy`, so one run reports every crate's failures, not just the first.
 
-**Detect.** Grep CI config for `RUSTFLAGS=.*-D ?warnings` and `RUSTDOCFLAGS`. Local gate runs keep `-- -D warnings` on the clippy command line (that flag reaches only workspace crates, not dependencies). Cargo prints `warnings are denied by build.warnings configuration` when it fires.
+**Detect.** Grep CI config for `RUSTFLAGS=.*-D ?warnings`. Local gate runs keep `-- -D warnings` on the clippy command line (that flag reaches only workspace crates, not dependencies). Cargo prints `warnings are denied by build.warnings configuration` when it fires.
 
 ### MOD-09 · Lints live in `[workspace.lints]`, members inherit
 **Why.** Crate-root `#![deny(...)]` attributes drift per crate and are invisible to the protected-config hook. One table in the root manifest is the single policy, and changing it is an H-05 matter. Members do not inherit `[workspace.lints]` implicitly, and stable Cargo says nothing when a member lacks `[lints] workspace = true`: that crate then builds with none of the policy, so `unwrap`, `as` casts and `#[allow]` pass clippy. `#![deny(warnings)]` in source is the classic wrong move: warning policy belongs to the build (MOD-13).
@@ -188,6 +188,7 @@ pub fn cached_or_fill(cache: &Mutex<Option<u64>>, fill: impl FnOnce() -> u64) ->
 **Do.**
 ```rust
 # use std::collections::BTreeMap;
+# use std::num::ParseIntError;
 # pub struct Pair<'a> { key: &'a str, value: &'a str }
 # pub enum PairError { MissingEquals { line: usize } }
 # pub enum Token<'a> { Flag(&'a str), Number(i64), Word(&'a str) }
@@ -205,17 +206,19 @@ pub fn parse_pair(line_no: usize, line: &str) -> Result<Pair<'_>, PairError> {
     })
 }
 
-/// Returns the configured port when `enabled` is `"true"` and `port` parses.
-#[must_use]
-pub fn enabled_port(config: &BTreeMap<String, String>) -> Option<u16> {
+/// The configured port when `enabled` is `"true"` and a `port` is set.
+///
+/// # Errors
+/// [`ParseIntError`] when `port` is set but is not a `u16`: a typo is
+/// reported, never read as "disabled" (H-10).
+pub fn enabled_port(config: &BTreeMap<String, String>) -> Result<Option<u16>, ParseIntError> {
     if let Some(flag) = config.get("enabled")
         && flag == "true"
         && let Some(raw) = config.get("port")
-        && let Ok(port) = raw.parse::<u16>()
     {
-        return Some(port);
+        return raw.parse().map(Some);
     }
-    None
+    Ok(None)
 }
 
 /// Classifies a raw argument.
@@ -354,7 +357,7 @@ pub fn legacy_len(name: String) -> usize {
 ### MOD-07 · Modern std APIs over hand-rolled equivalents
 **Why.** The std versions are shorter, named for intent, and handle the edge cases (overflow in `div_ceil`, aliasing in the slice form of `get_disjoint_mut`) that hand-rolled code gets wrong. They are not all panic-free: `as_chunks` panics when `N == 0` (guard it with `const { assert!(N > 0) }`, MOD-10), and `HashMap::get_disjoint_mut` panics on overlapping keys. Before using a std API, check its docs page: an "Experimental" badge means nightly-only (E0658 on stable), and its "since" version must not exceed `rust-version`, which clippy's `incompatible_msrv` enforces.
 
-- Atomics: use the dedicated read-modify-write (`fetch_add`, `fetch_max`, `swap`) first, `update` for a computed update and `try_update` for a conditional one (both 1.95), never a hand-written CAS loop (ASY-13). `fetch_update` is deprecated from 1.99 as a rename of `try_update`.
+- Atomics: use the dedicated read-modify-write (`fetch_add`, `fetch_max`, `swap`) first, `update` for a computed update and `try_update` for a conditional one (both 1.95), never a hand-written CAS loop (ASY-13). `fetch_update` is a rename of `try_update`, deprecated from 1.99 (no warning on 1.98.1).
 - `str::floor_char_boundary` (1.91) finds the byte index at or below `n` that starts a character, so cutting text to a byte budget never splits one.
 - `hint::cold_path()` (1.95) marks the unlikely branch in place, with no `#[cold]` helper function; use it only where a profile shows the branch is rare (PERF-08).
 - For a constant chunk size, `as_chunks::<N>()` (1.88) yields arrays with no `try_into` (see MOD-10's `frames`); `clippy::chunks_exact_to_as_chunks` rejects `chunks_exact(4)`.
@@ -439,7 +442,7 @@ let pages = (items + per_page - 1) / per_page;        // overflows near u64::MAX
 opt.map_or(true, |max| n <= max)                      // is_none_or
 let mut i = 0; while i < v.len() { if expired(&v[i]) { out.push(v.remove(i)); } else { i += 1; } }
 let (a, b) = (&mut v[from], &mut v[to]);              // E0499, then someone reaches for unsafe
-total.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_add(k))); // deprecated in 1.99: `update`
+total.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_add(k))); // deprecated from 1.99 (no warning on 1.98.1): `update`
 let head = text.get(..max).unwrap_or(text);           // `None` inside a character: the whole text slips through
 ```
 **Detect.** `clippy::manual_div_ceil`, `manual_is_multiple_of`, `unnecessary_map_or`, `manual_inspect`, `manual_repeat_n`, `manual_midpoint`, `manual_split_once`, `chunks_exact_to_as_chunks`; scanner `fetch-update` (advisory); review index loops with `remove`/`swap` and hand-written CAS loops.
@@ -612,7 +615,7 @@ Versions checked against releases.rs and clippy's `incompatible_msrv`. Each exam
 | `LazyLock::get` | 1.94 | tracking init separately | `LazyLock::get(&MIME).is_some()` |
 | if-let guards | 1.95 | nested `match` in an arm | `s if let Ok(n) = s.parse::<i64>() => ..` |
 | `cfg_select!` | 1.95 | `cfg-if` | see MOD-12 |
-| atomic `update` / `try_update` | 1.95 | CAS loops, `fetch_update` (deprecated in 1.99) | `next.try_update(Relaxed, Relaxed, \|n\| n.checked_add(1))` |
+| atomic `update` / `try_update` | 1.95 | CAS loops, `fetch_update` (deprecated from 1.99; no warning on 1.98.1) | `next.try_update(Relaxed, Relaxed, \|n\| n.checked_add(1))` |
 | `hint::cold_path` | 1.95 | a `#[cold]` helper fn | `hint::cold_path();` at the top of the rare branch |
 | `Vec::push_mut` | 1.95 | `push` then `last_mut().unwrap()` | `v.push_mut(String::new()).push_str("new");` |
 | `assert_matches!` | 1.96 | `assert!(matches!(..))` | `use std::assert_matches;` then `assert_matches!(r, Err(E::Accounts(_)));` |
@@ -685,5 +688,5 @@ Each of these fails on 1.98.1 without `#![feature]`, and nightly features are no
 - [ ] Run-time checks on sizes that could be `const { assert!() }` or a const generic? (MOD-10)
 - [ ] Any `as_any`, `downcast_ref` or `as_super` shims? (MOD-11)
 - [ ] Any new `cfg-if` use? (MOD-12)
-- [ ] Does CI use `RUSTFLAGS=-Dwarnings` or `RUSTDOCFLAGS=-D warnings` instead of `build.warnings`, and does it pass `--keep-going`? (MOD-13)
+- [ ] Does CI use `RUSTFLAGS=-Dwarnings` instead of `build.warnings`? (MOD-13)
 - [ ] Does the diff use an API newer than `rust-version`, one marked "Experimental", or anything from the "Not stable" list? (MOD-07)

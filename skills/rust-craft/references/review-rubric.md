@@ -165,13 +165,13 @@ Errors
 - [ ] `?` conversions don't erase which step failed. (ERR-04)
 - [ ] No log-and-return; nothing discarded. (ERR-08, H-10)
 - [ ] No empty `Err(_) => {}` arm, empty `if let Err(_)`, `filter_map(|r| r.ok())` or `parse().unwrap_or(..)` without a stated reason. (H-10)
-- [ ] A type whose teardown can fail exposes `finish`/`close(self) -> Result`, the success path calls it, and `Drop` only logs. (ERR-13)
+- [ ] A type whose teardown can fail exposes `finish`/`close(self) -> Result` and the success path calls it. The fallback `Drop` does no blocking work of its own (no flush, sync, commit, join or `block_on`); it only logs that `finish` was skipped. (ERR-13)
 - [ ] A fallible function that takes a non-`Copy` argument by value hands it back in its error. (ERR-14)
 
 API
 - [ ] The `pub` surface is minimal, and each new `pub` is deliberate. Every public item has one path: no glob re-exports, no `prelude` module. (API-14)
 - [ ] Invariant-bearing types have private fields and validating constructors. (API-03, API-04)
-- [ ] No bool params; builders (`Foo::builder(required..)`) or params structs for optional configuration. (API-10)
+- [ ] At most one bool parameter, reading naturally at the call site; builders (`Foo::builder(required..)`) or params structs for optional configuration. (API-10)
 - [ ] Naming and trait implementations follow convention; `#[must_use]` where it applies. (API-01, API-06, API-11)
 - [ ] Semver impact is identified; any break has a human decision. (API-17, H-16)
 - [ ] Generic structs and enums carry no trait bounds; bounds sit on the `impl` blocks. (API-21)
@@ -207,7 +207,7 @@ Performance and concurrency
 Observability and craft
 - [ ] `tracing` with fields; no secrets; deterministic machine output. (OUT-04, OUT-08)
 - [ ] Names reveal intent; functions are small; no dead or commented-out code; comments say why. (CRF-01..05)
-- [ ] No speculative generality: no single-implementation trait that is not a port, no marker trait without a sealing or typestate purpose. (CRF-05)
-- [ ] Docs and comments describe current behaviour; design history and rule-compliance tables live in the plan or decisions log. (CRF-11)
+- [ ] No speculative generality: no single-implementation trait that is not a port, extension, sealed or closure-blanket trait, and no marker trait without a sealing or typestate purpose. (CRF-05)
+- [ ] Rustdoc and READMEs describe the contract; `//` comments justify the current design in the present tense; design history and rule-compliance tables live in the plan or decisions log. (CRF-11)
 - [ ] Public docs are complete, with `# Errors`; examples use `?`. (API-15, TST-11)
 - [ ] Parameters are named in prose, never in `# Arguments` or `# Returns` sections. (API-15)

@@ -24,5 +24,8 @@
     "divan",
     "criterion",
     "tempfile"
-  ]
+  ],
+  "manifests": {
+    "ownLints": []
+  }
 }

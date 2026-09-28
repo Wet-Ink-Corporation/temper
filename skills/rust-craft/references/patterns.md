@@ -55,7 +55,6 @@ pub struct Email(String);
 
 /// Why a string is not an [`Email`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
 pub enum EmailError {
     /// Longer than the limit.
     #[error("email is {len} bytes; the limit is {max}")]
@@ -83,10 +82,10 @@ impl Email {
     }
 }
 
-impl TryFrom<String> for Email {
+impl TryFrom<&str> for Email {
     type Error = EmailError;
 
-    fn try_from(raw: String) -> Result<Self, Self::Error> {
+    fn try_from(raw: &str) -> Result<Self, Self::Error> {
         if raw.len() > Self::MAX_LEN {
             return Err(EmailError::TooLong {
                 len: raw.len(),
@@ -102,7 +101,7 @@ impl TryFrom<String> for Email {
         if local.is_empty() || domain.is_empty() {
             return Err(EmailError::EmptyPart);
         }
-        Ok(Self(raw))
+        Ok(Self(raw.to_owned()))
     }
 }
 
@@ -110,7 +109,7 @@ impl FromStr for Email {
     type Err = EmailError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::try_from(s.to_owned())
+        Self::try_from(s)
     }
 }
 
@@ -122,10 +121,10 @@ impl fmt::Display for Email {
 ```
 
 **Notes.**
-- `TryFrom<String>` keeps the caller's allocation; `FromStr` exists so `parse()`, clap and config loaders work. Both share one validation path.
+- `TryFrom<&str>` validates before allocating, and a rejected input stays with the caller, so the error needs no payload (ERR-14). A by-value `TryFrom<String>` would have to hand the `String` back inside its error (pattern 24). `FromStr` exists so `parse()`, clap and config loaders work; both share one validation path.
 - No public field, no `new_unchecked`, no `DerefMut`. Expose `as_str()`/`AsRef<str>`; never `Deref` to emulate inheritance (API-19).
 - Normalize inside the constructor (trim, lowercase the domain) if equality should ignore those differences; then `Eq`/`Hash` are correct for free.
-- With serde, validate on the way in: `#[serde(try_from = "String")]` on the newtype, or go through a DTO (pattern 19).
+- With serde, validate on the way in through a DTO (pattern 19).
 
 ## 2. Id newtypes
 
@@ -258,7 +257,7 @@ impl RetryPolicy {
 **Notes.**
 - Call site: `RetryPolicy { max_backoff: Duration::from_millis(250), ..RetryPolicy::default() }`.
 - Public fields are fine only because there is no cross-field invariant (API-04). If one appears (`initial <= max`), switch to a builder (pattern 4).
-- `#[non_exhaustive]` forbids struct-literal construction outside the crate, even with `..Default::default()`. If the struct must grow without a breaking change, use a builder instead.
+- In a published crate, `#[non_exhaustive]` forbids struct-literal construction outside the crate, even with `..Default::default()`. If such a struct must grow without a breaking change, use a builder instead.
 - Enums instead of bools (`Jitter`), `NonZeroU32` instead of a runtime check, `Duration` instead of `u64` millis.
 
 ## 4. Non-consuming builder
@@ -270,15 +269,12 @@ impl RetryPolicy {
 ```rust
 use std::time::Duration;
 
-/// A request description. Plain data once built.
+/// A validated request. Fields are private: the builder is the only way in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
-    /// Target URL.
-    pub url: String,
-    /// Headers in insertion order.
-    pub headers: Vec<(String, String)>,
-    /// Whole-request timeout.
-    pub timeout: Duration,
+    url: String,
+    headers: Vec<(String, String)>,
+    timeout: Duration,
 }
 
 impl Request {
@@ -290,11 +286,28 @@ impl Request {
             timeout: RequestBuilder::DEFAULT_TIMEOUT,
         }
     }
+
+    /// Target URL.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Headers in insertion order.
+    #[must_use]
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    /// Whole-request timeout; never zero.
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
+        self.timeout
+    }
 }
 
 /// Why a [`RequestBuilder`] could not build.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
 pub enum BuildError {
     /// A zero timeout would fail every request.
     #[error("request timeout must be greater than zero")]
@@ -810,7 +823,6 @@ pub struct NoteId(pub u64);
 
 /// Storage failure, as the application sees it.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum StoreError {
     /// No note with this id.
     #[error("note {0:?} not found")]
@@ -1007,7 +1019,6 @@ struct RawConfig {
 
 /// Why the configuration could not be loaded.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum ConfigError {
     /// The file could not be read.
     #[error("could not read {path}")]
@@ -1101,6 +1112,7 @@ fn announce(mut out: impl Write, config: &Config) -> io::Result<()> {
 - Output for a missing file: `Error: loading configuration`, then `Caused by: 0: could not read /nonexistent.json 1: No such file or directory (os error 2)`. Each layer says only its own step (ERR-05); the reporter prints the chain.
 - The library error carries the path as a typed field (ERR-03) and the cause via `#[source]`; `anyhow` never appears in its signatures (H-09).
 - Handle or propagate, never both: no logging before `?` (ERR-08).
+- `ConfigError` stays exhaustive inside a workspace, so a new variant breaks every match that must handle it. Mark errors `#[non_exhaustive]` only when they cross a published API boundary (API-05).
 - `main` returning `anyhow::Result<()>` exits with status 1 and prints the chain with `Debug`. For more exit codes return `ExitCode` (pattern 21). Backtraces print when `RUST_BACKTRACE=1`.
 
 ## 13. Iterator-returning accessor
@@ -1600,10 +1612,10 @@ use serde::Deserialize;
 #     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #     #[error("invalid email")]
 #     pub struct EmailError;
-#     impl TryFrom<String> for Email {
+#     impl TryFrom<&str> for Email {
 #         type Error = EmailError;
-#         fn try_from(raw: String) -> Result<Self, EmailError> {
-#             if raw.contains('@') { Ok(Self(raw)) } else { Err(EmailError) }
+#         fn try_from(raw: &str) -> Result<Self, EmailError> {
+#             if raw.contains('@') { Ok(Self(raw.to_owned())) } else { Err(EmailError) }
 #         }
 #     }
 # }
@@ -1632,7 +1644,6 @@ pub struct Signup {
 
 /// Why a [`SignupDto`] is not a valid [`Signup`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
 pub enum SignupError {
     /// Bad email.
     #[error("invalid email")]
@@ -1670,7 +1681,7 @@ impl TryFrom<SignupDto> for Signup {
     type Error = SignupError;
 
     fn try_from(dto: SignupDto) -> Result<Self, Self::Error> {
-        let email = Email::try_from(dto.email)?;
+        let email = Email::try_from(dto.email.as_str())?;
         let display_name = dto.display_name.trim().to_owned();
         let len = display_name.chars().count();
         if !(1..=Self::MAX_NAME).contains(&len) {
@@ -2035,12 +2046,11 @@ impl Journal {
 }
 
 impl Drop for Journal {
-    // Reached with `Some` only when `finish` was skipped: an early return, `?` or unwinding.
+    // `Some` here only when `finish` was skipped: an early return, `?` or unwinding.
+    // No flush or sync: `Drop` does no blocking work, it only reports the skip.
     fn drop(&mut self) {
-        if let Some(mut out) = self.out.take()
-            && let Err(error) = out.flush()
-        {
-            tracing::warn!(%error, "journal dropped without finish; its tail may be lost");
+        if self.out.is_some() {
+            tracing::warn!("journal dropped without finish; its buffered tail may be lost");
         }
     }
 }
@@ -2048,7 +2058,7 @@ impl Drop for Journal {
 
 **Notes.**
 - `BufWriter` and `File` discard errors when dropped, so without `finish` a full disk is silent (H-10). Callers end with `journal.finish()?`.
-- `Drop` never panics, blocks or awaits (H-14). It logs, because there is no caller left to return to. Async resources get `async fn close(self)`.
+- The fallback `Drop` never panics, blocks or awaits (H-14): no flush, sync, commit, join or `block_on` of its own. It logs that `finish` was skipped, because there is no caller left to return to. The tail "may" be lost because the inner `BufWriter` still tries its own silent flush when it drops. Async resources get `async fn close(self)`.
 - `process::exit`, `panic = "abort"` and a panic during unwinding skip `Drop` entirely: never rely on it for correctness.
 
 ## 24. Hand back the consumed argument
@@ -2381,13 +2391,14 @@ pub struct FoldConstants;
 
 impl Folder for FoldConstants {
     fn fold_expr(&mut self, expr: Expr) -> Expr {
-        match fold_children(self, expr) {
-            Expr::Add(lhs, rhs) => match (&*lhs, &*rhs) {
-                (Expr::Num(a), Expr::Num(b)) if let Some(sum) = a.checked_add(*b) => Expr::Num(sum),
-                _ => Expr::Add(lhs, rhs),
-            },
-            other => other,
+        let expr = fold_children(self, expr);
+        if let Expr::Add(lhs, rhs) = &expr
+            && let (Expr::Num(a), Expr::Num(b)) = (&**lhs, &**rhs)
+            && let Some(sum) = a.checked_add(*b)
+        {
+            return Expr::Num(sum);
         }
+        expr
     }
 }
 ```
@@ -2674,7 +2685,7 @@ impl<T> fmt::Debug for Id<T> {
 - [ ] Does external data go through a DTO and `TryFrom`, with versioned, upcast schemas for anything persisted? (OUT-03, OUT-05)
 - [ ] Does CLI output go to locked, buffered stdout with explicit flush and documented exit codes? (OUT-06, PERF-07)
 - [ ] Are secrets wrapped so `Debug` and serialization cannot leak them, with a test proving it? (OUT-08)
-- [ ] Does a type with fallible teardown expose `finish`/`close(self) -> Result`, with `Drop` only logging? (ERR-13)
+- [ ] Does a type with fallible teardown expose `finish`/`close(self) -> Result`, with a `Drop` that only logs the skipped `finish`? (ERR-13)
 - [ ] Does a fallible function that consumes its argument hand it back in the error? (ERR-14)
 - [ ] Is a local runtime choice `&mut dyn Trait` on the stack rather than a `Box`? (API-09)
 - [ ] Is a repeated closure bound a named trait with a blanket impl? (API-18)

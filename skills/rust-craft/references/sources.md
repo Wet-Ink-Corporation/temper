@@ -146,8 +146,8 @@ Every claim taken from a source was re-checked on the pinned toolchain (1.98.1, 
 | `-A deprecated` alongside `-D warnings` | Cargo Book | H-05. Migrate off deprecated APIs in the bump that introduces them. |
 | `println!`/`unwrap` in build scripts | Cargo Book | H-02/H-06. Use `writeln!` on a locked stdout, and have `main` return `Result` (ARC-17). |
 | `#[cfg_attr(miri, ignore)]` without a reason | Miri README | H-12. The reason string is required and scanned. |
-| `unsafe` with `// SAFETY:` comments as normal practice | rust-skills, Effective Rust | H-01. The approved-exception checklist is in escape-hatches.md. |
-| `as` after a manual range check | rust-skills | H-11: use `TryFrom`. |
+| `unsafe` with `// SAFETY:` comments as normal practice | rust-skills | H-01. The approved-exception checklist is in escape-hatches.md. |
+| `as` after a manual range check | rust-skills | H-11: `TryFrom` for integers. Float-to-integer (no `TryFrom<f64>`) goes through the H-05 exception with the range check, as escape-hatches.md shows. |
 | `let _ = tx.send(..)` | rust-skills | H-10: match the error and say why it is irrelevant. |
 | `mod.rs` directories | rust-skills | ARC-06. |
 | Lints: `unnameable_types`, the whole `clippy::cargo` group, `unneeded_field_pattern`, `panic_in_result_fn`, `missing_copy_implementations`, `same_name_method`, `missing_asserts_for_indexing`, workspace-wide `arithmetic_side_effects`, `empty_enum_variants_with_brackets` | several | Each was tested on the template: false positives on sealed traits, tests or serde enums; pressure towards `Copy` or `..` patterns; or the lint automates a conflicting practice. |

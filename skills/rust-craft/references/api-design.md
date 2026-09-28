@@ -331,8 +331,9 @@ impl From<String> for EmailAddress { .. }   // infallible: a back door around `T
 
 ### API-05 · `#[non_exhaustive]`, deliberately
 
-**Why.** Adding a variant or field to an exhaustive public type is a semver break (API-17). `#[non_exhaustive]` reserves the right to grow, at the cost that downstream must write a `_` arm and cannot build the struct with a literal. Use it on errors, config, events, options, and types that mirror an external system that evolves on its own schedule. Leave closed domain sets (`Fulfilment` above) exhaustive so downstream `match` breaks loudly when you add a case, which is what you want for a domain concept.
+**Why.** Adding a variant or field to an exhaustive public type breaks every crate outside the workspace that matches or builds it (API-17). `#[non_exhaustive]` reserves the right to grow, at the cost that downstream must write a `_` arm and cannot build the struct with a literal. It is for types that cross a published API boundary: the errors, config, options and external-system mirrors of a crate published outside the workspace.
 
+- Inside a workspace, enums stay exhaustive, so a new case breaks every sibling `match` and forces review (CRF-03). Decider events and closed domain sets (`Fulfilment` above) are exhaustive. "Foreign" in CRF-03 means defined outside the workspace; only those enums get a `_` arm.
 - On an enum it permits new variants only. A struct-like variant that may gain fields (an error variant gaining context, ERR-03) needs the attribute on the variant as well: `#[non_exhaustive] TooLarge { len: u64, max: u64 }`. Downstream then matches it with `..` and cannot construct it.
 - Decide at first publication. Adding the attribute to an existing type or variant is itself a break.
 - Never emulate it with a private `_priv: ()` field.
@@ -346,7 +347,7 @@ pub struct Limits {
 }
 ```
 
-**Detect.** `clippy::manual_non_exhaustive`. Review each new public `enum`/`struct` and each struct-like variant: is "may grow" or "closed" a stated decision? `clippy::exhaustive_enums` is not enabled.
+**Detect.** `clippy::manual_non_exhaustive`. Review each new public `enum`/`struct` and struct-like variant in a published crate: is "may grow" or "closed" a stated decision? Review `#[non_exhaustive]` on workspace-internal types, which turns sibling matches into `_` arms that hide new cases. `clippy::exhaustive_enums` is not enabled.
 
 ## Trait implementation checklist
 
@@ -637,53 +638,24 @@ pub fn emit(path: Option<&Path>, report: &str) -> io::Result<()> {
 
 - A service many callers share is a handle: a cheap `Clone` over a private `Arc<Inner>`, with methods on the handle. That clone copies a pointer, which is the ownership reason H-08 asks for.
 - A public type that holds a runtime-chosen implementation holds a named wrapper (`DynClock`) that implements the trait, never `Arc<dyn Clock>`. The core stays generic (`Stamper<C>`), and the composition root names `Stamper<DynClock>`.
-- Exceptions: the pointer is the product (a container or cache type), or a benchmark justifies exposing it. `patterns.md` has the full handle pattern.
+- Exceptions: the pointer is the product (a container or cache type), or a benchmark justifies exposing it.
 
-**Do.**
+**Do.** The named wrapper, matching pattern 29 in `patterns.md`, which also has the `Directory` handle and the hand-written `Debug`:
 ```rust
-//! Handles and named `dyn` wrappers (API-23).
-
-use std::fmt;
-use std::sync::Arc;
-use std::time::SystemTime;
-
-#[derive(Debug)]
-struct Inner {
-    endpoint: String,
-}
-
-/// A directory service handle. `Clone` copies one pointer, never the service.
-#[derive(Debug, Clone)]
-pub struct Directory {
-    inner: Arc<Inner>,
-}
-
-impl Directory {
-    /// Creates a handle for the service at `endpoint`.
-    pub fn new(endpoint: impl Into<String>) -> Self {
-        Self { inner: Arc::new(Inner { endpoint: endpoint.into() }) }
-    }
-
-    /// Returns the service endpoint.
-    #[must_use]
-    pub fn endpoint(&self) -> &str {
-        &self.inner.endpoint
-    }
-}
-
-/// Port: the current time.
-pub trait Clock {
-    /// Returns the current time.
-    fn now(&self) -> SystemTime;
-}
-
-/// A clock chosen at runtime, behind a name instead of `Arc<dyn Clock>`.
+# use std::sync::Arc;
+# use std::time::SystemTime;
+# /// Port: the current time.
+# pub trait Clock: Send + Sync {
+#     /// The current time.
+#     fn now(&self) -> SystemTime;
+# }
+/// A clock chosen at runtime. Callers name this type, not `Arc<dyn Clock>`.
 #[derive(Clone)]
-pub struct DynClock(Arc<dyn Clock + Send + Sync>);
+pub struct DynClock(Arc<dyn Clock>);
 
 impl DynClock {
     /// Wraps any clock.
-    pub fn new(clock: impl Clock + Send + Sync + 'static) -> Self {
+    pub fn new(clock: impl Clock + 'static) -> Self {
         Self(Arc::new(clock))
     }
 }
@@ -691,12 +663,6 @@ impl DynClock {
 impl Clock for DynClock {
     fn now(&self) -> SystemTime {
         self.0.now()
-    }
-}
-
-impl fmt::Debug for DynClock {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("DynClock(..)")
     }
 }
 ```

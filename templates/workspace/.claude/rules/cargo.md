@@ -7,7 +7,7 @@ paths:
 
 # Manifest rules (rust-craft)
 
-- Declare every dependency once, in the root `[workspace.dependencies]`, as a caret floor at the oldest version whose API you use (`"1.4.2"`), never `=`, `~`, `*` or an upper bound. Put `default-features = false` and the baseline features there; members write `name = { workspace = true }` and only add `features` (ARC-12). Sibling crates are workspace dependencies too (ARC-01).
+- Declare every dependency once, in the root `[workspace.dependencies]`, as a caret floor at the oldest version whose API you use (`"1.4.2"`), never `=`, `~`, `*` or an upper bound; the one exception is a proc-macro companion crate you re-export, pinned with `=`. Put `default-features = false` and the baseline features there; members write `name = { workspace = true }` and only add `features` (ARC-12). Sibling crates are workspace dependencies too (ARC-01).
 - A new dependency, a major-version bump, a `[patch]` or `[replace]` entry and a `rust-version` raise are human decisions (H-16). Pre-approved crates are listed in `.claude/temper.json`. Justify a dependency with maintenance status, size, license and `cargo deny check`; read its features from `cargo info <crate>`, not memory.
 - Every member has `[lints]\nworkspace = true`; the hook refuses a member without it. Lint levels live only in the root `[workspace.lints]` (MOD-09). Changing them is H-05 and needs human approval.
 - Members inherit `edition`, `rust-version`, `license`, `version` and `publish` from `[workspace.package]` (ARC-01). Never pass `--ignore-rust-version` (MOD-01). Turning `publish` on is H-16, and `cargo_common_metadata` then requires the crates.io metadata.

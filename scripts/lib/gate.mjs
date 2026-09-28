@@ -5,11 +5,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  run, readText, writeAtomic, fingerprint, rustChanges, showAt, crateOf, relTo, globMatch,
+  run, readText, writeAtomic, fingerprint, rustChanges, changedFiles, showAt, crateOf, relTo, globMatch, norm,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
 import { parseToml } from './toml.mjs';
-import { memberProblems } from './manifest.mjs';
+import { memberProblems, membersFromToml, ownLintsMember, splitProblems } from './manifest.mjs';
 
 const has = (cmd, args) => run(cmd, args, { timeoutMs: 20000 }).code === 0;
 
@@ -64,39 +64,74 @@ export function scanChanged(proj, base) {
 }
 
 /**
- * Every workspace member inherits the workspace lints and declares no profile
- * (MOD-09, ARC-01, PERF-09). Stable Cargo warns about neither, so a new crate
- * without `[lints] workspace = true` would compile with every escape hatch allowed.
+ * Member manifests against their base-revision text (MOD-09, ARC-01, PERF-09).
+ * Only problems a manifest did not have at the base fail (the ratchet), so a
+ * legacy member does not turn the gate red; a new, untracked or changed member
+ * (or a changed root manifest) is checked in full. Without a base, every
+ * problem counts.
  * @returns {{ ok: boolean, summary: string }}
  */
-export function checkManifests(proj) {
+export function checkManifestPaths(proj, base, rootPath, manifestPaths) {
+  const rootNow = parseToml(readText(rootPath));
+  const changed = proj.gitRoot && base ? new Set(changedFiles(proj, base).map(norm)) : null;
+  const rootRel = relTo(proj.root, rootPath);
+  const rootBaseText = changed ? showAt(proj, base, rootRel) : null;
+  const rootBase = rootBaseText === null ? null : parseToml(rootBaseText);
+  const fresh = [];
+  const legacy = [];
+  for (const mp of manifestPaths) {
+    const rel = relTo(proj.root, mp);
+    const now = parseToml(readText(mp));
+    if (!now || !rootNow) { fresh.push(`${rel}: not readable as TOML by temper`); continue; }
+    const self = path.resolve(mp) === path.resolve(rootPath);
+    const opts = { ownLints: ownLintsMember(proj.config, proj.root, mp) };
+    const after = memberProblems(now, { path: rootPath, manifest: rootNow, self }, opts);
+    let before = [];
+    if (changed && !changed.has(rel) && !changed.has(rootRel)) before = after; // untouched since the base
+    else if (changed && rootBase) {
+      const baseText = showAt(proj, base, rel);
+      const was = baseText === null ? null : parseToml(baseText);
+      if (was) before = memberProblems(was, { path: rootPath, manifest: rootBase, self }, opts);
+    }
+    const split = splitProblems(before, after);
+    for (const p of split.fresh) fresh.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
+    for (const p of split.legacy) legacy.push(`${p.id} ${rel}`);
+  }
+  const old = legacy.length ? `${legacy.length} older problem(s) not introduced since the base (advisory): ${legacy.join(', ')}` : '';
+  return {
+    ok: fresh.length === 0,
+    summary: fresh.length
+      ? fresh.join('\n') + (old ? `\n(${old})` : '')
+      : `${manifestPaths.length} member manifest(s): no new lint-inheritance or profile problems${old ? `; ${old}` : ''}`,
+  };
+}
+
+/** The manifests step without cargo: members from the root's `members` globs. */
+export function checkManifestsToml(proj, base) {
+  const members = membersFromToml(proj.root);
+  if (members === null) return { ok: true, checked: false, summary: `not checked: no readable Cargo.toml at ${proj.root}` };
+  return { ...checkManifestPaths(proj, base, path.join(proj.root, 'Cargo.toml'), members), checked: true };
+}
+
+/**
+ * The manifests step: members from `cargo metadata --no-deps` (fast, no
+ * resolution), falling back to the TOML walk when cargo cannot be run.
+ * Stable Cargo warns about neither problem, so a new crate without
+ * `[lints] workspace = true` would compile with every escape hatch allowed.
+ * @returns {{ ok: boolean, summary: string }}
+ */
+export function checkManifests(proj, base) {
   const r = run('cargo', ['metadata', '--no-deps', '--format-version', '1'], { cwd: proj.root, env: { CARGO_TERM_COLOR: 'never' }, timeoutMs: 120000 });
+  if (r.error) return checkManifestsToml(proj, base);
   if (r.code !== 0) {
-    const why = (r.error?.message ?? r.stderr).trim().split(/\r?\n/).filter(Boolean).slice(0, 6).join('\n');
+    const why = r.stderr.trim().split(/\r?\n/).filter(Boolean).slice(0, 6).join('\n');
     return { ok: false, summary: `cargo metadata failed:\n${why}` };
   }
   let meta;
   try { meta = JSON.parse(r.stdout); } catch { return { ok: false, summary: 'cargo metadata printed output that is not JSON' }; }
-  const rootPath = path.join(meta.workspace_root, 'Cargo.toml');
-  const rootManifest = parseToml(readText(rootPath));
   const members = new Set(meta.workspace_members ?? []);
-  const problems = [];
-  let count = 0;
-  for (const pkg of meta.packages ?? []) {
-    if (members.size && !members.has(pkg.id)) continue;
-    count++;
-    const rel = relTo(proj.root, pkg.manifest_path);
-    const manifest = parseToml(readText(pkg.manifest_path));
-    if (!manifest || !rootManifest) { problems.push(`${rel}: not readable as TOML by temper`); continue; }
-    const self = path.resolve(pkg.manifest_path) === path.resolve(rootPath);
-    for (const p of memberProblems(manifest, { path: rootPath, manifest: rootManifest, self })) {
-      problems.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
-    }
-  }
-  return {
-    ok: problems.length === 0,
-    summary: problems.length ? problems.join('\n') : `${count} member manifest(s) inherit the workspace lints; no member profiles`,
-  };
+  const paths = (meta.packages ?? []).filter((p) => !members.size || members.has(p.id)).map((p) => p.manifest_path);
+  return checkManifestPaths(proj, base, path.join(meta.workspace_root, 'Cargo.toml'), paths);
 }
 
 /**
@@ -116,7 +151,14 @@ export function runGate(proj, opts = {}) {
   const probe = run('cargo', ['--version'], { cwd, env, timeoutMs: 60000 });
   if (probe.code !== 0) {
     const why = (probe.error?.message ?? `${probe.stderr}${probe.stdout}`).trim().split(/\r?\n/).slice(0, 3).join(' ');
-    return { ok: null, unavailable: true, fp: null, at: new Date().toISOString(), cached: false, steps: [{ name: 'toolchain', ok: false, ms: 0, summary: `cargo is not usable in this environment: ${why}` }] };
+    const toolchain = { name: 'toolchain', ok: false, ms: 0, summary: `cargo is not usable in this environment: ${why}` };
+    // The manifest check needs only TOML, so it still runs; a new violation is a red gate.
+    const t = Date.now();
+    const m = checkManifestsToml(proj, opts.base);
+    const manifests = { name: 'manifests', ok: m.ok, ms: Date.now() - t, checked: m.checked, summary: `${m.summary} (read without cargo)` };
+    const at = new Date().toISOString();
+    if (!m.ok) return { ok: false, unavailable: false, fp: null, at, cached: false, steps: [toolchain, manifests] };
+    return { ok: null, unavailable: true, fp: null, at, cached: false, steps: [toolchain, manifests] };
   }
 
   // 1. fmt is mechanical: fix, don't argue. In check mode (reviewers) verify only.
@@ -153,7 +195,7 @@ export function runGate(proj, opts = {}) {
   // 4. member manifests (cargo metadata --no-deps: fast, no resolution), before clippy
   {
     const t = Date.now();
-    const m = checkManifests(proj);
+    const m = checkManifests(proj, opts.base);
     steps.push({ name: 'manifests', ok: m.ok, ms: Date.now() - t, summary: m.summary });
     if (!m.ok) return finish(proj, fp, steps, true, cachePath);
   }
@@ -198,7 +240,11 @@ export function cachedGate(proj, fp) {
 }
 
 export function renderGate(res) {
-  if (res.unavailable) return `temper gate: UNAVAILABLE (${res.steps[0].summary}). Nothing was checked; say so in "Not verified".`;
+  if (res.unavailable) {
+    const m = res.steps.find((s) => s.name === 'manifests');
+    const only = m?.checked ? `Only the member manifests were checked (without cargo): ${m.summary}. Nothing else was checked` : 'Nothing was checked, not even the member manifests';
+    return `temper gate: UNAVAILABLE (${res.steps[0].summary}). ${only}; say so in "Not verified".`;
+  }
   const head = res.steps.map((s) => `${s.name} ${s.ok ? 'ok' : 'FAILED'}`).join(' | ');
   const fails = res.steps.filter((s) => !s.ok).map((s) => `--- ${s.name} ---\n${s.summary}${s.log ? `\n(full log: ${s.log})` : ''}`).join('\n');
   const passes = res.steps.filter((s) => s.ok && s.name.includes('test')).map((s) => `${s.name}: ${s.summary}`).join('\n');

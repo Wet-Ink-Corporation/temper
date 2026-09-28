@@ -71,7 +71,7 @@ mod connection;
 #[cfg(test)] // lets clippy's allow-*-in-tests cover helpers, not only #[test] fns
 mod support;
 ```
-Helpers in `support.rs` are `pub(crate)`, because plain `pub` trips `unreachable_pub`. clippy's test allowances (`allow-expect-in-tests` and the others) cover only `#[test]` functions and `#[cfg(test)]` modules, not plain helper functions in `support.rs`. So make fixtures return `Result` and call them with `?` (TST-04), which also gives better failure messages. Keep `clippy::tests_outside_test_module` off; the workspace template leaves it off because it fires on every `#[test]` in `tests/`.
+Helpers in `support.rs` are `pub(crate)`, because plain `pub` trips `unreachable_pub`. clippy's test allowances (`allow-expect-in-tests` and the others) cover `#[test]` functions and `#[cfg(test)]` modules, so declaring the module `#[cfg(test)] mod support;` puts its helpers under them; a helper module declared without it does not get them. Fixtures still return `Result` and are called with `?` (TST-04), because that gives better failure messages than a panic inside a helper. Keep `clippy::tests_outside_test_module` off; the workspace template leaves it off because it fires on every `#[test]` in `tests/`.
 
 ## Naming and shape
 
@@ -495,7 +495,7 @@ Use `prop_assert*!` inside `proptest!` so failures shrink instead of aborting. B
 ### TST-07 · Snapshots for structured and textual output
 **Why.** Hand-written expected strings for rendered text or JSON are tedious, so people assert on fragments and miss regressions. A snapshot captures the whole output and turns every change into a reviewable diff.
 
-**Do.** `insta` with the `json` and `redactions` features (dev-dependency; adding it is H-16). Redact values that are volatile by nature (generated ids, times you do not control); inject the clock where you can instead (TST-10).
+**Do.** `insta` with the `json` and `redactions` features, as a dev-dependency (pre-approved in `.claude/temper.json`). Redact values that are volatile by nature (generated ids, times you do not control); inject the clock where you can instead (TST-10).
 ```rust,fragment
 #[test]
 fn renders_lines_and_total() -> fmt::Result {
@@ -670,7 +670,7 @@ The testing face of H-12: removing a test or changing what it expects is a human
 ### TST-16 · Every performance claim ships with a benchmark
 **Why.** "Faster" without a measurement is a guess, and a later change can silently undo it. A committed benchmark makes the claim reproducible (PERF-01).
 
-**Do.** `divan` (or `criterion`) as a dev-dependency (H-16), a `[[bench]]` target with `harness = false`, inputs at several sizes, and `black_box` on inputs. Report before and after numbers from the same machine in the change description.
+**Do.** `divan` (or `criterion`) as a dev-dependency (both pre-approved in `.claude/temper.json`), a `[[bench]]` target with `harness = false`, inputs at several sizes, and `black_box` on inputs. Report before and after numbers from the same machine in the change description.
 ```toml
 [[bench]]
 name = "encode"
@@ -709,7 +709,7 @@ Run with `cargo bench -p hexcodec`. Build inputs outside the measured closure; r
 **Scope.** Required for a crate with any non-`Relaxed` atomic ordering, a `Condvar`, or hand-written thread coordination (ASY-13, ASY-16). Worth it for any crate that spawns threads, holds locks across calls, or builds `Rc` graphs.
 
 **Do.**
-1. Keep the template's `miri` job: a pinned nightly with the `miri` component, run weekly and on demand. Each seed replays the tests under a different schedule. The `env-set` flags cut proptest to 8 cases (one 256-case property takes about 16 minutes under Miri) and stop it writing failure files:
+1. Keep the template's `miri` job: a pinned nightly with the `miri` component, run weekly and on demand. Each seed replays the tests under a different schedule. It turns isolation off so adapter tests can use the file system; the ARC-02 purity check is a separate run over the pure crates with isolation on. The `env-set` flags cut proptest to 8 cases (one 256-case property takes about 16 minutes under Miri) and stop it writing failure files:
 ```yaml
 - run: cargo +nightly-2026-09-28 miri test --locked --workspace --no-fail-fast
   env:

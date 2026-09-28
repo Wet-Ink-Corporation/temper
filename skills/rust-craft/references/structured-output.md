@@ -416,6 +416,8 @@ House exit-code convention (use it unless the tool's consumers already expect an
 | 3 | the domain refused the request, or partial success |
 | 4 | the failure could not even be reported (stderr closed) |
 
+The house table is the default, not a ceiling: a binary may define more specific codes (store failed, setup failed) when its crate charter documents them.
+
 When a supervisor or shell script needs finer classes, use sysexits(3) (64 usage, 65 data, 66 no input, 74 I/O, 78 config) for *every* class instead, as errors.md does. Don't mix the two schemes. Document the table in the binary's `--help` and its crate charter.
 
 Map outcomes to codes with an exhaustive `match`, never `as` on a discriminant (H-11): a new variant then fails to compile until it gets a code.
@@ -622,7 +624,7 @@ std::process::exit(1);                           // skips destructors and buffer
 
 ### OUT-07 · Generate and snapshot JSON Schemas
 **Why.** A snapshot of the generated schema turns an accidental contract change (renamed field, new required field, loosened type) into a failing test with a readable diff.
-**Do.** Derive `schemars::JsonSchema` on public DTOs (`CreateUserRequest` above) and snapshot the schema with `insta`. Adding `schemars`, and `insta` as a dev-dependency, is H-16:
+**Do.** Derive `schemars::JsonSchema` on public DTOs (`CreateUserRequest` above) and snapshot the schema with `insta`. Adding `schemars` is H-16; `insta` is pre-approved (`.claude/temper.json`):
 ```rust,fragment
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

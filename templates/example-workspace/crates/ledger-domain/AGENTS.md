@@ -16,7 +16,7 @@ Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `
 
 ## Invariants
 - A `Cents` balance never goes below zero and never wraps: `decide` refuses overdrafts and overflowing deposits (`rejects_withdrawal_over_balance`, `rejects_deposit_that_would_overflow_the_balance`, property `balance_never_goes_below_zero`).
-- `evolve` is total and infallible; replaying the events `decide` produced reproduces the state (property `replaying_decided_events_reproduces_state`). An event `decide` could not have produced in the current state leaves the state unchanged.
+- `evolve` is total and infallible; replaying the events `decide` produced reproduces the state (property `replaying_decided_events_reproduces_state`). An event of a kind `decide` never produces in the current state leaves it unchanged (`evolve_ignores_events_decide_cannot_produce`, `evolve_leaves_a_closed_account_closed`), and amounts saturate instead of overflowing (`evolve_saturates_a_deposit_decide_would_refuse`, `evolve_saturates_a_withdrawal_decide_would_refuse`). `evolve` matches every `(State, Event)` pair explicitly, so a new variant does not compile until it is placed.
 - Depositing then withdrawing the same amount restores the state (property `withdrawing_a_deposit_restores_the_state`).
 - A closed account never reopens and accepts no command (`closed_account_rejects_every_command`).
 - `AccountId` is 1 to 64 of `a-z`, `0-9`, `-`, not starting with `-`: no separators, dots or case ambiguity, so adapters can embed it in file names and URLs without escaping. `OwnerName` is trimmed, 1 to 80 characters, with no control characters. Both are only constructed through `FromStr` (API-03).
@@ -44,6 +44,7 @@ Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `
 | 2026-09-28 | `Command`, `Event` and `State` are exhaustive so adding a variant breaks every `match` over them (the store's DTO mapping, the CLI's rendering) and forces review. Errors are `#[non_exhaustive]`. | API-05, CRF-03 | example maintainers |
 | 2026-09-28 | `Cents` parses `12`, `12.5` and `12.50` so users never type raw cents; money stays `u64` cents inside. | API-03, ERR-09 | example maintainers |
 | 2026-09-28 | `evolve` stays total and ignores events `decide` could not have produced; history consistency is not re-validated on load. The store validates each record's shape and values, and only `decide` creates events. | ARC-13 | example maintainers |
+| 2026-09-28 | `evolve` lists every impossible `(State, Event)` pair instead of a wildcard arm, and applies amounts with saturating arithmetic rather than `checked_*` plus a fallback: `decide` already refuses overflows and overdrafts, so saturation only affects history `decide` did not write. | CRF-03, ERR-09 | example maintainers |
 | 2026-09-28 | Add `proptest` as a dev-dependency for invariant properties. | H-16, TST-06 | example maintainers |
 | 2026-09-28 | `FromStr` errors are named verb-object-`Error` like std's `ParseIntError`: `AccountIdError` and `OwnerNameError` became `ParseAccountIdError` and `ParseOwnerNameError`, matching `ParseCentsError`. | CRF-01 | example maintainers |
 | 2026-09-28 | `Cents` implements no `std::ops` traits: a sum can overflow, so arithmetic is `checked_add`/`checked_sub` returning `Option`. | API-22, ERR-09 | example maintainers |

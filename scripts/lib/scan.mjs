@@ -4,7 +4,7 @@
 // 'ask' hit: an exception request that a human must approve (H-05).
 
 import {
-  maskRust, lineIndex, testRegions, inRegions, countTests, matchBrace, matchPair, matchAngle, splitTop,
+  maskRust, lineIndex, testRegions, inRegions, countTests, countIgnored, topLevelCfgAttrArg, matchBrace, matchPair, matchAngle, splitTop,
   statementEnd, constRegions, traitImplRegions,
 } from './lexer.mjs';
 
@@ -31,7 +31,8 @@ export const isBuildScript = (relToCrate) => relToCrate.replace(/\\/g, '/') === 
 /**
  * Rule table. `ctx` gives severity per code context:
  *   prod = production code in a library crate, bin = production code in a binary/build script,
- *   example = examples/, test = tests, benches, #[cfg(test)] regions.
+ *   example = examples/ and benches/ (benchmarks follow production rules),
+ *   test = tests/, test modules and #[cfg(test)]/#[test] regions.
  * A rule has either `re` (optionally filtered by `keep(env, match)`) or `find(env)`,
  * which returns `{ offset, msg?, fix?, severity?, exception? }` entries.
  * A `severity` from `find` overrides the context table.
@@ -121,13 +122,15 @@ export const RULES = [
   },
   {
     key: 'empty-err-arm', id: 'H-10', re: /\bErr\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=>\s*(?:\{\s*\}|\(\s*\))/g,
+    // Not silent when another arm of the same match keeps an error (keep-first-error).
+    keep: (env, m) => !otherArmBindsErr(env.code, m.index),
     ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
     msg: 'empty `Err` match arm silently discards the error',
     fix: 'Handle or propagate the error. If it is truly irrelevant, bind and log it (`Err(e) => tracing::debug!(error = %e, "..")`) with a comment saying why (H-10, ERR-12).',
     lints: [],
   },
   {
-    key: 'empty-if-let-err', id: 'H-10', re: /\bif\s+let\s+Err\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=[^{;]*\{\s*\}(?!\s*else\b)/g,
+    key: 'empty-if-let-err', id: 'H-10', find: emptyIfLetErr,
     ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
     msg: 'empty `if let Err(_)` block silently discards the error',
     fix: 'Handle or propagate the error. If it is truly irrelevant, bind and log it (`if let Err(e) = .. { tracing::debug!(error = %e, "..") }`) with a comment saying why (H-10, ERR-12).',
@@ -187,6 +190,7 @@ export const RULES = [
   },
   {
     key: 'ignore-no-reason', id: 'H-12', re: /#\s*\[\s*(?:cfg_attr\s*\([^\]]*?,\s*)?ignore\s*(?=[\],)])/g,
+    keep: (_env, m) => topLevelCfgAttrArg(m[0]), // not `cfg_attr(.., educe(Debug, ignore))`
     ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'hard' },
     msg: '`#[ignore]` or `cfg_attr(.., ignore)` without a reason',
     fix: 'Do not disable tests to get green (H-12). If a test is slow, needs external resources or cannot run under Miri, write `#[ignore = "reason"]` or `#[cfg_attr(miri, ignore = "reason")]` and tell the human.',
@@ -290,7 +294,10 @@ export const RULES = [
     lints: [],
   },
   {
-    key: 'compiler-fence', id: 'ASY-13', re: /\bcompiler_fence\s*\(/g,
+    key: 'compiler-fence', id: 'ASY-13', re: /(?<![.\w]\s*|\bfn\s+)\bcompiler_fence\s*\(/g,
+    // std's fence only: an `atomic::` path, or an import from std/core::sync::atomic. Never `fn compiler_fence`.
+    keep: (env, m) => /\batomic\s*::\s*$/.test(env.code.slice(Math.max(0, m.index - 40), m.index))
+      || /\buse\s+(?:std|core)\s*::\s*sync\s*::\s*atomic\s*::\s*(?:compiler_fence\b|\{[^}]*\bcompiler_fence\b)/.test(env.code),
     ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
     msg: '`compiler_fence` does not order memory between threads',
     fix: 'Put the ordering on the atomic operation, or use `fence(Acquire)`/`fence(Release)` paired with a named operation. `compiler_fence` is for signal handlers, which need `unsafe` (ASY-13, H-01).',
@@ -430,9 +437,10 @@ export const RULES = [
   },
   {
     key: 'doc-unwrap', id: 'H-02', find: docUnwrap,
-    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    // rustdoc runs doctests of library crates only; elsewhere the fence is advisory.
+    ctx: { prod: 'hard', bin: 'soft', example: 'soft', test: 'soft' },
     msg: 'unwrap/expect/panic in a doctest',
-    fix: 'Doctests are copied verbatim: use `?` with a hidden `# fn main() -> Result<(), Box<dyn std::error::Error>> {` wrapper or a `# Ok::<(), MyError>(())` tail (TST-11, H-02). Fences tagged `text`, `ignore` or `compile_fail` are not checked.',
+    fix: 'Doctests are copied verbatim: use `?` with a hidden `# fn main() -> Result<(), Box<dyn std::error::Error>> {` wrapper or a `# Ok::<(), MyError>(())` tail (TST-11, H-02). Fences tagged `text`, `ignore`, `compile_fail` or `should_panic` are not checked.',
     lints: [],
   },
   {
@@ -528,6 +536,51 @@ function commentedCode(env) {
     if ((startsLikeCode || endsLikeCode) && !/[.!?…]\s*$/.test(body)) out.push({ offset: c.start });
   }
   return out;
+}
+
+/** `if let Err(_) = <scrutinee> {}` with an empty body (the body brace is the first `{` at depth 0). */
+function emptyIfLetErr(env) {
+  const { code } = env;
+  const out = [];
+  const re = /\bif\s+let\s+Err\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=(?!=)/g;
+  let m;
+  while ((m = re.exec(code))) {
+    let depth = 0;
+    let open = -1;
+    for (let k = re.lastIndex; k < code.length; k++) {
+      const ch = code[k];
+      if (ch === '(' || ch === '[') depth++;
+      else if (ch === ')' || ch === ']') depth--;
+      else if (ch === '{' && depth === 0) { open = k; break; }
+      else if (ch === '{') k = matchBrace(code, k);
+      else if ((ch === ';' || ch === '}') && depth <= 0) break;
+    }
+    if (open === -1) continue;
+    const close = matchBrace(code, open);
+    if (code.slice(open + 1, close).trim() !== '') continue;
+    if (/^\s*else\b/.test(code.slice(close + 1))) continue;
+    out.push({ offset: m.index });
+  }
+  return out;
+}
+
+/** Does another arm of the `match` enclosing `offset` bind an `Err` payload to a variable? */
+function otherArmBindsErr(code, offset) {
+  let depth = 0;
+  let open = -1;
+  for (let k = offset - 1; k >= 0; k--) {
+    if (code[k] === '}') depth++;
+    else if (code[k] === '{') { if (depth === 0) { open = k; break; } depth--; }
+  }
+  if (open === -1 || !/\bmatch\b[^;{}]*$/.test(code.slice(Math.max(0, open - 300), open))) return false;
+  const close = matchBrace(code, open);
+  // Arms at the match's own depth: blank out nested blocks.
+  let arms = '';
+  for (let k = open + 1; k < close; k++) {
+    if (code[k] === '{') { const e = matchBrace(code, k); arms += ' '.repeat(e - k + 1); k = e; continue; }
+    arms += code[k];
+  }
+  return /\bErr\s*\(\s*(?:ref\s+)?(?:mut\s+)?[a-z]\w*\s*[)@]/.test(arms.replace(/\bErr\s*\(\s*_\w*\s*\)/g, ''));
 }
 
 /** Is the item at `offset` preceded by a `#[cfg(..)]` attribute? */
@@ -646,7 +699,7 @@ function docBlocks(env) {
 function docUnwrap(env) {
   const out = [];
   for (const f of env.doc.fences) {
-    if (!isRustFence(f.info)) continue;
+    if (!isRustFence(f.info) || /(?:^|[\s,])should_panic(?:$|[\s,])/.test(f.info)) continue;
     // Hidden lines (`# ..`) are compiled too, so they are checked.
     const body = f.lines.map((l) => l.text.replace(/^(\s*)# /, '$1').replace(/^(\s*)#$/, '$1')).join('\n');
     maskRust(body).code.split('\n').forEach((line, i) => {
@@ -755,7 +808,7 @@ export function scanSource(src, { kind, build = false }) {
       push(rule, offset, sev, extra);
     }
   }
-  return { hits, tests: countTests(code), clones: (code.match(/\.\s*clone\s*\(\s*\)/g) ?? []).length };
+  return { hits, tests: countTests(code), ignores: countIgnored(code), clones: (code.match(/\.\s*clone\s*\(\s*\)/g) ?? []).length };
 }
 
 /** Hits present in `after` but not in `before` (matched by rule key + normalized line text). */

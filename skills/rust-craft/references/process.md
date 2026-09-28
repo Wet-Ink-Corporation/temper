@@ -214,7 +214,7 @@ Use the domain's own words. The charter's vocabulary is the ubiquitous language.
 
 - **Acronyms are one word**: `HttpClient`, `Uuid`, `Stdin` in CamelCase, `is_xid_start` in snake_case. `clippy::upper_case_acronyms` runs in aggressive mode (`clippy.toml`), so `HTTPClient` fails the gate.
 - **No `Manager`, `Factory`, `Helper` or `Util` types.** Name the role (`Bookings`, `BookingDispatcher`). A factory is a `FooBuilder` (API-10) or an `impl Fn() -> Foo` parameter. `Service` is fine for DDD application and domain services.
-- **One word order per kind.** Error types read verb-object-`Error` like std's `ParseIntError` (`ParseAddrError`, `LoadConfigError`), and iterator types are named after their method (`Iter`, `IntoIter`, API-01).
+- **Names of one kind share a word order within a crate.** If the crate's errors are `ParseAddrError` and `LoadConfigError`, the next one is `WriteReportError`, not `ReportWriteError`.
 
 Code ported from C# or Java carries shapes that compile but are not Rust:
 
@@ -275,7 +275,7 @@ pub fn parse_weighted(input: &str) -> Result<Weighted<'_>, ParseWeightedError> {
 }
 ```
 
-Use early returns (`?`, `let ... else`, guard `if`s) rather than pyramids. Match exhaustively on enums you own, with no `_ =>` arm, so that adding a variant forces every match to be revisited.
+Use early returns (`?`, `let ... else`, guard `if`s) rather than pyramids. Match exhaustively on enums you own, with no `_ =>` arm, so that adding a variant forces every match to be revisited. Enums inside a workspace stay exhaustive, sibling crates included; `#[non_exhaustive]` marks only types that cross a published API boundary (API-05), and a `_` arm is required only on those.
 
 ### CRF-04 · Comments
 
@@ -285,7 +285,7 @@ Comments say *why*: a constraint, a trade-off, a link to the issue or spec. Doc 
 
 Leave no unused functions, parameters, features or dependencies, and no speculative abstraction built "for later". `dead_code` and the `unused` lints find the first kind; `cargo machete` in CI finds unused dependencies. Speculative generality needs review, with these anchors:
 
-- a trait with one implementation that is not a port (a port with one adapter and a test fake is fine, ARC-03);
+- a trait with one implementation that is not a port. A port with one adapter and a test fake is fine (ARC-03), and so are an extension trait on a foreign type (API-18), a sealed trait (API-12) and a trait that exists for a blanket impl over closures (API-18);
 - a marker trait with no methods and no sealing or typestate purpose;
 - a type parameter or `where` clause on internal code that only one type ever fills;
 - a feature flag or configuration option that nothing sets.
@@ -355,9 +355,9 @@ rustc's `for_loops_over_fallibles` and `clippy::option_map_unit_fn` reject both.
 
 ### CRF-11 · Docs describe the current contract
 
-Docs and comments describe the current contract and behaviour. Design history, rejected alternatives and rule-compliance tables go in the plan or the charter's decisions log (ARC-08), never in rustdoc, READMEs or code comments.
+Rustdoc and READMEs describe the contract and behaviour. A `//` why-comment may justify the current design, in the present tense ("one lock: `balance` and `history` change together"). Design history, narratives of alternatives tried, and rule-compliance tables go in the plan or the charter's decisions log (ARC-08).
 
-**Why.** A reader of rustdoc needs what the item does now. "We first tried X" goes stale with the next change and buries the contract, and a table of rule IDs "applied" is a self-report nobody maintains. The plan and the decisions log are where that history is kept and dated.
+**Why.** A reader of rustdoc needs what the item does now. "We first tried X" goes stale with the next change and buries the contract, and a table of rule IDs "applied" is a self-report nobody maintains. A present-tense reason next to the code stays true as long as the code does; the plan and the decisions log keep the dated history.
 
 **Do.**
 ```rust
@@ -386,7 +386,7 @@ pub fn backoff(retry: u32) -> Duration {
 pub fn backoff(retry: u32) -> Duration { .. }
 ```
 
-**Detect.** Review: "originally", "we tried", "instead of X we", "alternatives considered", or rule-ID tables in doc comments, comments or READMEs. A comment may cite a rule ID when it explains a constraint at that line.
+**Detect.** Review: "originally", "we tried", "used to", "alternatives considered", or rule-ID tables in doc comments, comments or READMEs. A `//` comment may cite a rule ID when it explains a constraint at that line.
 
 ## Definition of done
 
@@ -409,7 +409,7 @@ fmt, clippy, tests and docs are green with zero warnings, and every public item 
 - [ ] Is the diff limited to the goal? (CRF-08)
 - [ ] Do names use the domain language, are functions small, and do comments explain why? (CRF-01, CRF-02, CRF-04)
 - [ ] Is there no dead code, speculative generality or commented-out code, and no untracked TODO? (CRF-05, H-06)
-- [ ] Do docs and comments describe current behaviour, with history kept in the plan or decisions log? (CRF-11)
+- [ ] Do rustdoc and READMEs describe the contract, `//` comments justify the design in the present tense, and history live in the plan or decisions log? (CRF-11)
 - [ ] Was `Cargo.lock` changed only by cargo? (PROC-13)
 - [ ] Are the charter, docs and CHANGELOG updated? (PROC-11)
 - [ ] Does the Status block match reality? (PROC-10)

@@ -81,7 +81,7 @@ tokio = { workspace = true }    # domain now chooses a runtime
 - `cargo tree --workspace --depth workspace -e normal --target all` shows the whole crate graph on one screen. `--target all` includes `[target.'cfg(..)'.dependencies]`, which the default host-only view skips.
 - `cargo tree -e normal --target all -p ledger-domain` must not show `tokio`, `sqlx`, `reqwest`, `hyper`, `axum`, or any `ledger-adapter-*`.
 - `cargo tree -e normal --target all -i ledger-adapter-fs` must show only binaries as dependents.
-- Under Miri with isolation on (the default, TST-17), a domain or application test that touches the file system aborts, and one that reads the environment or clock gets deterministic fakes. Either way, that test is using the wrong seam.
+- Run the pure crates under Miri with isolation on: `cargo +nightly miri test -p <domain>`, without `-Zmiri-disable-isolation`. The template's `miri` job turns isolation off for the whole workspace, so it does not do this. With isolation on, a domain or application test that touches the file system aborts, and one that reads the environment or clock gets deterministic fakes. Either way, that test is using the wrong seam.
 
 **CONSIDER** `#![no_std]` for a pure domain crate, with `extern crate alloc;` (and `#[cfg(test)] extern crate std;` when tests need std). The compiler then rejects `std::fs`, `std::env`, `SystemTime::now` and threads, so ARC-02 and ARC-04 become compile errors. It costs `BTreeMap` instead of `HashMap` (OUT-04 wants that anyway), `core::error::Error` (MOD-08), and `thiserror` with `default-features = false`.
 ```rust,fragment
@@ -203,7 +203,6 @@ pub mod app {
 
     /// Failure of [`handle`]: a business rejection or a store failure.
     #[derive(Debug, Error)]
-    #[non_exhaustive]
     pub enum HandleError<E> {
         /// The domain refused the command.
         #[error("command rejected")]
@@ -251,7 +250,6 @@ pub mod adapter_fs {
 
     /// File store failure. Adapter detail; never reaches the domain.
     #[derive(Debug, Error)]
-    #[non_exhaustive]
     pub enum FsStoreError {
         /// File system failure on a path.
         #[error("i/o on {}", .0.display())]
@@ -443,7 +441,6 @@ pub enum State {
 
 /// Why a command was refused. Business outcomes, not infrastructure failures.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum Rejection {
     /// `Open` on an open account.
     #[error("account is already open")]
@@ -496,8 +493,9 @@ pub fn evolve(state: State, event: &Event) -> State {
         (State::Open(balance), Event::Withdrawn(amount)) => {
             State::Open(balance.saturating_sub(*amount))
         }
-        // Not produced by `decide`; a total function keeps the state unchanged.
-        (state @ (State::Unopened | State::Open(_)), _) => state,
+        // `decide` never emits these; replaying them changes nothing.
+        (state @ State::Open(_), Event::Opened(_))
+        | (state @ State::Unopened, Event::Deposited(_) | Event::Withdrawn(_)) => state,
     }
 }
 
@@ -561,74 +559,22 @@ mod tests {
 pub enum Event { Deposit { amount: u64 }, UpdateBalance { new_balance: u64 } } // imperative names; state snapshots, not facts
 pub fn evolve(state: &mut State, event: &Event) -> Result<(), Error> { .. }      // fallible evolve: replay can fail on history
 ```
-**Detect.** Events named in the imperative, `evolve` returning `Result`, I/O in `decide`, `Rejection` variants holding `io::Error`.
+**Detect.** Events named in the imperative, `evolve` returning `Result` or matching events with `_`, I/O in `decide`, `Rejection` variants holding `io::Error`.
 
 Rules of the shape:
 - Commands are imperative (`Withdraw`), events past tense (`Withdrawn`). An event is a fact: never rejected, never edited, never deleted.
 - `decide` returns `Result<Vec<Event>, Rejection>`. `Rejection` is a business outcome enum, separate from infrastructure errors (`HandleError::Store`).
-- `evolve` is total and infallible. Validation belongs in `decide`; history is already true.
+- `evolve` is total and infallible. Validation belongs in `decide`; history is already true. `evolve` never has a wildcard on the event: a new event must fail to compile there (CRF-03).
 - `State` holds only what `decide` needs. Read models are separate projections (`view`, or a `BTreeMap` built by folding events into a query-side structure).
+- Events, commands and `Rejection` are exhaustive enums inside the workspace (no `#[non_exhaustive]`), so every match breaks when a variant is added (CRF-03). A published event crate makes the API-05 decision at first publication.
 
-**Typed ids.** One generic `Id<T>` gives every aggregate its own id type without a newtype per aggregate (API-02). `PhantomData<fn() -> T>` ties the id to `T` without owning one, and the trait impls are written by hand because derives would bound `T`.
-```rust
-//! One id type for every aggregate: an `Id<Account>` is never an `Id<Order>`.
-
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-
-/// Identifier of an aggregate of type `T`.
+**Typed ids.** One generic `Id<T>` gives every aggregate its own id type (`Id<Account>` is never `Id<Order>`) without a newtype per aggregate (API-02). Build it with `Id::new(raw)`, read it with `id.get()`; the full sketch is patterns.md #32. The two details that matter:
+```rust,fragment
 pub struct Id<T> {
     raw: u64,
-    // `fn() -> T` owns no `T`, so `Id<T>` is `Copy + Send + Sync` for every `T`.
-    entity: PhantomData<fn() -> T>,
+    entity: PhantomData<fn() -> T>, // owns no `T`: `Id<T>` is `Copy + Send + Sync` for every `T`
 }
-
-impl<T> Id<T> {
-    /// Wraps a raw id read from storage.
-    #[must_use]
-    pub const fn from_raw(raw: u64) -> Self {
-        Self {
-            raw,
-            entity: PhantomData,
-        }
-    }
-
-    /// The raw value, for storage.
-    #[must_use]
-    pub const fn raw(self) -> u64 {
-        self.raw
-    }
-}
-
-// Written by hand: `#[derive]` would add a `T: Clone`, `T: PartialEq`, ... bound (API-21).
-impl<T> Clone for Id<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> Copy for Id<T> {}
-
-impl<T> PartialEq for Id<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.raw == other.raw
-    }
-}
-
-impl<T> Eq for Id<T> {}
-
-impl<T> Hash for Id<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.raw.hash(state);
-    }
-}
-
-impl<T> fmt::Debug for Id<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Id({})", self.raw)
-    }
-}
+// Clone, Copy, PartialEq, Eq, Hash and Debug are written by hand: derives would bound `T` (API-21).
 ```
 
 **Versioning.** Stored events outlive code. Change them additively (new optional fields with `#[serde(default)]`, new variants). For a breaking change, freeze the old shape as a private `V1` type, add the new shape, and upcast on read so `decide`/`evolve` see only the current type. Changing a persisted event shape is a schema migration and a HITL decision (H-16). The full compiling pattern is in `structured-output.md` §Versioning and upcasting.
@@ -724,7 +670,7 @@ Stability: <internal to workspace | published, semver-checked>
 - <e.g. `evolve` is total and never fails>
 
 ## Error types
-- <ErrorEnum>: <operation it belongs to, #[non_exhaustive], which variants callers match on>
+- <ErrorEnum>: <operation it belongs to, which variants callers match on; #[non_exhaustive] only if the crate is published>
 
 ## Test strategy
 - Unit: <given/when/then over decide/evolve; view-model assertions>
@@ -774,91 +720,45 @@ Default to generic ports: `fn handle<S: EventStore>(store: &mut S, ..)`, or `str
 
 ```rust
 //! Dependency injection: generic ports in the core, a named `dyn` wrapper at the root.
+# use std::fmt;
+# use std::sync::Arc;
+# use std::time::SystemTime;
+# pub trait Clock: Send + Sync { fn now(&self) -> SystemTime; }
+# #[derive(Debug)] pub struct SystemClock;
+# impl Clock for SystemClock { fn now(&self) -> SystemTime { SystemTime::now() } }
+# #[derive(Debug)] pub struct FixedClock(pub SystemTime);
+# impl Clock for FixedClock { fn now(&self) -> SystemTime { self.0 } }
+# #[derive(Clone)] pub struct DynClock(Arc<dyn Clock>);
+# impl DynClock { pub fn new(clock: impl Clock + 'static) -> Self { Self(Arc::new(clock)) } }
+# impl Clock for DynClock { fn now(&self) -> SystemTime { self.0.now() } }
+# impl fmt::Debug for DynClock {
+#     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("DynClock") }
+# }
 
-use std::fmt;
-use std::sync::Arc;
-use std::time::SystemTime;
-
-/// Port: the current time. Injected so decisions stay deterministic in tests.
-pub trait Clock: Send + Sync {
-    /// The current wall-clock time.
-    fn now(&self) -> SystemTime;
-}
-
-/// Adapter: the operating-system clock.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct SystemClock;
-
-impl Clock for SystemClock {
-    fn now(&self) -> SystemTime {
-        SystemTime::now()
-    }
-}
-
-/// Fake: a clock frozen at one instant.
-#[derive(Debug, Clone, Copy)]
-pub struct FixedClock(pub SystemTime);
-
-impl Clock for FixedClock {
-    fn now(&self) -> SystemTime {
-        self.0
-    }
-}
-
-/// Core service: generic, statically dispatched, monomorphized per clock.
-/// The struct has no bound; the `impl` that needs `Clock` states it (API-21).
+/// Core service: no bound on the struct; the `impl` that needs `Clock` states it (API-21).
 #[derive(Debug)]
 pub struct Stamper<C> {
     clock: C,
 }
 
 impl<C: Clock> Stamper<C> {
-    /// Build a stamper around any clock.
-    pub fn new(clock: C) -> Self {
-        Self { clock }
-    }
-
     /// Pair a value with the time it was stamped.
     pub fn stamp<T>(&self, value: T) -> (SystemTime, T) {
         (self.clock.now(), value)
     }
 }
 
-/// A clock chosen at run time. Signatures name `DynClock`, never `Arc<dyn Clock>` (API-23).
-#[derive(Clone)]
-pub struct DynClock(Arc<dyn Clock>);
-
-impl DynClock {
-    /// Erase any clock behind one shared pointer.
-    #[must_use]
-    pub fn new(clock: impl Clock + 'static) -> Self {
-        Self(Arc::new(clock))
-    }
-}
-
-impl Clock for DynClock {
-    fn now(&self) -> SystemTime {
-        self.0.now()
-    }
-}
-
-/// Written by hand because `dyn Clock` is not `Debug`.
-impl fmt::Debug for DynClock {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("DynClock")
-    }
-}
-
-/// Composition root: pick the implementation at run time, erase it once.
+/// Composition root: pick the clock at run time and erase it once, as `DynClock`.
 #[must_use]
 pub fn build_stamper(frozen_at: Option<SystemTime>) -> Stamper<DynClock> {
     let clock = match frozen_at {
         Some(instant) => DynClock::new(FixedClock(instant)),
         None => DynClock::new(SystemClock),
     };
-    Stamper::new(clock)
+    Stamper { clock }
 }
 ```
+`Clock` is a `Send + Sync` port with `SystemClock` and `FixedClock` adapters. `DynClock(Arc<dyn Clock>)`, a cheap-to-clone wrapper that implements `Clock` with a hand-written `Debug`, is patterns.md #29.
 
 ## Configuration
 
@@ -892,7 +792,6 @@ pub struct Config {
 
 /// Why configuration could not be loaded.
 #[derive(Debug, Error, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ConfigError {
     /// A required variable is absent.
     #[error("{0} is required")]
@@ -989,7 +888,7 @@ rand = "*"                                     # no floor at all
 ```
 Also: adding a crate for one 10-line function; a version declared directly in a member.
 
-- **Pinning.** Control exact versions through `Cargo.lock` (`cargo update -p <crate> --precise <version>`, PROC-13), never through `=`, `~`, `<`, `>=`-only or `*` requirements.
+- **Pinning.** Control exact versions through `Cargo.lock` (`cargo update -p <crate> --precise <version>`, PROC-13), never through `=`, `~`, `<`, `>=`-only or `*` requirements. The one `=` exception is a re-exported proc-macro companion: a facade crate `foo` that re-exports `foo-macros` depends on it as `foo-macros = { version = "=1.4.2" }`, because the generated code calls `foo`'s hidden internals of that exact release, and the two are always released together (ARC-15).
 - **Major bumps.** A major-version bump, including a Dependabot PR, is H-16. Read the upgrade notes for changed preconditions: code that still compiles may now be wrong (TST-18).
 - **`[patch]`.** A committed `[patch]` is H-16, with a tracking-issue comment and a removal condition; delete it once upstream releases the fix. Local experiments use `--config 'patch.crates-io.<crate>.path="../<crate>"'` and are never committed.
 - **Libraries build anywhere (SHOULD).** A library builds on every Tier-1 target with nothing but `cargo`: output of external generators (`protoc`) is committed or produced by a pure-Rust generator (ARC-17), and platform-specific dependencies sit under `[target.'cfg(..)'.dependencies]` or an opt-in feature.
@@ -1077,8 +976,8 @@ fn run() -> anyhow::Result<ExitCode> {
             tracing::warn!(stream = %stream.as_str(), %rejection, "command rejected");
             Ok(ExitCode::from(EXIT_REJECTED))
         }
-        Err(other) => {
-            Err(other).with_context(|| format!("handling command on {}", stream.as_str()))
+        Err(error @ HandleError::Store(_)) => {
+            Err(error).with_context(|| format!("handling command on {}", stream.as_str()))
         }
     }
 }
@@ -1177,7 +1076,7 @@ Mechanics, for any macro that passes that bar:
 - An item-generating macro mirrors Rust syntax, accepts `$(#[$meta:meta])*` and `$vis:vis` per item and any `$t:ty`, and is tested at module scope and inside a function.
 - A macro, ours or a dependency's attribute macro, never changes an item's kind, signature, visibility or `async`-ness, and emits no hidden public items. This is one reason `#[async_trait]` is out (MOD-04).
 - Inspect the expansion with `cargo expand` when reviewing one.
-- **Proc macros** (a new crate, H-16): keep the logic in a plain library crate over `proc_macro2`, with snapshot tests of its expansions, behind a thin `proc-macro = true` shim with trybuild UI tests. The entry point parses, calls `expand(..) -> syn::Result<TokenStream2>`, and turns errors into spanned compile errors with `unwrap_or_else(syn::Error::into_compile_error)`: no `unwrap`, `expect` or `panic!`. Expansions reach the facade's dependencies through a `#[doc(hidden)] pub mod __private` (API-14).
+- **Proc macros** (a new crate, H-16): keep the logic in a plain library crate over `proc_macro2`, with snapshot tests of its expansions, behind a thin `proc-macro = true` shim with trybuild UI tests. The entry point parses, calls `expand(..) -> syn::Result<TokenStream2>`, and turns errors into spanned compile errors with `unwrap_or_else(syn::Error::into_compile_error)`: no `unwrap`, `expect` or `panic!`. Expansions reach the facade's dependencies through a `#[doc(hidden)] pub mod __private` (API-14), and the facade depends on the shim with an exact `=` requirement (the ARC-12 exception).
 
 **Don't.**
 ```rust,ignore

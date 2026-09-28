@@ -10,7 +10,7 @@ Clear code comes first. A change that trades clarity for speed users will notice
 
 ### PERF-01 · Measure before optimizing (TST-16)
 **Why.** Intuition about hot spots is wrong more often than right, and the optimizer already removes much of what looks expensive. An optimization without a before/after number is a readability cost with no proven benefit. TST-16 makes the benchmark part of the change. The plan records the numbers, but the code outlives the plan: code shaped for speed (a boxed variant, an `_into` form, a special-cased size, `cold_path`, a fast hasher) carries a why-comment naming the benchmark or profile, so the next change does not simplify it away.
-**Do.** Put benchmarks in `benches/`, with `harness = false` in the crate's `Cargo.toml`. `divan` is the lighter choice; `criterion` gives statistical comparison against a saved baseline. Either is a dev-dependency, which is still an H-16 decision the first time.
+**Do.** Put benchmarks in `benches/`, with `harness = false` in the crate's `Cargo.toml`. `divan` is the lighter choice; `criterion` gives statistical comparison against a saved baseline. Both are pre-approved (`.claude/temper.json`), so adding either as a dev-dependency needs no H-16 decision.
 ```toml
 [dev-dependencies]
 divan = { workspace = true }
@@ -139,7 +139,7 @@ Also: `Vec::with_capacity` only when the size is known or bounded (never from un
 
 ### PERF-03 · Iterators and adapters over index loops
 **Why.** Iterators carry their own bounds, so the compiler drops the per-index checks, and they express the intent (`windows`, `as_chunks`, `zip`) that index arithmetic hides. Index loops also collide with H-04.
-**Do.** `for (a, b) in xs.iter().zip(ys)`, `xs.windows(2)`, `slice::array_windows::<2>()` (1.94; raise `rust-version` deliberately), `iter().rev()`, `retain`, `dedup_by_key`, `extend`. For a constant chunk size use `as_chunks::<N>()` (1.88): it yields arrays plus the remainder, so `from_le_bytes(*w)` needs no conversion, and `chunks_exact(4)` with a literal fails the gate (`clippy::chunks_exact_to_as_chunks`, style). Keep `chunks_exact(n)` plus `.remainder()` for a runtime `n`.
+**Do.** `for (a, b) in xs.iter().zip(ys)`, `xs.windows(2)`, `slice::array_windows::<2>()`, `iter().rev()`, `retain`, `dedup_by_key`, `extend`. For a constant chunk size use `as_chunks::<N>()` (1.88): it yields arrays plus the remainder, so `from_le_bytes(*w)` needs no conversion, and `chunks_exact(4)` with a literal fails the gate (`clippy::chunks_exact_to_as_chunks`, style). Keep `chunks_exact(n)` plus `.remainder()` for a runtime `n`.
 
 To remove bounds checks from a loop, slice once up front with a fallible form (`get(..n)`, `split_at_checked`, `first_chunk::<N>()`, a slice pattern) and iterate the result. Never hoist the check with `assert!` (H-03), and leave `clippy::missing_asserts_for_indexing` off: it asks for exactly those asserts. When a profile shows small inputs dominate, branch on slice patterns (`[]`, `[x]`, `[a, b]`, `_`) before the general path; unlike `if v.len() == 1 { v[0] }`, they need no index.
 ```rust
@@ -149,9 +149,9 @@ use std::borrow::Cow;
 #[must_use]
 pub fn sum_words(bytes: &[u8]) -> u64 {
     let (words, _tail) = bytes.as_chunks::<4>();
-    words
-        .iter()
-        .fold(0_u64, |acc, w| acc.saturating_add(u64::from(u32::from_le_bytes(*w))))
+    words.iter().fold(0_u64, |acc, w| {
+        acc.saturating_add(u64::from(u32::from_le_bytes(*w)))
+    })
 }
 
 /// Dot product of the first `n` elements; `None` if either slice is shorter
@@ -162,15 +162,16 @@ pub fn dot(a: &[u32], b: &[u32], n: usize) -> Option<u64> {
     let (Some(a), Some(b)) = (a.get(..n), b.get(..n)) else {
         return None;
     };
-    a.iter()
-        .zip(b)
-        .try_fold(0_u64, |acc, (x, y)| acc.checked_add(u64::from(*x) * u64::from(*y)))
+    a.iter().zip(b).try_fold(0_u64, |acc, (x, y)| {
+        acc.checked_add(u64::from(*x) * u64::from(*y))
+    })
 }
 
-/// Joins names for a log line. The profile shows most calls pass zero or one
-/// name, so those cases borrow instead of allocating (PERF-01).
+/// Joins names for a log line.
 #[must_use]
 pub fn join_names<'a>(names: &[&'a str]) -> Cow<'a, str> {
+    // The request profile shows most calls pass zero or one name, so those
+    // cases borrow instead of allocating (PERF-01).
     match names {
         [] => Cow::Borrowed(""),
         [one] => Cow::Borrowed(*one),
@@ -288,7 +289,8 @@ pub enum Message {
     Ping,
     /// Small data.
     Value(u64),
-    /// Rare and large: boxed so every `Message` stays two words.
+    /// Full state, sent rarely.
+    // Boxed so every `Message` stays two words.
     Snapshot(Box<Snapshot>),
 }
 
@@ -363,10 +365,11 @@ disallowed-types = [
 ```rust,fragment
 use foldhash::{HashMap, HashMapExt as _};
 
-/// Counts interned ids, never attacker-controlled keys. foldhash was adopted
-/// after benches/ids.rs showed hashing dominating (PERF-01, PERF-06).
+/// Counts occurrences of each interned id.
 #[must_use]
 pub fn count_ids(ids: &[u32]) -> HashMap<u32, u32> {
+    // Interned ids are process-generated, never attacker-controlled, and
+    // benches/ids.rs shows hashing dominating with SipHash (PERF-01, PERF-06).
     let mut counts = HashMap::with_capacity(ids.len());
     for id in ids {
         let n = counts.entry(*id).or_insert(0_u32);
@@ -646,22 +649,43 @@ pub fn read_capped(reader: impl Read, limit: u64) -> Result<Vec<u8>, ReadError> 
 /// Maximum nesting accepted by [`depth`].
 pub const MAX_DEPTH: usize = 128;
 
-/// Nesting depth of brackets; `None` if unbalanced or deeper than [`MAX_DEPTH`].
-#[must_use]
-pub fn depth(input: &str) -> Option<usize> {
+/// Bracket nesting that [`depth`] rejects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DepthError {
+    /// A `]` without a matching `[`, or a `[` never closed.
+    #[error("unbalanced brackets")]
+    Unbalanced,
+    /// Nesting deeper than [`MAX_DEPTH`].
+    #[error("brackets nest deeper than {}", MAX_DEPTH)]
+    TooDeep,
+}
+
+/// Nesting depth of brackets.
+///
+/// # Errors
+/// [`DepthError::Unbalanced`] or [`DepthError::TooDeep`].
+pub fn depth(input: &str) -> Result<usize, DepthError> {
     let mut current = 0_usize;
     let mut max = 0_usize;
     for c in input.chars() {
         match c {
             '[' => {
-                current = current.checked_add(1).filter(|d| *d <= MAX_DEPTH)?;
+                current = current
+                    .checked_add(1)
+                    .filter(|d| *d <= MAX_DEPTH)
+                    .ok_or(DepthError::TooDeep)?;
                 max = max.max(current);
             }
-            ']' => current = current.checked_sub(1)?,
+            ']' => current = current.checked_sub(1).ok_or(DepthError::Unbalanced)?,
             _ => {}
         }
     }
-    Some(max)
+    if current == 0 {
+        Ok(max)
+    } else {
+        Err(DepthError::Unbalanced)
+    }
 }
 ```
 
@@ -758,13 +782,29 @@ impl LogBuffer {
     /// Swaps the buffer out under the lock, then writes with the lock released.
     ///
     /// # Errors
-    /// Returns the I/O error from the sink.
+    /// Returns the sink's I/O error. On a write error the failed line and the
+    /// rest of the batch go back to the front of the buffer, so a retry may
+    /// repeat a partly written line. Lines the sink accepted are its own, even
+    /// when the final flush fails.
     pub fn flush_to(&self, mut sink: impl Write) -> io::Result<()> {
         let batch = mem::take(&mut *self.lines.lock().unwrap_or_else(PoisonError::into_inner));
-        for line in &batch {
-            writeln!(sink, "{line}")?;
+        let written = batch
+            .iter()
+            .enumerate()
+            .try_for_each(|(i, line)| writeln!(sink, "{line}").map_err(|err| (i, err)));
+        if let Err((failed, err)) = written {
+            self.requeue(batch.into_iter().skip(failed));
+            return Err(err);
         }
-        Ok(())
+        sink.flush()
+    }
+
+    // Puts unsent lines back ahead of any pushed since the swap.
+    fn requeue(&self, unsent: impl Iterator<Item = String>) {
+        let mut lines = self.lines.lock().unwrap_or_else(PoisonError::into_inner);
+        let newer = mem::take(&mut *lines);
+        lines.extend(unsent);
+        lines.extend(newer);
     }
 }
 
@@ -774,10 +814,10 @@ struct Counts {
     total: u64,
 }
 
-/// Cache statistics. Readers rely on `hits <= total`, so both fields sit
-/// under one lock and a reader always sees a consistent pair.
+/// Cache statistics; every snapshot satisfies `hits <= total`.
 #[derive(Debug, Default)]
 pub struct CacheStats {
+    // Both fields under one lock: the invariant spans them (ASY-14).
     counts: Mutex<Counts>,
 }
 
@@ -845,10 +885,11 @@ const _: () = assert!(
     "PERF-13: one counter per cache line"
 );
 
-/// Per-worker hit counters. Padded after benches/counters.rs showed false
-/// sharing between workers (PERF-01).
+/// Per-worker hit counters.
 #[derive(Debug)]
 pub struct HitCounters {
+    // Padded: benches/counters.rs shows false sharing between workers
+    // without it (PERF-01).
     shards: Box<[CachePadded<AtomicU64>]>,
 }
 
@@ -865,7 +906,9 @@ impl HitCounters {
     pub fn hit(&self, worker: usize) {
         if let Some(shard) = self.shards.get(worker) {
             // Relaxed: a statistic; no other memory depends on it.
-            shard.0.update(Ordering::Relaxed, Ordering::Relaxed, |n| n.saturating_add(1));
+            shard.0.update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                n.saturating_add(1)
+            });
         }
     }
 
