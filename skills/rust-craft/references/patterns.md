@@ -1,8 +1,8 @@
 # Patterns
 
-A catalog of complete, compiling patterns that apply the rules in the other references. Each one was compiled in context on Rust 1.98.1 (edition 2024), passed `cargo clippy --all-targets -- -D warnings` under the workspace template lints, and has tests (mostly not shown). A few blocks continue an earlier one (a binary using the library above it, a DTO using pattern 1's `Email`), and they say so. Read this when the design defaults in SKILL.md §3 point at a shape (newtype, builder, typestate, port, actor) and you want the idiomatic version to copy, or when a reviewer asks "what should this look like instead?".
+A catalog of complete, compiling patterns that apply the rules in the other references. Each ` ```rust ` block compiles on Rust 1.98.1 (edition 2024) and passes `cargo clippy --all-targets -- -D warnings` under the workspace template lints, checked by the doc-example harness (`tests/doc_examples.py`); hidden `# ` lines hold imports and stubs. The two ` ```rust,fragment ` blocks need a crate the harness does not have (`futures`, `clap`). A few blocks continue an earlier one (a binary using the library above it, a DTO using pattern 1's `Email`), and they say so. Read this when the design defaults in SKILL.md §3 point at a shape (newtype, builder, typestate, port, actor) and you want the idiomatic version to copy, or when a reviewer asks "what should this look like instead?".
 
-Start from the index; read only the pattern you need. Snippets omit `#[cfg(test)]` modules; pattern 11 keeps its fake because the fake is part of the pattern. `use` lines are included so each block compiles as a module.
+Start from the index; read only the pattern you need. Snippets mostly omit `#[cfg(test)]` modules. Patterns 11, 22 and 26 keep theirs, because the fake or the test is part of the pattern. `use` lines are included so each block compiles as a module.
 
 | # | Pattern | Rules |
 |---|---|---|
@@ -28,6 +28,16 @@ Start from the index; read only the pattern you need. Snippets omit `#[cfg(test)
 | 20 | Versioned event enum with upcast | OUT-03, OUT-02, ARC-13 |
 | 21 | CLI JSON output to locked stdout with `ExitCode` | OUT-06, PERF-07, ARC-14, ERR-06, H-06 |
 | 22 | Redacted secret newtype | OUT-08, OUT-10, API-06 |
+| 23 | Explicit `finish` with a best-effort `Drop` | ERR-13, H-10, H-14 |
+| 24 | Hand back the consumed argument | ERR-14, H-08, ERR-01, OUT-08 |
+| 25 | On-stack `dyn` for a local runtime choice | API-09, PERF-08 |
+| 26 | Closure-friendly role trait | API-18, ARC-03, TST-09 |
+| 27 | Kind-parameterized API | API-13, API-12, API-21 |
+| 28 | Tree walk: `Visitor` with `ControlFlow`, moving `Fold` | CRF-03, H-03, H-08, PERF-10 |
+| 29 | Service handle and named `dyn` wrapper | API-23, H-08, API-09, ARC-03 |
+| 30 | Snapshot swap (read-copy-update) | OWN-11, PERF-12, ASY-14, H-02 |
+| 31 | Checked value-object arithmetic | API-22, ERR-09, API-02 |
+| 32 | Typed aggregate id | API-02, ARC-13, OWN-16 |
 
 ## 1. Validated newtype
 
@@ -271,32 +281,38 @@ pub struct Request {
     pub timeout: Duration,
 }
 
+impl Request {
+    /// Starts a builder. `url` is the one required input, so it is taken here.
+    pub fn builder(url: impl Into<String>) -> RequestBuilder {
+        RequestBuilder {
+            url: url.into(),
+            headers: Vec::new(),
+            timeout: RequestBuilder::DEFAULT_TIMEOUT,
+        }
+    }
+}
+
 /// Why a [`RequestBuilder`] could not build.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BuildError {
-    /// `url` was never set.
-    #[error("request has no url")]
-    MissingUrl,
+    /// A zero timeout would fail every request.
+    #[error("request timeout must be greater than zero")]
+    ZeroTimeout,
 }
 
-/// Builds [`Request`]s. Setters take `&mut self`, so a builder can be
-/// configured conditionally and reused.
-#[derive(Debug, Clone, Default)]
+/// Builds [`Request`]s; created by [`Request::builder`]. Setters take
+/// `&mut self`, so a builder can be configured conditionally and reused.
+#[derive(Debug, Clone)]
+#[must_use = "a builder does nothing until `build` is called"]
 pub struct RequestBuilder {
-    url: Option<String>,
+    url: String,
     headers: Vec<(String, String)>,
-    timeout: Option<Duration>,
+    timeout: Duration,
 }
 
 impl RequestBuilder {
     const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
-
-    /// Sets the URL.
-    pub fn url(&mut self, url: impl Into<String>) -> &mut Self {
-        self.url = Some(url.into());
-        self
-    }
 
     /// Appends a header.
     pub fn header(&mut self, name: impl Into<String>, value: impl Into<String>) -> &mut Self {
@@ -306,30 +322,34 @@ impl RequestBuilder {
 
     /// Overrides the default 30 s timeout.
     pub fn timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.timeout = Some(timeout);
+        self.timeout = timeout;
         self
     }
 
     /// Builds a request; the builder stays usable for the next one.
     ///
     /// # Errors
-    /// [`BuildError::MissingUrl`] when no URL was set.
+    /// [`BuildError::ZeroTimeout`] when the timeout is zero.
     pub fn build(&self) -> Result<Request, BuildError> {
-        let url = self.url.clone().ok_or(BuildError::MissingUrl)?;
+        if self.timeout.is_zero() {
+            return Err(BuildError::ZeroTimeout);
+        }
         Ok(Request {
-            url,
+            url: self.url.clone(),
             headers: self.headers.clone(),
-            timeout: self.timeout.unwrap_or(Self::DEFAULT_TIMEOUT),
+            timeout: self.timeout,
         })
     }
 }
 ```
 
 **Notes.**
+- Required inputs go to `Request::builder(url)`, so forgetting one does not compile. There is no public `RequestBuilder::new` and no `Default` that would start without them (API-10).
+- Setters are named after the field (`timeout`, never `set_timeout`) and cannot fail. Validation, including cross-field checks, happens once, in `build`.
 - `&mut self -> &mut Self` setters let callers write `if traced { builder.header(..); }` without rebinding.
-- `build(&self)` clones fields so the builder stays reusable. When fields are expensive or the builder is single-use, prefer a consuming builder (`fn url(self, ..) -> Self`, `build(self)`) and move instead.
-- Missing required data is a `Result` from `build`. If that error is common in practice, make it a compile error with a typestate builder (pattern 5).
-- Setters take `impl Into<String>` because the builder stores the value (OWN-02).
+- `build(&self)` clones fields so the builder stays reusable. When fields are expensive or the builder is single-use, prefer a consuming builder (`fn header(self, ..) -> Self`, `build(self)`) and move instead.
+- When the required steps have an order, or there are too many to pass at once, make them types instead (pattern 5).
+- The entry point and setters take `impl Into<String>` because the builder stores the value (OWN-02).
 
 ## 5. Typestate builder
 
@@ -348,10 +368,11 @@ pub struct NoEndpoint;
 #[derive(Debug)]
 pub struct Endpoint(String);
 
-/// Builds a [`Client`]. `build` exists only once an endpoint is set:
+/// Builds a [`Client`]; created by [`Client::builder`]. `build` exists only
+/// once an endpoint is set:
 ///
 /// ```compile_fail
-/// let client = my_crate::ClientBuilder::new().build();
+/// let client = my_crate::Client::builder().build();
 /// ```
 #[derive(Debug)]
 #[must_use]
@@ -367,27 +388,29 @@ pub struct Client {
     timeout: Duration,
 }
 
-impl ClientBuilder<NoEndpoint> {
-    /// Starts with a 10 s timeout and no endpoint.
-    pub const fn new() -> Self {
-        Self {
+impl Client {
+    /// Starts a builder with a 10 s timeout and no endpoint.
+    pub const fn builder() -> ClientBuilder<NoEndpoint> {
+        ClientBuilder {
             endpoint: NoEndpoint,
             timeout: Duration::from_secs(10),
         }
     }
 
+    /// Endpoint URL.
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+}
+
+impl ClientBuilder<NoEndpoint> {
     /// Sets the endpoint, unlocking `build`.
     pub fn endpoint(self, url: impl Into<String>) -> ClientBuilder<Endpoint> {
         ClientBuilder {
             endpoint: Endpoint(url.into()),
             timeout: self.timeout,
         }
-    }
-}
-
-impl Default for ClientBuilder<NoEndpoint> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -409,20 +432,12 @@ impl ClientBuilder<Endpoint> {
         }
     }
 }
-
-impl Client {
-    /// Endpoint URL.
-    #[must_use]
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
-    }
-}
 ```
 
 **Notes.**
 - The `compile_fail` doctest is the proof (TST-08); `cargo test` fails if `build()` ever becomes callable without an endpoint.
 - Marker types are `pub` so users can name `ClientBuilder<Endpoint>` in signatures.
-- Each required field doubles the state space. With more than two, take the required values in `new(..)` and keep the builder for optional ones.
+- Each required field doubles the state space. With more than two unordered ones, take them in `Client::builder(..)` instead (pattern 4).
 - State known only at runtime (a connection that can drop) is data, not a type: use an enum (pattern 9).
 
 ## 6. Sealed trait
@@ -522,6 +537,8 @@ pub struct InFlight {
 impl InFlight {
     /// Marks one request as started; it ends when the guard drops.
     pub fn enter(&self) -> InFlightGuard<'_> {
+        // Relaxed: a statistic; no other memory is published through it.
+        // Cannot wrap: every increment is owned by a live guard.
         self.count.fetch_add(1, Ordering::Relaxed);
         InFlightGuard { owner: self }
     }
@@ -529,6 +546,7 @@ impl InFlight {
     /// Requests currently in flight.
     #[must_use]
     pub fn current(&self) -> usize {
+        // Relaxed: the value is only reported, never used to order other reads.
         self.count.load(Ordering::Relaxed)
     }
 }
@@ -542,6 +560,7 @@ pub struct InFlightGuard<'a> {
 
 impl Drop for InFlightGuard<'_> {
     fn drop(&mut self) {
+        // Relaxed: pairs with nothing; see `enter`.
         self.owner.count.fetch_sub(1, Ordering::Relaxed);
     }
 }
@@ -549,9 +568,9 @@ impl Drop for InFlightGuard<'_> {
 
 **Notes.**
 - Bind it as `let _guard = stats.enter();`. `let _ = stats.enter();` drops it immediately; `clippy::let_underscore_must_use` (deny) and `let_underscore_drop` catch that.
-- `Drop` cannot fail or `.await`. For fallible or async cleanup, add an explicit `fn finish(self) -> Result<..>` (or `async fn close`) and keep `Drop` as the best-effort fallback.
+- `Drop` cannot fail or `.await`. For fallible or async cleanup, add an explicit `fn finish(self) -> Result<..>` (or `async fn close`) and keep `Drop` as the best-effort fallback (pattern 23, ERR-13).
 - Never `mem::forget` a guard (H-07). A guard that protects a lock must not live across `.await` (H-14).
-- `Relaxed` is enough for a statistics counter; anything that orders other memory needs a stated `Ordering` reason (ASY-10).
+- `Relaxed` is enough for a statistics counter, and each use says why in a comment. Anything that orders other memory names the operation it pairs with (ASY-13).
 
 ## 9. Enum state machine with `mem::take` / `mem::replace`
 
@@ -950,7 +969,7 @@ mod tests {
 
 **Notes.**
 - In a real workspace the three sections are three crates: the application crate owns `NoteStore` and its error, the adapter crate depends on it, the binary composes. Nothing points outward.
-- Generic `Notes<S: NoteStore>` is static dispatch. Use `Box<dyn NoteStore>` only when the adapter is chosen at runtime.
+- Generic `Notes<S: NoteStore>` is static dispatch. Use `Box<dyn NoteStore>`, or a named wrapper (pattern 29), only when the adapter is chosen at runtime.
 - `StoreError::NotFound` is a domain outcome the use case handles; `Backend` is infrastructure and propagates (ERR-10).
 - `AppendError::Load` and `Save` wrap the same source type, so they use `map_err`, not `#[from]` (ERR-04): the caller learns which step failed.
 - The fake is hand-written and can inject failures (`fail_saves`). No mocking crate, no test-only branches in production code.
@@ -1044,6 +1063,19 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 use my_service::config::{self, Config}; // the library crate above (package `my-service`)
+# mod my_service {
+#     pub mod config {
+#         use std::num::NonZeroUsize;
+#         use std::{io, path::Path};
+#         pub struct Config {
+#             pub port: u16,
+#             pub workers: NonZeroUsize,
+#         }
+#         pub fn load(_path: &Path) -> io::Result<Config> {
+#             Err(io::ErrorKind::NotFound.into())
+#         }
+#     }
+# }
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args_os()
@@ -1473,15 +1505,12 @@ fn record(report: &mut ShutdownReport, joined: Result<WorkerReport, tokio::task:
 
 **Rules.** PERF-10, H-13, ASY-01, ASY-04
 
-```rust
-use std::io;
+On one task, with the `futures` crate (a dependency, H-16):
+
+```rust,fragment
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use futures::stream::{self, StreamExt};
-use tokio::sync::{AcquireError, Semaphore};
-use tokio::task::{JoinError, JoinSet};
 
 /// Runs `fetch` for every id with at most `limit` in flight on this task.
 /// Results arrive in completion order.
@@ -1497,6 +1526,18 @@ pub async fn fetch_all<T, E>(
         .collect()
         .await
 }
+```
+
+Across the runtime, with tokio alone:
+
+```rust
+use std::io;
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tokio::sync::{AcquireError, Semaphore};
+use tokio::task::{JoinError, JoinSet};
 
 /// Why a spawned batch failed.
 #[derive(Debug, thiserror::Error)]
@@ -1552,7 +1593,21 @@ pub async fn file_sizes(
 ```rust
 use serde::Deserialize;
 
-use crate::email::{Email, EmailError}; // pattern 1
+# mod email {
+#     #[derive(Debug, Clone, PartialEq, Eq)]
+#     pub struct Email(String);
+#     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#     #[error("invalid email")]
+#     pub struct EmailError;
+#     impl TryFrom<String> for Email {
+#         type Error = EmailError;
+#         fn try_from(raw: String) -> Result<Self, EmailError> {
+#             if raw.contains('@') { Ok(Self(raw)) } else { Err(EmailError) }
+#         }
+#     }
+# }
+# use email::{Email, EmailError};
+// `Email` and `EmailError` are pattern 1's (`use crate::email::{Email, EmailError};`).
 
 /// Wire shape of a signup request. Unvalidated.
 #[derive(Debug, Deserialize)]
@@ -1748,7 +1803,9 @@ pub fn write(event: &UserRegistered) -> Result<String, serde_json::Error> {
 
 **Rules.** OUT-06, PERF-07, ARC-14, ERR-06, H-06
 
-```rust
+Argument parsing uses `clap` with its `derive` feature, so this block is not compiled by the doc-example harness.
+
+```rust,fragment
 //! CLI binary: JSON Lines output to a locked stdout, exit codes from main.
 
 use std::fmt;
@@ -1905,12 +1962,698 @@ pub struct DbConfig {
     /// Password.
     pub password: Secret,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_the_secret() {
+        let raw = "hunter2-7f3a";
+        let config = DbConfig { host: "db".to_owned(), password: Secret::new(raw.to_owned()) };
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains(raw), "Debug leaked the secret: {rendered}");
+        assert!(rendered.contains("Secret([REDACTED])"), "unexpected Debug: {rendered}");
+    }
+}
 ```
 
 **Notes.**
-- `Debug` redacts, so `#[derive(Debug)]` on containing configs and `tracing` fields like `?config` stay safe.
+- `Debug` redacts, so `#[derive(Debug)]` on containing configs and `tracing` fields like `?config` stay safe. The test proves it through the container, which is where a leak would come from (OUT-08).
 - No `Display`, `Serialize`, `PartialEq` or `Clone`: leaking needs a visible `expose()` call, which reviewers grep for, and there is exactly one copy of the secret to zeroize or drop.
 - Compare secrets with a constant-time function (`subtle`), never `==`. Zeroing memory on drop needs `zeroize` or `secrecy`: a new dependency (H-16).
+
+## 23. Explicit `finish` with a best-effort `Drop`
+
+**Use when.** Teardown can fail (flushing a buffer, syncing a file, committing a transaction, sending a final frame) and the caller must learn about it.
+
+**Rules.** ERR-13, H-10, H-14
+
+```rust
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
+
+/// An append-only record file. Call [`Journal::finish`] on the success path:
+/// a dropped journal can lose its buffered tail.
+#[derive(Debug)]
+pub struct Journal {
+    // `Option` because `finish(self)` cannot move a field out of a `Drop` type (E0509).
+    out: Option<BufWriter<File>>,
+}
+
+impl Journal {
+    /// Creates or truncates the journal at `path`.
+    ///
+    /// # Errors
+    /// The I/O error from creating the file.
+    pub fn create(path: &Path) -> io::Result<Self> {
+        Ok(Self { out: Some(BufWriter::new(File::create(path)?)) })
+    }
+
+    /// Appends one record as a line.
+    ///
+    /// # Errors
+    /// The I/O error from writing.
+    pub fn append(&mut self, record: &str) -> io::Result<()> {
+        // `None` only inside `finish` and `drop`, which both end the journal.
+        let out = self.out.as_mut().ok_or(io::ErrorKind::NotConnected)?;
+        writeln!(out, "{record}")
+    }
+
+    /// Flushes and syncs. The only place a failed write-back is visible.
+    ///
+    /// # Errors
+    /// The I/O error from flushing or syncing.
+    pub fn finish(mut self) -> io::Result<()> {
+        let Some(out) = self.out.take() else {
+            return Ok(());
+        };
+        out.into_inner().map_err(io::IntoInnerError::into_error)?.sync_all()
+    }
+}
+
+impl Drop for Journal {
+    // Reached with `Some` only when `finish` was skipped: an early return, `?` or unwinding.
+    fn drop(&mut self) {
+        if let Some(mut out) = self.out.take()
+            && let Err(error) = out.flush()
+        {
+            tracing::warn!(%error, "journal dropped without finish; its tail may be lost");
+        }
+    }
+}
+```
+
+**Notes.**
+- `BufWriter` and `File` discard errors when dropped, so without `finish` a full disk is silent (H-10). Callers end with `journal.finish()?`.
+- `Drop` never panics, blocks or awaits (H-14). It logs, because there is no caller left to return to. Async resources get `async fn close(self)`.
+- `process::exit`, `panic = "abort"` and a panic during unwinding skip `Drop` entirely: never rely on it for correctness.
+
+## 24. Hand back the consumed argument
+
+**Use when.** A fallible function takes a non-`Copy` value by value, and a caller may want it back to retry, reroute or report.
+
+**Rules.** ERR-14, H-08, ERR-01, OUT-08
+
+```rust
+use std::collections::VecDeque;
+use std::fmt;
+
+/// The job was not queued. [`Full::into_inner`] returns it.
+#[derive(thiserror::Error)]
+#[error("queue is full ({capacity} jobs)")]
+pub struct Full<T> {
+    job: T,
+    capacity: usize,
+}
+
+impl<T> Full<T> {
+    /// The rejected job, without a clone.
+    #[must_use]
+    pub fn into_inner(self) -> T {
+        self.job
+    }
+}
+
+// Written by hand: no `T: Debug` bound, and the payload (perhaps a secret) stays out of logs.
+impl<T> fmt::Debug for Full<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Full").field("capacity", &self.capacity).finish_non_exhaustive()
+    }
+}
+
+/// A bounded FIFO of jobs.
+#[derive(Debug)]
+pub struct JobQueue<T> {
+    jobs: VecDeque<T>,
+    capacity: usize,
+}
+
+impl<T> JobQueue<T> {
+    /// An empty queue that holds at most `capacity` jobs.
+    #[must_use]
+    pub const fn new(capacity: usize) -> Self {
+        Self { jobs: VecDeque::new(), capacity }
+    }
+
+    /// Queues `job`.
+    ///
+    /// # Errors
+    /// [`Full`], carrying `job` back, when the queue is at capacity.
+    pub fn push(&mut self, job: T) -> Result<(), Full<T>> {
+        if self.jobs.len() >= self.capacity {
+            return Err(Full { job, capacity: self.capacity });
+        }
+        self.jobs.push_back(job);
+        Ok(())
+    }
+}
+```
+
+**Notes.**
+- Call site: `if let Err(full) = queue.push(job) { overflow.push(full.into_inner()); }`. No `job.clone()` before the call "in case it fails" (H-08).
+- std does the same: `FromUtf8Error::into_bytes`, `SendError<T>`, `Arc::try_unwrap` returning `Err(Arc<T>)`, `<[T; N]>::try_from(Vec<T>)` returning `Err(Vec<T>)`, `IntoInnerError::into_inner`.
+- `Full<T>` is `Error + Send + Sync + 'static` whenever `T` is (ERR-01).
+
+## 25. On-stack `dyn` for a local runtime choice
+
+**Use when.** A function picks one of a few concrete types at runtime and the value never leaves the function.
+
+**Rules.** API-09, PERF-08
+
+```rust
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
+/// Counts the bytes in `path`, or in stdin when `path` is `-`.
+///
+/// # Errors
+/// The I/O error from opening or reading the input.
+pub fn byte_count(path: &Path) -> io::Result<u64> {
+    // Both temporaries live to the end of the enclosing block (1.79+): no `Box`.
+    let input: &mut dyn Read = if path == Path::new("-") {
+        &mut io::stdin().lock()
+    } else {
+        &mut File::open(path)?
+    };
+    io::copy(input, &mut io::sink())
+}
+```
+
+**Notes.**
+- `Box<dyn Read>` would allocate; calling a generic helper from both arms would compile the rest of the function twice.
+- If the value is returned or stored, this shape no longer fits: use an enum over the known types, or `Box<dyn Trait>` for an open set (API-09).
+
+## 26. Closure-friendly role trait
+
+**Use when.** A port or strategy has one method, and tests or callers would like to pass a closure, but several items need to name the role.
+
+**Rules.** API-18, ARC-03, TST-09
+
+```rust
+use std::time::SystemTime;
+
+/// Port: the current time (ARC-03).
+pub trait Clock {
+    /// The current time.
+    fn now(&self) -> SystemTime;
+}
+
+/// Any `Fn() -> SystemTime` is a clock, so a test passes `move || fixed`.
+impl<F: Fn() -> SystemTime> Clock for F {
+    fn now(&self) -> SystemTime {
+        self()
+    }
+}
+
+/// The production clock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
+}
+
+/// Stamps records with the time they were made.
+#[derive(Debug)]
+pub struct Stamper<C> {
+    clock: C,
+}
+
+impl<C: Clock> Stamper<C> {
+    /// Uses `clock` for every stamp.
+    pub const fn new(clock: C) -> Self {
+        Self { clock }
+    }
+
+    /// Pairs `record` with the current time.
+    pub fn stamp<'r>(&self, record: &'r str) -> (SystemTime, &'r str) {
+        (self.clock.now(), record)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closure_is_a_clock() {
+        let fixed = SystemTime::UNIX_EPOCH;
+        let stamper = Stamper::new(move || fixed);
+        assert_eq!(stamper.stamp("paid"), (fixed, "paid"));
+    }
+}
+```
+
+**Notes.**
+- The named trait replaces `F: Fn() -> SystemTime` repeated on every item, and `Stamper<C>` reads as a role, not a closure type.
+- The blanket impl coexists with `impl Clock for SystemClock` and with a named wrapper such as `DynClock` (pattern 29): a local type that is not a closure never implements `Fn`.
+- When the role produces a varying type, give the trait `type Output` and write `impl<F: FnMut() -> T, T> Source for F { type Output = T; }`. Users then write `Poller<S>`, not `Poller<F, T>`.
+
+## 27. Kind-parameterized API
+
+**Use when.** A value's kind (protocol, backend, unit system) is fixed where it is created, and some operations exist for only one kind.
+
+**Rules.** API-13, API-12, API-21
+
+```rust
+use std::path::{Path, PathBuf};
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// A transfer protocol. Sealed: the set of kinds is closed (API-12).
+pub trait Protocol: sealed::Sealed {}
+
+/// NFS transfers, which need a mount point.
+#[derive(Debug)]
+pub struct Nfs {
+    mount_point: PathBuf,
+}
+
+/// HTTP transfers.
+#[derive(Debug)]
+pub struct Http;
+
+impl sealed::Sealed for Nfs {}
+impl sealed::Sealed for Http {}
+impl Protocol for Nfs {}
+impl Protocol for Http {}
+
+/// A download whose protocol is fixed at creation.
+#[derive(Debug)]
+pub struct Download<P> {
+    file: PathBuf,
+    protocol: P,
+}
+
+impl<P: Protocol> Download<P> {
+    /// The file being fetched, for every protocol.
+    #[must_use]
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
+}
+
+impl Download<Nfs> {
+    /// Starts an NFS download.
+    pub fn nfs(file: impl Into<PathBuf>, mount_point: impl Into<PathBuf>) -> Self {
+        let protocol = Nfs { mount_point: mount_point.into() };
+        Self { file: file.into(), protocol }
+    }
+
+    /// Exists only for NFS: no `Option`, no runtime check.
+    #[must_use]
+    pub fn mount_point(&self) -> &Path {
+        &self.protocol.mount_point
+    }
+}
+
+impl Download<Http> {
+    /// Starts an HTTP download.
+    pub fn http(file: impl Into<PathBuf>) -> Self {
+        Self { file: file.into(), protocol: Http }
+    }
+}
+```
+
+**Notes.**
+- This replaces an `Option<PathBuf>` that is `Some` only for NFS and a method documented "returns `None` unless NFS". Typestate (pattern 5) does the same for order; this does it for kind.
+- The bound sits on the `impl`, not the struct (API-21).
+- When the kind arrives at runtime, or downloads of different kinds share one collection, use an enum and convert at that boundary.
+
+## 28. Tree walk: `Visitor` with `ControlFlow`, moving `Fold`
+
+**Use when.** Several passes (checks, queries, rewrites) run over one recursive data type, such as an AST or a document tree.
+
+**Rules.** CRF-03, H-03, H-08, PERF-10
+
+```rust
+use std::ops::ControlFlow;
+
+/// An integer expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expr {
+    /// A literal.
+    Num(i64),
+    /// A named variable.
+    Var(String),
+    /// A sum.
+    Add(Box<Expr>, Box<Expr>),
+    /// A negation.
+    Neg(Box<Expr>),
+}
+
+/// A read-only pass. Override only the hooks you need.
+pub trait Visitor {
+    /// Why the pass stopped early.
+    type Break;
+
+    /// Visits `expr`; the default walks its children.
+    fn visit_expr(&mut self, expr: &Expr) -> ControlFlow<Self::Break> {
+        walk_expr(self, expr)
+    }
+}
+
+/// Visits the children of `expr`: the one exhaustive match on the tree's shape.
+pub fn walk_expr<V: Visitor + ?Sized>(visitor: &mut V, expr: &Expr) -> ControlFlow<V::Break> {
+    match expr {
+        Expr::Num(_) | Expr::Var(_) => ControlFlow::Continue(()),
+        Expr::Add(lhs, rhs) => {
+            visitor.visit_expr(lhs)?;
+            visitor.visit_expr(rhs)
+        }
+        Expr::Neg(inner) => visitor.visit_expr(inner),
+    }
+}
+
+struct FindVar;
+
+impl Visitor for FindVar {
+    type Break = ();
+
+    fn visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
+        if let Expr::Var(_) = expr {
+            return ControlFlow::Break(());
+        }
+        walk_expr(self, expr)
+    }
+}
+
+/// True when `expr` has no variables; stops at the first one.
+#[must_use]
+pub fn is_constant(expr: &Expr) -> bool {
+    FindVar.visit_expr(expr).is_continue()
+}
+
+/// A rewriting pass. Nodes are taken by value, so unchanged subtrees move
+/// through with no clone.
+pub trait Folder {
+    /// Rewrites `expr`; the default rewrites its children.
+    fn fold_expr(&mut self, expr: Expr) -> Expr {
+        fold_children(self, expr)
+    }
+}
+
+/// Rewrites the children of `expr`, reusing each `Box`.
+pub fn fold_children<F: Folder + ?Sized>(folder: &mut F, expr: Expr) -> Expr {
+    match expr {
+        leaf @ (Expr::Num(_) | Expr::Var(_)) => leaf,
+        Expr::Add(lhs, rhs) => Expr::Add(fold_box(folder, lhs), fold_box(folder, rhs)),
+        Expr::Neg(inner) => Expr::Neg(fold_box(folder, inner)),
+    }
+}
+
+fn fold_box<F: Folder + ?Sized>(folder: &mut F, mut node: Box<Expr>) -> Box<Expr> {
+    *node = folder.fold_expr(*node);
+    node
+}
+
+/// Replaces `Num + Num` with its sum; a sum that would overflow stays as it is.
+#[derive(Debug)]
+pub struct FoldConstants;
+
+impl Folder for FoldConstants {
+    fn fold_expr(&mut self, expr: Expr) -> Expr {
+        match fold_children(self, expr) {
+            Expr::Add(lhs, rhs) => match (&*lhs, &*rhs) {
+                (Expr::Num(a), Expr::Num(b)) if let Some(sum) = a.checked_add(*b) => Expr::Num(sum),
+                _ => Expr::Add(lhs, rhs),
+            },
+            other => other,
+        }
+    }
+}
+```
+
+**Notes.**
+- A new variant breaks exactly `walk_expr` and `fold_children` (CRF-03); passes that override one hook are untouched.
+- `ControlFlow` plus `?` stops a search early without a flag. Unsupported nodes are an error variant or a `Break`, never `panic!` or `unimplemented!` (H-03).
+- Recursion depth equals tree depth, and a stack overflow aborts the process: cap nesting where the tree is parsed (PERF-10).
+
+## 29. Service handle and named `dyn` wrapper
+
+**Use when.** A service (client, repository, registry) is shared across tasks, or an implementation is chosen at runtime, and the public API must not expose `Arc`.
+
+**Rules.** API-23, H-08, API-09, ARC-03
+
+```rust
+use std::fmt;
+use std::sync::Arc;
+use std::time::SystemTime;
+
+/// Port: the current time.
+pub trait Clock: Send + Sync {
+    /// The current time.
+    fn now(&self) -> SystemTime;
+}
+
+#[derive(Debug)]
+struct Inner {
+    endpoint: String,
+    max_retries: u32,
+}
+
+/// Handle to the directory service. Cheap to clone: a clone copies one
+/// pointer, never the service.
+#[derive(Debug, Clone)]
+pub struct Directory {
+    inner: Arc<Inner>,
+}
+
+impl Directory {
+    /// Connects to `endpoint`.
+    pub fn new(endpoint: impl Into<String>, max_retries: u32) -> Self {
+        let inner = Inner { endpoint: endpoint.into(), max_retries };
+        Self { inner: Arc::new(inner) }
+    }
+
+    /// The service address.
+    #[must_use]
+    pub fn endpoint(&self) -> &str {
+        &self.inner.endpoint
+    }
+}
+
+/// A clock chosen at runtime. Callers name this type, not `Arc<dyn Clock>`.
+#[derive(Clone)]
+pub struct DynClock(Arc<dyn Clock>);
+
+impl DynClock {
+    /// Wraps any clock.
+    pub fn new(clock: impl Clock + 'static) -> Self {
+        Self(Arc::new(clock))
+    }
+}
+
+impl Clock for DynClock {
+    fn now(&self) -> SystemTime {
+        self.0.now()
+    }
+}
+
+// Written by hand: `dyn Clock` is not `Debug`.
+impl fmt::Debug for DynClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DynClock")
+    }
+}
+```
+
+**Notes.**
+- `Directory::clone` is the cheap-handle clone H-08 allows; say "cheap to clone" in the type's docs. Mutable state goes inside `Inner`, behind its own lock (OWN-12), never `Arc<Mutex<Directory>>` at call sites.
+- Business code stays generic (`Stamper<C>` with `impl<C: Clock>`, pattern 26). The composition root builds `Stamper<DynClock>` when configuration picks the clock.
+- `Arc` in a signature fixes the sharing strategy in the API and makes every caller write `Arc::new`; changing it later is a breaking change.
+
+## 30. Snapshot swap (read-copy-update)
+
+**Use when.** Many readers need a consistent view of read-mostly data (routing table, configuration, projection) for a whole request, and updates are rare.
+
+**Rules.** OWN-11, PERF-12, ASY-14, H-02
+
+```rust
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+/// Where each path prefix is routed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Routes {
+    by_prefix: BTreeMap<String, String>,
+}
+
+impl Routes {
+    /// The target for `prefix`.
+    #[must_use]
+    pub fn target(&self, prefix: &str) -> Option<&str> {
+        self.by_prefix.get(prefix).map(String::as_str)
+    }
+}
+
+/// Shares the current [`Routes`]. Readers work on a snapshot, never under the lock.
+#[derive(Debug, Default)]
+pub struct RouteTable {
+    current: Mutex<Arc<Routes>>,
+}
+
+impl RouteTable {
+    /// The current routes. The lock is held only to copy one pointer.
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<Routes> {
+        Arc::clone(&self.lock())
+    }
+
+    /// Routes `prefix` to `target`, returning the previous target. Readers
+    /// holding a snapshot keep the old version.
+    pub fn set(&self, prefix: String, target: String) -> Option<String> {
+        // Mutates in place when no snapshot is alive; otherwise copies once.
+        Arc::make_mut(&mut self.lock()).by_prefix.insert(prefix, target)
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Arc<Routes>> {
+        // Each critical section is one pointer copy or one `insert`, so a panic
+        // elsewhere cannot leave the routes half-updated: recover from poison.
+        self.current.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+```
+
+**Notes.**
+- A reader writes `let routes = table.snapshot();` and then works for as long as it likes; an update never waits for it, and it never sees a half-applied change.
+- `Arc::make_mut` is clone-on-write: no copy when the table is unshared. Never write `Arc::new((*old).clone())`, which always copies (OWN-11).
+- Updates are methods, not callbacks, so no caller code runs under the lock (ASY-14). While a snapshot is alive, `set` copies the table under the lock: the price of a rare update.
+- `Mutex`, not `RwLock`: readers hold it only to copy a pointer (PERF-12). `arc-swap` removes even that lock, as a new dependency (H-16).
+
+## 31. Checked value-object arithmetic
+
+**Use when.** A numeric domain value (money, quantity, capacity) must not overflow silently, and callers need to decide what overflow means.
+
+**Rules.** API-22, ERR-09, API-02
+
+```rust
+use std::num::NonZeroU64;
+
+/// An amount of money, in cents. No `Add`: overflow must reach the caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Cents(u64);
+
+impl Cents {
+    /// Nothing.
+    pub const ZERO: Self = Self(0);
+
+    /// Wraps a raw amount.
+    #[must_use]
+    pub const fn new(cents: u64) -> Self {
+        Self(cents)
+    }
+
+    /// The raw amount.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// The sum, or `None` when it does not fit.
+    #[must_use]
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.0.checked_add(other.0).map(Self)
+    }
+
+    /// The difference, or `None` when `other` is larger.
+    #[must_use]
+    pub fn checked_sub(self, other: Self) -> Option<Self> {
+        self.0.checked_sub(other.0).map(Self)
+    }
+
+    /// Equal shares and the remainder. The divisor's type rules out division by zero.
+    #[must_use]
+    pub fn split(self, parts: NonZeroU64) -> (Self, Self) {
+        (Self(self.0 / parts), Self(self.0 % parts))
+    }
+}
+
+/// The total of `amounts`, or `None` on overflow. Never `.sum()`, which panics or wraps.
+#[must_use]
+pub fn total(amounts: &[Cents]) -> Option<Cents> {
+    amounts.iter().try_fold(Cents::ZERO, |sum, &amount| sum.checked_add(amount))
+}
+```
+
+**Notes.**
+- `impl Add for Cents` would hide a choice: `+` on `u64` panics in debug builds and wraps in release. Expose `checked_*`, or document saturating or wrapping semantics on the operator (API-22).
+- Callers turn `None` into their own error: `.ok_or(LedgerError::Overflow { account })?` (ERR-07).
+- `split` returns the remainder, so no cent disappears. Value objects compare by value and have no identity; entities get ids (pattern 32).
+
+## 32. Typed aggregate id
+
+**Use when.** Many aggregates share one id representation and each needs its own id type (`Id<Order>`, `Id<Customer>`).
+
+**Rules.** API-02, ARC-13, OWN-16
+
+```rust
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+
+/// Identifies one `T`. An `Id<Order>` is not an `Id<Customer>`.
+pub struct Id<T> {
+    raw: u64,
+    // `fn() -> T`: the id owns no `T`, so it is `Send + Sync + Copy` for every `T`.
+    entity: PhantomData<fn() -> T>,
+}
+
+impl<T> Id<T> {
+    /// Wraps a raw id from storage.
+    #[must_use]
+    pub const fn new(raw: u64) -> Self {
+        Self { raw, entity: PhantomData }
+    }
+
+    /// The raw value, for storage.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.raw
+    }
+}
+
+// Written by hand: derives would demand `T: Clone`, `T: PartialEq`, ... of the entity.
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Id<T> {}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<T> Eq for Id<T> {}
+
+impl<T> Hash for Id<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+impl<T> fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Id").field(&self.raw).finish()
+    }
+}
+```
+
+**Notes.**
+- One generic type replaces a newtype per entity (pattern 2) when every id has the same representation. Add `Ord` the same way if ids are map keys in a `BTreeMap`.
+- `PhantomData<T>` would make `Id<T>` `!Send` whenever `T` is, and tell drop check that the id owns a `T`. `PhantomData<fn() -> T>` does neither.
+- `type OrderId = Id<Order>;` is fine: the alias names a distinct type, unlike an alias of `u64` (API-02).
 
 ## Review checklist
 - [ ] Is a value with rules a newtype with a validating `TryFrom`/`FromStr` and private field? (API-02, API-03)
@@ -1929,4 +2672,14 @@ pub struct DbConfig {
 - [ ] Is concurrency bounded with `buffer_unordered` or a `Semaphore`? (PERF-10)
 - [ ] Does external data go through a DTO and `TryFrom`, with versioned, upcast schemas for anything persisted? (OUT-03, OUT-05)
 - [ ] Does CLI output go to locked, buffered stdout with explicit flush and documented exit codes? (OUT-06, PERF-07)
-- [ ] Are secrets wrapped so `Debug` and serialization cannot leak them? (OUT-08)
+- [ ] Are secrets wrapped so `Debug` and serialization cannot leak them, with a test proving it? (OUT-08)
+- [ ] Does a type with fallible teardown expose `finish`/`close(self) -> Result`, with `Drop` only logging? (ERR-13)
+- [ ] Does a fallible function that consumes its argument hand it back in the error? (ERR-14)
+- [ ] Is a local runtime choice `&mut dyn Trait` on the stack rather than a `Box`? (API-09)
+- [ ] Is a repeated closure bound a named trait with a blanket impl? (API-18)
+- [ ] Is a kind fixed at creation a sealed type parameter rather than an `Option` field? (API-13)
+- [ ] Do tree passes share one `walk`/`fold` match, stop with `ControlFlow`, and move nodes instead of cloning? (CRF-03, H-08)
+- [ ] Is shared service state behind a cheap-clone handle or named wrapper, with no `Arc` in public signatures? (API-23)
+- [ ] Do readers of read-mostly shared data work on an `Arc` snapshot, updated with `Arc::make_mut`? (OWN-11, PERF-12)
+- [ ] Does domain arithmetic use `checked_*` instead of operators that can overflow? (API-22, ERR-09)
+- [ ] Are generic ids `PhantomData<fn() -> T>` with hand-written impls? (API-02)

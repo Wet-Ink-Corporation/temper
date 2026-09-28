@@ -230,5 +230,14 @@ pub fn fold<'history>(history: impl IntoIterator<Item = &'history Event>) -> Sta
     history.into_iter().fold(State::NotOpened, evolve)
 }
 
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Command>();
+    assert_send_sync::<Event>();
+    assert_send_sync::<State>();
+    assert_send_sync::<Rejection>();
+};
+
 #[cfg(test)]
 mod tests;

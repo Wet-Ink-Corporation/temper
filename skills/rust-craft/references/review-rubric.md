@@ -52,10 +52,10 @@ Score each dimension 0 to 4, or `"n/a"` when the change doesn't touch it (for ex
 | `architecture` | Right crate and module; dependencies point inward; ports owned by the consumer; no global state; charter updated | Domain depending on an adapter, I/O in the core, `utils` dumping grounds, config read deep inside |
 | `tests` | Red-first evidence (a test list covered); exact assertions; deterministic; fakes of ports; none weakened (H-12) | Missing tests for new behavior, `is_ok()` assertions, sleeps, testing private details, a deleted or loosened test (blocker) |
 | `performance` | No needless allocation or copying in paths that matter; bounded resources; any perf claim has a benchmark | `collect` then iterate, `format!` in loops, unbounded buffers from input, an unmeasured "optimization" that hurts clarity |
-| `concurrency` | Structured tasks, bounded channels, timeouts, cancellation, no blocking or held guards across `.await` | Detached spawns, `unbounded_channel`, `std::sync::Mutex` held across `.await`, `thread::sleep` in async |
+| `concurrency` | Structured tasks and threads, bounded channels, timeouts, cancellation, no blocking or held guards across `.await`; justified atomic orderings | Detached spawns, `unbounded_channel`, `std::sync::Mutex` held across `.await`, `thread::sleep` in async, `thread::spawn`, an unexplained `SeqCst`, a spin loop |
 | `observability` | `tracing` with fields and spans at boundaries; no secrets in logs; deterministic machine output | `println!`, secrets in `Debug`, logging the same error at several layers, nondeterministic JSON |
 | `craft` | Clear names in the domain language; small functions; early returns; comments explain why; no dead code | God functions, misleading names, commented-out code, magic numbers, unrelated churn |
-| `docs` | Every public item documented; `# Errors` present; runnable examples on entry points; charter and README in sync | Missing docs, stale charter, examples using `unwrap` |
+| `docs` | Every public item documented; `# Errors` present; runnable examples on entry points; charter and README in sync | Missing docs, stale charter, examples using `unwrap`, `# Arguments` sections, design history in rustdoc (CRF-11) |
 
 ## Severity
 
@@ -146,7 +146,9 @@ When the implementer rebuts a finding with evidence (a benchmark, a compiler con
 Correctness
 - [ ] Every behavior in the plan's test list is implemented and tested. (TST-01)
 - [ ] Empty, boundary, invalid and maximum inputs are handled. (correctness)
-- [ ] Arithmetic on external input is checked or deliberately saturating. (ERR-09)
+- [ ] Arithmetic on external input is checked or deliberately saturating, including `/`, `%`, `sum` and atomic `fetch_add`. (ERR-09)
+- [ ] No std call from the escape-hatches.md panicking-APIs table on input the code does not control (`clamp`, non-total `sort_by`, float `Duration`, `env::args`). (H-03)
+- [ ] No `map[&k]` on `HashMap`/`BTreeMap` or `deque[i]` on `VecDeque`; no lint catches them. (H-04)
 
 Escape hatches
 - [ ] No new scan hits, and every advisory is judged. (H-01..H-11)
@@ -162,13 +164,19 @@ Errors
 - [ ] Library APIs return typed errors with context fields. (H-09, ERR-01, ERR-03)
 - [ ] `?` conversions don't erase which step failed. (ERR-04)
 - [ ] No log-and-return; nothing discarded. (ERR-08, H-10)
+- [ ] No empty `Err(_) => {}` arm, empty `if let Err(_)`, `filter_map(|r| r.ok())` or `parse().unwrap_or(..)` without a stated reason. (H-10)
+- [ ] A type whose teardown can fail exposes `finish`/`close(self) -> Result`, the success path calls it, and `Drop` only logs. (ERR-13)
+- [ ] A fallible function that takes a non-`Copy` argument by value hands it back in its error. (ERR-14)
 
 API
-- [ ] The `pub` surface is minimal, and each new `pub` is deliberate. (API-14)
+- [ ] The `pub` surface is minimal, and each new `pub` is deliberate. Every public item has one path: no glob re-exports, no `prelude` module. (API-14)
 - [ ] Invariant-bearing types have private fields and validating constructors. (API-03, API-04)
-- [ ] No bool params; builders or params structs for optional configuration. (API-10)
+- [ ] No bool params; builders (`Foo::builder(required..)`) or params structs for optional configuration. (API-10)
 - [ ] Naming and trait implementations follow convention; `#[must_use]` where it applies. (API-01, API-06, API-11)
 - [ ] Semver impact is identified; any break has a human decision. (API-17, H-16)
+- [ ] Generic structs and enums carry no trait bounds; bounds sit on the `impl` blocks. (API-21)
+- [ ] Operator impls have their usual meaning and cannot overflow; domain arithmetic uses `checked_*`. (API-22)
+- [ ] No `Arc`, `Rc`, `RefCell`, `Mutex` or `RwLock` in public signatures: a handle type or a named wrapper instead. (API-23)
 
 Architecture
 - [ ] The code lives in the right crate and module; dependencies point inward. (ARC-02, ARC-05)
@@ -183,13 +191,23 @@ Tests
 - [ ] Unit tests sit beside the code; integration tests use the public API. (TST-02)
 - [ ] No test was removed, ignored or loosened. (H-12)
 - [ ] Property or snapshot tests are used where they fit. (TST-06, TST-07)
+- [ ] No tautological test: none restates a constant or mirrors the implementation's branches. (TST-05)
+- [ ] Crates with non-`Relaxed` atomics, `Condvar`s or hand-written thread coordination run under Miri and on aarch64; a Miri-incompatible test carries `cfg_attr(miri, ignore = "reason")`. (TST-17)
 
 Performance and concurrency
 - [ ] I/O is buffered; resources are bounded; timeouts are in place. (PERF-07, PERF-10, ASY-08)
 - [ ] Tasks are owned, channels bounded, cancellation handled. (ASY-04, ASY-05, ASY-07)
-- [ ] Nothing blocks in async code; no guard is held across `.await`. (H-14)
+- [ ] Nothing blocks in async code; no guard, entered span or `watch::Ref` is held across `.await`. (H-14)
+- [ ] Every atomic ordering has a comment justifying it; unsure means a `Mutex`, not `SeqCst`. (ASY-13)
+- [ ] No guard in a `match`/`if let` scrutinee whose body does more than read, no re-entrant locking, one documented lock order, no callbacks under a lock. (ASY-14)
+- [ ] Threads are spawned with `thread::Builder`, named, and joined on shutdown. (ASY-15)
+- [ ] Waiting uses `Condvar::wait_while` or a blocking primitive, never a spin loop. (ASY-16)
+- [ ] No lock, once-cell, semaphore or channel is built from atomics. (ASY-17)
 
 Observability and craft
 - [ ] `tracing` with fields; no secrets; deterministic machine output. (OUT-04, OUT-08)
 - [ ] Names reveal intent; functions are small; no dead or commented-out code; comments say why. (CRF-01..05)
+- [ ] No speculative generality: no single-implementation trait that is not a port, no marker trait without a sealing or typestate purpose. (CRF-05)
+- [ ] Docs and comments describe current behaviour; design history and rule-compliance tables live in the plan or decisions log. (CRF-11)
 - [ ] Public docs are complete, with `# Errors`; examples use `?`. (API-15, TST-11)
+- [ ] Parameters are named in prose, never in `# Arguments` or `# Returns` sections. (API-15)

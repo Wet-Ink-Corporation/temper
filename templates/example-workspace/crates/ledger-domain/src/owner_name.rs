@@ -5,7 +5,9 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-/// Longest accepted name, in characters.
+/// Longest accepted name, in characters: room for a full legal name on one
+/// line of output. The store validates names on read, so lowering it makes
+/// streams that hold a longer name fail to load.
 const MAX_CHARS: usize = 80;
 
 /// The name of an account holder: trimmed, 1 to 80 characters, no control
@@ -16,7 +18,7 @@ pub struct OwnerName(String);
 /// Why a string is not an [`OwnerName`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
-pub enum OwnerNameError {
+pub enum ParseOwnerNameError {
     /// The name is empty or only whitespace.
     #[error("owner name is blank")]
     Blank,
@@ -40,19 +42,19 @@ impl OwnerName {
 }
 
 impl FromStr for OwnerName {
-    type Err = OwnerNameError;
+    type Err = ParseOwnerNameError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         let name = text.trim();
         if name.is_empty() {
-            return Err(OwnerNameError::Blank);
+            return Err(ParseOwnerNameError::Blank);
         }
         let chars = name.chars().count();
         if chars > MAX_CHARS {
-            return Err(OwnerNameError::TooLong { chars });
+            return Err(ParseOwnerNameError::TooLong { chars });
         }
         if name.chars().any(char::is_control) {
-            return Err(OwnerNameError::ControlCharacter);
+            return Err(ParseOwnerNameError::ControlCharacter);
         }
         Ok(Self(name.to_owned()))
     }
@@ -63,6 +65,13 @@ impl fmt::Display for OwnerName {
         f.write_str(&self.0)
     }
 }
+
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<OwnerName>();
+    assert_send_sync::<ParseOwnerNameError>();
+};
 
 #[cfg(test)]
 mod tests {
@@ -80,7 +89,7 @@ mod tests {
 
     #[test]
     fn rejects_whitespace_only_name() {
-        assert_eq!(" \t ".parse::<OwnerName>(), Err(OwnerNameError::Blank));
+        assert_eq!(" \t ".parse::<OwnerName>(), Err(ParseOwnerNameError::Blank));
     }
 
     #[test]
@@ -94,7 +103,7 @@ mod tests {
         );
         assert_eq!(
             over_limit.parse::<OwnerName>(),
-            Err(OwnerNameError::TooLong { chars: 81 })
+            Err(ParseOwnerNameError::TooLong { chars: 81 })
         );
     }
 
@@ -102,7 +111,7 @@ mod tests {
     fn rejects_embedded_newline() {
         assert_eq!(
             "Ada\nLovelace".parse::<OwnerName>(),
-            Err(OwnerNameError::ControlCharacter)
+            Err(ParseOwnerNameError::ControlCharacter)
         );
     }
 }

@@ -8,7 +8,7 @@
 
 ## Allowed dependencies
 - Workspace crates: <list, all pointing inward (ARC-02)>
-- Third-party: <list, each with a one-line reason (ARC-12)>
+- Third-party: <list, each with a one-line reason (ARC-12) and the features this crate enables itself (ARC-16)>
 - Never: <e.g. tokio, sqlx, reqwest, anything from adapter crates>
 
 ## Public surface

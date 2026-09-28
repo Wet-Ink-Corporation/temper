@@ -3,14 +3,38 @@
 // A 'hard' hit covered by an `#[expect(<lint>, reason = "...")]` becomes an
 // 'ask' hit: an exception request that a human must approve (H-05).
 
-import { maskRust, lineIndex, testRegions, inRegions, countTests } from './lexer.mjs';
+import {
+  maskRust, lineIndex, testRegions, inRegions, countTests, matchBrace, matchPair, matchAngle, splitTop,
+  statementEnd, constRegions, traitImplRegions,
+} from './lexer.mjs';
 
 const REF = 'skills/rust-craft/references';
+
+const KEYWORDS = new Set(['as', 'async', 'await', 'break', 'const', 'continue', 'dyn', 'else', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'move', 'mut', 'ref', 'return', 'static', 'unsafe', 'where', 'while', 'yield']);
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Bad calls inside a doctest (run over masked fence code).
+const DOC_BAD = /\.\s*(?:unwrap\s*\(\s*\)|unwrap_err\s*\(\s*\)|expect\s*\(\s*"|expect_err\s*\(\s*")|\b(?:panic|todo|unimplemented)\s*!/;
+// Fence tokens rustdoc compiles as Rust; any other token (text, toml, sh, ..) is not Rust.
+const RUST_FENCE_TOKEN = /^(?:rust|no_run|should_panic|test_harness|standalone_crate|edition\d{4}|E\d{4})$/;
+const NOT_COMPILED_TOKEN = /^(?:ignore(?:-.*)?|compile_fail|text)$/;
+
+/** Is a doc-comment fence with this info string compiled as a Rust doctest? */
+export function isRustFence(info) {
+  const toks = String(info).split(/[\s,]+/).filter(Boolean);
+  return toks.every((t) => !NOT_COMPILED_TOKEN.test(t) && RUST_FENCE_TOKEN.test(t));
+}
+
+/** Is this crate-relative path a build script? */
+export const isBuildScript = (relToCrate) => relToCrate.replace(/\\/g, '/') === 'build.rs';
 
 /**
  * Rule table. `ctx` gives severity per code context:
  *   prod = production code in a library crate, bin = production code in a binary/build script,
  *   example = examples/, test = tests, benches, #[cfg(test)] regions.
+ * A rule has either `re` (optionally filtered by `keep(env, match)`) or `find(env)`,
+ * which returns `{ offset, msg?, fix?, severity?, exception? }` entries.
+ * A `severity` from `find` overrides the context table.
  */
 export const RULES = [
   {
@@ -37,9 +61,11 @@ export const RULES = [
   },
   {
     key: 'assert-in-prod', id: 'H-03', re: /\b(?:assert|assert_eq|assert_ne)\s*!/g,
+    // Compile-time assertions (`const _: () = assert!(..)`, `const { assert!(..) }`) fail the build, never at run time.
+    keep: (env, m) => !inRegions(env.consts, m.index),
     ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
     msg: '`assert!` panics in production code',
-    fix: 'Use `debug_assert!` for internal sanity checks, or return an error for conditions callers can trigger.',
+    fix: 'Use `debug_assert!` for internal sanity checks, a compile-time `const { assert!(..) }` for constants, or return an error for conditions callers can trigger (H-03).',
     lints: [],
   },
   {
@@ -61,6 +87,7 @@ export const RULES = [
     ctx: { prod: 'hard', bin: 'hard', example: 'soft', test: null },
     msg: 'print macro in production code',
     fix: 'Libraries: use `tracing`. Binaries: write through a locked handle, `writeln!(io::stdout().lock(), ...)?`. It returns an error on a closed pipe where `println!` would panic.',
+    fixBuild: 'Build scripts emit directives with `writeln!(io::stdout().lock(), "cargo::rerun-if-changed=..")?` from a `main` that returns `Result` (ARC-17, H-06).',
     lints: ['clippy::print_stdout', 'clippy::print_stderr'],
   },
   {
@@ -93,10 +120,40 @@ export const RULES = [
     lints: ['clippy::unused_result_ok'],
   },
   {
+    key: 'empty-err-arm', id: 'H-10', re: /\bErr\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=>\s*(?:\{\s*\}|\(\s*\))/g,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    msg: 'empty `Err` match arm silently discards the error',
+    fix: 'Handle or propagate the error. If it is truly irrelevant, bind and log it (`Err(e) => tracing::debug!(error = %e, "..")`) with a comment saying why (H-10, ERR-12).',
+    lints: [],
+  },
+  {
+    key: 'empty-if-let-err', id: 'H-10', re: /\bif\s+let\s+Err\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=[^{;]*\{\s*\}(?!\s*else\b)/g,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    msg: 'empty `if let Err(_)` block silently discards the error',
+    fix: 'Handle or propagate the error. If it is truly irrelevant, bind and log it (`if let Err(e) = .. { tracing::debug!(error = %e, "..") }`) with a comment saying why (H-10, ERR-12).',
+    lints: [],
+  },
+  {
     key: 'let-underscore', id: 'H-10', re: /\blet\s+_\s*=/g,
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
     msg: '`let _ =` may discard a failure',
     fix: 'Confirm the value is infallible or irrelevant, and leave a comment saying why. Results must be handled (ERR-12).',
+    lints: [],
+  },
+  {
+    key: 'filter-map-ok', id: 'H-10',
+    re: /\.\s*filter_map\s*\(\s*(?:Result\s*::\s*ok|\|[^|]*\|[^;]*?\.\s*ok\s*\(\s*\))\s*\)/g,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
+    msg: '`filter_map(.. .ok())` silently drops every error',
+    fix: 'Collect the errors (`collect::<Result<Vec<_>, _>>()?`), or count and log what is skipped, or say in a comment why dropping them is correct (H-10).',
+    lints: [],
+  },
+  {
+    key: 'parse-unwrap-or', id: 'H-10',
+    re: /\.\s*parse\s*(?:::\s*<[^>]*>)?\s*\(\s*\)\s*\.\s*(?:unwrap_or|unwrap_or_else|unwrap_or_default)\s*\(/g,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
+    msg: 'parse failure replaced by a default',
+    fix: 'Propagate the parse error, or log it and document why the default is the right meaning of bad input (H-10).',
     lints: [],
   },
   {
@@ -129,10 +186,10 @@ export const RULES = [
     lints: [],
   },
   {
-    key: 'ignore-no-reason', id: 'H-12', re: /#\s*\[\s*ignore\s*\]/g,
+    key: 'ignore-no-reason', id: 'H-12', re: /#\s*\[\s*(?:cfg_attr\s*\([^\]]*?,\s*)?ignore\s*(?=[\],)])/g,
     ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'hard' },
-    msg: '`#[ignore]` without a reason',
-    fix: 'Do not disable tests to get green (H-12). If a test is slow or needs external resources, use `#[ignore = "reason"]` and tell the human.',
+    msg: '`#[ignore]` or `cfg_attr(.., ignore)` without a reason',
+    fix: 'Do not disable tests to get green (H-12). If a test is slow, needs external resources or cannot run under Miri, write `#[ignore = "reason"]` or `#[cfg_attr(miri, ignore = "reason")]` and tell the human.',
     lints: [],
   },
   {
@@ -147,6 +204,13 @@ export const RULES = [
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
     msg: 'shared mutable state',
     fix: 'Justify it in a comment on the type (who shares it, why mutation must be shared). Consider single ownership, message passing, or an arena first (OWN-11).',
+    lints: [],
+  },
+  {
+    key: 'mutex-unit', id: 'OWN-12', re: /\bMutex\s*<\s*\(\s*\)\s*>/g,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
+    msg: '`Mutex<()>` guards no data',
+    fix: 'Put the protected resource inside the `Mutex` (a zero-sized handle if need be) so every access needs the guard (OWN-12).',
     lints: [],
   },
   {
@@ -172,10 +236,26 @@ export const RULES = [
     lints: [],
   },
   {
-    key: 'detached-spawn', id: 'ASY-04', re: /^[ \t]*(?:tokio\s*::\s*(?:task\s*::\s*)?)?spawn\s*\(/gm,
+    key: 'thread-spawn', id: 'ASY-15', re: /\bthread\s*::\s*spawn\s*\(/g,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    msg: '`thread::spawn` panics when the OS refuses a thread',
+    fix: 'Use `thread::Builder::new().name(..).spawn(..)?` (or `spawn_scoped`), propagate the `io::Error`, and keep the `JoinHandle` (ASY-15).',
+    lints: ['clippy::disallowed_methods'],
+  },
+  {
+    key: 'detached-spawn', id: 'ASY-04',
+    re: /^[ \t]*(?:(?:tokio\s*::\s*(?:task\s*::\s*)?)?spawn|(?:std\s*::\s*)?thread\s*::\s*(?:spawn|Builder\b[^;]*?\.\s*spawn))\s*\(/gm,
+    // Owned when the handle is returned (tail expression) or joined/awaited in the same statement.
+    keep: (env, m) => {
+      const { code } = env;
+      const end = statementEnd(code, m.index);
+      if (code[end] !== ';') return false;
+      const close = matchPair(code, m.index + m[0].length - 1, '(', ')');
+      return !/^\s*\??\s*\.\s*(?:join|await)\b/.test(code.slice(close + 1, end));
+    },
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
-    msg: 'spawned task handle not kept',
-    fix: 'Own every task: keep the `JoinHandle`, or spawn into a `JoinSet`/`TaskTracker` that is joined on shutdown (ASY-04).',
+    msg: 'spawned task or thread handle not kept',
+    fix: 'Own every task and thread: keep the `JoinHandle` and join it on shutdown, or spawn into a `JoinSet`/`TaskTracker`/`thread::scope` (ASY-04, H-13).',
     lints: [],
   },
   {
@@ -186,6 +266,37 @@ export const RULES = [
     lints: [],
   },
   {
+    key: 'seqcst', id: 'ASY-13', re: /\bSeqCst\b/g,
+    // A comment on the same or previous line that names the order is the justification the rule asks for.
+    keep: (env, m) => {
+      const line = env.idx.lineOf(m.index);
+      const justified = env.comments.some((c) => {
+        const from = env.idx.lineOf(c.start);
+        const to = env.idx.lineOf(Math.max(c.start, c.end - 1));
+        return from <= line && to >= line - 1 && /\bSeqCst\b|\b(?:total|single|global)\s+order/i.test(c.text);
+      });
+      return !justified && !/\buse\s+[\w\s:{},*]*$/.test(env.code.slice(Math.max(0, m.index - 300), m.index));
+    },
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
+    msg: '`SeqCst` without a comment naming the total order it needs',
+    fix: 'Say in a comment which cross-variable total order needs `SeqCst`, or use `Acquire`/`Release` and name the paired operation. Unsure means a `Mutex`, not `SeqCst` (ASY-13).',
+    lints: [],
+  },
+  {
+    key: 'fetch-update', id: 'MOD-07', re: /\.\s*fetch_update\s*\(/g,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: 'soft' },
+    msg: '`fetch_update` is deprecated from 1.99 (renamed `try_update`)',
+    fix: 'Use the dedicated read-modify-write (`fetch_add`, `fetch_max`, `swap`), or `update`/`try_update` (stable since 1.95) for a computed update (MOD-07).',
+    lints: [],
+  },
+  {
+    key: 'compiler-fence', id: 'ASY-13', re: /\bcompiler_fence\s*\(/g,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    msg: '`compiler_fence` does not order memory between threads',
+    fix: 'Put the ordering on the atomic operation, or use `fence(Acquire)`/`fence(Release)` paired with a named operation. `compiler_fence` is for signal handlers, which need `unsafe` (ASY-13, H-01).',
+    lints: [],
+  },
+  {
     key: 'downcast', id: 'MOD-11', re: /\bdowncast(?:_ref|_mut)?\b|\bas_any\s*\(/g,
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
     msg: '`Any` downcasting',
@@ -193,10 +304,19 @@ export const RULES = [
     lints: [],
   },
   {
-    key: 'unwrap-or-default', id: 'H-10', re: /\.\s*unwrap_or_default\s*\(\s*\)/g,
+    key: 'unwrap-or-default', id: 'H-10',
+    re: /(?<!\bparse\s*(?:::\s*<[^>]*>)?\s*\(\s*\)\s*)\.\s*unwrap_or_default\s*\(\s*\)/g,
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
     msg: '`unwrap_or_default()` may mask a failure',
     fix: 'Fine when the default is the documented meaning of absence. When it hides an error the caller should see, propagate instead (H-10).',
+    lints: [],
+  },
+  {
+    key: 'map-index', id: 'H-04', re: /(?:\b([A-Za-z_]\w*)|[)\]])\[\s*&/g,
+    keep: (_env, m) => !m[1] || !KEYWORDS.has(m[1]),
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: null },
+    msg: '`map[&key]` panics when the key is missing',
+    fix: 'Use `get`/`get_mut` or `entry` and handle the missing key (H-04). Clippy does not lint map or deque indexing.',
     lints: [],
   },
   {
@@ -204,6 +324,15 @@ export const RULES = [
     ctx: { prod: 'soft', bin: null, example: null, test: 'soft' },
     msg: 'environment read inside library code',
     fix: 'Read configuration once at the composition root into a validated config type and pass it down (ARC-11).',
+    lints: [],
+  },
+  {
+    key: 'global-allocator', id: 'ARC-14', re: /#\s*\[\s*global_allocator\s*\]/g,
+    // A file with a top-level `fn main` is a binary root, whatever its path.
+    keep: (env) => !/^(?:pub\s+)?fn\s+main\s*\(/m.test(env.code),
+    ctx: { prod: 'hard', bin: null, example: null, test: null },
+    msg: '`#[global_allocator]` in a library crate',
+    fix: 'Only the binary at the composition root may choose the allocator, as an H-16 decision with a benchmark (ARC-14, PERF-09). A library that sets one breaks every binary that sets another.',
     lints: [],
   },
   {
@@ -221,10 +350,124 @@ export const RULES = [
     lints: [],
   },
   {
-    key: 'extern-crate', id: 'MOD-01', re: /\bextern\s+crate\b/g,
+    key: 'extern-crate', id: 'MOD-01', re: /\bextern\s+crate\s+(?!(?:alloc|std)\s*;|self\s+as\b)/g,
     ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: 'soft' },
     msg: '`extern crate` is unnecessary in edition 2018+',
-    fix: 'Remove it; use `use` paths.',
+    fix: 'Remove it; use `use` paths. Only `extern crate alloc;`/`extern crate std;` in a `no_std` crate are needed (MOD-01).',
+    lints: [],
+  },
+  {
+    key: 'crate-lint-attr', id: 'MOD-09', re: /#\s*!\s*\[\s*(?:deny|warn|forbid)\s*\(/g,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: 'soft' },
+    msg: 'crate-level lint attribute',
+    fix: 'Configure lints in the workspace `[lints]` table and inherit them with `[lints] workspace = true` (MOD-09).',
+    lints: [],
+  },
+  {
+    key: 'pub-glob-reexport', id: 'API-14', re: /\bpub\s+use\s+[^;]*::\s*\*\s*;/g,
+    // Globs are fine for `#[cfg]`-selected platform modules.
+    keep: (env, m) => !cfgAttrAbove(env, m.index),
+    ctx: { prod: 'soft', bin: null, example: null, test: null },
+    msg: 'glob re-export in the public surface',
+    fix: 'Re-export items by name so every public item has one deliberate path; a glob silently publishes every future item (API-14).',
+    lints: [],
+  },
+  {
+    key: 'prelude-mod', id: 'API-14', re: /\bpub\s+mod\s+prelude\b/g,
+    ctx: { prod: 'soft', bin: null, example: null, test: null },
+    msg: 'public `prelude` module',
+    fix: 'Drop the prelude: every public item has exactly one path (API-14). If users need many imports, the module layout is wrong (ARC-05).',
+    lints: [],
+  },
+  {
+    key: 'pub-smart-ptr', id: 'API-23',
+    // Only the two shapes API-23 names: shared mutable state and a runtime-chosen `dyn` implementation.
+    // `Arc<str>`, `Arc<Config>` snapshots and `&Mutex<T>` parameters are idiomatic and not flagged.
+    re: /\bpub\s+(?:const\s+)?(?:async\s+)?fn\s+\w+[^{;]*?\b(?:Rc|Arc)\s*<\s*(?:(?:std\s*::\s*)?(?:sync|cell)\s*::\s*)?(?:Mutex|RwLock|RefCell|dyn)\b/g,
+    ctx: { prod: 'soft', bin: null, example: null, test: null },
+    msg: 'public signature exposes `Arc<Mutex<..>>`/`Rc<RefCell<..>>` or `Arc<dyn ..>`',
+    fix: 'Hide sharing in a handle type with a cheap `Clone` over `Arc<Inner>`, and wrap a runtime-chosen `Arc<dyn Trait>` in a named type (API-23).',
+    lints: [],
+  },
+  {
+    key: 'ops-impl', id: 'API-22',
+    re: /\bimpl\b(?:\s*<[^{;]*?>)?\s+(?:(?:core|std)\s*::\s*)?(?:ops\s*::\s*)?(?:Add|Sub|Mul|Div|Rem|Neg)(?:Assign)?\b(?:\s*<[^{;]*?>)?\s+for\b/g,
+    // An impl that already uses checked/saturating/wrapping arithmetic has chosen its overflow semantics.
+    keep: (env, m) => {
+      const open = env.code.indexOf('{', m.index);
+      if (open === -1) return false;
+      return !/\b(?:checked|saturating|wrapping|overflowing)_\w+\s*\(/.test(env.code.slice(open, matchBrace(env.code, open)));
+    },
+    ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
+    msg: 'arithmetic operator impl',
+    fix: 'An operator cannot report overflow or an invalid result: expose `checked_*` returning `Option`/`Result`, or document wrapping or saturating semantics on the impl (API-22, ERR-09).',
+    lints: [],
+  },
+  {
+    key: 'type-alias-primitive', id: 'API-02',
+    re: /^(?:pub(?:\s*\([^)]*\))?\s+)?type\s+[A-Z][A-Za-z0-9]*\s*=\s*(?:[ui](?:8|16|32|64|128|size)|f(?:32|64)|bool|char|String|&\s*'static\s+str)\s*;/gm,
+    ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
+    msg: '`type` alias for a primitive is not a newtype',
+    fix: 'Use a newtype (`pub struct UserId(u64);`) so the compiler keeps ids, units and validated values apart (API-02).',
+    lints: [],
+  },
+  {
+    key: 'get-prefix', id: 'API-01',
+    re: /\bfn\s+get_(?!(?:mut|ref|pin_mut|unchecked(?:_mut)?)\b)\w+\s*(?:<[^>]*>)?\s*\(\s*(?:&\s*(?:'\w+\s+)?(?:mut\s+)?)?self\s*\)/g,
+    // A trait impl cannot rename the trait's methods.
+    keep: (env, m) => !inRegions(env.traitImpls, m.index),
+    ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
+    msg: '`get_` prefix on a getter',
+    fix: 'Name the getter after the field (`name()`, `name_mut()`); `get` is for keyed lookup or the single obvious value (API-01).',
+    lints: [],
+  },
+  {
+    key: 'struct-bounds', id: 'API-21', find: structBounds,
+    ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
+    msg: 'trait bound on a generic type definition',
+    fix: 'Move the bounds to the `impl` blocks that need them; every bound on the type is forced on every user and test fake (API-21). Exceptions: a field names an associated type, `?Sized`, or a `Drop` impl needs it.',
+    lints: [],
+  },
+  {
+    key: 'doc-unwrap', id: 'H-02', find: docUnwrap,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'soft' },
+    msg: 'unwrap/expect/panic in a doctest',
+    fix: 'Doctests are copied verbatim: use `?` with a hidden `# fn main() -> Result<(), Box<dyn std::error::Error>> {` wrapper or a `# Ok::<(), MyError>(())` tail (TST-11, H-02). Fences tagged `text`, `ignore` or `compile_fail` are not checked.',
+    lints: [],
+  },
+  {
+    key: 'doc-arg-sections', id: 'API-15', find: docArgSections,
+    ctx: { prod: 'soft', bin: 'soft', example: null, test: null },
+    msg: '`# Arguments`/`# Returns` doc section',
+    fix: 'Name parameters in the prose and document what the signature cannot say: behaviour, errors, invariants, units (API-15).',
+    lints: [],
+  },
+  {
+    key: 'expect-attr', id: 'H-05', find: expectAttrs,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'hard' },
+    msg: '`#[expect]` lint exception',
+    fix: 'Exception requests need human approval (H-05).',
+    lints: [],
+  },
+  {
+    key: 'erased-error', id: 'H-09', find: erasedErrors,
+    ctx: { prod: 'hard', bin: null, example: null, test: null },
+    msg: 'public library signature returns an erased error',
+    fix: 'Define a typed error enum with `thiserror` and return it (ERR-01, ERR-03).',
+    lints: [],
+  },
+  {
+    key: 'todo-comment', id: 'CRF-04', find: todoComments,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: 'soft' },
+    msg: 'TODO without a tracking reference',
+    fix: 'Link a tracking issue (`TODO(#123)`), or do it now.',
+    lints: [],
+  },
+  {
+    key: 'commented-code', id: 'H-06', find: commentedCode,
+    ctx: { prod: 'soft', bin: 'soft', example: 'soft', test: 'soft' },
+    msg: 'commented-out code',
+    fix: 'Delete it; version control remembers.',
     lints: [],
   },
 ];
@@ -235,6 +478,191 @@ const PUB_SIG_BAD = [
   [/\banyhow\s*::\s*(?:Result|Error)\b/, 'anyhow'],
   [/\beyre\s*::\s*(?:Result|Report)\b/, 'eyre'],
 ];
+
+// ------------------------------------------------------------ custom finders
+
+function expectAttrs(env) {
+  const out = [];
+  const exp = /#\s*!?\s*\[\s*expect\s*\(([^\]]*)\)\s*\]/g;
+  let m;
+  while ((m = exp.exec(env.code))) {
+    if (!/\breason\s*=/.test(m[1])) {
+      out.push({ offset: m.index, severity: 'hard', msg: '`#[expect]` without a reason', fix: 'Add `reason = "..."` explaining why the lint does not apply. A human will review it.' });
+    } else {
+      const lint = m[1].split(',')[0].trim();
+      out.push({ offset: m.index, severity: 'ask', msg: `lint exception requested for \`${lint}\``, exception: lint });
+    }
+  }
+  return out;
+}
+
+function erasedErrors(env) {
+  const out = [];
+  const sig = /\bpub\s+(?:const\s+)?(?:async\s+)?fn\s+\w+[^{;]*/g;
+  let m;
+  while ((m = sig.exec(env.code))) {
+    for (const [re, label] of PUB_SIG_BAD) {
+      if (re.test(m[0])) out.push({ offset: m.index, msg: `public library signature returns ${label}` });
+    }
+  }
+  return out;
+}
+
+function todoComments(env) {
+  const out = [];
+  for (const c of env.comments) {
+    if (c.doc) continue;
+    const body = c.text.replace(/^\/\/+|^\/\*+|\*+\/$/g, '').trim();
+    if (/\b(TODO|FIXME|XXX|HACK)\b/.test(body) && !/(#\d+|https?:\/\/|\b[A-Z][A-Z0-9]+-\d+\b)/.test(body)) out.push({ offset: c.start });
+  }
+  return out;
+}
+
+function commentedCode(env) {
+  const out = [];
+  for (const c of env.comments) {
+    if (c.doc) continue;
+    const body = c.text.replace(/^\/\/+|^\/\*+|\*+\/$/g, '').trim();
+    const startsLikeCode = /^(let|fn|use|pub|if|match|return|for|while|impl|struct|enum|mod|const|static)\b/.test(body) && /[;{}()=<>]/.test(body);
+    const endsLikeCode = /[;{}]\s*$/.test(body) && /[()=:<>]|\b(let|fn|return)\b/.test(body);
+    if ((startsLikeCode || endsLikeCode) && !/[.!?…]\s*$/.test(body)) out.push({ offset: c.start });
+  }
+  return out;
+}
+
+/** Is the item at `offset` preceded by a `#[cfg(..)]` attribute? */
+function cfgAttrAbove(env, offset) {
+  const lines = env.code.slice(0, offset).split('\n');
+  lines.pop(); // the item's own line up to the match
+  for (let k = lines.length - 1; k >= 0; k--) {
+    const l = lines[k].trim();
+    if (!l.startsWith('#')) return false;
+    if (/^#\s*\[\s*cfg\s*\(/.test(l)) return true;
+  }
+  return false;
+}
+
+/** Does a bound list contain a trait bound (anything but lifetimes and `?Sized`)? */
+function traitBound(bounds) {
+  return splitTop(bounds, '+').map((t) => t.trim()).some((t) => t && !t.startsWith("'") && t !== '?Sized');
+}
+
+function structBounds(env) {
+  const { code } = env;
+  const out = [];
+  const re = /\b(?:struct|enum)\s+([A-Za-z_]\w*)\s*</g;
+  let m;
+  while ((m = re.exec(code))) {
+    const open = m.index + m[0].length - 1;
+    const close = matchAngle(code, open);
+    if (close < 0) continue;
+    const bounded = new Set();
+    for (const p of splitTop(code.slice(open + 1, close))) {
+      const t = p.trim();
+      if (!t || t.startsWith("'") || /^const\b/.test(t)) continue;
+      const mm = /^([A-Za-z_]\w*)\s*:([^=]*)/.exec(t);
+      if (mm && traitBound(mm[2])) bounded.add(mm[1]);
+    }
+    let k = close + 1;
+    while (/\s/.test(code[k] ?? '')) k++;
+    let body = '';
+    if (code[k] === '(') {
+      const pc = matchPair(code, k, '(', ')');
+      body = code.slice(k, pc + 1);
+      k = pc + 1;
+    }
+    const w = /^\s*where\b([^{;]*)/.exec(code.slice(k));
+    if (w) {
+      k += w[0].length;
+      for (const pred of splitTop(w[1])) {
+        const mm = /^\s*([^:]+?)\s*:([\s\S]*)$/.exec(pred);
+        if (mm && !mm[1].trim().startsWith("'") && traitBound(mm[2])) bounded.add(mm[1].trim());
+      }
+    }
+    if (!bounded.size) continue;
+    if (!body) {
+      while (/\s/.test(code[k] ?? '')) k++;
+      if (code[k] === '{') body = code.slice(k, matchBrace(code, k) + 1);
+    }
+    const assoc = [...bounded].some((n) => new RegExp(`(?:^|[^\\w:])${esc(n)}\\s*::|<\\s*${esc(n)}\\s+as\\b`).test(body));
+    const drop = new RegExp(`\\bimpl\\b[^{;]*\\bDrop\\s+for\\s+${esc(m[1])}\\b`).test(code);
+    if (!assoc && !drop) out.push({ offset: m.index });
+  }
+  return out;
+}
+
+/**
+ * Doc comments (line and block forms, outer and inner) as runs of consecutive
+ * lines, split into fenced code blocks and prose lines.
+ */
+function docBlocks(env) {
+  const runs = [];
+  let run = null;
+  let prevEnd = -1;
+  let prevInner = null;
+  for (const c of env.comments) {
+    if (!c.doc) continue;
+    const inner = /^\/[/*]!/.test(c.text);
+    if (!(run && inner === prevInner && env.code.slice(prevEnd, c.start).trim() === '')) {
+      run = [];
+      runs.push(run);
+    }
+    prevEnd = c.end;
+    prevInner = inner;
+    if (c.text.startsWith('//')) {
+      const p = /^\/\/[/!] ?/.exec(c.text)[0].length;
+      run.push({ text: c.text.slice(p).replace(/\r$/, ''), offset: c.start + p });
+    } else {
+      const bodyEnd = c.text.endsWith('*/') ? c.text.length - 2 : c.text.length;
+      let pos = 3;
+      for (const line of c.text.slice(3, bodyEnd).split('\n')) {
+        const lead = /^[ \t]*(?:\* ?)?/.exec(line)[0].length;
+        run.push({ text: line.slice(lead).replace(/\r$/, ''), offset: c.start + pos + lead });
+        pos += line.length + 1;
+      }
+    }
+  }
+  const fences = [];
+  const prose = [];
+  for (const lines of runs) {
+    let fence = null;
+    for (const l of lines) {
+      const f = /^ {0,3}(`{3,}|~{3,})\s*([^`]*?)\s*$/.exec(l.text);
+      if (!fence) {
+        if (f) fence = { marker: f[1], info: f[2], lines: [] };
+        else prose.push(l);
+      } else if (f && f[1][0] === fence.marker[0] && f[1].length >= fence.marker.length && f[2] === '') {
+        fences.push(fence);
+        fence = null;
+      } else {
+        fence.lines.push(l);
+      }
+    }
+    if (fence) fences.push(fence); // rustdoc closes an unterminated fence at the end of the docs
+  }
+  return { fences, prose };
+}
+
+function docUnwrap(env) {
+  const out = [];
+  for (const f of env.doc.fences) {
+    if (!isRustFence(f.info)) continue;
+    // Hidden lines (`# ..`) are compiled too, so they are checked.
+    const body = f.lines.map((l) => l.text.replace(/^(\s*)# /, '$1').replace(/^(\s*)#$/, '$1')).join('\n');
+    maskRust(body).code.split('\n').forEach((line, i) => {
+      if (DOC_BAD.test(line)) out.push({ offset: f.lines[i].offset });
+    });
+  }
+  return out;
+}
+
+function docArgSections(env) {
+  return env.doc.prose
+    .filter((l) => /^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:Arguments|Parameters|Params|Returns|Return value)(?:\*\*)?\s*:?\s*(?:\*\*)?\s*$/.test(l.text))
+    .map((l) => ({ offset: l.offset }));
+}
+
+// ------------------------------------------------------------------ scanning
 
 /** Classify a file path relative to its crate root. */
 export function classifyPath(relToCrate, crateHasLib) {
@@ -272,73 +700,59 @@ function exceptionFor(code, idx, offset, lints) {
   return found;
 }
 
+function regexMatches(rule, env) {
+  const out = [];
+  const re = new RegExp(rule.re.source, rule.re.flags);
+  let m;
+  while ((m = re.exec(env.code))) {
+    if (m[0] === '') { re.lastIndex++; continue; }
+    if (rule.keep && !rule.keep(env, m)) continue;
+    out.push({ offset: m.index });
+  }
+  return out;
+}
+
+function makeEnv(src, kind, build) {
+  const { code, comments } = maskRust(src);
+  const idx = lineIndex(code);
+  const env = { src, code, comments, idx, kind, build, regions: testRegions(code) };
+  const lazy = (name, fn) => Object.defineProperty(env, name, { get() { const v = fn(); Object.defineProperty(env, name, { value: v }); return v; }, configurable: true });
+  lazy('consts', () => constRegions(code));
+  lazy('traitImpls', () => traitImplRegions(code));
+  lazy('doc', () => docBlocks(env));
+  return env;
+}
+
 /**
  * Scan one Rust source.
  * @param {string} src
- * @param {{kind: 'prod'|'bin'|'example'|'test', isLib?: boolean}} opts
+ * @param {{kind: 'prod'|'bin'|'example'|'test', build?: boolean}} opts
+ *   `build`: the file is a build script (only changes fix texts).
  */
-export function scanSource(src, { kind }) {
-  const { code, comments } = maskRust(src);
-  const idx = lineIndex(code);
-  const regions = testRegions(code);
+export function scanSource(src, { kind, build = false }) {
+  const env = makeEnv(src, kind, build);
+  const { code, idx, regions } = env;
   const hits = [];
   const push = (rule, offset, severity, extra = {}) => {
     const line = idx.lineOf(offset);
     hits.push({
       key: rule.key, id: rule.id, severity, line,
       text: idx.lineText(line, src).trim().slice(0, 160),
-      msg: extra.msg ?? rule.msg, fix: rule.fix, ...extra,
+      ...extra,
+      msg: extra.msg ?? rule.msg,
+      fix: extra.fix ?? ((build && rule.fixBuild) || rule.fix),
     });
   };
   for (const rule of RULES) {
-    rule.re.lastIndex = 0;
-    let m;
-    while ((m = rule.re.exec(code))) {
-      const ctx = contextAt(kind, regions, m.index);
-      const sev = rule.ctx[ctx];
+    for (const f of rule.find ? rule.find(env) : regexMatches(rule, env)) {
+      const { offset, severity: forced, ...extra } = f;
+      const sev = forced ?? rule.ctx[contextAt(kind, regions, offset)];
       if (!sev) continue;
-      if (sev === 'hard') {
-        const lint = exceptionFor(code, idx, m.index, rule.lints);
-        if (lint) { push(rule, m.index, 'ask', { exception: lint }); continue; }
+      if (sev === 'hard' && !forced) {
+        const lint = exceptionFor(code, idx, offset, rule.lints);
+        if (lint) { push(rule, offset, 'ask', { ...extra, exception: lint }); continue; }
       }
-      push(rule, m.index, sev);
-    }
-  }
-  // #[expect] attributes: without reason = hard; with reason = exception request
-  const exp = /#\s*!?\s*\[\s*expect\s*\(([^\]]*)\)\s*\]/g;
-  let m;
-  while ((m = exp.exec(code))) {
-    const rule = { key: 'expect-attr', id: 'H-05', fix: '' };
-    if (!/\breason\s*=/.test(m[1])) {
-      push({ ...rule, fix: 'Add `reason = "..."` explaining why the lint does not apply. A human will review it.' }, m.index, 'hard', { msg: '`#[expect]` without a reason' });
-    } else {
-      const lint = m[1].split(',')[0].trim();
-      push({ ...rule, fix: 'Exception requests need human approval (H-05).' }, m.index, 'ask', { msg: `lint exception requested for \`${lint}\``, exception: lint });
-    }
-  }
-  // stringly / erased errors in pub signatures (library production code only)
-  if (kind === 'prod') {
-    const sig = /\bpub\s+(?:const\s+)?(?:async\s+)?fn\s+\w+[^{;]*/g;
-    while ((m = sig.exec(code))) {
-      if (inRegions(regions, m.index)) continue;
-      for (const [re, label] of PUB_SIG_BAD) {
-        if (re.test(m[0])) {
-          push({ key: 'erased-error', id: 'H-09', fix: 'Define a typed error enum with `thiserror` and return it (ERR-01, ERR-03).' }, m.index, 'hard', { msg: `public library signature returns ${label}` });
-        }
-      }
-    }
-  }
-  // comments: untracked TODOs and commented-out code
-  for (const c of comments) {
-    if (c.doc) continue;
-    const body = c.text.replace(/^\/\/+|^\/\*+|\*+\/$/g, '').trim();
-    if (/\b(TODO|FIXME|XXX|HACK)\b/.test(body) && !/(#\d+|https?:\/\/|\b[A-Z][A-Z0-9]+-\d+\b)/.test(body)) {
-      push({ key: 'todo-comment', id: 'CRF-04', fix: 'Link a tracking issue (`TODO(#123)`), or do it now.' }, c.start, 'soft', { msg: 'TODO without a tracking reference' });
-    }
-    const startsLikeCode = /^(let|fn|use|pub|if|match|return|for|while|impl|struct|enum|mod|const|static)\b/.test(body) && /[;{}()=<>]/.test(body);
-    const endsLikeCode = /[;{}]\s*$/.test(body) && /[()=:<>]|\b(let|fn|return)\b/.test(body);
-    if ((startsLikeCode || endsLikeCode) && !/[.!?…]\s*$/.test(body)) {
-      push({ key: 'commented-code', id: 'H-06', fix: 'Delete it; version control remembers.' }, c.start, 'soft', { msg: 'commented-out code' });
+      push(rule, offset, sev, extra);
     }
   }
   return { hits, tests: countTests(code), clones: (code.match(/\.\s*clone\s*\(\s*\)/g) ?? []).length };

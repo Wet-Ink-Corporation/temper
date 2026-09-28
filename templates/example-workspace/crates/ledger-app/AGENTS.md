@@ -26,6 +26,7 @@ Re-exported from `lib.rs`: `Ledger` (`new`, `execute`, `summary`), `AccountSumma
 
 ## Test strategy
 - Integration tests in `tests/it/` (one binary) through the public API, with hand-written fakes in `tests/it/support.rs`: `InMemoryStore` (same contract as the file store, including the version check), `UnavailableStore`, `ContendedStore` (always loses the race), `FixedClock` (TST-09, TST-10).
+- A crate-root doctest wires `Ledger` to hidden in-memory ports (TST-11).
 - Business rules are tested in `ledger-domain`, not here; these tests cover orchestration.
 - Run: `cargo test -p ledger-app`.
 
@@ -40,4 +41,6 @@ Re-exported from `lib.rs`: `Ledger` (`new`, `execute`, `summary`), `AccountSumma
 | 2026-09-28 | `EventStore` has an associated `Error` type and `AppError` is generic over it, so each adapter keeps its own typed error and the binary sees `AppError<ledger_store_jsonl::StoreError>`. | ARC-03, ERR-01 | example maintainers |
 | 2026-09-28 | `Ledger` is generic over both ports (static dispatch); no `dyn` needed because the binary wires exactly one store and one clock. | API-09 | example maintainers |
 | 2026-09-28 | `Timestamp` is whole milliseconds since the Unix epoch; no date-time crate is needed for stamping and ordering. | ARC-12 | example maintainers |
-| 2026-09-28 | Test fixtures in `tests/it/support.rs` return `Result`: clippy's `allow-expect-in-tests` covers `#[test]` functions and `#[cfg(test)]` modules, not helper functions in integration-test crates. | H-02, TST-04 | example maintainers |
+| 2026-09-28 | Shared test helpers are declared `#[cfg(test)] mod support;`, so clippy's test relaxations apply to them, and fixtures return `Result` so tests read with `?`. | TST-14, TST-04 | example maintainers |
+| 2026-09-28 | `Timestamp::from_unix_millis`, `Version::new` and `Version::from_len` are named constructors, not `From<u64>`/`From<usize>`: a bare integer does not say whether it counts milliseconds, seconds or events. | API-07 | example maintainers |
+| 2026-09-28 | `AccountSummary` and `Recorded` are exhaustive plain data with public fields: adapters and tests construct them, so a new field is a deliberate change reviewed across the workspace. | API-04, API-05 | example maintainers |

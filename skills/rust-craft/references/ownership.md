@@ -2,7 +2,7 @@
 
 Signatures, lifetimes, borrow-checker errors, smart pointers, interior mutability and clones. Read it before designing a signature or a shared type, whenever rustc reports a borrow or lifetime error (E04xx, E05xx, E07xx), and before approving any `.clone()`, `Arc`, `Mutex`, `RefCell` or `'static` in a diff. After two failed attempts at the same error (PROC-09), stop and pick a shape from §Fighting the borrow checker.
 
-Rules covered: OWN-01, OWN-02, OWN-03, OWN-04, OWN-05, OWN-06, OWN-07, OWN-08, OWN-09, OWN-10, OWN-11, OWN-12, OWN-13, OWN-14, OWN-15, OWN-16, H-07, H-08
+Rules covered: OWN-01, OWN-02, OWN-03, OWN-04, OWN-05, OWN-06, OWN-07, OWN-08, OWN-09, OWN-10, OWN-11, OWN-12, OWN-13, OWN-14, OWN-15, OWN-16, OWN-17, H-07, H-08
 
 ## Signatures
 
@@ -12,7 +12,10 @@ Rules covered: OWN-01, OWN-02, OWN-03, OWN-04, OWN-05, OWN-06, OWN-07, OWN-08, O
 |---|---|---|
 | reads a string, sequence or path | `&str`, `&[T]`, `&Path` (`impl AsRef<Path>` at public edges) | |
 | reads any source of items once | `impl IntoIterator<Item = T>` | |
+| reads or writes a stream | `R: Read` / `W: Write` by value; callers pass `&mut r` to keep it | |
 | mutates the caller's value in place | `&mut T` | `()` or a summary |
+| fills a buffer the caller reuses (OWN-17) | `&mut String`, `&mut Vec<T>`; name it `*_into` | `()` or a count |
+| produces several results (OWN-17) | | a tuple or named struct, never `&mut` out-parameters |
 | stores the value (field, map, channel) | `String`, `Vec<T>`, `T` | |
 | constructor or builder that stores | `impl Into<String>`, `impl Into<PathBuf>` | `Self` |
 | consumes or transitions the value | `self` / `T` | the new value |
@@ -93,19 +96,106 @@ pub fn name(&self) -> String { self.name.clone() }      // OWN-01: allocates on 
 **Detect.** `clippy::needless_pass_by_value`, `ptr_arg`, `borrowed_box`, `wrong_self_convention`. Review: any `.to_string()`/`.clone()` of a parameter inside the callee means the parameter should have been owned.
 **Exceptions.** `impl Into<String>` in non-constructor methods is fine when the method is builder-like; say so in the doc comment.
 
+OWN-01's exception: generic I/O parameters are taken by value, `R: Read`/`W: Write` (or `impl Read`/`impl Write`), with a doc line telling callers to pass `&mut reader` to keep it. `&mut R` implements `Read` too, so one signature accepts owned readers, borrowed ones and `&mut dyn Write`; `fn f<W: Write>(out: &mut W)` rejects `&mut dyn Write` (E0277, `W: Sized` is implicit).
+```rust
+use std::io::{self, Write};
+
+/// Writes one line per name. Pass `&mut out` to keep using the writer.
+///
+/// # Errors
+/// Returns the I/O error from writing or flushing.
+pub fn write_names<W: Write>(mut out: W, names: &[&str]) -> io::Result<()> {
+    for name in names {
+        writeln!(out, "{name}")?;
+    }
+    out.flush()
+}
+
+/// The caller keeps its buffer, and a `&mut dyn Write` works the same way.
+///
+/// # Errors
+/// Returns the I/O error from either sink.
+pub fn report(names: &[&str], log: &mut dyn Write) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    write_names(&mut buf, names)?;
+    write_names(log, names)?;
+    Ok(buf)
+}
+```
+
 ### OWN-10 · Return `Cow` when you usually borrow
 **Why.** `expand_tabs` above returns the input untouched in the common case. `Cow<'_, str>` makes that free and still owns when it must. Do not return `Cow` when you always allocate (return `String`) or never do (return `&str`).
+
+### OWN-17 · Return results; `&mut` only to modify or fill caller data
+Return results by value, as a tuple or a named struct when there are several. A `&mut` parameter only modifies the caller's data in place or fills a caller-owned buffer for reuse; such a function is named `*_into` and documents whether it appends or clears.
+**Why.** An out-parameter hides a second result, makes the caller build a placeholder first, and cannot be chained or matched. The legitimate `&mut` case is reuse: `read_line(&mut buf)` lets a loop keep one allocation. Appending is the std convention (`read_line`, `read_to_end`, `Extend`), so say so when you clear instead. On a hot path the allocating form is a thin wrapper over the `_into` form (PERF-02).
+**Do.**
+```rust
+use std::fmt::{self, Write as _};
+
+/// Smallest and largest value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    /// Smallest value.
+    pub min: u32,
+    /// Largest value.
+    pub max: u32,
+}
+
+/// Two results: a named struct, not two `&mut u32` parameters.
+#[must_use]
+pub fn bounds(values: &[u32]) -> Option<Bounds> {
+    Some(Bounds {
+        min: *values.iter().min()?,
+        max: *values.iter().max()?,
+    })
+}
+
+/// Appends one `key=value` line per pair to `out`; the caller clears it between uses.
+///
+/// # Errors
+/// Propagates the sink's error.
+pub fn encode_into(pairs: &[(&str, u32)], out: &mut String) -> fmt::Result {
+    for (key, value) in pairs {
+        writeln!(out, "{key}={value}")?;
+    }
+    Ok(())
+}
+
+/// Allocating form: a thin wrapper over [`encode_into`].
+///
+/// # Errors
+/// Propagates the sink's error.
+pub fn encode(pairs: &[(&str, u32)]) -> Result<String, fmt::Error> {
+    let mut out = String::new();
+    encode_into(pairs, &mut out)?;
+    Ok(out)
+}
+```
+**Don't.**
+```rust,ignore
+pub fn bounds(values: &[u32], min: &mut u32, max: &mut u32) -> bool { .. } // out-parameters: return Option<Bounds>
+pub fn parse(input: &str, warnings: &mut Vec<Warning>) -> Config { .. }    // hidden second result: return (Config, Vec<Warning>)
+pub fn encode(pairs: &[(&str, u32)], out: &mut String) { .. }              // fills a buffer: name it encode_into, say append or clear
+```
+**Detect.** Review: a `&mut` parameter that the function only writes to; `bool` or `()` returns beside `&mut` scalars; buffer-filling functions not named `*_into` or silent about append versus clear.
 
 ## Lifetimes and elision
 
 ### OWN-05 · Rely on elision; name lifetimes only for real relationships
-**Why.** Elision rules: each elided input gets its own lifetime; with exactly one input lifetime, or a `&self`/`&mut self`, the output takes it. Name a lifetime only when there are several inputs and the output is tied to a specific one, or in a type that holds borrows.
+**Why.** Elision rules: each elided input gets its own lifetime; with exactly one input lifetime, or a `&self`/`&mut self`, the output takes it. Name a lifetime only when there are several inputs and the output is tied to a specific one, or in a type that holds borrows. Tie the output only to the inputs it borrows from. The E0106 help puts one `'a` on every reference input; that compiles, but then every argument must outlive the result, and a caller passing a temporary gets E0716.
 **Do.**
 ```rust
 /// Elision ties the output to the only input.
 #[must_use]
 pub fn first_word(text: &str) -> &str {
     text.split_whitespace().next().unwrap_or_default()
+}
+
+/// The result borrows only from `haystack`; `needle` may be a temporary.
+#[must_use]
+pub fn after<'h>(haystack: &'h str, needle: &str) -> Option<&'h str> {
+    haystack.split_once(needle).map(|(_, rest)| rest)
 }
 
 /// Two reference inputs: elision cannot choose, so name the relationship.
@@ -143,6 +233,7 @@ impl<'a> IntoIterator for &'a Queue {
 **Don't.**
 ```rust,ignore
 pub fn first_word<'a>(text: &'a str) -> &'a str { .. }  // needless_lifetimes
+pub fn after<'a>(haystack: &'a str, needle: &'a str) -> Option<&'a str> // E0106's help: `after(t, &format!(..))` then fails
 pub fn iter(&self) -> std::slice::Iter<u32> { .. }     // hidden lifetime: mismatched_lifetime_syntaxes
 fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result   // elided_lifetimes_in_paths (rust_2018_idioms)
 ```
@@ -152,6 +243,8 @@ fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result   // elided_lifetimes_in_pa
 **Why.** A lifetime parameter on a struct infects every type and function that holds it. Parsers, tokenizers, iterators and formatting adapters borrow; domain entities, config, services and anything stored in a collection or sent across a task own. Name struct lifetimes after what they borrow (`'src`, `'buf`, `'de`).
 **Do.**
 ```rust
+use std::iter::FusedIterator;
+
 /// A short-lived borrowing tokenizer over source text.
 #[derive(Debug, Clone)]
 pub struct Tokens<'src> {
@@ -176,7 +269,15 @@ impl<'src> Iterator for Tokens<'src> {
         self.rest = rest;
         (!token.is_empty()).then_some(token)
     }
+
+    // Report what is known (API-06): each token needs a byte and a separator.
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.rest.len().div_ceil(2)))
+    }
 }
+
+// Once `next` returns `None`, `rest` is empty and stays empty.
+impl FusedIterator for Tokens<'_> {}
 ```
 **Don't.**
 ```rust,ignore
@@ -210,10 +311,12 @@ fn run<F: Fn() + 'static>(f: F)  // 'static added only because a borrow did not 
 | E0597 does not live long enough | Owner is dropped while a borrow is still needed | Move the owner to an outer scope, or return/store owned data |
 | E0716 temporary value dropped while borrowed | Borrowing from a temporary (`String::from(..).as_str()`, `lock().unwrap().get()`) | Bind the temporary with `let` first; or narrow RPIT captures with `use<..>` |
 | E0373 closure may outlive the current function | Thread or task closure borrows a local | `move` an owned value in; or `std::thread::scope` to borrow |
-| E0521 borrowed data escapes outside of method | `&self` data sent into `thread::spawn`/`tokio::spawn` | Clone only the needed `Arc` handle before `move`; move owned data; scope |
+| E0521 borrowed data escapes outside of method | `&self` data sent into a spawned thread (`Builder::spawn`) or `tokio::spawn` | Clone only the needed `Arc` handle before `move`; move owned data; scope |
 | E0507 cannot move out of `*x` / of index / out of enum behind `&mut` | Taking ownership through a reference | `mem::take`, `mem::replace`, `Option::take`/`replace`, `Vec::swap_remove`/`drain`, iterate by value, match on `&` |
 | E0515 cannot return reference to local variable | The value is created in the function | Return the owned value (`String`, `Vec<T>`), or `Cow` |
 | E0502/E0716 at a call site that holds a returned `impl Iterator` | Edition 2024 RPIT captures a borrow the iterator does not use | `+ use<>` / `+ use<'a>` (§Returning iterators) |
+
+**Detect.** `clippy::mem_replace_with_default` and `mem_replace_option_with_none` (style, denied) flag the long-hand `mem::replace` forms of `mem::take` and `Option::take`; `redundant_clone` catches local clones; review: a `.clone()` added in the same diff that fixed a borrow error (H-08).
 
 #### Shape: disjoint fields and helpers that take fields (E0499)
 ```rust,ignore
@@ -386,40 +489,56 @@ A struct that wants to hold `&` into a sibling collection (`parent: &Node`, `cur
 
 #### Shape: move into the thread, or scope it (E0373, E0521)
 ```rust,ignore
-let handle = thread::spawn(|| sum(&values));        // E0373: borrows `values`
-thread::spawn(move || self.names.len());             // E0521: `&self` escapes
-thread::spawn(move || ctx.clone().names.len());      // H-08/OWN-14: clones the whole context
+let handle = spawner.spawn(|| sum(&values))?;        // E0373: borrows `values`
+spawner.spawn(move || self.names.len())?;            // E0521: `&self` escapes
+spawner.spawn(move || ctx.clone().names.len())?;     // H-08/OWN-14: clones the whole context
 ```
+Threads start through `thread::Builder` and the spawn error propagates: `thread::spawn` and `Scope::spawn` panic when the OS refuses a thread and are denied by `disallowed-methods` (ASY-15).
 ```rust
+use std::io;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-/// A worker thread panicked.
+/// Parallel summing failed.
 #[derive(Debug, thiserror::Error)]
-#[error("worker thread panicked")]
-pub struct WorkerPanicked;
+#[non_exhaustive]
+pub enum SumError {
+    /// The OS refused to start the helper thread.
+    #[error("failed to spawn a worker thread")]
+    Spawn(#[source] io::Error),
+    /// The helper thread panicked.
+    #[error("worker thread panicked")]
+    WorkerPanicked,
+}
 
 fn sum(values: &[u64]) -> u64 {
     values.iter().fold(0, |acc, v| acc.saturating_add(*v))
 }
 
 /// Moves ownership into the thread; the caller owns the handle.
-#[must_use]
-pub fn spawn_sum(values: Vec<u64>) -> JoinHandle<u64> {
-    thread::spawn(move || sum(&values))
+///
+/// # Errors
+/// Returns the OS error if the thread cannot be started.
+pub fn spawn_sum(values: Vec<u64>) -> io::Result<JoinHandle<u64>> {
+    thread::Builder::new()
+        .name("sum".to_owned())
+        .spawn(move || sum(&values))
 }
 
 /// Borrows across threads without `'static`: the scope joins before returning.
 ///
 /// # Errors
-/// [`WorkerPanicked`] if the helper thread panicked.
-pub fn parallel_sum(values: &[u64]) -> Result<u64, WorkerPanicked> {
+/// [`SumError`] if the helper thread cannot start or panicked.
+pub fn parallel_sum(values: &[u64]) -> Result<u64, SumError> {
     let (left, right) = values.split_at(values.len() / 2);
     thread::scope(|s| {
-        let worker = s.spawn(|| sum(left));
+        let worker = thread::Builder::new()
+            .name("sum-left".to_owned())
+            .spawn_scoped(s, || sum(left))
+            .map_err(SumError::Spawn)?;
         let right_sum = sum(right);
         // the panic payload has no diagnostic value here (ERR-04)
-        let left_sum = worker.join().map_err(|_payload| WorkerPanicked)?;
+        let left_sum = worker.join().map_err(|_payload| SumError::WorkerPanicked)?;
         Ok(left_sum.saturating_add(right_sum))
     })
 }
@@ -431,11 +550,15 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    /// Clones only the handle the thread needs, then moves it (OWN-14).
-    #[must_use]
-    pub fn spawn_counter(&self) -> JoinHandle<usize> {
-        let names = Arc::clone(&self.names);
-        thread::spawn(move || names.len())
+    /// The capture block clones only the handle the thread needs (OWN-14).
+    ///
+    /// # Errors
+    /// Returns the OS error if the thread cannot be started.
+    pub fn spawn_counter(&self) -> io::Result<JoinHandle<usize>> {
+        thread::Builder::new().name("counter".to_owned()).spawn({
+            let names = Arc::clone(&self.names);
+            move || names.len()
+        })
     }
 }
 ```
@@ -466,8 +589,8 @@ if !counts.contains_key(word) { counts.insert(word, 0); } // double lookup
 **Detect.** `clippy::map_entry`. Exception to the shape: for `String` keys looked up by `&str`, `entry` needs an owned key every call; use `get_mut` then `insert(key.to_owned(), ..)` on miss (see `HitCounter` below).
 
 ### OWN-14 · Closures borrow; `move` only across a boundary
-**Why.** Non-`move` closures borrow exactly the fields they use (edition 2021+ disjoint capture). `move` is for closures that outlive the frame: threads, tasks, returned closures. Before a `move`, clone the one `Arc` handle it needs (`spawn_counter` above), never `self.clone()`.
-**Detect.** Review: `let this = self.clone(); spawn(move || ..)`; `move` on closures passed to `iter().map(..)` that do not need it.
+**Why.** Non-`move` closures borrow exactly the fields they use (edition 2021+ disjoint capture). `move` is for closures that outlive the frame: threads, tasks, returned closures. Before a `move`, clone the one `Arc` handle it needs, never `self.clone()`. Build the closure in a capture block that rebinds each clone under its original name (`spawn_counter` above): the clone is visibly for that closure, and the extra binding ends with the block. To move a borrow into a `move` closure, rebind the reference first (`let names = names.as_slice();`). The same block works for tasks: `tasks.spawn({ let store = Arc::clone(&store); async move { .. } })`.
+**Detect.** Review: `let this = self.clone(); spawn(move || ..)`; `names2`/`names_clone` bindings made just before a `move`; `move` on closures passed to `iter().map(..)` that do not need it.
 
 ## Returning iterators and the 2024 capture rules
 
@@ -518,7 +641,7 @@ pub fn reserve_ids(dir: &mut Directory) -> Vec<u32> {
 pub fn active(&self) -> Vec<&User> { self.users.iter().filter(|u| u.active).collect() } // OWN-13
 pub fn active(&self) -> Box<dyn Iterator<Item = &User> + '_> { .. } // heap + dyn for no reason
 ```
-**Detect.** `clippy::needless_collect` (inside functions); review: public getters returning `Vec` built from `self`.
+**Detect.** `clippy::needless_collect` (nursery, enabled in the template; inside functions); review: public getters returning `Vec` built from `self`.
 
 ## Sharing
 
@@ -539,7 +662,8 @@ pub fn active(&self) -> Box<dyn Iterator<Item = &User> + '_> { .. } // heap + dy
 | `Rc<RefCell<T>>` | Single-threaded shared mutation | as `Rc`, plus why `&mut` cannot be threaded through; prefer an arena |
 | Arena + index handles | Graphs, trees with parent links, cyclic data | none: this is the default for graphs |
 
-`Rc<Mutex<T>>` is denied (`clippy::rc_mutex`). `Arc<RefCell<T>>` does not compile across threads; do not try to make it.
+`Rc<Mutex<T>>` is denied (`clippy::rc_mutex`). `Arc<RefCell<T>>` is flagged by `clippy::arc_with_non_send_sync` and cannot be sent to another thread: use `Rc` for single-threaded sharing and `Mutex` for cross-thread sharing.
+
 **Do.**
 ```rust
 use std::collections::HashMap;
@@ -570,12 +694,41 @@ impl HitCounter {
 }
 ```
 The `Mutex` lives inside the type and the API takes `&self`; callers hold `Arc<HitCounter>`, never `Arc<Mutex<HashMap<..>>>`. Recovering from poison is only correct when the protected data cannot be left half-updated; otherwise map the `PoisonError` to a typed error.
+
+Back-references (parent links, observers) are `Weak` (`Rc::downgrade`, `Arc::downgrade`): a cycle of strong pointers never drops. Leave the ladder without a clone too:
+- `Arc::into_inner(shared)` (1.70) takes the value back once the other owners are gone; it returns `None` while one remains. Never `Arc::try_unwrap(..).unwrap()` or `(*shared).clone()`.
+- `Arc::make_mut(&mut snapshot)` updates a shared snapshot in place and clones only while a reader still holds the old one.
+- `Arc::unwrap_or_clone(shared)` (1.76) is for callers that accept a copy when the value is still shared.
+```rust
+use std::sync::Arc;
+
+/// Running totals, published to readers as immutable snapshots.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Totals {
+    orders: u64,
+    cents: u64,
+}
+
+/// Applies one order; clones the totals only if a reader still holds this snapshot.
+pub fn apply(snapshot: &mut Arc<Totals>, cents: u64) {
+    let totals = Arc::make_mut(snapshot);
+    totals.orders = totals.orders.saturating_add(1);
+    totals.cents = totals.cents.saturating_add(cents);
+}
+
+/// Takes the totals back after every reader has dropped its handle.
+#[must_use]
+pub fn close(snapshot: Arc<Totals>) -> Option<Totals> {
+    Arc::into_inner(snapshot)
+}
+```
 **Don't.**
 ```rust,ignore
 pub struct App { state: Arc<Mutex<AppState>> } // no justification; every field behind one lock
 let shared = Rc::new(RefCell::new(node));    // tree with parent links: use an arena
+let totals = (*shared).clone();              // H-08: after the fan-out, `Arc::into_inner(shared)`
 ```
-**Detect.** scan (advisory) and review: every new `Arc<Mutex`, `Arc<RwLock`, `Rc<RefCell`, `Rc<` needs the doc-comment justification; `clippy::rc_mutex`.
+**Detect.** scan (advisory) and review: every new `Arc<Mutex`, `Arc<RwLock`, `Rc<RefCell`, `Rc<` needs the doc-comment justification; strong parent links; `try_unwrap(..).unwrap()` or a deep clone out of an `Arc`; `clippy::rc_mutex`, `arc_with_non_send_sync`.
 
 ### OWN-12 · Interior mutability is a documented design decision
 
@@ -587,9 +740,11 @@ let shared = Rc::new(RefCell::new(node));    // tree with parent links: use an a
 | Borrow-checked-at-runtime mutation | `RefCell<T>` | no | panics on overlapping `borrow_mut` |
 | Counter or flag | `AtomicU64`, `AtomicBool` | yes | wrong `Ordering` |
 | Shared mutable struct, short sections | `Mutex<T>` | yes | poisoning, deadlock |
-| Read-mostly shared struct | `RwLock<T>` | yes | writer starvation; measure first |
+| Read-mostly shared struct | `RwLock<T>` | yes | OS-dependent priority policy, no read-to-write upgrade; benchmark first (PERF-12) |
 
 Use it only when the type's contract says `&self` operations have an internal side effect (cache, counter, connection pool). Never add a `RefCell` because a method "should" have been `&mut self` but the caller only has `&`: change the receiver or the caller.
+
+A `Mutex` owns what it protects. A free-standing `Mutex<()>` beside the data it guards is C-style locking: nothing stops code from touching the data without the guard. Put the resource inside, even when it is a zero-sized handle type: `Mutex<Port>`, not `Mutex<()>` plus `port`.
 **Do.**
 ```rust
 use std::cell::OnceCell;
@@ -613,7 +768,14 @@ impl Document {
     }
 }
 ```
-**Detect.** Review: `Cell`/`RefCell`/`Mutex` field without a doc line saying why; `RefCell` introduced in the same diff as a borrow error.
+**Don't.**
+```rust,ignore,expect=scan:mutex-unit
+pub struct Device {
+    lock: Mutex<()>, // OWN-12: guards nothing; `port` is reachable without it
+    port: Port,
+}
+```
+**Detect.** scan (advisory: `Mutex<()>`); review: `Cell`/`RefCell`/`Mutex` field without a doc line saying why; `RefCell` introduced in the same diff as a borrow error.
 
 ### OWN-15 · Frozen data: `Box<str>`, `Box<[T]>`, `Arc<str>`, `Arc<[T]>`
 **Why.** `String`/`Vec` carry a capacity word and invite mutation. `Arc<String>` is a double indirection (`clippy::rc_buffer`). For data that never grows, the boxed slice forms are one word smaller and `Arc<str>` clones are a refcount bump. Build them with `String::into_boxed_str`, `Vec::into_boxed_slice`, `Arc::from(s)` or `.collect::<Arc<[T]>>()`; an interned `Symbol(Arc<str>)` newtype is the common shape.
@@ -636,7 +798,26 @@ pub fn manhattan(a: Point, b: Point) -> u32 {
 }
 ```
 
+## Drop order
+
+Values drop at the end of their scope in a fixed order. It matters for guards and handles: a transaction must end before its connection closes, and a lock guard must drop before slow work starts.
+
+| What | Drops |
+|---|---|
+| Locals in a block | in reverse declaration order |
+| Function parameters | after the body's locals, in reverse order |
+| Struct fields, tuple elements | in declaration order |
+| Array and `Vec` elements | first element first |
+| Temporaries | at the end of the enclosing statement; a block's tail-expression temporaries before its locals (edition 2024) |
+| `let _ = expr;` | a temporary at once; a named place is not moved at all |
+
+Order guard fields deliberately (declare `tx` before `conn` so the transaction drops first) and end a guard early with `drop(guard)`. `let _guard = m.lock()` holds the lock to the end of the scope; `let _ = m.lock()` releases it at once (`clippy::let_underscore_lock`, denied).
+
 ## Clone audit (H-08)
+
+### H-08 · No clones to appease the borrow checker
+Every clone has an ownership reason, visible from the code or a comment. A clone forced by a fallible API that consumes its argument is a finding against that API, which should hand the argument back in its error (ERR-14). The table and procedure below are the audit.
+**Detect.** `clippy::redundant_clone`, `clone_on_ref_ptr`; scan (advisory); review with the table below.
 
 Every `.clone()`, `.to_owned()`, `.to_string()`, `.to_vec()` and `String::from`/`Vec::from` on borrowed data in a diff needs one of these reasons, visible from the code or a comment.
 
@@ -647,6 +828,7 @@ Every `.clone()`, `.to_owned()`, `.to_string()`, `.to_vec()` and `String::from`/
 | Real duplication: the copy diverges (snapshot, undo, test fixture) | Cloning a parameter that should have been owned (OWN-02) |
 | Crossing an owned boundary: sending to a thread/task/channel that needs its own copy, and the source is still used | Returning a clone from a getter instead of `&T` (OWN-01) |
 | Converting a borrowed input into an owned output the function returns | `.to_vec()` then iterate; `.clone()` then immediately drop the original |
+| `Arc::make_mut` or `Arc::unwrap_or_clone`, which copy only while the value is shared (OWN-11) | Cloning an argument before a consuming fallible call in case it fails (ERR-14) |
 
 Reviewer procedure for each clone:
 1. What type is cloned? Refcount handles are fine but must be written `Arc::clone(&x)` (`clippy::clone_on_ref_ptr`, PERF-11).
@@ -741,20 +923,66 @@ impl<T> Default for Graph<T> {
 ```
 Design notes: `NodeId`'s field is private so handles come only from `add`. This arena never removes nodes; if removal is needed, a stale handle must not alias a new node. Use generational indices (a `slotmap`-style crate is a new dependency, H-16) or tombstones. Lookups return `Option`/`Result`, never index (H-04).
 
+When a benchmark shows handle size matters (PERF-05), store `u32` and convert without `as` (H-11): `usize: From<u32>` does not exist, so use `try_from` in both directions.
+```rust
+use std::num::TryFromIntError;
+
+/// A 4-byte handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Handle(u32);
+
+/// The arena already holds `u32::MAX` items.
+#[derive(Debug, thiserror::Error)]
+#[error("arena is full")]
+pub struct ArenaFull(#[from] TryFromIntError);
+
+/// Items addressed by compact handles.
+#[derive(Debug)]
+pub struct Arena<T> {
+    items: Vec<T>,
+}
+
+impl<T> Arena<T> {
+    /// Stores `value` and returns its handle.
+    ///
+    /// # Errors
+    /// [`ArenaFull`] once the index no longer fits in `u32`.
+    pub fn add(&mut self, value: T) -> Result<Handle, ArenaFull> {
+        let id = u32::try_from(self.items.len())?;
+        self.items.push(value);
+        Ok(Handle(id))
+    }
+
+    /// Looks a handle up; `None` if it is not from this arena.
+    #[must_use]
+    pub fn get(&self, handle: Handle) -> Option<&T> {
+        usize::try_from(handle.0).ok().and_then(|i| self.items.get(i))
+    }
+}
+
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self { items: Vec::new() }
+    }
+}
+```
+
 ## Review checklist
-- [ ] Do read-only parameters borrow (`&str`, `&[T]`, `&Path`, `impl IntoIterator`) and stored ones own? (OWN-01, OWN-02)
+- [ ] Do read-only parameters borrow (`&str`, `&[T]`, `&Path`, `impl IntoIterator`), stored ones own, and generic readers and writers come by value? (OWN-01, OWN-02)
 - [ ] Any `&String`, `&Vec<T>`, `&Box<T>`, `&PathBuf`? (OWN-03)
 - [ ] Does each receiver match query / mutate / consume? (OWN-04)
-- [ ] Are named lifetimes necessary and meaningfully named; `'_` written in path types? (OWN-05)
+- [ ] Are named lifetimes necessary and meaningfully named, tying outputs only to the inputs they borrow from; `'_` written in path types? (OWN-05)
 - [ ] Do lifetime parameters appear only on short-lived views? (OWN-06)
 - [ ] Any new `'static` bound, `Box::leak`, `mem::forget`, `static mut`, global? (OWN-07, H-07)
 - [ ] Was each borrow error fixed with a shape rather than a clone? (OWN-08, H-08)
 - [ ] Insert-or-update uses the entry API or a single `get_mut`? (OWN-09)
 - [ ] Usually-borrowing transforms return `Cow`? (OWN-10)
-- [ ] Every `Arc<Mutex>`, `RwLock`, `Rc`, `RefCell` has a written justification and is the lowest workable rung? (OWN-11)
-- [ ] Interior mutability documented on the type, not patching a receiver? (OWN-12)
+- [ ] Several results returned as a tuple or struct; `&mut` parameters only modify or fill caller data, named `*_into`? (OWN-17)
+- [ ] Every `Arc<Mutex>`, `RwLock`, `Rc`, `RefCell` has a written justification and is the lowest workable rung; back-references `Weak`; values leave an `Arc` via `into_inner`/`make_mut`, not a clone? (OWN-11)
+- [ ] Interior mutability documented on the type, not patching a receiver; no free-standing `Mutex<()>`? (OWN-12)
+- [ ] Guard and handle fields declared in the order they must drop? (§Drop order)
 - [ ] Getters return slices or iterators, with correct `use<..>` captures? (OWN-13, MOD-06)
-- [ ] `move` closures clone only the needed handle? (OWN-14)
+- [ ] `move` closures clone only the needed handle, in a capture block under the same name? (OWN-14)
 - [ ] Frozen data uses `Box<str>`/`Arc<[T]>` where it helps; no `Arc<String>`? (OWN-15)
 - [ ] `Copy` only on small value types? (OWN-16)
 - [ ] Every clone passes the clone audit? (H-08)

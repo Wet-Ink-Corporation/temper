@@ -15,25 +15,29 @@ $ echo $?
 
 ## What it demonstrates
 
-| Where | Pattern | Rules |
-|---|---|---|
-| `crates/ledger-domain` | Validated newtypes (`AccountId`, `OwnerName`, `Cents`) with `FromStr` and private fields; the Decider (`decide`, `evolve`, `fold`); a typed `Rejection`; property tests for invariants | API-02, API-03, ARC-13, ERR-09, TST-06 |
-| `crates/ledger-app` | Ports owned by the consumer (`EventStore`, `Clock`); a use-case service generic over them; `AppError` separating rejections from store failures; hand-written fakes | ARC-03, ARC-04, ERR-10, TST-09 |
-| `crates/ledger-store-jsonl` | Versioned DTOs, `TryFrom` into the domain, v1 upcasting, deterministic output, buffered and bounded I/O, optimistic concurrency under a file lock, an `insta` snapshot | OUT-01..05, PERF-07, H-13, TST-07 |
-| `crates/ledger-cli` | Thin composition root: hand-parsed args with slice patterns, locked buffered stdout, `tracing` to stderr, `anyhow` context at the edge, documented exit codes | ARC-14, ERR-06, OUT-06, OUT-08 |
-| Root | The temper workspace template: shared `[workspace.lints]`, pinned toolchain, `clippy.toml`, `deny.toml`, CI, pre-commit hook, and a charter (`AGENTS.md`) per crate | ARC-01, ARC-08, MOD-09 |
+| Where | Pattern |
+|---|---|
+| `crates/ledger-domain` | Validated newtypes (`AccountId`, `OwnerName`, `Cents`) with `FromStr` and private fields; checked money arithmetic; the Decider (`decide`, `evolve`, `fold`); a typed `Rejection`; property tests for invariants |
+| `crates/ledger-app` | Ports owned by the consumer (`EventStore`, `Clock`); a use-case service generic over them; `AppError` separating rejections from store failures; hand-written fakes |
+| `crates/ledger-store-jsonl` | Versioned DTOs, `TryFrom` into the domain, v1 upcasting, deterministic output, buffered and bounded I/O, optimistic concurrency under a file lock, an `insta` snapshot |
+| `crates/ledger-cli` | Thin composition root: hand-parsed args with slice patterns, locked buffered stdout, named `tracing` events on stderr, `anyhow` context at the edge, exit codes from one exhaustive `match` |
+| Root | The temper workspace template: shared `[workspace.lints]`, profiles, pinned toolchain, `clippy.toml`, `deny.toml`, CI, pre-commit hook, and a charter (`AGENTS.md`) per crate |
 
-There are no `unwrap`, `expect`, `panic!`, `unsafe`, `as` casts, `#[allow]` or `#[expect]` in production code, and every `clone` carries its reason.
+Each charter's decisions log records which rust-craft rules shaped that crate and why.
 
 ## Run the gate
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+for p in ledger-domain ledger-app ledger-store-jsonl ledger-cli; do
+  cargo check -p "$p" --locked                    # each crate builds alone
+done
+cargo +1.96 check --workspace --all-targets --locked   # MSRV
 cargo deny check                                  # if cargo-deny is installed
 node <temper>/scripts/temper.mjs scan --all       # escape-hatch scan
 ```
 
-In Claude Code with the temper plugin, `/temper:gate` runs all of these. Start reading at `AGENTS.md`, then each crate's `AGENTS.md`.
+In Claude Code with the temper plugin, `/temper:gate` runs the fmt, manifest, clippy, test, doc and scan steps; CI runs the rest. Start reading at `AGENTS.md`, then each crate's `AGENTS.md`.

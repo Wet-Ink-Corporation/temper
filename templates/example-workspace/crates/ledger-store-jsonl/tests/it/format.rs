@@ -2,7 +2,7 @@ use std::assert_matches;
 use std::fs;
 
 use ledger_app::{EventStore, Recorded, Timestamp, Version};
-use ledger_domain::{Cents, Event, OwnerNameError};
+use ledger_domain::{Cents, Event, ParseOwnerNameError};
 use ledger_store_jsonl::{RecordError, StoreError};
 
 use crate::support::{TestResult, account, fixture, history};
@@ -17,6 +17,26 @@ fn writes_one_current_schema_record_per_line() -> TestResult {
     let written = fs::read_to_string(fixture.stream_path(&account()?))?;
 
     insta::assert_snapshot!(written);
+    Ok(())
+}
+
+#[test]
+fn closed_event_is_written_as_a_bare_type_tag_and_read_back() -> TestResult {
+    let mut fixture = fixture()?;
+    let closed = [Recorded {
+        event: Event::Closed,
+        recorded_at: Timestamp::from_unix_millis(0),
+    }];
+
+    fixture
+        .store
+        .append(&account()?, Version::new(0), &closed)?;
+
+    assert_eq!(
+        fs::read_to_string(fixture.stream_path(&account()?))?,
+        "{\"schema_version\":2,\"recorded_at_ms\":0,\"event\":{\"type\":\"closed\"}}\n"
+    );
+    assert_eq!(fixture.store.load(&account()?)?, closed);
     Ok(())
 }
 
@@ -120,7 +140,7 @@ fn validates_stored_owner_names_into_the_domain() -> TestResult {
         result,
         Err(StoreError::Corrupt {
             line: 1,
-            source: RecordError::InvalidOwner(OwnerNameError::Blank),
+            source: RecordError::InvalidOwner(ParseOwnerNameError::Blank),
             ..
         })
     );

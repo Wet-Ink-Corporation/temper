@@ -2,7 +2,7 @@
 
 How failures are typed, carried, reported, tested, and never dropped. Read this before designing an error type, writing `?` plumbing across a module or crate boundary, converting `Option` to `Result`, touching `main`, or removing an `unwrap`. Exceptions to the escape-hatch rules are in `escape-hatches.md`.
 
-Rules covered: ERR-01, ERR-02, ERR-03, ERR-04, ERR-05, ERR-06, ERR-07, ERR-08, ERR-09, ERR-10, ERR-11, ERR-12, H-02, H-09, H-10
+Rules covered: ERR-01, ERR-02, ERR-03, ERR-04, ERR-05, ERR-06, ERR-07, ERR-08, ERR-09, ERR-10, ERR-11, ERR-12, ERR-13, ERR-14, H-02, H-09, H-10
 
 ## Library error design
 
@@ -131,9 +131,6 @@ fn parse(path: &Path, text: &str) -> Result<Config, LoadConfigError> {
     let workers = workers.ok_or(ValidateError::MissingWorkers)?;
     Ok(Config { workers })
 }
-
-#[cfg(test)]
-mod tests;
 ```
 
 | Attribute | Use | Rule |
@@ -145,10 +142,20 @@ mod tests;
 | `#[non_exhaustive]` | Callers need a `_` arm, so adding a variant is not breaking. Default for public error enums. | API-05 |
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:erased-error
 pub fn load(path: &Path) -> Result<Config, String>;                  // H-09: nothing to match on
 pub fn load(path: &Path) -> Result<Config, Box<dyn std::error::Error>>; // H-09: erased, not Send
 pub fn load(path: &Path) -> anyhow::Result<Config>;                  // H-09: anyhow in a library API
+```
+
+Library errors carry no `Backtrace` field. On stable, `thiserror` cannot derive `Error` for a type that has one (E0658, `error_generic_member_access`). The binary edge captures the backtrace instead: `anyhow` records one when `RUST_BACKTRACE=1`.
+```rust,ignore,expect=E0658
+#[derive(Debug, thiserror::Error)]
+#[error("record {id} is malformed")]
+pub struct MalformedRecord {
+    id: u64,
+    backtrace: std::backtrace::Backtrace,
+}
 ```
 
 **Detect.** Scanner (H-09) on `pub fn` signatures in library crates. Review: `String`, `&'static str`, `Box<dyn Error>`, `anyhow::`, `eyre::` in any public `Result`. Compile-time check: `const _: () = { const fn f<T: Send + Sync + 'static>() {} f::<LoadConfigError>(); };`.
@@ -260,13 +267,25 @@ Err(ConfigError::Parse(format!("line {line}: bad value {v}")))    // allocates, 
 
 **Why.** `#[source]` keeps the chain so the reporter can print "failed to read app.conf: permission denied". `#[from]` makes `?` convert silently, which is right only when one step can produce that cause type. With two `fs` calls and `#[from] io::Error`, the error cannot say which step failed and has no path. Use `map_err` to attach the step and context instead.
 
+A variant's fields, and every `From<dep::Error>` impl that `#[from]` generates, are public API. A third-party error type there makes that crate's major version part of your semver (API-14). In a published crate, keep third-party causes in a private repr (ERR-02's opaque shape) unless the dependency is deliberately public and re-exported.
+
 **Don't.**
-```rust,ignore
-#[error("io error")]
-Io(#[from] std::io::Error),       // read? write? rename? which file?
-let text = fs::read_to_string(path)?;
-fs::write(backup, &text)?;        // both land in `Io`, indistinguishable
-.map_err(|_| LoadError::Read)?    // cause discarded: `clippy::map_err_ignore`
+```rust,ignore,expect=clippy::map_err_ignore
+use std::{fs, io, path::Path};
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackupError {
+    #[error("io error")]
+    Io(#[from] io::Error), // read? write? which file?
+    #[error("backup is unreadable")]
+    Verify,
+}
+
+pub fn backup(path: &Path, copy: &Path) -> Result<String, BackupError> {
+    let text = fs::read_to_string(path)?;
+    fs::write(copy, &text)?; // both land in `Io`, indistinguishable
+    fs::read_to_string(copy).map_err(|_| BackupError::Verify) // cause discarded
+}
 ```
 
 **Detect.** `clippy::map_err_ignore`. It catches only `|_|`: a named binding such as `|_closed|` discards the cause just the same and slips past it. That form is allowed only with a comment saying why the cause has no diagnostic value, for example a `SendError` that only carries the unsent value, or a panic payload. Review: `#[from]` on `io::Error` or other general-purpose errors; any variant without a `source` that wraps a failure.
@@ -321,7 +340,7 @@ At the binary edge, `anyhow::Error` does this for you: `{}` prints the outermost
 
 ### ERR-06 · `anyhow` at the edge, context at every boundary, exit codes from `main`
 
-**Why.** A binary's errors end at a human or a supervisor, not a `match`, so type erasure is fine there and `.context()` gives each layer its sentence cheaply. The edge is also where failures become exit codes: classify once, after all handling is done. `main` returns `ExitCode` (or `anyhow::Result<()>` when exit status 1 is enough) and never calls `process::exit` (`clippy::exit`, ARC-14).
+**Why.** A binary's errors end at a human or a supervisor, not a `match`, so type erasure is fine there and `.context()` gives each layer its sentence cheaply. Pick one application error type per binary, `anyhow::Error` or `eyre::Report`, and never mix them: neither converts into the other with `?`, so every crossing is hand-written glue. The edge is also where failures become exit codes: classify once, after all handling is done. `main` returns `ExitCode` (or `anyhow::Result<()>` when exit status 1 is enough) and never calls `process::exit` (`clippy::exit`, ARC-14).
 
 **Do.**
 ```rust
@@ -332,6 +351,27 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
+# mod errs {
+#     pub mod config {
+#         use std::path::{Path, PathBuf};
+#         #[derive(Debug, thiserror::Error)]
+#         pub enum LoadConfigError {
+#             #[error("failed to read {}", path.display())]
+#             Read { path: PathBuf, #[source] source: std::io::Error },
+#             #[error("`workers` must be a positive integer")]
+#             Workers(#[source] std::num::ParseIntError),
+#         }
+#         pub struct Config(u16);
+#         impl Config {
+#             pub fn workers(&self) -> u16 { self.0 }
+#         }
+#         pub fn load(path: &Path) -> Result<Config, LoadConfigError> {
+#             let text = std::fs::read_to_string(path)
+#                 .map_err(|source| LoadConfigError::Read { path: path.to_owned(), source })?;
+#             text.trim().parse().map(Config).map_err(LoadConfigError::Workers)
+#         }
+#     }
+# }
 use errs::config::{self, LoadConfigError};
 
 // sysexits(3) codes: this tool is run by a supervisor that branches on them.
@@ -382,13 +422,15 @@ fn exit_code(err: &anyhow::Error) -> ExitCode {
 - `downcast_ref` on a typed library error is the one sanctioned downcast: classification at the edge. Never downcast to recover inside the program (MOD-11); if code needs to branch on it, the error must stay typed.
 - Print with `writeln!(io::stderr().lock(), ..)`; the print macros are denied (H-06).
 
-**Detect.** Review: `anyhow` in a library crate's `[dependencies]`; `?` across a crate or I/O boundary with no `.context`; `process::exit`; `main` that prints and returns success.
+**Detect.** Review: `anyhow` in a library crate's `[dependencies]`; both `anyhow` and `eyre` in one binary; `?` across a crate or I/O boundary with no `.context`; `process::exit`; `main` that prints and returns success.
 
 ## Option to Result
 
 ### ERR-07 · Convert `Option` explicitly
 
 **Why.** `None` carries no reason. The caller must decide what absence means here and name it: `ok_or` (cheap, `Copy` error), `ok_or_else` (allocating or computed error), or `let ... else` when the branch needs more than one expression.
+
+Choose your own return type the same way. `Option` means plain absence: a lookup, a first element, an optional field. A function that can fail for a reason the caller could use returns `Result`, so a parse or validate function never returns `Option`: that throws the reason away and pushes the conversion onto every caller.
 
 **Do.**
 ```rust
@@ -447,13 +489,33 @@ pub fn parse_ports(list: &str) -> Result<Vec<u16>, ParseIntError> {
 ```
 
 **Don't.**
-```rust,ignore
-let entry = self.emails.get(&id).unwrap();                     // H-02
-let entry = self.emails.get(&id).ok_or(LookupError::Other(format!("{id}")))?; // allocates on success: ok_or_else
-if entry.is_none() { return Err(..) } let email = entry.unwrap(); // check-then-unwrap: let-else
+```rust,ignore,expect=clippy::unwrap_used+clippy::or_fun_call+clippy::unnecessary_unwrap
+use std::collections::HashMap;
+
+#[derive(Debug)]
+pub enum LookupError {
+    Unknown(String),
+}
+
+pub fn email(emails: &HashMap<u64, String>, id: u64) -> &String {
+    emails.get(&id).unwrap() // H-02
+}
+pub fn email_or(emails: &HashMap<u64, String>, id: u64) -> Result<&String, LookupError> {
+    emails.get(&id).ok_or(LookupError::Unknown(format!("user {id}"))) // formats on success too: ok_or_else
+}
+pub fn email_checked(emails: &HashMap<u64, String>, id: u64) -> Result<&String, LookupError> {
+    let entry = emails.get(&id);
+    if entry.is_some() {
+        return Ok(entry.unwrap()); // check-then-unwrap: let-else
+    }
+    Err(LookupError::Unknown(format!("user {id}")))
+}
+pub fn parse_port(text: &str) -> Option<u16> {
+    text.trim().parse().ok() // the reason is lost: return Result
+}
 ```
 
-**Detect.** `clippy::unwrap_used`, `clippy::manual_let_else`, `clippy::unnecessary_unwrap`. `clippy::or_fun_call` is in the nursery group and not enabled by the template, so review `ok_or(format!(..))` by eye.
+**Detect.** `clippy::unwrap_used`, `clippy::manual_let_else`, `clippy::unnecessary_unwrap`, and `clippy::or_fun_call`, which catches `ok_or(format!(..))` and lets cheap variant constructors through. Review: parse and validate functions that return `Option`.
 
 ## Eliminating `unwrap` and `expect`
 
@@ -463,15 +525,15 @@ if entry.is_none() { return Err(..) } let email = entry.unwrap(); // check-then-
 
 | Situation | Replace with |
 |---|---|
-| `mutex.lock().unwrap()` | If the protected data cannot be torn mid-update: `.unwrap_or_else(PoisonError::into_inner)` with a comment. If it can: an error variant (`Poisoned`). Better still, avoid the shared lock (actor, ASY-09). |
-| `Regex::new(LIT).unwrap()` in a static | `LazyLock<Result<Regex, regex::Error>>`, a typed error, and a unit test proving the pattern compiles. |
+| `mutex.lock().unwrap()` | One of the three poison handlings in escape-hatches.md, H-02: recover with `.unwrap_or_else(PoisonError::into_inner)` and a comment when the data cannot be torn; repair, then `clear_poison`, when the invariant can be re-checked; otherwise a unit `Poisoned` variant. Better still, avoid the shared lock (actor, ASY-09). |
+| `Regex::new(LIT).unwrap()` in a static | `LazyLock<Result<Regex, regex::Error>>`, a typed error, and a unit test proving the pattern compiles. A `LazyLock` whose initializer panics stays poisoned for good. |
 | `"127.0.0.1:8080".parse().unwrap()`, `"30".parse::<u64>().unwrap()` | Const construction: `Ipv4Addr::LOCALHOST`, `SocketAddr::new(..)`, `Duration::from_secs(30)`, integer literals. |
 | `NonZeroU16::new(8).unwrap()` | `const` via `NonZeroU16::MIN.saturating_add(7)`, or take `NonZeroU16` from the caller. |
 | `v.first().unwrap()`, `v[0]` | Slice pattern `let [first, rest @ ..] = v else { .. }`, `split_first()`, or a `NonEmpty` type. |
 | `v.last().unwrap()` right after `push` | Keep the value you pushed, or `Vec::push_mut` (1.95), which returns `&mut T`. |
 | `iter.max().unwrap()` on "known non-empty" data | A `NonEmpty` type, or `.ok_or(Error::Empty)?`. |
 | `map.get(&k).unwrap()`, `map[&k]` | `.get(&k).ok_or(..)?`; after an insert, use the reference `entry(..).or_insert(..)` returns. |
-| `tx.send(x).unwrap()` | An error that hands the value back (`PoolClosed(job)`), or handle "receiver gone" explicitly (H-10). |
+| `tx.send(x).unwrap()` | An error that hands the value back (`PoolClosed(job)`, ERR-14), or handle "receiver gone" explicitly (H-10). |
 | `.map(\|s\| s.parse().unwrap())` | `.map(str::parse).collect::<Result<Vec<_>, _>>()?`. |
 | `path.to_str().unwrap()` | Stay in `&Path`/`&OsStr`; `path.display()` for messages; or `.to_str().ok_or_else(..)?`. |
 | `SystemTime::now().duration_since(UNIX_EPOCH).unwrap()` | Inject a clock port (TST-10), and map `SystemTimeError` to a variant. |
@@ -496,7 +558,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_WORKERS: NonZeroU16 = NonZeroU16::MIN.saturating_add(7);
 ```
 A static regex with fallible initialization:
-```rust
+```rust,fragment
 //! A static regex without `unwrap` (H-02, MOD-03).
 
 use std::sync::LazyLock;
@@ -643,7 +705,14 @@ pub fn submit(queue: &SyncSender<Job>, job: Job) -> Result<(), PoolClosed> {
 ```rust
 //! Handle or propagate, never both (ERR-08).
 
-use crate::report::Report;
+# use std::fmt;
+# /// The cause-chain adapter from "Reporting the cause chain".
+# struct Report<'a>(&'a (dyn std::error::Error + 'static));
+# impl fmt::Display for Report<'_> {
+#     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+#         write!(f, "{}", self.0)
+#     }
+# }
 
 /// A feed fetch failed.
 #[derive(Debug, thiserror::Error)]
@@ -687,10 +756,17 @@ Err(e) => { tracing::error!(?e); return Err(e.into()); }                     // 
 
 **Why.** `a * b` on external values panics in debug builds and silently wraps in release: a crash in tests and a wrong invoice in production. Decide per operation: overflow is an error (`checked_*` + variant), a documented cap (`saturating_*`), or modular by specification (`wrapping_*` for hashes, checksums, sequence numbers). `strict_*` (1.91) panics on overflow in every build, so it is a panic (H-03) and not allowed in production code.
 
+The operators are not the only arithmetic:
+- `/` and `%` panic on a zero divisor, and signed `MIN / -1` overflows, in release too. Use `checked_div`/`checked_rem`, or take the divisor as `NonZeroU*`: `u64 / NonZeroU64` cannot fail. Signed `NonZero` types have no division impl, so signed code uses `checked_*`.
+- `Iterator::sum` and `product` are `+` and `*` in a loop, with the same debug-panic, release-wrap behaviour. Fold with `checked_add` instead.
+- Atomic `fetch_add` and `fetch_sub` wrap silently in every build, so an id counter hands out duplicates after the wrap. Use `try_update` with `checked_add` and map the failure to a typed error. Checking the returned value afterwards is too late: the counter has already moved.
+
 **Do.**
 ```rust
 //! Arithmetic on untrusted input (ERR-09).
 
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// An order total does not fit in `u64` cents.
@@ -721,16 +797,52 @@ pub const MAX_BACKOFF: Duration = Duration::from_secs(30);
 pub fn backoff(attempt: u32) -> Duration {
     Duration::from_millis(100).saturating_mul(2_u32.saturating_pow(attempt)).min(MAX_BACKOFF)
 }
+
+/// Sum of caller-supplied amounts, or `None` if it overflows. Never `.sum()`.
+#[must_use]
+pub fn order_total(amounts: &[u64]) -> Option<u64> {
+    amounts.iter().try_fold(0_u64, |total, &cents| total.checked_add(cents))
+}
+
+/// Even split. The divisor's type rules out division by zero.
+#[must_use]
+pub fn per_person(total_cents: u64, people: NonZeroU64) -> u64 {
+    total_cents / people
+}
+
+/// Every id has been handed out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("id space exhausted at {last}")]
+pub struct IdsExhausted {
+    /// The counter's final value.
+    pub last: u64,
+}
+
+/// Hands out unique ids. `fetch_add` would wrap to 0 and repeat them.
+///
+/// # Errors
+///
+/// Returns [`IdsExhausted`] once the counter reaches `u64::MAX`.
+pub fn next_id(counter: &AtomicU64) -> Result<u64, IdsExhausted> {
+    // Relaxed: the counter publishes no other data, and uniqueness only needs
+    // the read-modify-write to be atomic, which it is in every ordering.
+    counter
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .map_err(|last| IdsExhausted { last })
+}
 ```
 
 **Don't.**
 ```rust,ignore
 let total = unit_cents * u64::from(quantity);  // attacker-chosen quantity: panic or wrap
 let idx = offset + len;                        // then used to slice: H-04 as well
+let share = total / people;                    // people == 0 panics in release too
+let sum: u64 = amounts.iter().sum();           // `+` in a loop: panic or wrap
+let id = NEXT_ID.fetch_add(1, Ordering::Relaxed); // wraps to 0 and repeats ids
 let n = header.len as usize;                   // H-11
 ```
 
-**Detect.** `clippy::as_conversions`. Review: `+ - * /` on values that came from a request, file, or environment. `clippy::arithmetic_side_effects` flags every unchecked operator, but it is not in the template, and a member crate cannot add lints next to `[lints] workspace = true`. To opt a parser, codec or money crate in, the human copies the workspace lint table into that crate's own `[lints]` (dropping `workspace = true`) and adds the lint. That is an H-05 decision, recorded in the charter.
+**Detect.** `clippy::as_conversions`. Review: `+ - * / %`, `sum` and `product` on values that came from a request, file, or environment, and `fetch_add`/`fetch_sub` on counters whose values must stay unique. `clippy::arithmetic_side_effects` flags every unchecked operator, but it is not in the template, and a member crate cannot add lints next to `[lints] workspace = true`. To opt a parser, codec or money crate in, the human copies the workspace lint table into that crate's own `[lints]` (dropping `workspace = true`) and adds the lint. That is an H-05 decision, recorded in the charter.
 
 ## Domain rejections vs infrastructure failures
 
@@ -821,6 +933,31 @@ pub fn withdraw(store: &impl Balances, account: u64, requested: u64) -> Result<u
 
 **Do.**
 ```rust
+# use std::num::{NonZeroU16, ParseIntError};
+# use std::path::Path;
+# #[derive(Debug, thiserror::Error)]
+# pub enum ValidateError {
+#     #[error("required setting `workers` is missing")]
+#     MissingWorkers,
+# }
+# #[derive(Debug, thiserror::Error)]
+# pub enum LoadConfigError {
+#     #[error("line {line}: `workers` must be a positive integer")]
+#     Workers { line: usize, #[source] source: ParseIntError },
+#     #[error(transparent)]
+#     Invalid(#[from] ValidateError),
+# }
+# /// Stand-in for the ERR-01 parser.
+# pub fn parse(_path: &Path, text: &str) -> Result<NonZeroU16, LoadConfigError> {
+#     for (line, raw) in (1..).zip(text.lines()) {
+#         if let Some(value) = raw.strip_prefix("workers =") {
+#             return value.trim().parse().map_err(|source| LoadConfigError::Workers { line, source });
+#         }
+#     }
+#     Err(ValidateError::MissingWorkers.into())
+# }
+# #[cfg(test)]
+# mod tests {
 use std::assert_matches;
 use std::path::Path;
 
@@ -837,6 +974,7 @@ fn reports_missing_workers() {
     let err = parse(Path::new("app.conf"), "").unwrap_err();
     assert!(matches!(err, LoadConfigError::Invalid(ValidateError::MissingWorkers)));
 }
+# }
 ```
 
 **Don't.**
@@ -849,21 +987,50 @@ assert!(result.is_err());                                                       
 
 ## Discarded results
 
-### H-10 · No silently discarded failures · ERR-12 · Never silence `#[must_use]`
+### H-10 · No silently discarded failures
 
-**Why.** A dropped `Result` is a failure nobody will ever see: the write that did not happen, the message never delivered. `#[must_use]` exists so the compiler flags it; `let _ =` and `.ok();` are the two ways to lie to it.
+**Why.** A dropped `Result` is a failure nobody will ever see: the write that did not happen, the message never delivered. The lints reject the two direct forms (ERR-12). The rest compile clean, and some are what clippy itself suggests, so the scanner and the reviewer catch them.
 
 | Pattern | What it hides | Instead |
 |---|---|---|
-| `let _ = fallible();` | The error. Denied: `let_underscore_must_use`. | `?`, or handle it. |
-| `fallible().ok();` | The error. Denied: `unused_result_ok`. | `?`, or handle it. |
+| `let _ = fallible();` | The error. Denied: `let_underscore_must_use`. | `?`, or handle it (ERR-12). |
+| `fallible().ok();` | The error. Denied: `unused_result_ok`. | `?`, or handle it (ERR-12). |
+| `Err(_) => {}`, `if let Err(_) = f() {}` | The error, in a branch that looks handled. | Propagate, or log once with the reason (ERR-08). |
 | `.unwrap_or_default()` on a `Result` | A parse or I/O failure becomes `0` or `""`. | `?`. Use a default only on an `Option` whose absence means "default" by specification. |
-| `.unwrap_or(0)` / `.unwrap_or_else(\|_\| ..)` | Same, with a hand-picked value. | Same; if the fallback is the spec, log once (ERR-08). |
-| `.filter_map(Result::ok)` / `.flatten()` on `Result`s | Every bad item, silently. | Collect into `Result<Vec<_>, _>`, or partition and report the rejects. |
+| `.parse::<T>().unwrap_or(0)` / `.unwrap_or_else(\|_\| ..)` | Same, with a hand-picked value. | Same; if the fallback is the spec, log once (ERR-08). |
+| `.filter_map(Result::ok)`, `.filter_map(\|s\| s.parse().ok())`, `.flatten()` on `Result`s | Every bad item, silently. | Collect into `Result<Vec<_>, _>`, or partition and report the rejects. |
 | `if let Ok(v) = f() { .. }` with no `else` | The failure path. | `match` with an `Err` arm that propagates or logs. |
 | `let _ = mutex.lock();` | Drops the guard at once; nothing is locked. | `let _guard = ..`, or restructure. |
+| A `BufWriter` or a `Drop` impl that flushes at scope end | The error from the final write. | An explicit `finish(self)` on the success path (ERR-13). |
 
-**The rare legitimate discard.** Under the template lints `let _ =` on a `Result` does not compile. When failure really is an expected, harmless outcome, write the branch out and say why:
+**Don't.**
+```rust,ignore,expect=scan:empty-err-arm+scan:empty-if-let-err+scan:filter-map-ok+scan:parse-unwrap-or
+use std::io::Write;
+
+pub fn append(out: &mut impl Write, line: &str) {
+    match writeln!(out, "{line}") {
+        Ok(()) => {}
+        Err(_) => {} // the write failed, and nobody will know
+    }
+}
+pub fn sync(out: &mut impl Write) {
+    if let Err(_) = out.flush() {} // clippy's own suggestion, `.is_err()`, is just as silent
+}
+pub fn ports(list: &str) -> Vec<u16> {
+    list.split(',').map(|p| p.trim().parse::<u16>()).filter_map(Result::ok).collect() // bad entries vanish
+}
+pub fn port(text: &str) -> u16 {
+    text.parse::<u16>().unwrap_or(8080) // a typo silently becomes the default
+}
+```
+
+**Detect.** `let_underscore_must_use`, `unused_result_ok`, `unused_must_use`, `let_underscore_drop`. Scanner: `discard-ok`, `let-underscore` and `unwrap-or-default`; `empty-err-arm` and `empty-if-let-err` (hard); `filter-map-ok` and `parse-unwrap-or` (advisory). Review: `if let Ok` without `else`, and `.ok()` followed by `?`-free code.
+
+### ERR-12 · Never silence `#[must_use]`
+
+**Why.** `#[must_use]` is the author of a type telling every caller that ignoring the value is a bug: a `Result` that may hold an error, a guard that must be held, an iterator that does nothing until consumed. `let _ =` and `.ok();` are the two ways to tell the compiler to stop saying so, and the template denies both.
+
+**Do.** When a failure really is an expected, harmless outcome, match it explicitly and say why in a comment:
 ```rust
 //! Discarded results (H-10, ERR-12).
 
@@ -873,27 +1040,224 @@ use std::sync::mpsc::SyncSender;
 pub fn reply(to: &SyncSender<u64>, value: u64) {
     // A closed receiver means the requester timed out and went away. That is an
     // expected outcome of the protocol, not a failure: record it and move on.
-    if to.send(value).is_err() {
-        tracing::debug!(value, "requester gone; reply dropped");
+    if let Err(unsent) = to.send(value) {
+        tracing::debug!(value = unsent.0, "requester gone; reply dropped");
     }
 }
 ```
-For values that are not `#[must_use]`, write the expression as a statement; `let _ =` adds nothing. If a `#[must_use]` value must be dropped without a branch, that is an exception request (H-05), not a `let _`.
+For values that are not `#[must_use]`, write the expression as a statement; `let _ =` adds nothing.
 
-**Detect.** `let_underscore_must_use`, `unused_result_ok`, `unused_must_use`, `let_underscore_drop`; scanner; review for `unwrap_or_default`, `filter_map(Result::ok)`, `.ok()` followed by `?`-free code.
+**Don't.**
+```rust,ignore,expect=clippy::let_underscore_must_use+clippy::unused_result_ok+scan:let-underscore+scan:discard-ok
+use std::sync::mpsc::SyncSender;
+
+pub fn reply(to: &SyncSender<u64>, value: u64) {
+    let _ = to.send(value); // the compiler was told, and told to be quiet
+}
+pub fn reply_again(to: &SyncSender<u64>, value: u64) {
+    to.send(value).ok(); // the same, spelled differently
+}
+```
+
+**Detect.** `clippy::let_underscore_must_use`, `clippy::unused_result_ok`, rustc's `unused_must_use`, and the scanner (`let-underscore`, `discard-ok`).
+
+**Exceptions.** A `#[must_use]` value that must be dropped without a branch is an exception request (H-05), not a `let _`.
+
+## Teardown that can fail
+
+### ERR-13 · Fallible teardown is an explicit call; `Drop` is the fallback
+
+**Why.** `Drop` cannot return an error, so a flush, commit or sync that runs there fails invisibly: by design, `BufWriter` ignores errors from the flush it attempts on drop, and `File` ignores errors from closing. `Drop` is not even guaranteed to run. `process::exit` skips it (`clippy::exit` denies that call), `panic = "abort"` skips it, and a destructor that panics while another panic unwinds aborts the process. So a type whose teardown can fail exposes a consuming `finish(self)` or `close(self) -> Result`, and the success path calls it. `Drop` stays as a best-effort fallback for early returns and unwinding. It never panics, never blocks or awaits (H-14), and logs a failure instead of discarding it (H-10). A type with async teardown exposes `async fn close(self)`; its `Drop` only signals, for example by cancelling a token.
+
+**Do.** Hold the resource in an `Option`: `finish(self)` cannot move a field out of a type that implements `Drop` (E0509), but it can `take()` it.
+```rust
+//! Explicit `finish`, best-effort `Drop` (ERR-13).
+
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+
+/// An append-only event journal. Call [`Journal::finish`] to learn whether
+/// the tail reached the disk; dropping it only tries.
+#[derive(Debug)]
+pub struct Journal {
+    // `None` only once `finish` or `drop` has taken it.
+    out: Option<BufWriter<File>>,
+}
+
+impl Journal {
+    /// Wraps an open file.
+    pub fn new(file: File) -> Self {
+        Self { out: Some(BufWriter::new(file)) }
+    }
+
+    /// Buffers one event line.
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error from the write.
+    pub fn append(&mut self, event: &str) -> io::Result<()> {
+        let out = self.out.as_mut().ok_or(io::ErrorKind::NotConnected)?;
+        writeln!(out, "{event}")
+    }
+
+    /// Flushes buffered events and syncs them to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns the flush or sync failure, the only place a lost write is visible.
+    pub fn finish(mut self) -> io::Result<()> {
+        let Some(out) = self.out.take() else {
+            return Ok(());
+        };
+        out.into_inner().map_err(io::IntoInnerError::into_error)?.sync_all()
+    }
+}
+
+impl Drop for Journal {
+    // Runs with `out` still present only when `finish` was skipped: an early
+    // return, a `?`, or unwinding.
+    fn drop(&mut self) {
+        if let Some(mut out) = self.out.take()
+            && let Err(error) = out.flush()
+        {
+            tracing::warn!(%error, "journal dropped without finish; its tail may be lost");
+        }
+    }
+}
+```
+
+**Don't.**
+```rust,ignore,expect=clippy::unwrap_used
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
+use std::path::Path;
+
+pub struct Journal {
+    out: BufWriter<File>,
+}
+
+impl Drop for Journal {
+    fn drop(&mut self) {
+        self.out.flush().unwrap(); // a panic here during unwinding aborts the process
+    }
+}
+
+pub fn save(events: &[String], path: &Path) -> io::Result<()> {
+    let mut out = BufWriter::new(File::create(path)?);
+    for event in events {
+        writeln!(out, "{event}")?;
+    }
+    Ok(()) // the final flush happens in `Drop`, which ignores its error
+}
+```
+
+**Detect.** `clippy::empty_drop` rejects an empty `Drop` impl. Review: a `Drop` that flushes, syncs, commits, sends, joins or calls `block_on`; a `BufWriter` that leaves scope without `flush` or `into_inner`; a type with a `Drop` impl and no consuming `finish`/`close`.
+
+## Handing back consumed arguments
+
+### ERR-14 · A fallible call that consumes its argument returns it on failure
+
+**Why.** When `push(item)` fails and the item is gone, a caller that needs it for a retry or a fallback has to clone it before every call, even though failure is rare. That clone is forced by the API, so it is a finding against the callee (H-08), not the caller. Put the argument back in the error with an `into_inner(self) -> T` accessor (API-01), as std does: `FromUtf8Error::into_bytes`, `mpsc::SendError<T>` (field `.0`), `<[T; N]>::try_from(Vec<T>)` returning the `Vec`, `Rc::try_unwrap` returning the `Rc`, and `IntoInnerError::into_inner`. Write the error's `Debug` by hand so it omits the payload: that avoids a `T: Debug` bound and keeps payloads, which may be secrets (OUT-08), out of logs. The error is still `Error + Send + Sync + 'static` whenever `T` is (ERR-01).
+
+**Do.**
+```rust
+//! Hand back a consumed argument on failure (ERR-14).
+
+use std::fmt;
+
+/// The outbox is at capacity. Holds the rejected message.
+#[derive(thiserror::Error)]
+#[error("outbox is full ({capacity} messages)")]
+pub struct OutboxFull<T> {
+    message: T,
+    capacity: usize,
+}
+
+impl<T> OutboxFull<T> {
+    /// Returns the message that was not queued, without a clone.
+    pub fn into_inner(self) -> T {
+        self.message
+    }
+}
+
+// By hand: no `T: Debug` bound, and the payload never reaches a log.
+impl<T> fmt::Debug for OutboxFull<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OutboxFull").field("capacity", &self.capacity).finish_non_exhaustive()
+    }
+}
+# const _: () = {
+#     const fn is_error<E: std::error::Error + Send + Sync + 'static>() {}
+#     is_error::<OutboxFull<String>>();
+# };
+
+/// A bounded queue of outgoing messages.
+#[derive(Debug)]
+pub struct Outbox<T> {
+    messages: Vec<T>,
+    capacity: usize,
+}
+
+impl<T> Outbox<T> {
+    /// Creates an empty outbox that holds at most `capacity` messages.
+    pub fn new(capacity: usize) -> Self {
+        Self { messages: Vec::new(), capacity }
+    }
+
+    /// Queues `message`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutboxFull`], holding `message`, when the outbox is at capacity.
+    pub fn push(&mut self, message: T) -> Result<(), OutboxFull<T>> {
+        if self.messages.len() >= self.capacity {
+            return Err(OutboxFull { message, capacity: self.capacity });
+        }
+        self.messages.push(message);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Outbox;
+
+    #[test]
+    fn full_outbox_hands_the_message_back() {
+        let mut outbox = Outbox::new(1);
+        outbox.push(String::from("first")).expect("an empty outbox has room");
+        let full = outbox.push(String::from("second")).unwrap_err();
+        assert_eq!(full.into_inner(), "second");
+    }
+}
+```
+
+**Don't.**
+```rust,ignore
+pub fn push(&mut self, message: T) -> Result<(), OutboxFull>; // the message is dropped on failure
+
+if outbox.push(message.clone()).is_err() {                    // every caller clones, just in case
+    retry_later(message);
+}
+```
+
+**Detect.** Review: a fallible `fn` that takes a non-`Copy` value by value and whose error type has no field for it; callers that `.clone()` an argument before a fallible call so they can retry.
 
 ## Review checklist
 
-- [ ] Does every public library signature return a typed error that is `Error + Send + Sync + 'static`, with no `String`, `Box<dyn Error>` or `anyhow`? (ERR-01, H-09)
+- [ ] Does every public library signature return a typed error that is `Error + Send + Sync + 'static`, with no `String`, `Box<dyn Error>`, `anyhow` or `Backtrace` field? (ERR-01, H-09)
 - [ ] Is each error type scoped to an operation or module, with only variants that can occur? Opaque with `kind()` where internals must evolve? (ERR-02)
 - [ ] Do variants carry typed context fields rather than preformatted strings? (ERR-03)
-- [ ] Is every cause kept with `#[source]`, and is `#[from]` used only where one step produces that cause? (ERR-04)
+- [ ] Is every cause kept with `#[source]`, is `#[from]` used only where one step produces that cause, and is every third-party error in a public variant a deliberate public dependency? (ERR-04, API-14)
 - [ ] Are messages lowercase, unpunctuated, about this layer only, without interpolating the source? (ERR-05)
-- [ ] Does the binary use `anyhow` with context at each boundary, and map failures to exit codes in `main`? (ERR-06)
-- [ ] Is every `Option` turned into an error with `ok_or`, `ok_or_else` or `let ... else`? (ERR-07)
+- [ ] Does the binary use one application error type with context at each boundary, and map failures to exit codes in `main`? (ERR-06)
+- [ ] Is every `Option` turned into an error with `ok_or`, `ok_or_else` or `let ... else`, and does every parse or validate function return `Result`, not `Option`? (ERR-07)
 - [ ] Is any error both logged and returned? (ERR-08)
-- [ ] Does arithmetic on external input use `checked_*`, `saturating_*` or `wrapping_*` deliberately, and no `strict_*`? (ERR-09)
+- [ ] Does arithmetic on external input, including `/`, `%`, `sum`, `product` and atomic `fetch_add`, use `checked_*`, `saturating_*`, `wrapping_*` or a `NonZero` divisor deliberately, and no `strict_*`? (ERR-09)
 - [ ] Are domain rejections distinct from infrastructure failures? (ERR-10)
 - [ ] Do tests assert variants and fields, not `Display` strings or bare `is_err()`? (ERR-11)
-- [ ] Is any `#[must_use]` value silenced, or any failure hidden by `let _ =`, `.ok();`, `unwrap_or_default()` or `filter_map(Result::ok)`? (ERR-12, H-10)
+- [ ] Is any failure hidden by `Err(_) => {}`, `unwrap_or_default()`, `.parse().unwrap_or(..)` or `filter_map(Result::ok)`? (H-10)
+- [ ] Is any `#[must_use]` value silenced with `let _ =` or `.ok();`? (ERR-12)
+- [ ] Does every type whose teardown can fail expose `finish`/`close`, called on the success path, with a `Drop` that never panics, blocks or discards the error? (ERR-13)
+- [ ] Does every fallible function that consumes a non-`Copy` argument hand it back in its error? (ERR-14)
 - [ ] Is there any `unwrap`, `expect`, `unwrap_err` or `expect_err` outside tests? (H-02)

@@ -52,8 +52,8 @@ pub struct Recorded {
 
 /// Port: an append-only store of per-account event streams.
 ///
-/// Owned by this crate and implemented by adapters (ARC-03). Implementations
-/// must return events in the order they were appended.
+/// Owned by this crate and implemented by adapters. Implementations must
+/// return events in the order they were appended.
 pub trait EventStore {
     /// The adapter's failure type. The application never inspects it; it only
     /// passes it to the caller as [`AppError::Store`](crate::AppError::Store).
@@ -82,3 +82,10 @@ pub trait EventStore {
         events: &[Recorded],
     ) -> Result<Version, Self::Error>;
 }
+
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Version>();
+    assert_send_sync::<Recorded>();
+};

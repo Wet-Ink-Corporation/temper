@@ -8,7 +8,11 @@ import {
   markSkillLoaded, skillLoaded, setBase, baseRev, pruneSessions, pruneMarkers, telemetry, rustChanges,
   fingerprint, diffStat, run, startFingerprint,
 } from './project.mjs';
-import { scanSource, newHits, classifyPath, formatHit } from './scan.mjs';
+import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
+import { parseToml } from './toml.mjs';
+import {
+  workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
+} from './manifest.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 
@@ -86,7 +90,7 @@ export function sessionStart(input) {
     `- The standard is the skill \`temper:rust-craft\`. It ${loaded ? 'is loaded in this session' : 'has not been loaded in this session yet'}. Edits to .rs and Cargo.toml files are refused until it has been loaded in the current agent context.`,
     `- Iron rules (production code): ${IRON_RULES.join('; ')}.`,
     '- Workflow: orient, frame, plan (.temper/plans/), red, green, refactor, self-review, gate, independent review by the temper:rust-reviewer subagent, then report with the Status block.',
-    `- Gate command: ${gateCmd()} (also available as: node "$TEMPER_CLI" gate). It runs cargo fmt, clippy -D warnings, tests, rustdoc -D warnings and the escape-hatch scan, cached per tree fingerprint.`,
+    `- Gate command: ${gateCmd()} (also available as: node "$TEMPER_CLI" gate). It runs cargo fmt, the escape-hatch scan, the member-manifest check, clippy -D warnings, tests and rustdoc -D warnings, cached per tree fingerprint.`,
     '- A turn that changed Rust ends when the gate is green and temper:rust-reviewer has approved the current tree. To pause instead, the final message carries a line "Status: WIP" or "Status: BLOCKED" with the reason or question.',
     '- Edits to lint, format, toolchain, CI, hook and agent configuration, new dependencies, lint exceptions and removed tests are routed to the human for approval.',
     `- Session base revision: ${base ?? 'none (no git)'}. Current state: ${state}.`,
@@ -105,7 +109,7 @@ export function userPromptSubmit(input) {
 
 // ------------------------------------------------------------------ PreToolUse
 
-function applyEdit(before, ti, tool) {
+export function applyEdit(before, ti, tool) {
   if (tool === 'Write') return ti.content ?? '';
   const edits = tool === 'MultiEdit' ? (ti.edits ?? []) : [ti];
   let text = before;
@@ -117,7 +121,7 @@ function applyEdit(before, ti, tool) {
 }
 
 /** Text of Cargo.toml sections that control lints and profiles. */
-function lintSections(toml) {
+export function lintSections(toml) {
   const out = [];
   let keep = false;
   for (const line of toml.split(/\r?\n/)) {
@@ -128,8 +132,66 @@ function lintSections(toml) {
   return out.filter(Boolean).join('\n');
 }
 
+/**
+ * Do the lint or profile settings differ? Adding or keeping a bare
+ * `[lints] workspace = true` (plain inheritance) is not a change of settings.
+ */
+export function lintConfigChanged(before, after) {
+  const pb = before === '' ? {} : parseToml(before);
+  const pa = parseToml(after);
+  if (!pa || !pb) return lintSections(before) !== lintSections(after);
+  const pick = (m) => JSON.stringify({
+    lints: inheritsLints(m) && Object.keys(m.lints).length === 1 ? undefined : m.lints,
+    workspaceLints: m.workspace?.lints,
+    profile: m.profile,
+  });
+  return pick(pb) !== pick(pa);
+}
+
+const short = (v) => (v === undefined ? 'unset' : v.length > 80 ? `${v.slice(0, 77)}...` : v);
+
+/**
+ * Cargo.toml rules beyond lints and dependencies: member lint inheritance and
+ * member profiles (deny), test and toolchain switches (ask), non-caret
+ * requirements (advice).
+ */
+export function manifestChecks(file, rel, before, after) {
+  const out = { denies: [], asks: [], advice: [] };
+  const a = parseToml(after);
+  if (!a) return out; // invalid TOML: cargo rejects it on its own
+  const b = before === '' ? {} : parseToml(before);
+  const root = a.package ? workspaceRootFor(file, a) : null;
+  for (const p of memberProblems(a, root)) out.denies.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
+  if (before === '' && a.package && root && !root.self) {
+    out.asks.push(`${rel}: new crate \`${a.package.name ?? rel}\` in the workspace. Crate boundaries are a human decision (H-16, ARC-07).`);
+  }
+  if (b) {
+    const wa = watchedKeys(a);
+    const wb = watchedKeys(b);
+    for (const label of new Set([...wb.keys(), ...wa.keys()])) {
+      const x = wa.get(label);
+      const y = wb.get(label);
+      if (x?.value === y?.value) continue;
+      if (before === '' && x && benignWhenNew(label, x)) continue;
+      const id = (x ?? y).id;
+      const why = id === 'H-12'
+        ? 'this switch can stop tests, doctests or targets from running (H-12)'
+        : 'dependency overrides, MSRV, edition, resolver and default features are human decisions (H-16)';
+      out.asks.push(`${rel}: \`${label}\` changes (${short(y?.value)} -> ${short(x?.value)}); ${why}.`);
+    }
+  }
+  const ra = depRequirements(a);
+  const rb = b ? depRequirements(b) : new Map();
+  for (const [k, req] of ra) {
+    if (rb.get(k) === req) continue;
+    const why = nonCaretRequirement(req);
+    if (why) out.advice.push(`ARC-12 ${rel}: \`${k.slice(k.lastIndexOf(':') + 1)} = "${req}"\` is ${why}.\n    fix: declare a caret floor at the oldest version whose API you use (\`"1.4"\`), never \`=\`, \`~\`, \`*\` or an upper bound.`);
+  }
+  return out;
+}
+
 /** Dependency names declared in Cargo.toml (all dependency tables). */
-function depNames(toml) {
+export function depNames(toml) {
   const names = new Set();
   let table = null;
   for (const line of toml.split(/\r?\n/)) {
@@ -162,6 +224,10 @@ export function preEdit(input) {
   if (path.resolve(file).startsWith(absState) || /(^|\/)\.git\//.test(rel)) {
     return deny('temper: files under .git (including temper gate state and review verdicts) are not edited directly. Verdicts come from the temper:rust-reviewer subagent; gate results come from the gate command.');
   }
+  if (/(^|\/)Cargo\.lock$/.test(rel)) {
+    telemetry(proj, input, 'deny-lockfile', { file: rel });
+    return deny(LOCKFILE_DENY(rel));
+  }
   const before = readText(file) ?? '';
   const after = applyEdit(before, ti, tool);
   if (after === null) return none(); // the edit will fail on its own
@@ -187,7 +253,11 @@ export function preEdit(input) {
     asks.push(`${rel} is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.`);
   }
   if (isManifest) {
-    if (lintSections(before) !== lintSections(after)) asks.push(`${rel}: the [lints]/[profile] sections change (H-05). Approve only if intended.`);
+    const mc = manifestChecks(file, rel, before, after);
+    denies.push(...mc.denies);
+    asks.push(...mc.asks);
+    advice.push(...mc.advice);
+    if (lintConfigChanged(before, after)) asks.push(`${rel}: the [lints]/[profile] sections change (H-05). Approve only if intended.`);
     if (proj.config.askOnNewDependency) {
       const was = depNames(before);
       const approved = new Set(proj.config.preapprovedDependencies ?? []);
@@ -198,12 +268,14 @@ export function preEdit(input) {
 
   if (isRust) {
     const krate = crateOf(file);
-    const kind = krate ? classifyPath(relTo(krate.dir, file), krate.hasLib) : 'prod';
+    const crateRel = krate ? relTo(krate.dir, file) : rel;
+    const kind = krate ? classifyPath(crateRel, krate.hasLib) : 'prod';
+    const build = isBuildScript(crateRel);
     if (tool === 'Write' && before === '' && /(^|\/)mod\.rs$/.test(rel) && kind !== 'test') {
       denies.push(`ARC-06 ${rel}: new mod.rs file.\n    fix: use \`foo.rs\` plus \`foo/bar.rs\`.`);
     }
-    const b = scanSource(before, { kind });
-    const a = scanSource(after, { kind });
+    const b = scanSource(before, { kind, build });
+    const a = scanSource(after, { kind, build });
     const exempt = (h) => (proj.config.scanner.exempt ?? []).some((e) => e.rule === h.id && (e.paths ?? []).some((p) => globMatch(p, rel)));
     const fresh = newHits(b.hits, a.hits).filter((h) => !exempt(h));
     // One approval line per exception: the #[expect] attribute carries the reason.
@@ -219,12 +291,14 @@ export function preEdit(input) {
   }
 
   if (denies.length) {
-    telemetry(proj, input, 'deny-scan', { file: rel, rules: denies.map((d) => d.split(' ')[0]) });
+    telemetry(proj, input, isManifest ? 'deny-manifest' : 'deny-scan', { file: rel, rules: denies.map((d) => d.split(' ')[0]) });
     return deny([
-      `temper: this edit introduces ${denies.length} escape hatch(es), so it was not applied. Rewrite it without them:`,
+      isManifest
+        ? `temper: this manifest edit breaks ${denies.length} workspace rule(s), so it was not applied. Fix the manifest text:`
+        : `temper: this edit introduces ${denies.length} escape hatch(es), so it was not applied. Rewrite it without them:`,
       ...denies.slice(0, 10),
       denies.length > 10 ? `... and ${denies.length - 10} more.` : '',
-      'If one of these is a genuine exception, put `#[expect(<lint>, reason = "...")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.',
+      isManifest ? '' : 'If one of these is a genuine exception, put `#[expect(<lint>, reason = "...")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.',
     ].filter(Boolean).join('\n'));
   }
   if (asks.length) {
@@ -235,15 +309,20 @@ export function preEdit(input) {
   return none();
 }
 
-const SHELL_WRITE_RS = [
-  /(?:^|[^>&0-9])>>?\s*["']?[^\s"'|;&<>]*\.rs\b/,
-  /\btee\s+(?:-a\s+)?["']?[^\s"'|;&]*\.rs\b/,
-  /\bsed\b[^|;&]*\s-[a-zA-Z]*i[^|;&]*\.rs\b/,
-  /\bsed\b[^|;&]*--in-place[^|;&]*\.rs\b/,
-  /\bperl\b[^|;&]*-[a-zA-Z]*i[^|;&]*\.rs\b/,
-  /\bopen\s*\([^)]*\.rs["']\s*,\s*["'][wa+]/,
-  /\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\b[^|;&]*\.rs\b/,
+const LOCKFILE_DENY = (rel) => `temper: ${rel} is maintained by Cargo and is never edited by hand (PROC-13). Change it with cargo: \`cargo update -p <crate> --precise <version>\` to pin or roll back one dependency, \`cargo update --workspace\` after a manifest edit, \`cargo update --dry-run\` to preview. For a merge conflict, check out one side's Cargo.lock and re-run a cargo command.`;
+
+/** Shell commands that write a file whose name ends with `target` (a regex source). */
+const shellWrites = (target) => [
+  new RegExp(`(?:^|[^>&0-9])>>?\\s*["']?[^\\s"'|;&<>]*${target}\\b`),
+  new RegExp(`\\btee\\s+(?:-a\\s+)?["']?[^\\s"'|;&]*${target}\\b`),
+  new RegExp(`\\bsed\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${target}\\b`),
+  new RegExp(`\\bsed\\b[^|;&]*--in-place[^|;&]*${target}\\b`),
+  new RegExp(`\\bperl\\b[^|;&]*-[a-zA-Z]*i[^|;&]*${target}\\b`),
+  new RegExp(`\\bopen\\s*\\([^)]*${target}["']\\s*,\\s*["'][wa+]`),
+  new RegExp(`\\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\\b[^|;&]*${target}\\b`),
 ];
+const SHELL_WRITE_RS = shellWrites('\\.rs');
+const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock');
 
 export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
@@ -252,6 +331,14 @@ export function preBash(input) {
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', {});
     return deny('temper: write Rust sources with the Edit or Write tools, not the shell, so the standard\'s checks run on them (H-12). Use the Edit tool for this change.');
+  }
+  if (SHELL_WRITE_LOCK.some((re) => re.test(cmd))) {
+    telemetry(proj, input, 'deny-lockfile', { via: 'shell' });
+    return deny(LOCKFILE_DENY('Cargo.lock'));
+  }
+  if (/(?:^|\s)--ignore-rust-version\b/.test(cmd)) {
+    telemetry(proj, input, 'deny-ignore-rust-version', {});
+    return deny('temper: --ignore-rust-version bypasses the MSRV check, so green would not mean the declared rust-version builds (MOD-01, H-12). If a dependency needs a newer Rust, raising rust-version is a human decision (H-16): say so and ask.');
   }
   if (/--no-verify\b|\bgit\s+commit\b[^|;&]*\s-n\b/.test(cmd)) {
     return deny('temper: skipping git hooks (--no-verify) is not allowed (H-12). Fix what the hook reports.');

@@ -23,3 +23,9 @@ pub trait Clock {
     /// The current time.
     fn now(&self) -> Timestamp;
 }
+
+// Compile-time proof that this type can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Timestamp>();
+};

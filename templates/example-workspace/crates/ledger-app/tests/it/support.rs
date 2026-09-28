@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::error::Error;
 
 use ledger_app::{Clock, EventStore, Ledger, Recorded, Timestamp, Version};
-use ledger_domain::{AccountId, AccountIdError, Cents, Command, OwnerName, OwnerNameError, State};
+use ledger_domain::{
+    AccountId, Cents, Command, OwnerName, ParseAccountIdError, ParseOwnerNameError, State,
+};
 use thiserror::Error;
 
 /// Outcome of a test; `?` works on every error type.
@@ -112,20 +114,20 @@ pub(crate) fn ledger() -> Ledger<InMemoryStore, FixedClock> {
     Ledger::new(InMemoryStore::default(), FixedClock(NOW))
 }
 
-pub(crate) fn account() -> Result<AccountId, AccountIdError> {
+pub(crate) fn account() -> Result<AccountId, ParseAccountIdError> {
     "acc-1".parse()
 }
 
-pub(crate) fn ada() -> Result<OwnerName, OwnerNameError> {
+pub(crate) fn ada() -> Result<OwnerName, ParseOwnerNameError> {
     "Ada Lovelace".parse()
 }
 
-pub(crate) fn open() -> Result<Command, OwnerNameError> {
+pub(crate) fn open() -> Result<Command, ParseOwnerNameError> {
     Ok(Command::Open { owner: ada()? })
 }
 
 /// Ada's account, open and holding `cents`.
-pub(crate) fn open_with(cents: u64) -> Result<State, OwnerNameError> {
+pub(crate) fn open_with(cents: u64) -> Result<State, ParseOwnerNameError> {
     Ok(State::Open {
         owner: ada()?,
         balance: Cents::new(cents),

@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use crate::support::{Run, TestResult, ledger, ledger_all};
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn account_lifecycle_shows_the_running_balance() -> TestResult {
     let store = tempfile::tempdir()?;
     ledger_all(
@@ -30,6 +31,7 @@ fn account_lifecycle_shows_the_running_balance() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn emptied_account_can_be_closed() -> TestResult {
     let store = tempfile::tempdir()?;
     ledger_all(
@@ -54,6 +56,7 @@ fn emptied_account_can_be_closed() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn overdraft_exits_3_and_records_nothing() -> TestResult {
     let store = tempfile::tempdir()?;
     ledger_all(store.path(), &[&["open", "acc-1", "Ada Lovelace"]])?;
@@ -75,6 +78,7 @@ fn overdraft_exits_3_and_records_nothing() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn json_format_reports_balance_in_cents() -> TestResult {
     let store = tempfile::tempdir()?;
     ledger_all(store.path(), &[&["open", "acc-1", "Ada Lovelace"]])?;
@@ -104,6 +108,7 @@ fn json_format_reports_balance_in_cents() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn unknown_command_is_a_usage_error() -> TestResult {
     let store = tempfile::tempdir()?;
 
@@ -114,6 +119,7 @@ fn unknown_command_is_a_usage_error() -> TestResult {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn corrupt_stream_is_a_store_error() -> TestResult {
     let store = tempfile::tempdir()?;
     fs::write(store.path().join("account-acc-1.jsonl"), "not json\n")?;

@@ -112,12 +112,101 @@ export function lineIndex(text) {
 
 /** Find the offset of the matching close brace for the `{` at `open`. */
 export function matchBrace(code, open) {
+  return matchPair(code, open, '{', '}');
+}
+
+/** Offset of the bracket closing the `o` at `open` (end of text if unbalanced). */
+export function matchPair(code, open, o, c) {
   let depth = 0;
   for (let k = open; k < code.length; k++) {
-    if (code[k] === '{') depth++;
-    else if (code[k] === '}') { depth--; if (depth === 0) return k; }
+    if (code[k] === o) depth++;
+    else if (code[k] === c) { depth--; if (depth === 0) return k; }
   }
   return code.length - 1;
+}
+
+/**
+ * Offset of the `>` closing the generic list opened at `open` (`->` is not a
+ * closer), or -1 if a `{` or `;` comes first.
+ */
+export function matchAngle(code, open) {
+  let depth = 0;
+  for (let k = open; k < code.length; k++) {
+    const ch = code[k];
+    if (ch === '<') depth++;
+    else if (ch === '>' && code[k - 1] !== '-') { depth--; if (depth === 0) return k; }
+    else if (ch === '{' || ch === ';') return -1;
+  }
+  return -1;
+}
+
+/** Split `s` on `sep` at bracket depth 0 (`<>`, `()`, `[]`, `{}`; `->` is not a bracket). */
+export function splitTop(s, sep = ',') {
+  const out = [];
+  let depth = 0;
+  let from = 0;
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if ('<([{'.includes(ch)) depth++;
+    else if (')]}'.includes(ch) || (ch === '>' && s[k - 1] !== '-')) depth--;
+    else if (ch === sep && depth === 0) { out.push(s.slice(from, k)); from = k + 1; }
+  }
+  out.push(s.slice(from));
+  return out;
+}
+
+/**
+ * Offset of the `;` that ends the statement or item starting at `from`, or of
+ * the `}` closing the enclosing block when the statement is a tail expression.
+ */
+export function statementEnd(code, from) {
+  let depth = 0;
+  for (let k = from; k < code.length; k++) {
+    const ch = code[k];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') { depth--; if (depth < 0) return k; }
+    else if (ch === ';' && depth === 0) return k;
+  }
+  return code.length;
+}
+
+/**
+ * Regions evaluated at compile time: inline `const { .. }` blocks and
+ * `const NAME: T = ..;` items (not const generic parameters, not `const fn`).
+ * @returns {[number, number][]}
+ */
+export function constRegions(code) {
+  const regions = [];
+  const block = /\bconst\s*\{/g;
+  let m;
+  while ((m = block.exec(code))) regions.push([m.index, matchBrace(code, code.indexOf('{', m.index))]);
+  const item = /\bconst\s+(?:_|[A-Za-z_]\w*)\s*:/g;
+  while ((m = item.exec(code))) {
+    const prev = code.slice(0, m.index).trimEnd().at(-1);
+    if (prev === '<' || prev === ',') continue; // const generic parameter
+    regions.push([m.index, statementEnd(code, m.index)]);
+  }
+  return regions;
+}
+
+/** Bodies of trait impls (`impl Trait for Type { .. }`), whose method names the trait fixes. */
+export function traitImplRegions(code) {
+  const regions = [];
+  const re = /\bimpl\b/g;
+  let m;
+  while ((m = re.exec(code))) {
+    let depth = 0;
+    let open = -1;
+    for (let k = m.index + 4; k < code.length; k++) {
+      const ch = code[k];
+      if (ch === '<') depth++;
+      else if (ch === '>' && code[k - 1] !== '-') depth--;
+      else if ((ch === '{' || ch === ';' || ch === ')') && depth <= 0) { open = ch === '{' ? k : -1; break; }
+    }
+    if (open === -1) continue;
+    if (/\bfor\b(?!\s*<)/.test(code.slice(m.index, open))) regions.push([m.index, matchBrace(code, open)]);
+  }
+  return regions;
 }
 
 /**

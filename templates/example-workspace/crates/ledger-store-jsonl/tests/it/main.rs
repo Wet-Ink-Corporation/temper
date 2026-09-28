@@ -2,4 +2,5 @@
 
 mod format;
 mod store;
+#[cfg(test)]
 mod support;

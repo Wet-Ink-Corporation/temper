@@ -12,14 +12,16 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 
 use ledger_app::{Recorded, Timestamp};
-use ledger_domain::{Cents, Event, OwnerNameError};
+use ledger_domain::{Cents, Event, ParseOwnerNameError};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
 use self::v1::RecordV1;
 
-/// Schema version this build writes.
+/// Schema version this build writes. Raise it only together with a new
+/// frozen version module and an upcaster from the previous shape: readers
+/// refuse any version they do not know.
 const CURRENT_SCHEMA: u32 = 2;
 
 /// Why a stored line is not a valid event record.
@@ -40,8 +42,14 @@ pub enum RecordError {
     },
     /// The stored owner name fails domain validation.
     #[error("stored owner name is invalid")]
-    InvalidOwner(#[source] OwnerNameError),
+    InvalidOwner(#[source] ParseOwnerNameError),
 }
+
+// Compile-time proof that this type can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<RecordError>();
+};
 
 /// Schema v2 wire shape, minus the `schema_version` tag. Borrows on write,
 /// owns on read.
@@ -58,10 +66,15 @@ enum EventV2<'a> {
     Opened { owner: Cow<'a, str> },
     Deposited { amount_cents: u64 },
     Withdrew { amount_cents: u64 },
-    // Braces, not a unit variant: serde ignores `deny_unknown_fields` on unit
-    // variants of a tagged enum. Both forms write the same JSON.
-    Closed {},
+    // A unit struct in a newtype variant, not a unit variant: serde ignores
+    // `deny_unknown_fields` on unit variants of a tagged enum, but a unit
+    // struct refuses any field. Both forms write `{"type":"closed"}`.
+    Closed(ClosedV2),
 }
+
+/// The body of a `closed` event: no fields.
+#[derive(Debug, Serialize, Deserialize)]
+struct ClosedV2;
 
 /// The tag written before the body, so it leads every line.
 #[derive(Serialize)]
@@ -83,7 +96,7 @@ impl<'a> From<&'a Recorded> for RecordV2<'a> {
             Event::Withdrew { amount } => EventV2::Withdrew {
                 amount_cents: amount.get(),
             },
-            Event::Closed => EventV2::Closed {},
+            Event::Closed => EventV2::Closed(ClosedV2),
         };
         Self {
             recorded_at_ms: recorded.recorded_at.as_unix_millis(),
@@ -106,7 +119,7 @@ impl TryFrom<RecordV2<'_>> for Recorded {
             EventV2::Withdrew { amount_cents } => Event::Withdrew {
                 amount: Cents::new(amount_cents),
             },
-            EventV2::Closed {} => Event::Closed,
+            EventV2::Closed(ClosedV2) => Event::Closed,
         };
         Ok(Self {
             event,
@@ -115,13 +128,14 @@ impl TryFrom<RecordV2<'_>> for Recorded {
     }
 }
 
-/// Write `recorded` as one current-schema line, newline included.
-pub(crate) fn encode(recorded: &Recorded, out: &mut impl Write) -> io::Result<()> {
+/// Write `recorded` as one current-schema line, newline included. Pass
+/// `&mut out` to keep using the writer.
+pub(crate) fn encode(recorded: &Recorded, mut out: impl Write) -> io::Result<()> {
     let line = Tagged {
         schema_version: CURRENT_SCHEMA,
         record: RecordV2::from(recorded),
     };
-    serde_json::to_writer(&mut *out, &line)?;
+    serde_json::to_writer(&mut out, &line)?;
     out.write_all(b"\n")
 }
 
@@ -163,7 +177,7 @@ fn upcast_v1(record: RecordV1) -> RecordV2<'static> {
                 amount_cents: cents,
             },
         ),
-        RecordV1::Closed { at } => (at, EventV2::Closed {}),
+        RecordV1::Closed { at } => (at, EventV2::Closed(ClosedV2)),
     };
     RecordV2 {
         recorded_at_ms,

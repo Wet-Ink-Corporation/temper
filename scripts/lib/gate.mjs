@@ -1,12 +1,15 @@
-// The gate: fmt (auto-fix), clippy -D warnings, tests, rustdoc -D warnings,
-// and the escape-hatch scan of changed files. Results are cached per tree
-// fingerprint so repeated Stop/SubagentStop checks cost nothing.
+// The gate: fmt (auto-fix), the escape-hatch scan of changed files, the
+// member-manifest check, clippy -D warnings, tests and rustdoc -D warnings.
+// Results are cached per tree fingerprint so repeated Stop/SubagentStop checks
+// cost nothing.
 import fs from 'node:fs';
 import path from 'node:path';
 import {
   run, readText, writeAtomic, fingerprint, rustChanges, showAt, crateOf, relTo, globMatch,
 } from './project.mjs';
-import { scanSource, newHits, classifyPath, formatHit } from './scan.mjs';
+import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
+import { parseToml } from './toml.mjs';
+import { memberProblems } from './manifest.mjs';
 
 const has = (cmd, args) => run(cmd, args, { timeoutMs: 20000 }).code === 0;
 
@@ -49,13 +52,51 @@ export function scanChanged(proj, base) {
     const after = readText(abs);
     if (after === null) continue;
     const krate = crateOf(abs);
-    const kind = krate ? classifyPath(relTo(krate.dir, abs), krate.hasLib) : 'prod';
+    const crateRel = krate ? relTo(krate.dir, abs) : rel;
+    const kind = krate ? classifyPath(crateRel, krate.hasLib) : 'prod';
+    const build = isBuildScript(crateRel);
     const before = showAt(proj, base, rel) ?? '';
     const exempt = (h) => (proj.config.scanner.exempt ?? []).some((e) => e.rule === h.id && (e.paths ?? []).some((p) => globMatch(p, rel)));
-    const fresh = newHits(scanSource(before, { kind }).hits, scanSource(after, { kind }).hits).filter((h) => !exempt(h));
+    const fresh = newHits(scanSource(before, { kind, build }).hits, scanSource(after, { kind, build }).hits).filter((h) => !exempt(h));
     for (const h of fresh) out[h.severity]?.push({ ...h, file: rel });
   }
   return out;
+}
+
+/**
+ * Every workspace member inherits the workspace lints and declares no profile
+ * (MOD-09, ARC-01, PERF-09). Stable Cargo warns about neither, so a new crate
+ * without `[lints] workspace = true` would compile with every escape hatch allowed.
+ * @returns {{ ok: boolean, summary: string }}
+ */
+export function checkManifests(proj) {
+  const r = run('cargo', ['metadata', '--no-deps', '--format-version', '1'], { cwd: proj.root, env: { CARGO_TERM_COLOR: 'never' }, timeoutMs: 120000 });
+  if (r.code !== 0) {
+    const why = (r.error?.message ?? r.stderr).trim().split(/\r?\n/).filter(Boolean).slice(0, 6).join('\n');
+    return { ok: false, summary: `cargo metadata failed:\n${why}` };
+  }
+  let meta;
+  try { meta = JSON.parse(r.stdout); } catch { return { ok: false, summary: 'cargo metadata printed output that is not JSON' }; }
+  const rootPath = path.join(meta.workspace_root, 'Cargo.toml');
+  const rootManifest = parseToml(readText(rootPath));
+  const members = new Set(meta.workspace_members ?? []);
+  const problems = [];
+  let count = 0;
+  for (const pkg of meta.packages ?? []) {
+    if (members.size && !members.has(pkg.id)) continue;
+    count++;
+    const rel = relTo(proj.root, pkg.manifest_path);
+    const manifest = parseToml(readText(pkg.manifest_path));
+    if (!manifest || !rootManifest) { problems.push(`${rel}: not readable as TOML by temper`); continue; }
+    const self = path.resolve(pkg.manifest_path) === path.resolve(rootPath);
+    for (const p of memberProblems(manifest, { path: rootPath, manifest: rootManifest, self })) {
+      problems.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
+    }
+  }
+  return {
+    ok: problems.length === 0,
+    summary: problems.length ? problems.join('\n') : `${count} member manifest(s) inherit the workspace lints; no member profiles`,
+  };
 }
 
 /**
@@ -109,7 +150,15 @@ export function runGate(proj, opts = {}) {
     if (!ok) return finish(proj, fp, steps, true, cachePath);
   }
 
-  // 4. cargo steps, fail fast
+  // 4. member manifests (cargo metadata --no-deps: fast, no resolution), before clippy
+  {
+    const t = Date.now();
+    const m = checkManifests(proj);
+    steps.push({ name: 'manifests', ok: m.ok, ms: Date.now() - t, summary: m.summary });
+    if (!m.ok) return finish(proj, fp, steps, true, cachePath);
+  }
+
+  // 5. cargo steps, fail fast
   for (const step of cfg.gate.steps ?? defaultSteps(cfg)) {
     const t = Date.now();
     const [cmd, ...args] = step.cmd;

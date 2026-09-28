@@ -2,7 +2,7 @@
 
 Workspace layout, crate and module boundaries, dependency direction, ports and adapters, event sourcing, configuration, dependency policy and binaries. Read this before creating a crate or module, moving code between them, adding a dependency, or designing a use case. The default architecture is event-sourced, domain-driven and hexagonal: a pure domain core, an application layer that owns ports, adapters at the edge, and thin binaries that wire them. Tests reach from the domain up to view models (Crux style) without touching I/O.
 
-Rules covered: ARC-01, ARC-02, ARC-03, ARC-04, ARC-05, ARC-06, ARC-07, ARC-08, ARC-09, ARC-10, ARC-11, ARC-12, ARC-13, ARC-14, ARC-15
+Rules covered: ARC-01, ARC-02, ARC-03, ARC-04, ARC-05, ARC-06, ARC-07, ARC-08, ARC-09, ARC-10, ARC-11, ARC-12, ARC-13, ARC-14, ARC-15, ARC-16, ARC-17
 
 ## Workspace layout
 
@@ -21,15 +21,15 @@ ledger/
 └── xtask/                  optional: repo automation as a Rust binary (not shipped)
 ```
 
-Every crate has `AGENTS.md` (its charter, ARC-08) and a `CLAUDE.md` containing `@AGENTS.md`. Root manifest essentials come from `templates/workspace/Cargo.toml`: `resolver = "3"`, `[workspace.package]` with `edition = "2024"` and `rust-version`, every third-party crate declared once in `[workspace.dependencies]`, and the full `[workspace.lints]` tables. Members inherit with `edition.workspace = true`, `thiserror = { workspace = true }` and `[lints] workspace = true`.
+Every crate has `AGENTS.md` (its charter, ARC-08) and a `CLAUDE.md` containing `@AGENTS.md`. Root manifest essentials come from `templates/workspace/Cargo.toml`: `resolver = "3"`, `[workspace.package]` with `edition = "2024"` and `rust-version`, every third-party crate and every sibling crate declared once in `[workspace.dependencies]`, and the full `[workspace.lints]` tables. Members inherit with `edition.workspace = true`, `thiserror = { workspace = true }` and `[lints] workspace = true`.
 
 ### ARC-01 · Virtual workspace with shared config
-**Why.** One manifest for editions, versions and lints means a new crate cannot silently opt out of the escape-hatch lints or drift to a different dependency version.
+**Why.** One manifest for editions, versions and lints means a new crate cannot silently opt out of the escape-hatch lints or drift to a different dependency version. Stable Cargo does not warn when a member omits `[lints] workspace = true`: that member compiles with `unwrap`, `as` casts and `#[allow]` accepted.
 **Do.**
 ```toml
-# crates/ledger-domain/Cargo.toml
+# crates/ledger-app/Cargo.toml
 [package]
-name = "ledger-domain"
+name = "ledger-app"
 edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
@@ -39,19 +39,24 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# The root declares siblings once:
+# ledger-domain = { path = "crates/ledger-domain", version = "0.1.0" }
+ledger-domain = { workspace = true }
 thiserror = { workspace = true }
-serde = { workspace = true }
 ```
 **Don't.**
 ```toml
 [package]
-name = "ledger-domain"
-edition = "2021"            # drifts from the workspace
+name = "ledger-app"
+edition = "2021"                              # drifts from the workspace
 [dependencies]
-serde = "1.0.150"           # version pinned per crate, bypasses [workspace.dependencies]
+ledger-domain = { path = "../ledger-domain" } # sibling bypasses the workspace table
+serde = "1.0.150"                             # version set per crate, bypasses [workspace.dependencies]
 # no [lints] table: this crate compiles with unwrap, as-casts and #[allow] permitted
 ```
-**Detect.** Review every new `Cargo.toml` for `[lints] workspace = true` and `workspace = true` on each dependency. `cargo metadata --format-version 1 | jq '.packages[] | select(.source == null) | .name, .edition'`.
+**Detect.** The temper hook refuses a member manifest without `[lints] workspace = true`, and the gate's manifest step fails any member that lacks it. Review each dependency for `workspace = true`. `cargo metadata --format-version 1 | jq '.packages[] | select(.source == null) | .name, .edition'`.
+
+**Publishing.** Turning `publish` on is H-16. A publishable crate sets `description`, `readme`, `keywords` and `categories`, inherits `license` and `repository` from `[workspace.package]`, omits `authors`, and sets `documentation` only when the docs are not on docs.rs. `clippy::cargo_common_metadata` fails the gate until these are set; it stays silent while `publish = false`. Each path dependency also needs a `version`. Check the tarball with `cargo package --list` and `cargo publish --dry-run --locked -p <crate>`.
 
 ## Layer rules
 
@@ -72,7 +77,23 @@ serde = "1.0.150"           # version pinned per crate, bypasses [workspace.depe
 sqlx = { workspace = true }     # domain now knows the database
 tokio = { workspace = true }    # domain now chooses a runtime
 ```
-**Detect.** `cargo tree -e normal -p ledger-domain` must not show `tokio`, `sqlx`, `reqwest`, `hyper`, `axum`, or any `ledger-adapter-*`. `cargo tree -e normal -i ledger-adapter-fs` must show only binaries as dependents.
+**Detect.**
+- `cargo tree --workspace --depth workspace -e normal --target all` shows the whole crate graph on one screen. `--target all` includes `[target.'cfg(..)'.dependencies]`, which the default host-only view skips.
+- `cargo tree -e normal --target all -p ledger-domain` must not show `tokio`, `sqlx`, `reqwest`, `hyper`, `axum`, or any `ledger-adapter-*`.
+- `cargo tree -e normal --target all -i ledger-adapter-fs` must show only binaries as dependents.
+- Under Miri with isolation on (the default, TST-17), a domain or application test that touches the file system aborts, and one that reads the environment or clock gets deterministic fakes. Either way, that test is using the wrong seam.
+
+**CONSIDER** `#![no_std]` for a pure domain crate, with `extern crate alloc;` (and `#[cfg(test)] extern crate std;` when tests need std). The compiler then rejects `std::fs`, `std::env`, `SystemTime::now` and threads, so ARC-02 and ARC-04 become compile errors. It costs `BTreeMap` instead of `HashMap` (OUT-04 wants that anyway), `core::error::Error` (MOD-08), and `thiserror` with `default-features = false`.
+```rust,fragment
+//! Ledger domain: decisions and events only.
+#![no_std]
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
+use alloc::collections::BTreeMap;
+```
 
 ### ARC-03 · Ports are owned by the consumer
 **Why.** The application declares the capability it needs in its own vocabulary, so adapters depend on the app and not the reverse. Adapter types (rows, HTTP responses, SDK errors) stay behind the trait.
@@ -278,7 +299,7 @@ pub mod adapter_fs {
 }
 ```
 
-The in-memory fake implements the same port for tests. Put it in `#[cfg(test)]` when one crate uses it, or in a `testing` module behind a `testing` Cargo feature when several crates do.
+The in-memory fake implements the same port for tests. Put it in `#[cfg(test)]` when one crate uses it, or behind a `test-util` Cargo feature when several crates do (TST-09).
 
 ```rust
 #[cfg(test)]
@@ -529,6 +550,68 @@ Rules of the shape:
 - `evolve` is total and infallible. Validation belongs in `decide`; history is already true.
 - `State` holds only what `decide` needs. Read models are separate projections (`view`, or a `BTreeMap` built by folding events into a query-side structure).
 
+**Typed ids.** One generic `Id<T>` gives every aggregate its own id type without a newtype per aggregate (API-02). `PhantomData<fn() -> T>` ties the id to `T` without owning one, and the trait impls are written by hand because derives would bound `T`.
+```rust
+//! One id type for every aggregate: an `Id<Account>` is never an `Id<Order>`.
+
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
+
+/// Identifier of an aggregate of type `T`.
+pub struct Id<T> {
+    raw: u64,
+    // `fn() -> T` owns no `T`, so `Id<T>` is `Copy + Send + Sync` for every `T`.
+    entity: PhantomData<fn() -> T>,
+}
+
+impl<T> Id<T> {
+    /// Wraps a raw id read from storage.
+    #[must_use]
+    pub const fn from_raw(raw: u64) -> Self {
+        Self {
+            raw,
+            entity: PhantomData,
+        }
+    }
+
+    /// The raw value, for storage.
+    #[must_use]
+    pub const fn raw(self) -> u64 {
+        self.raw
+    }
+}
+
+// Written by hand: `#[derive]` would add a `T: Clone`, `T: PartialEq`, ... bound (API-21).
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Id<T> {}
+
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<T> Eq for Id<T> {}
+
+impl<T> Hash for Id<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+impl<T> fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Id({})", self.raw)
+    }
+}
+```
+
 **Versioning.** Stored events outlive code. Change them additively (new optional fields with `#[serde(default)]`, new variants). For a breaking change, freeze the old shape as a private `V1` type, add the new shape, and upcast on read so `decide`/`evolve` see only the current type. Changing a persisted event shape is a schema migration and a HITL decision (H-16). The full compiling pattern is in `structured-output.md` §Versioning and upcasting.
 ```rust,ignore
 #[derive(Deserialize)]
@@ -584,7 +667,7 @@ Size caps: about 400 lines per file, about 50 per function (CRF-02). Split a mod
 1. The code needs a different dependency profile (pure domain vs `sqlx` adapter).
 2. It changes for a different reason or on a different cadence (a protocol adapter vs business rules).
 3. It is a reuse boundary (two binaries need it, or it is published).
-4. Compile time: a large, stable subtree recompiles on every edit of an unrelated part.
+4. Compile time: a large, stable subtree recompiles on every edit of an unrelated part. Cite `cargo build --timings` from before and after the split.
 5. Visibility: you need `pub(crate)` to hide internals from a sibling that currently sees them.
 
 Do not split for "organization", for one struct, or to share three helper functions (copy them or give them a real home).
@@ -645,6 +728,8 @@ Owner: <human or team>
 ### ARC-09 · Low coupling
 **Why.** Every dependency edge is a reason your code changes when someone else's does. Global mutable state is an invisible edge to every caller, and cyclic modules cannot be split into crates later.
 **Do.** Depend on the narrowest port (`EventStore`, not `Database`). Inject collaborators through constructors or parameters. Keep fan-out of a module small; high fan-in is fine for stable, pure types.
+
+Statics hold only caches and immutable data (`LazyLock` of a parsed table), whose value never changes what the program decides. A crate linked in two semver-incompatible versions gets two copies of every static, so state kept there silently splits. A `thread_local!` is global mutable state per thread: use it only for caches and scratch buffers, with `const { .. }` initialization (`clippy::missing_const_for_thread_local`), accessed through a single `with_borrow_mut` call that never re-enters the same key (a nested borrow panics).
 **Don't.**
 ```rust,ignore
 static STORE: LazyLock<Mutex<HashMap<String, Vec<Event>>>> = LazyLock::new(Default::default); // global mutable state
@@ -653,7 +738,7 @@ mod a { use super::b::helper; }  mod b { use super::a::Thing; }                 
 **Detect.**
 - `cargo tree -e normal -p <crate>` for fan-out; `cargo tree -e normal -i <crate>` for fan-in.
 - Module cycles: two modules that `use` each other's items. Break by moving the shared concept into a third module or inverting with a trait.
-- `static` with `Mutex`, `RwLock`, `RefCell` or atomics holding domain state.
+- `static` or `thread_local!` with `Mutex`, `RwLock`, `RefCell`, `Cell` or atomics holding domain state (scan advisory `global-mut` for statics).
 
 ### ARC-10 · High cohesion: tell, don't ask
 **Why.** When behavior lives with the data whose invariant it maintains, the invariant is enforced in one place. Callers that fetch fields, decide, and write back duplicate the rule and eventually disagree.
@@ -666,11 +751,12 @@ if account.balance() >= amount { account.set_balance(account.balance() - amount)
 
 ## Dependency injection
 
-Default to generic ports: `fn handle<S: EventStore>(store: &mut S, ..)` or `struct Stamper<C: Clock>`. Static dispatch inlines, needs no allocation, and keeps the core free of `dyn`. Use `Arc<dyn Port>` at the composition root when the implementation is chosen at runtime, when many heterogeneous implementations share a collection, or when monomorphization measurably hurts compile time or binary size. Implementing the port for `Arc<dyn Port>` lets the generic core accept the erased form unchanged.
+Default to generic ports: `fn handle<S: EventStore>(store: &mut S, ..)`, or `struct Stamper<C>` with the bound on `impl<C: Clock> Stamper<C>` (API-21). Static dispatch inlines, needs no allocation, and keeps the core free of `dyn`. Erase the type at the composition root when the implementation is chosen at run time, when heterogeneous implementations share a collection, when a service type would nest generics (`App<Retry<Cached<PgStore>>>`, API-09), or when monomorphization measurably hurts compile time or binary size. Erase it behind a named wrapper that implements the port (`DynClock`), never a bare `Arc<dyn Clock>` in a signature (API-23). The generic core accepts the wrapper unchanged.
 
 ```rust
-//! Dependency injection: generic ports in the core, `Arc<dyn Port>` at the root.
+//! Dependency injection: generic ports in the core, a named `dyn` wrapper at the root.
 
+use std::fmt;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -701,6 +787,7 @@ impl Clock for FixedClock {
 }
 
 /// Core service: generic, statically dispatched, monomorphized per clock.
+/// The struct has no bound; the `impl` that needs `Clock` states it (API-21).
 #[derive(Debug)]
 pub struct Stamper<C> {
     clock: C,
@@ -718,19 +805,37 @@ impl<C: Clock> Stamper<C> {
     }
 }
 
-/// `Arc<dyn Clock>` is itself a `Clock`, so the root can erase the type once.
-impl Clock for Arc<dyn Clock> {
-    fn now(&self) -> SystemTime {
-        self.as_ref().now()
+/// A clock chosen at run time. Signatures name `DynClock`, never `Arc<dyn Clock>` (API-23).
+#[derive(Clone)]
+pub struct DynClock(Arc<dyn Clock>);
+
+impl DynClock {
+    /// Erase any clock behind one shared pointer.
+    #[must_use]
+    pub fn new(clock: impl Clock + 'static) -> Self {
+        Self(Arc::new(clock))
     }
 }
 
-/// Composition root: pick the implementation at runtime, share one instance.
+impl Clock for DynClock {
+    fn now(&self) -> SystemTime {
+        self.0.now()
+    }
+}
+
+/// Written by hand because `dyn Clock` is not `Debug`.
+impl fmt::Debug for DynClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DynClock")
+    }
+}
+
+/// Composition root: pick the implementation at run time, erase it once.
 #[must_use]
-pub fn build_stamper(frozen_at: Option<SystemTime>) -> Stamper<Arc<dyn Clock>> {
-    let clock: Arc<dyn Clock> = match frozen_at {
-        Some(instant) => Arc::new(FixedClock(instant)),
-        None => Arc::new(SystemClock),
+pub fn build_stamper(frozen_at: Option<SystemTime>) -> Stamper<DynClock> {
+    let clock = match frozen_at {
+        Some(instant) => DynClock::new(FixedClock(instant)),
+        None => DynClock::new(SystemClock),
     };
     Stamper::new(clock)
 }
@@ -842,21 +947,62 @@ Library crates take the pieces they need (`&Path`, `NonZeroUsize`), not the whol
 ## Dependency policy
 
 ### ARC-12 · Justify every dependency
-**Why.** Each dependency is code you ship, audit, license and compile. Unused default features add compile time and attack surface.
-**Do.**
+**Why.** Each dependency is code you ship, audit, license and compile, and its build script and proc macros run on every developer and CI machine. Unused default features add compile time and attack surface. A version floor below the API you call still compiles here, because the lockfile holds a newer release, and breaks for anyone who resolves lower.
+**Do.** Declare each dependency once, as a full `major.minor.patch` caret floor: the oldest release whose API you use (when adding one, the version cargo just locked). Raise the floor in the change that starts using a newer API. Read features, defaults, license and `rust-version` from `cargo info <crate>@<version>`, not from memory (PROC-01).
 ```toml
-# root Cargo.toml
+# root Cargo.toml: floors and baseline features only
 [workspace.dependencies]
-serde = { version = "1", default-features = false, features = ["std", "derive"] }
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net"] }
+serde = { version = "1.0.228", default-features = false, features = ["std"] }
+tokio = { version = "1.53.1", default-features = false }
+
+# crates/ledger-cli/Cargo.toml: each member adds what its own code uses (ARC-16)
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 ```
-**Don't.** `tokio = { version = "1", features = ["full"] }` in a library; adding a crate for one 10-line function; a version declared directly in a member.
-**Detect.** `cargo deny check` (licenses, advisories, bans, duplicate versions) with a committed `deny.toml`; `cargo tree -d` for duplicates; `cargo tree -e features -p <crate>` for feature bloat. A new entry in `[workspace.dependencies]` is a HITL decision (H-16): state maintenance status, size, license and alternatives, and log it in the charter.
+A member can add `features` or set `optional`, nothing else: `default-features = false` in a member is a hard error when the workspace entry keeps defaults on, so it goes in the workspace entry.
+**Don't.**
+```toml
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] } # floor below the API in use; every member gets every feature
+serde = "=1.0.228"                             # exact pin: the lockfile's job, and it blocks unification
+rand = "*"                                     # no floor at all
+```
+Also: adding a crate for one 10-line function; a version declared directly in a member.
+
+- **Pinning.** Control exact versions through `Cargo.lock` (`cargo update -p <crate> --precise <version>`, PROC-13), never through `=`, `~`, `<`, `>=`-only or `*` requirements.
+- **Major bumps.** A major-version bump, including a Dependabot PR, is H-16. Read the upgrade notes for changed preconditions: code that still compiles may now be wrong (TST-18).
+- **`[patch]`.** A committed `[patch]` is H-16, with a tracking-issue comment and a removal condition; delete it once upstream releases the fix. Local experiments use `--config 'patch.crates-io.<crate>.path="../<crate>"'` and are never committed.
+- **Libraries build anywhere (SHOULD).** A library builds on every Tier-1 target with nothing but `cargo`: output of external generators (`protoc`) is committed or produced by a pure-Rust generator (ARC-17), and platform-specific dependencies sit under `[target.'cfg(..)'.dependencies]` or an opt-in feature.
+
+**Detect.** `cargo deny check` (licenses, advisories, bans, duplicate versions) with a committed `deny.toml`; `cargo tree -d` for duplicates; `cargo tree -e features -p <crate>` for feature bloat, and `cargo tree --workspace --target all -e features -i <crate>` to explain why a crate or feature is present. The temper hook asks on new dependencies, `[patch]` and `[replace]`, and flags `=`, `~`, `*`, `<` and `>=`-only requirements. A new entry in `[workspace.dependencies]` is a HITL decision (H-16): state maintenance status, size, license and alternatives, and log it in the charter.
+
+### ARC-16 · Every crate builds on its own
+**Why.** Cargo unifies features across everything it builds at once: `cargo build --workspace` enables the union of every member's requests, and a test build adds the dev-dependencies' features. A crate that derives `Serialize` while only a sibling enables serde's `derive` passes every workspace-wide command, then fails with E0433 under `cargo check -p <crate>`, for a downstream user, or once the sibling drops the feature.
+**Do.** Each manifest enables every feature its own code uses (the ARC-12 member example), and CI checks each member alone, as the template's gate job does. `cargo check` without target flags builds libraries and binaries only, so dev-dependencies stay out, and a binary-only crate needs no `--lib` (which would fail on it):
+```yaml
+- name: Each crate builds on its own (ARC-16)
+  shell: bash # pipefail: a failing cargo metadata must fail the step
+  run: >-
+    cargo metadata --locked --no-deps --format-version 1
+    | jq -r '.packages[].name'
+    | xargs -I{} cargo check --locked -p {}
+```
+**Don't.**
+```toml
+# crates/ledger-domain/Cargo.toml: derives Serialize, but only ledger-app enables `derive`
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] } # hides the gap in every test build
+```
+**Detect.** The per-crate CI step above; locally `cargo check -p <crate>`. A diff that removes a feature from one manifest needs every dependent checked alone.
 
 ## Thin binaries and the composition root
 
 ### ARC-14 · Binaries parse, wire, run and map exit codes
-**Why.** Logic in `main` cannot be unit-tested or reused. The composition root is the one place that knows every concrete type, so everything else can stay generic.
+**Why.** Logic in `main` cannot be unit-tested or reused. The composition root is the one place that knows every concrete type, so everything else can stay generic. Process-wide choices belong there too: a library that sets a `#[global_allocator]` makes every binary that sets its own fail to build, and a library that installs a subscriber takes logging away from the application (OUT-08). `main` returns `ExitCode` because `std::process::exit` runs no destructors on any thread: buffered output and `Drop` cleanup are lost (ERR-13).
 **Do.**
 ```rust
 //! Composition root: parse input, wire adapters to use cases, run, map to exit codes.
@@ -964,18 +1110,120 @@ fn main() {
     if balance < 50 { println!("no"); std::process::exit(3); }      // business rule in main; clippy::exit
 }
 ```
-**Detect.** `main.rs` over about 100 lines; `if` on domain values in the binary; `std::process::exit` (denied by `clippy::exit`).
+**Detect.** `main.rs` over about 100 lines; `if` on domain values in the binary; `std::process::exit` (denied by `clippy::exit`); `#[global_allocator]` or a subscriber `init`/`try_init` in a library crate (scan `global-allocator` for the former).
 
 ## Macros policy
 
 ### ARC-15 · Macros are a last resort
 **Why.** Macros hide control flow and types from readers, rust-analyzer and error messages, and a `return` or `?` inside one surprises every caller. Functions, generics and traits cover almost every case with better diagnostics.
-**Do.** Use a `macro_rules!` only for what the type system cannot express: repetitive trait impls over a list of types, or compile-time literal validation. Keep it private, document it, and make its expansion obvious.
+**Do.** Use a `macro_rules!` only for what the type system cannot express: repetitive items or trait impls over a list of types, or compile-time literal validation. Keep it private, document it, and make its expansion obvious.
+```rust
+//! Unit newtypes generated from one table: each item reads like the struct it becomes.
+
+macro_rules! unit_newtypes {
+    ($($(#[$meta:meta])* $vis:vis struct $name:ident($inner:ty) = $unit:literal;)+) => {
+        $(
+            $(#[$meta])*
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+            $vis struct $name($inner);
+
+            impl $name {
+                /// Wraps a raw value.
+                #[must_use]
+                $vis const fn new(value: $inner) -> Self {
+                    Self(value)
+                }
+            }
+
+            impl std::fmt::Display for $name {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{} {}", self.0, $unit)
+                }
+            }
+        )+
+    };
+}
+
+unit_newtypes! {
+    /// A distance in whole metres.
+    pub struct Metres(u32) = "m";
+    /// A duration in whole seconds.
+    pub(crate) struct Seconds(u64) = "s";
+}
+```
+Mechanics, for any macro that passes that bar:
+- Bind each `$e:expr` to a local once, so an argument with side effects runs once. Use `ident`, `ty` or `literal` fragments when an arbitrary expression is not meant.
+- A fallible macro expands to a `Result` expression, and the caller writes the `?`. No `return`, `?`, `break` or `continue` in the expansion. Take references at the call site (`m!(&x)`), never inside the expansion.
+- An item-generating macro mirrors Rust syntax, accepts `$(#[$meta:meta])*` and `$vis:vis` per item and any `$t:ty`, and is tested at module scope and inside a function.
+- A macro, ours or a dependency's attribute macro, never changes an item's kind, signature, visibility or `async`-ness, and emits no hidden public items. This is one reason `#[async_trait]` is out (MOD-04).
+- Inspect the expansion with `cargo expand` when reviewing one.
+- **Proc macros** (a new crate, H-16): keep the logic in a plain library crate over `proc_macro2`, with snapshot tests of its expansions, behind a thin `proc-macro = true` shim with trybuild UI tests. The entry point parses, calls `expand(..) -> syn::Result<TokenStream2>`, and turns errors into spanned compile errors with `unwrap_or_else(syn::Error::into_compile_error)`: no `unwrap`, `expect` or `panic!`. Expansions reach the facade's dependencies through a `#[doc(hidden)] pub mod __private` (API-14).
+
 **Don't.**
 ```rust,ignore
 macro_rules! try_or_log { ($e:expr) => { match $e { Ok(v) => v, Err(e) => { warn!(%e); return; } } } } // hidden early return, discards error
+macro_rules! square { ($e:expr) => { $e * $e } }                                                         // square!(next_id()) calls next_id twice
 ```
-**Detect.** New `macro_rules!` or proc-macro crates in a diff; macros containing `return`, `?`, `break` or `continue`. A new proc-macro crate is a crate-boundary change (H-16).
+**Detect.** New `macro_rules!` or proc-macro crates in a diff; macros containing `return`, `?`, `break` or `continue`; a `$e` used twice in one expansion. A new proc-macro crate is a crate-boundary change (H-16).
+
+## Build scripts and generated code
+
+### ARC-17 · Build scripts are hermetic, declared and fallible
+**Why.** `build.rs` is production code that runs on every developer and CI machine. A script that writes into `src/`, reads the network or embeds a timestamp makes builds unreproducible, and `cargo package` rejects one that modifies source files. A script without a rerun directive re-runs whenever any file in the package changes. An undeclared custom cfg trips `unexpected_cfgs`, which fails the zero-warnings gate.
+**Do.** Write only under `OUT_DIR`, declare every input, report failures by returning `Err` from `main`, and emit directives with `writeln!` on a locked stdout (H-06):
+```rust
+//! Build script: turns `schema/events.txt` into Rust source under `OUT_DIR`.
+
+use std::error::Error;
+use std::fmt::Write as _;
+use std::io::{self, Write};
+use std::path::PathBuf;
+use std::{env, fs};
+
+const SCHEMA: &str = "schema/events.txt";
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Directives go through a locked stdout: no `println!` (H-06).
+    let mut cargo = io::stdout().lock();
+    writeln!(cargo, "cargo::rerun-if-changed={SCHEMA}")?;
+
+    let mut source =
+        String::from("/// Event names, in schema order.\npub const EVENT_NAMES: &[&str] = &[\n");
+    for name in fs::read_to_string(SCHEMA)?.lines().map(str::trim) {
+        if !name.is_empty() {
+            writeln!(source, "    {name:?},")?;
+        }
+    }
+    source.push_str("];\n");
+
+    let out_dir = env::var_os("OUT_DIR").ok_or("cargo did not set OUT_DIR")?;
+    fs::write(PathBuf::from(out_dir).join("event_names.rs"), source)?;
+    Ok(())
+}
+```
+The library pulls it in with `include!(concat!(env!("OUT_DIR"), "/event_names.rs"));`. A script with no inputs still emits `cargo::rerun-if-changed=build.rs`; an environment input gets `cargo::rerun-if-env-changed=<VAR>`. Before emitting `cargo::rustc-cfg=<name>`, emit `cargo::rustc-check-cfg=cfg(<name>)`. Read target facts from `CARGO_CFG_*` variables (`CARGO_CFG_TARGET_OS`): inside a build script, `cfg!` describes the host that runs it, not the target. When code only needs to branch on the target, a plain `#[cfg(target_os = "..")]` in the crate needs no build script at all.
+
+**Checked-in generated code** (schemas, SQL, protobuf output that consumers read without building) comes from an `xtask` command, not from `build.rs`, and a test keeps it fresh: it regenerates in memory and compares, never writes.
+```rust,fragment
+// crates/ledger-schema/tests/it/fresh.rs. `render` is the function `cargo xtask codegen` writes to disk.
+#[test]
+fn checked_in_schema_matches_the_generator() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schema/events.json");
+    let on_disk = std::fs::read_to_string(path)?;
+    assert_eq!(on_disk, ledger_schema::render()?, "stale: run `cargo xtask codegen` and commit");
+    Ok(())
+}
+```
+**Don't.**
+```rust,ignore,expect=scan:print+scan:unwrap
+fn main() {
+    println!("cargo::rustc-cfg=fast_path");                            // print macro; cfg never declared
+    if cfg!(windows) { /* .. */ }                                      // the host, not the target
+    let schema = std::fs::read_to_string("schema/events.txt").unwrap(); // panics instead of reporting
+    std::fs::write("src/generated.rs", render(&schema)).unwrap();      // writes into the source tree
+}
+```
+**Detect.** The scanner treats `build.rs` as production code: print macros and `unwrap` are hard hits, and the template lints apply. Review for writes outside `OUT_DIR`, network clients, `SystemTime::now`, `cfg!` on target properties, `rustc-cfg` without `rustc-check-cfg`, and a missing `rerun-if-changed`. `cargo package` fails a script that modifies source files.
 
 ## xtask (CONSIDER)
 
@@ -983,18 +1231,20 @@ For repo automation that outgrows a shell one-liner (codegen, schema export, rel
 
 ## Review checklist
 
-- [ ] Does every member inherit `[workspace.package]`, `[workspace.dependencies]` and `[lints] workspace = true`? (ARC-01)
-- [ ] Does `cargo tree -e normal -p <domain>` show no I/O, runtime or adapter crates? (ARC-02)
+- [ ] Does every member inherit `[workspace.package]`, `[workspace.dependencies]` (siblings included) and `[lints] workspace = true`? (ARC-01)
+- [ ] Does `cargo tree -e normal --target all -p <domain>` show no I/O, runtime or adapter crates? (ARC-02)
 - [ ] Are ports defined in the consuming app crate, with no adapter types in their signatures? (ARC-03)
 - [ ] Are decisions pure, with time, ids and randomness injected? (ARC-04)
 - [ ] Is `lib.rs` only module declarations and deliberate re-exports? (ARC-05)
 - [ ] No `mod.rs`, no `#[path]`, files under about 400 lines and functions under about 50? (ARC-06)
 - [ ] Does any new crate satisfy a split criterion, and is it not a `utils`/`common`/`models` crate? (ARC-07)
 - [ ] Does every touched crate have a current `AGENTS.md` charter? (ARC-08)
-- [ ] No global mutable state, no module cycles, narrowest port injected? (ARC-09)
+- [ ] No global mutable state, statics and `thread_local!` only for caches and immutable data, no module cycles, narrowest port injected? (ARC-09)
 - [ ] Does behavior live with the data whose invariant it protects? (ARC-10)
 - [ ] Is configuration parsed once in the binary into validated types? (ARC-11)
-- [ ] Is every new dependency approved (H-16), declared in the workspace with minimal features, and clean under `cargo deny`? (ARC-12)
+- [ ] Is every new dependency or major bump approved (H-16), declared in the workspace as a caret floor with `default-features = false`, and clean under `cargo deny`? (ARC-12)
 - [ ] Decider shape: past-tense events, total `evolve`, `Rejection` separate from infra errors, versioned events? (ARC-13)
-- [ ] Is the binary only parsing, wiring, running and mapping exit codes? (ARC-14)
-- [ ] Is every new macro something functions, generics or traits cannot do, with no hidden control flow? (ARC-15)
+- [ ] Is the binary only parsing, wiring, running and mapping exit codes, and the only place with a global allocator or subscriber? (ARC-14)
+- [ ] Is every new macro something functions, generics or traits cannot do, evaluating each argument once, with no hidden control flow? (ARC-15)
+- [ ] Does every crate enable the features its own code uses, so `cargo check -p <crate>` passes alone? (ARC-16)
+- [ ] Does `build.rs` write only to `OUT_DIR`, declare its inputs and cfgs, read `CARGO_CFG_*`, and return errors? Is checked-in generated code guarded by a freshness test? (ARC-17)

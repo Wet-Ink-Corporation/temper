@@ -5,7 +5,9 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-/// Cents per currency unit.
+/// Cents per currency unit: the ledger's currency has two decimal places.
+/// Amounts are stored in cents, so changing this rescales every stored amount
+/// and breaks the two-digit text form.
 const CENTS_PER_UNIT: u64 = 100;
 
 /// A non-negative amount of money in cents.
@@ -122,6 +124,13 @@ impl FromStr for Cents {
             })
     }
 }
+
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Cents>();
+    assert_send_sync::<ParseCentsError>();
+};
 
 /// Value of a string of ASCII digits, or `None` if it overflows `u64`.
 fn decimal_value(digits: &str) -> Option<u64> {

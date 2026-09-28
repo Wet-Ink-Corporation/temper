@@ -6,7 +6,7 @@ use std::io;
 use std::path::PathBuf;
 
 use ledger_app::{Recorded, Timestamp};
-use ledger_domain::{AccountId, AccountIdError, Cents, Event, OwnerNameError};
+use ledger_domain::{AccountId, Cents, Event, ParseAccountIdError, ParseOwnerNameError};
 use ledger_store_jsonl::JsonlStore;
 use tempfile::TempDir;
 
@@ -37,12 +37,12 @@ impl Fixture {
     }
 }
 
-pub(crate) fn account() -> Result<AccountId, AccountIdError> {
+pub(crate) fn account() -> Result<AccountId, ParseAccountIdError> {
     "acc-1".parse()
 }
 
 /// Ada opens an account, pays in 12.50 and takes out 2.50.
-pub(crate) fn history() -> Result<Vec<Recorded>, OwnerNameError> {
+pub(crate) fn history() -> Result<Vec<Recorded>, ParseOwnerNameError> {
     let at = |millis| Timestamp::from_unix_millis(millis);
     Ok(vec![
         Recorded {

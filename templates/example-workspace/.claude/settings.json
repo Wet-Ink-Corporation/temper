@@ -31,7 +31,7 @@
       "Edit(/rust-toolchain.toml)",
       "Edit(/deny.toml)",
       "Edit(/.cargo/**)",
-      "Edit(/.github/workflows/**)",
+      "Edit(/.github/**)",
       "Edit(/.githooks/**)",
       "Edit(/.claude/**)"
     ],

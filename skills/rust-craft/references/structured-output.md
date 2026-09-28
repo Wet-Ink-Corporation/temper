@@ -395,6 +395,49 @@ House exit-code convention (use it unless the tool's consumers already expect an
 | 4 | the failure could not even be reported (stderr closed) |
 
 When a supervisor or shell script needs finer classes, use sysexits(3) (64 usage, 65 data, 66 no input, 74 I/O, 78 config) for *every* class instead, as errors.md does. Don't mix the two schemes. Document the table in the binary's `--help` and its crate charter.
+
+Map outcomes to codes with an exhaustive `match`, never `as` on a discriminant (H-11): a new variant then fails to compile until it gets a code.
+```rust
+//! Exit codes as a closed set, mapped without casts.
+
+use std::process::ExitCode;
+
+/// How a run ended; one variant per row of the exit-code table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Everything succeeded.
+    Success,
+    /// Infrastructure or unexpected failure.
+    Failure,
+    /// The command line was invalid.
+    Usage,
+    /// The domain refused the request, or only part of it succeeded.
+    Refused,
+    /// The failure could not be reported (stderr closed).
+    Unreported,
+}
+
+impl From<Outcome> for u8 {
+    fn from(outcome: Outcome) -> Self {
+        match outcome {
+            Outcome::Success => 0,
+            Outcome::Failure => 1,
+            Outcome::Usage => 2,
+            Outcome::Refused => 3,
+            Outcome::Unreported => 4,
+        }
+    }
+}
+
+impl From<Outcome> for ExitCode {
+    fn from(outcome: Outcome) -> Self {
+        Self::from(u8::from(outcome))
+    }
+}
+```
+```rust,ignore,expect=scan:as-cast
+ExitCode::from(Outcome::Usage as u8) // denied by clippy::as_conversions; reordering the enum would change the contract
+```
 **Do.** Data to stdout through one locked, buffered writer. Diagnostics to stderr through `tracing`. JSON Lines (one object per line) for streams, so consumers can process records before the run ends. Distinct `ExitCode`s for success, partial failure and usage errors. `clap` with `value_enum` is fine for real CLIs; this example hand-parses to stay dependency-light.
 ```rust
 //! `filestat [--format human|json] <path>...`: line and byte counts per file.
@@ -574,10 +617,11 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_refused() {
-        let result = serde_json::from_str::<CreateUserRequest>(
+        let error = serde_json::from_str::<CreateUserRequest>(
             r#"{"email":"a@b.io","displayName":"Ada","isAdmin":true}"#,
-        );
-        assert!(result.is_err());
+        )
+        .expect_err("isAdmin is not a field");
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
     }
 
     #[test]
@@ -593,19 +637,23 @@ Review the `.snap` diff like an API change. Accepting a changed schema snapshot 
 ## Observability with tracing
 
 ### OUT-08 · Structured, span-scoped, secret-free
-**Why.** Structured fields are queryable; interpolated strings are not. Spans give every event its context (request, user, attempt) without threading it through arguments. A library that installs a subscriber or prints fights the application for control of output.
+**Why.** Structured fields are queryable; interpolated strings are not. Spans give every event its context (request, user, attempt) without threading it through arguments. Stable event names and standard field names let dashboards and alerts survive a reworded message. A library that installs a subscriber or prints fights the application for control of output.
 **Do.**
 - Libraries emit spans and events only. The binary installs the subscriber once (`tracing_subscriber::fmt().with_env_filter(..).with_writer(io::stderr)`, plus `.json()` for machine consumers), as in `architecture.md` §Thin binaries and the CLI above.
 - Filter with `EnvFilter` (`RUST_LOG=ledger=debug,warn`), with a default directive.
 - `#[instrument(skip_all, fields(...))]`: skip everything, then record chosen safe fields. Never rely on the default, which records every argument with `Debug`.
 - `%value` records with `Display`, `?value` with `Debug`. Prefer `%` for ids and errors.
 - Spans for units of work with duration (request, job, command); events for things that happen at a point (decision taken, retry, failure).
+- Events that operators query carry a stable `name:` in `<component>.<operation>.<outcome>` form. Fields use the OpenTelemetry semantic-convention key where one exists: `user.id`, `http.request.method`, `http.response.status_code`, `url.path`, `db.operation.name`, `file.path`, `error.type`. Keep the message plain text; `{field}` templates print literally.
+- Hot loops log per batch, not per item: count inside the loop and emit one event with the totals. Never put a `format!` result in a field.
 ```rust
 //! Library-side instrumentation: spans and events only, no subscriber.
 
 use tracing::{debug, info, instrument, warn};
-
-use crate::secret::Secret;
+#
+# /// Stand-in for the redacting `Secret` in the next section.
+# #[derive(Debug)]
+# pub struct Secret(String);
 
 /// A login attempt.
 #[derive(Debug)]
@@ -634,16 +682,23 @@ pub enum AuthOutcome {
 }
 
 /// Check a login. `skip_all` records no arguments; `fields` adds only safe ones.
-#[instrument(skip_all, fields(user_id = %login.user_id, attempt = attempt))]
+#[instrument(skip_all, fields(user.id = login.user_id, attempt = attempt))]
 pub fn authenticate(login: &Login, verifier: &impl Verifier, attempt: u32) -> AuthOutcome {
     debug!("verifying credentials");
     if verifier.verify(&login.user, &login.password) {
-        info!(outcome = ?AuthOutcome::Granted, "login succeeded");
+        info!(name: "auth.login.granted", "login succeeded");
         AuthOutcome::Granted
     } else {
-        warn!(outcome = ?AuthOutcome::Denied, "login failed");
+        warn!(name: "auth.login.denied", "login failed");
         AuthOutcome::Denied
     }
+}
+
+/// Import rows, logging once per batch however many rows there are.
+pub fn import(rows: &[&str]) -> usize {
+    let rejected = rows.iter().filter(|row| row.trim().is_empty()).count();
+    info!(name: "import.batch.completed", rows = rows.len(), rejected, "batch imported");
+    rows.len().saturating_sub(rejected)
 }
 ```
 **Don't.**
@@ -654,11 +709,11 @@ pub fn authenticate(login: &Login) -> AuthOutcome {
     info!("user {} failed", login.user);            // interpolated, not a field
 }
 ```
-**Detect.** `#[instrument]` without `skip_all` on functions taking credentials or large values; `tracing_subscriber` in a library's `[dependencies]`; `info!("..{}..", x)` with interpolated values instead of fields; `print`/`eprint` macros (denied).
+**Detect.** `#[instrument]` without `skip_all` on functions taking credentials or large values; `tracing_subscriber` in a library's `[dependencies]`; `info!("..{}..", x)` with interpolated values instead of fields; operator-facing events without `name:`; an event inside a per-item loop; `print`/`eprint` macros (denied).
 
 ## Secrets and PII
 
-Wrap credentials, tokens and personal data in a newtype whose `Debug` redacts and which implements neither `Display` nor `Serialize`. Reading the value requires a named method (`expose`) that is easy to grep in review. If a secret must be persisted, write a dedicated DTO field with an explicit `serialize_with`, never a blanket derive.
+Wrap credentials, tokens and personal data in a newtype whose `Debug` redacts and which implements neither `Display` nor `Serialize`. Reading the value requires a named method (`expose`) that is easy to grep in review. A unit test proves the redaction, because a later switch to `#[derive(Debug)]` would silently undo it. If a secret must be persisted, write a dedicated DTO field with an explicit `serialize_with`, never a blanket derive.
 
 ```rust
 //! Secrets that cannot leak through `Debug`, logs or serialization.
@@ -698,21 +753,44 @@ pub struct DbSettings {
     /// Password, redacted in `Debug`.
     pub password: Secret,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_never_prints_the_secret() {
+        let raw = "hunter2-7f3a";
+        let settings = DbSettings {
+            host: "db.internal".to_owned(),
+            password: Secret::new(raw.to_owned()),
+        };
+
+        let rendered = format!("{settings:?}");
+
+        assert!(!rendered.contains(raw), "leaked: {rendered}");
+        assert_eq!(
+            rendered,
+            r#"DbSettings { host: "db.internal", password: Secret([redacted]) }"#
+        );
+    }
+}
 ```
 
-Do not derive `Debug` on a struct holding a raw `String` password. For PII (emails, names, addresses) in logs, record a stable id instead of the value.
+Do not derive `Debug` on a struct holding a raw `String` password. A hand-written `Debug` is never empty: when it hides fields, list the safe ones and end with `finish_non_exhaustive()` (`Session { user_id: 7, .. }`), which also keeps `clippy::missing_fields_in_debug` quiet. For PII (emails, names, addresses) in logs, record a stable id instead of the value.
 
 ## Display vs Debug
 
 ### OUT-10 · `Display` for users, `Debug` for developers
 **Why.** `Debug` output is unstable (derive formats may change, fields get added) and may expose internals. Parsing it, or showing it to users, couples them to implementation details.
-**Do.** Implement `Display` for types users see (errors via `thiserror`'s `#[error]`, ids, quantities); derive `Debug` everywhere (API-06), redacting where needed. Provide `FromStr` as the inverse of `Display` when a value round-trips through text. Use `serde` for machine-readable output, not either format trait.
+**Do.** Implement `Display` for types users see (errors via `thiserror`'s `#[error]`, ids, quantities); derive `Debug` everywhere (API-06), redacting where needed. Provide `FromStr` as the inverse of `Display` when a value round-trips through text: that pair is the type's own canonical text form (`acc-42`, `12.50 EUR`). Machine-readable output goes through `Serialize`/`Deserialize`, so the caller picks the format; never make `Display` or `FromStr` speak JSON or CSV.
 **Don't.**
 ```rust,ignore
 let id: u64 = format!("{order:?}").trim_start_matches("OrderId(").trim_end_matches(')').parse()?; // parsing Debug
 eprintln!("error: {err:?}");                                                                       // Debug shown to users
+impl fmt::Display for Order { /* serde_json::to_string(self) */ }                                 // a wire format posing as text
 ```
-**Detect.** `format!("{:?}")` whose result is parsed, compared or shown in UI; user-facing messages built from `{:?}`. In binaries, report errors with `{err:#}` (anyhow chain), not `{err:?}`.
+**Detect.** `format!("{:?}")` whose result is parsed, compared or shown in UI; user-facing messages built from `{:?}`; a `Display` impl that calls a serializer. `clippy::to_string_trait_impl` denies `impl ToString`. In binaries, report errors with `{err:#}` (anyhow chain), not `{err:?}`.
 
 ## Zero-copy deserialization
 
@@ -774,8 +852,9 @@ struct Record<'a> { message: &'a str } // fails at runtime on any escaped messag
 - [ ] Do persisted and public formats carry a version, with an upcaster for each old version? (OUT-03)
 - [ ] Is output deterministic: `BTreeMap`, sorted collections, injected time and ids? (OUT-04)
 - [ ] Is external data deserialized into a DTO and validated by `TryFrom`, with no `Deserialize` on validated types? (OUT-05)
-- [ ] Does the CLI offer JSON output on stdout, diagnostics on stderr, JSON Lines for streams, and distinct exit codes? (OUT-06)
+- [ ] Does the CLI offer JSON output on stdout, diagnostics on stderr, JSON Lines for streams, and distinct exit codes mapped with a `match`, not `as` (H-11)? (OUT-06)
 - [ ] Are public schemas generated with `schemars` and snapshot-tested? (OUT-07)
-- [ ] `tracing` only, subscriber in the binary, `skip_all` plus chosen fields, no secrets or PII in logs? (OUT-08)
+- [ ] `tracing` only, subscriber in the binary, `skip_all` plus chosen fields, named events with standard keys, one event per batch, no secrets or PII in logs? (OUT-08)
+- [ ] Does every secret type have a non-empty redacting `Debug` with a unit test, no `Serialize` and no `PartialEq`? (OUT-08)
 - [ ] For large or hot inputs, is borrowing considered and `Cow` fields marked `#[serde(borrow)]`? (OUT-09)
-- [ ] Is `Display` used for users and `Debug` never parsed or shown to users? (OUT-10)
+- [ ] Is `Display` used for users and `Debug` never parsed or shown to users, with serialization only through serde? (OUT-10)

@@ -14,7 +14,11 @@ impl Clock for SystemClock {
             // Saturates only past the year 584 million.
             Ok(since_epoch) => u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX),
             Err(error) => {
-                tracing::warn!(%error, "system clock is set before 1970; recording the epoch");
+                tracing::warn!(
+                    name: "clock.read.before_epoch",
+                    %error,
+                    "system clock is set before 1970; recording the epoch"
+                );
                 0
             }
         };

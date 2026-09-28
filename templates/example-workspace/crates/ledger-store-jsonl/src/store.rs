@@ -11,8 +11,10 @@ use thiserror::Error;
 use crate::record::{self, RecordError};
 
 /// Longest record accepted on read, in bytes, newline excluded. Caps the
-/// memory one damaged or hostile line can claim (H-13); real records are a
-/// few hundred bytes.
+/// memory one damaged or hostile line can claim. The longest record this
+/// store writes, an `opened` event with an 80-character name, is well under
+/// 1 KiB. Lowering the limit below a record already written makes that
+/// stream unreadable.
 const MAX_RECORD_BYTES: u16 = u16::MAX;
 
 /// File-backed [`EventStore`]: `<root>/account-<account-id>.jsonl`.
@@ -98,6 +100,13 @@ pub enum StoreError {
         actual: Version,
     },
 }
+
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<JsonlStore>();
+    assert_send_sync::<StoreError>();
+};
 
 impl JsonlStore {
     /// A store keeping its files under `root`. The directory is created on

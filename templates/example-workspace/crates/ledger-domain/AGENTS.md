@@ -12,7 +12,7 @@ domain. Pure: no I/O, no clock, no randomness, no environment, no async, no seri
 - Never: `serde`, `tracing`, `tokio`, any `ledger-*` crate.
 
 ## Public surface
-Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `evolve`, `fold`; `AccountId`/`AccountIdError`; `OwnerName`/`OwnerNameError`; `Cents`/`ParseCentsError`. Workspace-internal, not published.
+Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `evolve`, `fold`; `AccountId`/`ParseAccountIdError`; `OwnerName`/`ParseOwnerNameError`; `Cents`/`ParseCentsError`. Workspace-internal, not published.
 
 ## Invariants
 - A `Cents` balance never goes below zero and never wraps: `decide` refuses overdrafts and overflowing deposits (`rejects_withdrawal_over_balance`, `rejects_deposit_that_would_overflow_the_balance`, property `balance_never_goes_below_zero`).
@@ -23,12 +23,12 @@ Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `
 
 ## Errors
 - `Rejection`: why `decide` refused a command. Business outcomes only, never infrastructure (ERR-10). `#[non_exhaustive]`: new rules add variants. Callers usually report it rather than match variants.
-- `AccountIdError`, `OwnerNameError`, `ParseCentsError`: why text is not a valid value, with the offending position, length or text as typed fields (ERR-03).
+- `ParseAccountIdError`, `ParseOwnerNameError`, `ParseCentsError`: why text is not a valid value, with the offending position, length or text as typed fields (ERR-03).
 
 ## Test strategy
 - Unit: given/when/then over `decide` and `evolve` in `src/account/tests.rs`; validation cases beside each newtype.
 - Property (`proptest`): balance conservation, replay, deposit/withdraw round trip, and `Cents` parse/display round trip.
-- Doctests on `decide`, `AccountId` and `Cents` (TST-11).
+- Doctests on the crate root (quick start), `decide`, `AccountId` and `Cents` (TST-11).
 - Run: `cargo test -p ledger-domain`.
 
 ## Do not
@@ -45,3 +45,6 @@ Re-exported from `lib.rs`: `Command`, `Event`, `State`, `Rejection`, `decide`, `
 | 2026-09-28 | `Cents` parses `12`, `12.5` and `12.50` so users never type raw cents; money stays `u64` cents inside. | API-03, ERR-09 | example maintainers |
 | 2026-09-28 | `evolve` stays total and ignores events `decide` could not have produced; history consistency is not re-validated on load. The store validates each record's shape and values, and only `decide` creates events. | ARC-13 | example maintainers |
 | 2026-09-28 | Add `proptest` as a dev-dependency for invariant properties. | H-16, TST-06 | example maintainers |
+| 2026-09-28 | `FromStr` errors are named verb-object-`Error` like std's `ParseIntError`: `AccountIdError` and `OwnerNameError` became `ParseAccountIdError` and `ParseOwnerNameError`, matching `ParseCentsError`. | CRF-01 | example maintainers |
+| 2026-09-28 | `Cents` implements no `std::ops` traits: a sum can overflow, so arithmetic is `checked_add`/`checked_sub` returning `Option`. | API-22, ERR-09 | example maintainers |
+| 2026-09-28 | Variants are not individually `#[non_exhaustive]`: each error variant carries the complete context of its failure, and tests compare whole values (TST-05). A new field is a deliberate, reviewed change. | API-05 | example maintainers |

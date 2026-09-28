@@ -2,7 +2,7 @@
 // temper: enforcement CLI for the rust-craft standard.
 //
 //   temper hook <event>        hook entry point (reads the hook JSON on stdin)
-//   temper gate [--check] [--no-cache]   fmt (--check: verify only) + clippy -D warnings + tests + rustdoc + scan
+//   temper gate [--check] [--no-cache]   fmt (--check: verify only) + scan + manifests + clippy -D warnings + tests + rustdoc
 //   temper scan [files..] [--all] [--json]
 //   temper status              fingerprint, changed files, gate and review state
 //   temper setup [--dry-run] [--force]   install repo templates (lints, rules, charters, CI)
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
 import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev } from './lib/project.mjs';
 import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
-import { scanSource, classifyPath, formatHit } from './lib/scan.mjs';
+import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -91,8 +91,9 @@ function scan(args) {
       const src = readText(abs);
       if (src === null) continue;
       const krate = crateOf(abs);
-      const kind = krate ? classifyPath(relTo(krate.dir, abs), krate.hasLib) : 'prod';
-      for (const h of scanSource(src, { kind }).hits) results.push({ ...h, file: relTo(proj.root, abs) });
+      const crateRel = krate ? relTo(krate.dir, abs) : relTo(proj.root, abs);
+      const kind = krate ? classifyPath(crateRel, krate.hasLib) : 'prod';
+      for (const h of scanSource(src, { kind, build: isBuildScript(crateRel) }).hits) results.push({ ...h, file: relTo(proj.root, abs) });
     }
   } else {
     const s = scanChanged(proj, sessionBase(proj));

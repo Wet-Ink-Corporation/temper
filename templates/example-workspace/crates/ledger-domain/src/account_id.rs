@@ -5,7 +5,9 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-/// Longest accepted identifier, in bytes.
+/// Longest accepted identifier, in bytes. Adapters embed ids in file names,
+/// and 64 keeps `account-<id>.jsonl` far below the 255-byte name limit of
+/// common file systems. Lowering it makes existing accounts unaddressable.
 const MAX_LEN: usize = 64;
 
 /// Identifies one account: 1 to 64 of `a-z`, `0-9` and `-`, starting with a
@@ -18,7 +20,7 @@ const MAX_LEN: usize = 64;
 /// # Examples
 ///
 /// ```
-/// # fn main() -> Result<(), ledger_domain::AccountIdError> {
+/// # fn main() -> Result<(), ledger_domain::ParseAccountIdError> {
 /// let id: ledger_domain::AccountId = "acc-42".parse()?;
 /// assert_eq!(id.as_str(), "acc-42");
 /// # Ok(())
@@ -30,7 +32,7 @@ pub struct AccountId(String);
 /// Why a string is not an [`AccountId`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
-pub enum AccountIdError {
+pub enum ParseAccountIdError {
     /// The id is the empty string.
     #[error("account id is empty")]
     Empty,
@@ -62,21 +64,21 @@ impl AccountId {
 }
 
 impl FromStr for AccountId {
-    type Err = AccountIdError;
+    type Err = ParseAccountIdError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         if text.is_empty() {
-            return Err(AccountIdError::Empty);
+            return Err(ParseAccountIdError::Empty);
         }
         if text.len() > MAX_LEN {
-            return Err(AccountIdError::TooLong { len: text.len() });
+            return Err(ParseAccountIdError::TooLong { len: text.len() });
         }
         if text.starts_with('-') {
-            return Err(AccountIdError::LeadingHyphen);
+            return Err(ParseAccountIdError::LeadingHyphen);
         }
         let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
         if let Some((index, found)) = text.char_indices().find(|&(_, c)| !allowed(c)) {
-            return Err(AccountIdError::InvalidChar { index, found });
+            return Err(ParseAccountIdError::InvalidChar { index, found });
         }
         Ok(Self(text.to_owned()))
     }
@@ -87,6 +89,13 @@ impl fmt::Display for AccountId {
         f.write_str(&self.0)
     }
 }
+
+// Compile-time proof that these types can cross threads (ASY-11).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AccountId>();
+    assert_send_sync::<ParseAccountIdError>();
+};
 
 #[cfg(test)]
 mod tests {
@@ -101,7 +110,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_id() {
-        assert_eq!("".parse::<AccountId>(), Err(AccountIdError::Empty));
+        assert_eq!("".parse::<AccountId>(), Err(ParseAccountIdError::Empty));
     }
 
     #[test]
@@ -110,7 +119,7 @@ mod tests {
 
         assert_eq!(
             long.parse::<AccountId>(),
-            Err(AccountIdError::TooLong { len: 65 })
+            Err(ParseAccountIdError::TooLong { len: 65 })
         );
     }
 
@@ -118,7 +127,7 @@ mod tests {
     fn rejects_leading_hyphen() {
         assert_eq!(
             "-acc".parse::<AccountId>(),
-            Err(AccountIdError::LeadingHyphen)
+            Err(ParseAccountIdError::LeadingHyphen)
         );
     }
 
@@ -126,7 +135,7 @@ mod tests {
     fn rejects_path_separators_with_their_position() {
         assert_eq!(
             "acc/../etc".parse::<AccountId>(),
-            Err(AccountIdError::InvalidChar {
+            Err(ParseAccountIdError::InvalidChar {
                 index: 3,
                 found: '/'
             })

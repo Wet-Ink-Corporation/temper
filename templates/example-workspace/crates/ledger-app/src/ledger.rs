@@ -103,3 +103,13 @@ impl<S: EventStore, C: Clock> Ledger<S, C> {
         })
     }
 }
+
+// Compile-time proof that these types can cross threads (ASY-11). The generic
+// types are checked with unit parameters: they add no field of their own that
+// is not `Send + Sync`.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AccountSummary>();
+    assert_send_sync::<AppError<()>>();
+    assert_send_sync::<Ledger<(), ()>>();
+};

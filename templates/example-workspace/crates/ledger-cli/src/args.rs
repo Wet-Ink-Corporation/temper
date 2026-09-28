@@ -3,10 +3,14 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use ledger_domain::{AccountId, AccountIdError, Cents, Command, OwnerNameError, ParseCentsError};
+use ledger_domain::{
+    AccountId, Cents, Command, ParseAccountIdError, ParseCentsError, ParseOwnerNameError,
+};
 use thiserror::Error;
 
-/// Where streams live when `--store` is not given.
+/// Where streams live when `--store` is not given: a directory under the
+/// working directory, so a first run needs no setup. Renaming it hides the
+/// accounts of everyone who relied on the default.
 const DEFAULT_STORE: &str = "ledger-data";
 
 /// A fully parsed command line.
@@ -50,11 +54,11 @@ pub(crate) enum UsageError {
     #[error("wrong number of arguments for {0:?}")]
     WrongArity(String),
     #[error("invalid account id")]
-    Account(#[source] AccountIdError),
+    Account(#[source] ParseAccountIdError),
     #[error("invalid amount")]
     Amount(#[source] ParseCentsError),
     #[error("invalid owner name")]
-    Owner(#[source] OwnerNameError),
+    Owner(#[source] ParseOwnerNameError),
 }
 
 /// Parse the arguments after the program name.

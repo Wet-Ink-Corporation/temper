@@ -2,7 +2,7 @@
 
 How to write tests in Rust: the red-green-refactor loop, where each kind of test lives, what makes an assertion strong, and how to use fakes, builders, property tests, snapshots, compile-fail tests and benchmarks. It also covers H-12 in depth: never weaken verification to get green. Read this before writing the first test of a change, when a test fails and you are tempted to edit it, and when reviewing a diff that touches `tests/`, `#[cfg(test)]` or snapshots.
 
-Rules covered: TST-01, TST-02, TST-03, TST-04, TST-05, TST-06, TST-07, TST-08, TST-09, TST-10, TST-11, TST-12, TST-13, TST-14, TST-15, TST-16, H-12
+Rules covered: TST-01, TST-02, TST-03, TST-04, TST-05, TST-06, TST-07, TST-08, TST-09, TST-10, TST-11, TST-12, TST-13, TST-14, TST-15, TST-16, TST-17, TST-18, H-12
 
 Test code may use `unwrap`, `expect("why")`, `assert!`, indexing and panics (the template's `clippy.toml` allows them in tests). It may not use `unsafe`, `dbg!`, `#[allow]`, sleeps, or `#[ignore]` without a reason string.
 
@@ -134,18 +134,16 @@ Mixed error types: return `Result<(), Box<dyn std::error::Error>>` in tests (tes
 ### TST-11 · Runnable doctests with `?`
 **Why.** Doctests are the documentation users copy. An example with `unwrap()` teaches `unwrap()`; one that does not run can drift from the API silently.
 
-**Do.** Hide the `main` wrapper with `#` (body elided; the full function appears in the compiled crate):
+**Do.** End the example with a hidden `# Ok::<(), ErrorType>(())` line: rustdoc wraps the body in a `main` that returns the block's value, so `?` works. The type annotation is required because nothing else names the error type. A hidden `# fn main() -> Result<(), E> { .. # }` wrapper does the same job in more lines.
 ```rust,ignore
 /// Decodes lowercase hex into bytes.
 ///
 /// # Examples
 ///
 /// ```
-/// # fn main() -> Result<(), hexcodec::DecodeError> {
 /// let bytes = hexcodec::decode("cafe")?;
 /// assert_eq!(bytes, [0xca, 0xfe]);
-/// # Ok(())
-/// # }
+/// # Ok::<(), hexcodec::DecodeError>(())
 /// ```
 ///
 /// # Errors
@@ -154,12 +152,22 @@ Mixed error types: return `Result<(), Box<dyn std::error::Error>>` in tests (tes
 /// [`DecodeError::InvalidDigit`] for anything outside `0-9a-f`.
 pub fn decode(hex: &str) -> Result<Vec<u8>, DecodeError> { /* ... */ }
 ```
-**Detect.** `cargo test --doc`; grep doc comments for `unwrap()` and for fences marked `ignore` or `no_run` without a reason.
+When the example needs a value a doctest cannot build (an open connection, a pool), write the body inside a hidden function that takes it as a parameter. It type-checks against the real API but never runs, so keep assertions out of it, and never add a `#[doc(hidden)] pub` constructor just for docs (API-14):
+```rust,ignore
+/// ```
+/// # fn demo(conn: &mut shop::Connection<shop::Open>) -> Result<(), shop::SendError> {
+/// conn.send(b"ping")?;
+/// # Ok(())
+/// # }
+/// ```
+```
+Examples under `examples/` follow production rules too: `main` returns `Result` or `ExitCode` and uses `?`. `cargo test --examples` only builds them and runs their `#[test]` functions, and an example whose `main` fails still reports `ok`, so CI runs each one with `cargo run --locked --example <name>`.
+**Detect.** `cargo test --doc`; the scanner flags `unwrap`, `expect`, `panic!` and `todo!` inside doc-comment fences (`doc-unwrap`), except fences tagged `text`, `ignore` or `compile_fail`; review fences marked `ignore` or `no_run` without a reason.
 
 ## Assertions that can fail
 
 ### TST-05 · Exact values and exact variants
-**Why.** `assert!(r.is_ok())` passes for every `Ok`, including wrong ones; `assert!(r.is_err())` passes for the wrong error. Mutation testing (TST-13) finds these first. Comparing whole values also prints a structural diff on failure.
+**Why.** `assert!(r.is_ok())` passes for every `Ok`, including wrong ones; `assert!(r.is_err())` passes for the wrong error. Mutation testing (TST-13) finds these first. Comparing whole values also prints a structural diff on failure. A test whose expected value copies a constant or mirrors the implementation's branches passes by construction, so it can never catch a bug.
 
 **Do.**
 - `assert_eq!(actual, expected)` on the whole value, `Result` included: `assert_eq!(decode("0g"), Err(DecodeError::InvalidDigit { index: 0 }))`. Derive `PartialEq` on error enums to allow this.
@@ -188,7 +196,29 @@ assert!(result.is_err());                                      // any error pass
 assert_eq!(err.to_string(), "quantity must be at least one");  // couples to wording
 assert!(order.quantity > 0);                                   // expected value unknown
 ```
-**Detect.** `rg 'assert!\([^)]*\.is_(ok|err|some|none)\(\)\)' --type rust`; `to_string()` inside `assert_eq!`.
+
+**Tautologies.** For a constant or a table, assert the property it must have (spacing, ordering, round-trip), not its literal value:
+```rust
+/// Retry delays in milliseconds: exponential backoff from 100 ms.
+pub const BACKOFF_MS: [u64; 4] = [100, 200, 400, 800];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_backoff_doubles_the_previous_one() {
+        for pair in BACKOFF_MS.windows(2) {
+            assert_eq!(pair[1], pair[0] * 2, "delays {pair:?} do not double");
+        }
+    }
+}
+```
+```rust,ignore
+assert_eq!(BACKOFF_MS, [100, 200, 400, 800]); // restates the constant: passes by construction
+```
+When only such a test could kill a mutant, the mutant is definitional: exclude it with a reason (TST-13) instead of writing the test.
+**Detect.** `clippy::assertions_on_result_states` fails the gate on `assert!(r.is_ok())` and `assert!(r.is_err())`, tests included; the scanner's `weak-assert` also flags `is_some()`/`is_none()`. `to_string()` inside `assert_eq!`; an expected value that is a copy of a `const` or of the implementation's `match`.
 
 ## Fakes over mocks
 
@@ -249,7 +279,17 @@ fn surfaces_storage_failure() {
     assert_eq!(result, Err(PlaceOrderError::Storage(StorageError)));
 }
 ```
-Fakes used by several test files go in `tests/it/support.rs`, or behind a `test-support` Cargo feature when other crates need them (additive, API-16).
+Fakes used by several test files go in `tests/it/support.rs`. When other crates need them, put them behind one feature named `test-util` (tokio's name for the same thing), enabled only from other crates' `[dev-dependencies]`. The feature only adds items (fakes, builders); it never changes the behaviour of existing code, which would be a test-only branch (API-16).
+```toml
+# crates/ledger-app/Cargo.toml
+[features]
+test-util = []   # exposes `ledger_app::fakes`, for other crates' tests only
+
+# crates/ledger-cli/Cargo.toml
+[dev-dependencies]
+ledger-app = { workspace = true, features = ["test-util"] }
+```
+A shared test-support crate that depends on crate X is used only from X's `tests/`, never from X's own unit tests: as a dev-dependency of X it links a second copy of X into the unit-test build, and the compiler then rejects `X::Id` where it expects `X::Id`.
 **Don't.**
 ```rust,ignore
 pub fn now() -> UnixSeconds {
@@ -325,6 +365,8 @@ proptest! {
 ```
 Use `prop_assert*!` inside `proptest!` so failures shrink instead of aborting. Bound generated sizes (`0..256`) so the suite stays fast (TST-15). A property that re-implements the function under test proves nothing; state a relation, not the algorithm.
 
+**Fuzzing.** A parser of attacker-controlled input (network protocol, file format, decoder) also gets a coverage-guided fuzz target, because under H-03 any panic reachable from input is a defect, and a bounded proptest string explores far less than a fuzzer. Use `cargo fuzz` (nightly) in a separate `fuzz/` crate outside the workspace gate. Adding it is H-16. Run it on a schedule, not per PR, and commit the corpus. Every crash becomes a failing regression test before the fix (TST-01).
+
 ## Snapshot testing
 
 ### TST-07 · Snapshots for structured and textual output
@@ -397,6 +439,7 @@ Each `tests/ui/<case>.rs` has a committed `<case>.stderr`. Generate it once with
 | unseeded RNG | an injected RNG seeded per test (`StdRng::seed_from_u64(7)`); proptest manages its own seeds |
 | real network or database | fakes of the port; adapter tests against a local container, tagged and isolated (TST-15) |
 | fixed temp paths, env vars, globals | `tempfile::tempdir()` per test; config passed as values (ARC-11) |
+| fixture paths relative to the working directory | `Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/orders.json")`, which holds however the test binary was launched |
 | `HashMap` iteration order in output | sort, or `BTreeMap` (OUT-04) |
 
 **Do.** `#[tokio::test(start_paused = true)]` freezes the tokio clock; when every task is idle it jumps straight to the next timer, so time-based tests run instantly and elapsed times are exact. Requires tokio's `test-util` feature in dev-dependencies.
@@ -421,6 +464,8 @@ async fn succeeds_on_third_probe_after_two_intervals() {
 }
 ```
 Here `Instant` is `tokio::time::Instant`; `std::time::Instant` ignores the paused clock. Paused time needs the current-thread runtime, which is the `#[tokio::test]` default.
+
+Tests of blocking or coordination code (ASY-16) order threads with a `Barrier`, a channel or `join`, never a sleep, and assert that the wait really blocked: count wakeups or predicate checks and bound the count, so a wait that degraded into a spin fails.
 **Don't.**
 ```rust,ignore
 spawn_worker();
@@ -450,16 +495,16 @@ assert_eq!(counter.load(Ordering::SeqCst), 1);
 
 ## Never weaken verification
 
-### H-12 · TST-12 · Red means something is wrong: decide what
+### H-12 · Red means something is wrong: decide what
 **Why.** Tests, lints and hooks are the only evidence that the code does what the plan says. Making a check pass by changing the check destroys that evidence while reporting success.
 
 **Forbidden moves** (each needs an explicit human decision, H-16, recorded in the plan):
 - Deleting a test, a test module, a property, a snapshot or a trybuild case.
-- Adding `#[ignore]`, or `#[ignore = "reason"]` to a failing test, to get green.
+- Adding `#[ignore]` or `#[cfg_attr(.., ignore)]`, or `#[ignore = "reason"]` to a failing test, to get green.
 - Loosening an assertion: `assert_eq!` to `assert!(..is_ok())`, exact value to range, full struct to one field, `assert_matches!` with fewer fields.
 - Changing an expected value to match what the code now returns.
 - Catching a panic to pass (`std::panic::catch_unwind` is also a disallowed method), or adding `#[should_panic]` to a test that used to assert a value.
-- `#[cfg(...)]`-ing a test out, gating it behind a feature CI does not enable, or moving it to a target that is not run.
+- `#[cfg(...)]`-ing a test out (including `#![cfg(not(miri))]`), gating it behind a feature CI does not enable, moving it to a target that is not run, or changing `test`, `doctest`, `harness` or `autotests` in a manifest so that tests stop running.
 - Accepting snapshots blindly: `cargo insta accept`, `cargo insta test --accept`, `INSTA_UPDATE=always`, or `TRYBUILD=overwrite` without reading every diff.
 - Lowering lints or skipping checks: `#[allow]`, `#[expect]` without approval (H-05), editing `[lints]`, `clippy.toml`, `rustfmt.toml`, CI or hook config, `--no-verify`, `SKIP=` variables.
 - Weakening the check's input: shrinking proptest ranges or case counts to dodge a failing case, deleting `proptest-regressions` entries.
@@ -470,7 +515,10 @@ assert_eq!(counter.load(Ordering::SeqCst), 1);
 3. If the test is wrong, stop and raise a HITL decision (H-16) with evidence: the requirement, the old expectation, the proposed one. Do not edit the test until the human agrees.
 4. You may update an expectation (a test, a snapshot or a `.stderr`) without asking again only when the plan's Decisions table records a **human** approval of that specific behavior change. A plan an agent wrote does not count on its own. Call the change out in the Status block ("Changed expectation: `renders_lines_and_total` snapshot, per decision D2, approved by <name>"). Otherwise, return `Status: BLOCKED` with the question.
 5. A flaky test is a bug: fix the nondeterminism (TST-10); do not retry or ignore it.
-**Detect.** The temper hook prompts the human on test removal and on edits to protected config. Reviewers diff `tests/`, `*.snap`, `*.stderr`, `proptest-regressions/`, `[lints]` and CI files first and ask for the H-16 record for every weakened line.
+**Detect.** The temper hook prompts the human on test removal, on manifest switches that stop tests running (`test`, `doctest`, `harness`, `autotests`), and on edits to protected config. The scanner flags `#[ignore]` and `cfg_attr(.., ignore)` without a reason. Reviewers diff `tests/`, `*.snap`, `*.stderr`, `proptest-regressions/`, `[lints]` and CI files first and ask for the H-16 record for every weakened line.
+
+### TST-12 · Never weaken tests
+The testing face of H-12: removing a test or changing what it expects is a human decision (H-16), never a way to get green. The forbidden moves, the "do instead" steps and the detection are in H-12 above.
 
 ## Benchmarks
 
@@ -506,7 +554,124 @@ fn decode(bencher: divan::Bencher<'_, '_>, len: usize) {
         .bench(|| hexcodec::decode(divan::black_box(&input)));
 }
 ```
-Run with `cargo bench -p hexcodec`. Build inputs outside the measured closure; return the result from the closure so it is not optimized away. Benches are not production code, but `harness = false` targets are not compiled with `cfg(test)`, so the lint config still denies `expect`/`unwrap` there: build inputs that cannot fail, or return the `Result` from the closure.
+Run with `cargo bench -p hexcodec`. Build inputs outside the measured closure; return the result from the closure so it is not optimized away. Benches follow production rules: `harness = false` targets are not compiled with `cfg(test)`, so the lint config still denies `expect`/`unwrap` there. Build inputs that cannot fail, or return the `Result` from the closure.
+
+## Concurrency under Miri and on aarch64
+
+### TST-17 · Concurrency code runs under Miri and on an ARM runner
+**Why.** x86-64 orders memory so strongly that a wrong `Relaxed` almost never misbehaves there, while the same test fails on ARM. Miri emulates weak memory and explores a different thread schedule per seed, and it reports deadlocks, leaks and threads left running, all in safe code. A test that publishes data behind a `Relaxed` flag fails under Miri at the default seed; the `Release`/`Acquire` version passes. Passing on x86-64 alone is no evidence that the orderings are right.
+
+**Scope.** Required for a crate with any non-`Relaxed` atomic ordering, a `Condvar`, or hand-written thread coordination (ASY-13, ASY-16). Worth it for any crate that spawns threads, holds locks across calls, or builds `Rc` graphs.
+
+**Do.**
+1. Keep the template's `miri` job: a pinned nightly with the `miri` component, run weekly and on demand. Each seed replays the tests under a different schedule. The `env-set` flags cut proptest to 8 cases (one 256-case property takes about 16 minutes under Miri) and stop it writing failure files:
+```yaml
+- run: cargo +nightly-2026-09-28 miri test --locked --workspace --no-fail-fast
+  env:
+    MIRIFLAGS: >-
+      -Zmiri-many-seeds=0..8
+      -Zmiri-disable-isolation
+      -Zmiri-env-set=PROPTEST_CASES=8
+      -Zmiri-env-set=PROPTEST_DISABLE_FAILURE_PERSISTENCE=1
+```
+2. Add an ARM job for the crates in scope:
+```yaml
+arm:
+  runs-on: ubuntu-24.04-arm # GitHub-hosted arm64, public and private repositories
+  steps:
+    # checkout, toolchain "1.98.1" and cache: the same pinned steps as `gate`
+    - run: cargo test --locked -p <crate>
+```
+3. A test Miri cannot run (process spawning, network, FFI) carries `#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]`, so it stays visible in the ignored count. Shrink expensive tests from the job's `MIRIFLAGS`, as above; when a loop must shrink, use a `cfg!(miri)` constant inside test code:
+```rust
+//! Test-side Miri idioms: fewer rounds under the interpreter, in test code only.
+
+use std::sync::{Mutex, PoisonError};
+
+/// A running total shared by worker threads.
+#[derive(Debug, Default)]
+pub struct Tally {
+    total: Mutex<u64>,
+}
+
+impl Tally {
+    /// Adds `amount`, saturating at `u64::MAX`.
+    pub fn add(&self, amount: u64) {
+        // One assignment cannot leave the total half-written, so a poisoned lock is still valid.
+        let mut total = self.total.lock().unwrap_or_else(PoisonError::into_inner);
+        *total = total.saturating_add(amount);
+    }
+
+    /// The current total.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        *self.total.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+
+    use super::Tally;
+
+    /// Miri interprets every step, so it runs fewer rounds. Never in production code.
+    const ROUNDS: u64 = if cfg!(miri) { 4 } else { 1_000 };
+
+    #[test]
+    fn concurrent_adds_are_all_counted() {
+        let tally = Tally::default();
+
+        thread::scope(|scope| {
+            let mut adders = Vec::new();
+            for i in 0..2 {
+                let adder = thread::Builder::new()
+                    .name(format!("adder-{i}"))
+                    .spawn_scoped(scope, || (0..ROUNDS).for_each(|_| tally.add(1)))
+                    .expect("spawn adder");
+                adders.push(adder);
+            }
+            for adder in adders {
+                adder.join().expect("adder panicked");
+            }
+        });
+
+        assert_eq!(tally.total(), 2 * ROUNDS);
+    }
+}
+```
+**Don't.**
+```rust,ignore,expect=scan:ignore-no-reason
+#![cfg(not(miri))]                                   // the whole file vanishes from Miri's count
+#[cfg_attr(miri, ignore)]                            // no reason (H-12)
+const RETRIES: u32 = if cfg!(miri) { 1 } else { 5 }; // production code now differs under test
+```
+Never add `-Zmiri-ignore-leaks`, `-Zmiri-fixed-schedule`, `-Zmiri-deterministic-concurrency`, or any `-Zmiri-disable-*` flag other than `-Zmiri-disable-isolation`, to get green: they stop Miri finding exactly these bugs, and several are marked unsound (H-12). A Miri report of a leak, a deadlock or "main thread terminated without waiting" is a blocker (ASY-04, H-13, OWN-11).
+**Detect.** A crate in scope with no ARM job or no Miri coverage; `cfg!(miri)` or `cfg(miri)` outside `#[cfg(test)]` code; the flags above in `MIRIFLAGS`; the scanner flags `cfg_attr(.., ignore)` without a reason.
+**Limits.** Miri runs one execution per seed, so a pass is evidence, not proof. It reports a thread locking a `Mutex` it already holds, but found no two-thread lock-order inversion in 64 seeds, so lock order stays a review item (ASY-14). It cannot spawn processes, use the network or call FFI, and it runs 3 to 4 orders of magnitude slower than native tests.
+
+## Dependency behaviour
+
+### TST-18 · Pin the dependency behaviour you rely on
+**Why.** A dependency's signature says what compiles, not how it behaves. When correctness depends on sort stability, rounding, parser leniency or output order, an upgrade or a feature enabled elsewhere in the build can change the answer while everything still compiles. A small test in the consuming crate turns that into a red build.
+**Do.** Name the assumption in the test's doc comment and assert exactly that behaviour:
+```rust
+#[cfg(test)]
+mod tests {
+    /// Report output relies on `serde_json::Value` objects serializing in key order
+    /// (OUT-04). The `preserve_order` feature of `serde_json`, enabled anywhere in the build
+    /// graph (ARC-16), would switch them to insertion order.
+    #[test]
+    fn json_objects_serialize_in_key_order() {
+        let value = serde_json::json!({ "b": 1, "a": 2 });
+
+        assert_eq!(value.to_string(), r#"{"a":2,"b":1}"#);
+    }
+}
+```
+The template's weekly `latest-deps` job (`cargo update`, then clippy and the tests, `continue-on-error`) is where these tests fire first: it runs against releases the lockfile has not taken yet. A failure there is a heads-up for the next bump (ARC-12), not a broken main.
+**Don't.** Rely on the behaviour only through snapshot or end-to-end tests, where a change shows up as a large diff with no named cause, or not at all.
+**Detect.** Code whose correctness rests on a dependency's ordering, rounding or leniency, with no test that names the assumption; a dependency bump PR whose diff contains no such test.
 
 ## Test smells for reviewers
 
@@ -514,6 +679,9 @@ Run with `cargo bench -p hexcodec`. Build inputs outside the measured closure; r
 |---|---|---|
 | `assert!(x.is_ok())` / `is_err()` / `is_some()` alone | wrong values pass | TST-05 |
 | Expected value computed by the same logic as the code | the bug is in both | TST-05, TST-06 |
+| Expected value copied from a `const` or table under test | passes by construction | TST-05 |
+| `cfg!(miri)` in production code, `#![cfg(not(miri))]` on a test file | tested code differs from shipped code; tests hidden | TST-17, H-12 |
+| Correctness resting on a dependency's ordering or rounding, with no test naming it | an upgrade changes answers silently | TST-18 |
 | Test name `test_foo`, `works`, `it_works`, ticket numbers | unclear failure meaning | TST-03 |
 | Several Act steps, or asserts about unrelated behaviors | first failure masks the rest | TST-03 |
 | `sleep`, `Instant::now`, `SystemTime::now`, real ports or URLs | flakiness | TST-10 |
@@ -532,15 +700,17 @@ Run with `cargo bench -p hexcodec`. Build inputs outside the measured closure; r
 - [ ] Are unit tests in `#[cfg(test)] mod tests` and integration tests public-API-only, with no visibility widened for tests? (TST-02)
 - [ ] Do names state behavior, one behavior per test, Arrange-Act-Assert? (TST-03)
 - [ ] Do tests use `?` for setup and `expect("reason")` over `unwrap()`? (TST-04)
-- [ ] Are whole values and exact error variants asserted, with no bare `is_ok()`/`is_err()`? (TST-05)
-- [ ] Do parsers, codecs and domain rules have property tests for round-trips and invariants? (TST-06)
+- [ ] Are whole values and exact error variants asserted, with no bare `is_ok()`/`is_err()` and no expected value copied from the code under test? (TST-05)
+- [ ] Do parsers, codecs and domain rules have property tests for round-trips and invariants, and do parsers of attacker-controlled input have a fuzz target? (TST-06)
 - [ ] Are textual and structured outputs snapshotted, and were changed snapshots reviewed, not blind-accepted? (TST-07)
 - [ ] Are typestate and sealing guarantees proven by compile-fail tests with error codes? (TST-08)
-- [ ] Are doubles hand-written fakes of ports, with no test-only branches in production code? (TST-09)
-- [ ] Is every test free of sleeps, wall clock, real network, shared state and order dependence? (TST-10)
+- [ ] Are doubles hand-written fakes of ports, with no test-only branches in production code, and shared fakes behind a `test-util` feature? (TST-09)
+- [ ] Is every test free of sleeps, wall clock, real network, shared state and order dependence, with fixtures found through `CARGO_MANIFEST_DIR`? (TST-10)
 - [ ] Do public entry points have runnable doctests using `?`? (TST-11)
 - [ ] Was any test deleted, ignored, loosened or re-expected, any snapshot accepted, or any lint lowered, and is there an H-16 record for each? (TST-12, H-12)
 - [ ] Were surviving mutants on changed code killed or explained? (TST-13)
 - [ ] Is test data built with builders, and do integration tests compile as one `tests/it` binary? (TST-14)
 - [ ] Does the suite stay fast, with doctests run separately when nextest is used? (TST-15)
 - [ ] Does every performance claim come with a benchmark in the diff? (TST-16)
+- [ ] Is a crate with non-`Relaxed` atomics, a `Condvar` or thread coordination covered by the Miri job and an ARM runner, with every Miri-ignored test giving a reason? (TST-17)
+- [ ] Is every dependency behaviour the code relies on, but the signature does not express, pinned by a test? (TST-18)

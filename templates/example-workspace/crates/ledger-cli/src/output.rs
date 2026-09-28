@@ -19,7 +19,8 @@ commands:
   close <account>             close an account with a zero balance
   show <account>              show an account
 
-exit codes: 0 ok, 1 output failed, 2 usage, 3 rejected, 4 store failed
+exit codes: 0 ok, 1 output failed, 2 usage, 3 rejected, 4 store failed,
+            5 log setup failed
 ";
 
 /// Machine-readable summary: one JSON object per line, fields in this order.
@@ -34,12 +35,15 @@ struct SummaryJson<'a> {
     last_activity_unix_ms: Option<u64>,
 }
 
-pub(crate) fn write_usage(out: &mut impl Write) -> io::Result<()> {
+/// Write the usage text. Pass `&mut out` to keep using the writer.
+pub(crate) fn write_usage(mut out: impl Write) -> io::Result<()> {
     out.write_all(USAGE.as_bytes())
 }
 
+/// Write one account summary in `format`. Pass `&mut out` to keep using the
+/// writer.
 pub(crate) fn write_summary(
-    out: &mut impl Write,
+    mut out: impl Write,
     format: Format,
     account: &AccountId,
     summary: &AccountSummary,
@@ -47,14 +51,14 @@ pub(crate) fn write_summary(
     match format {
         Format::Human => write_human(out, account, summary),
         Format::Json => {
-            serde_json::to_writer(&mut *out, &to_json(account, summary))?;
+            serde_json::to_writer(&mut out, &to_json(account, summary))?;
             writeln!(out)
         }
     }
 }
 
 fn write_human(
-    out: &mut impl Write,
+    mut out: impl Write,
     account: &AccountId,
     summary: &AccountSummary,
 ) -> io::Result<()> {
