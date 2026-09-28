@@ -1,0 +1,21 @@
+# clippy configuration for the rust-craft standard. Protected file: changes need human approval (H-05).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = false
+avoid-breaking-exported-api = false
+too-many-arguments-threshold = 4
+too-many-lines-threshold = 60
+cognitive-complexity-threshold = 15
+max-fn-params-bools = 1
+max-struct-bools = 2
+disallowed-methods = [
+  { path = "std::boxed::Box::leak", reason = "H-07: leaking memory to obtain 'static hides an ownership bug" },
+  { path = "std::panic::catch_unwind", reason = "H-03: panics are bugs, not control flow" },
+  { path = "std::process::abort", reason = "H-03: return an error; main maps it to an ExitCode" },
+]
+disallowed-macros = [
+  { path = "lazy_static::lazy_static", reason = "MOD-03: use std::sync::LazyLock", allow-invalid = true },
+]

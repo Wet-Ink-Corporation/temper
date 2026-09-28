@@ -1,0 +1,29 @@
+[package]
+name = "ledger-cli"
+description = "Command-line front end for the ledger: the composition root"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ledger"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+ledger-app = { workspace = true }
+ledger-domain = { workspace = true }
+ledger-store-jsonl = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,6 @@
+#!/bin/sh
+# temper pre-commit: fast checks only; the full gate runs in CI and on agent Stop.
+# Enable with: git config core.hooksPath .githooks
+set -e
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --quiet -- -D warnings

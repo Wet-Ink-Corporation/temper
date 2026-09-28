@@ -1,0 +1,22 @@
+[package]
+name = "ledger-store-jsonl"
+description = "Append-only JSON Lines event store for the ledger"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ledger-app = { workspace = true }
+ledger-domain = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "ledger-app"
+description = "Ledger use cases and the ports they need (event store, clock)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ledger-domain = { workspace = true }
+thiserror = { workspace = true }

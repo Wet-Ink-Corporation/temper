@@ -1,0 +1,89 @@
+# temper workspace template. Merge these tables into your root Cargo.toml.
+# Each member crate opts in with:
+#
+#   [lints]
+#   workspace = true
+#
+# Levels: escape-hatch lints are "deny" so they fail `cargo clippy` immediately.
+# Style and pedantic lints are "warn"; the gate and CI run with warnings denied,
+# so nothing merges with a warning, but red/green TDD iterations aren't blocked
+# by a missing doc comment on a function you haven't finished yet.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.96"          # MSRV = oldest compiler you support. clippy rejects newer std APIs
+                               # (incompatible_msrv): assert_matches! needs 1.96, if-let guards 1.95
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# Declare every third-party dependency here once (ARC-12), then in members:
+#   thiserror = { workspace = true }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"                                  # H-01
+missing_docs = "warn"                                   # H-15 / API-15
+missing_debug_implementations = "warn"                  # API-06
+unreachable_pub = "warn"                                # API-14
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+unused_lifetimes = "warn"                               # OWN-05
+redundant_lifetimes = "warn"                            # OWN-05
+let_underscore_drop = "warn"                            # H-10
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unit_bindings = "warn"
+non_ascii_idents = "deny"
+
+[workspace.lints.clippy]
+# Groups: correctness/suspicious/style/complexity/perf deny; pedantic warn.
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"                       # `order::OrderError` is idiomatic
+naive_bytecount = "allow"                               # would push a new dependency (H-16)
+
+# Escape hatches (H-rules): deny outright.
+unwrap_used = "deny"                                    # H-02
+expect_used = "deny"                                    # H-02
+unwrap_in_result = "deny"                               # H-02
+panic = "deny"                                          # H-03
+todo = "deny"                                           # H-03
+unimplemented = "deny"                                  # H-03
+unreachable = "deny"                                    # H-03
+indexing_slicing = "deny"                               # H-04
+string_slice = "deny"                                   # H-04
+allow_attributes = "deny"                               # H-05
+allow_attributes_without_reason = "deny"                # H-05
+dbg_macro = "deny"                                      # H-06
+print_stdout = "deny"                                   # H-06 (bins: writeln!(io::stdout().lock(), ..)?)
+print_stderr = "deny"                                   # H-06
+mem_forget = "deny"                                     # H-07
+rc_mutex = "deny"                                       # H-07 / OWN-11
+let_underscore_must_use = "deny"                        # H-10
+unused_result_ok = "deny"                               # H-10
+as_conversions = "deny"                                 # H-11
+exit = "deny"                                           # ARC-14: main returns ExitCode
+
+# Idiom and design lints: warn (denied by the gate).
+clone_on_ref_ptr = "warn"                               # PERF-11
+redundant_clone = "warn"                                # H-08
+rc_buffer = "warn"                                      # OWN-15
+map_err_ignore = "warn"                                 # ERR-04
+str_to_string = "warn"
+mod_module_files = "warn"                               # ARC-06
+empty_structs_with_brackets = "warn"
+format_push_string = "warn"                             # PERF-04
+significant_drop_tightening = "warn"                    # PERF-12
+cognitive_complexity = "warn"                           # CRF-02
+large_futures = "warn"                                  # PERF-05
+
+# Release profile (PERF-09): document deviations in the root AGENTS.md.
+[profile.release]
+lto = "thin"
+codegen-units = 1
