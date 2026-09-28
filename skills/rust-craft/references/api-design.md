@@ -387,10 +387,14 @@ pub struct Limits {
 **Do.** The `EmailAddress` example under API-03: `TryFrom<&str>` and `FromStr` on the specific type, `Display` for the way back.
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::from_over_into
+# pub struct EmailAddress { local: String, domain: String }
+# pub struct EmailError;
 pub trait StrExt { fn to_email(&self) -> Result<EmailAddress, EmailError>; } // conversion hung on `str`
-pub fn email_from_str(raw: &str) -> Option<EmailAddress> { .. }             // ad hoc, and `None` loses why
-impl Into<String> for EmailAddress { .. }                                     // implement `From`, get `Into` free
+pub fn email_from_str(raw: &str) -> Option<EmailAddress> { None }           // ad hoc, and `None` loses why
+impl Into<String> for EmailAddress {                                          // implement `From`, get `Into` free
+    fn into(self) -> String { format!("{}@{}", self.local, self.domain) }
+}
 ```
 
 **Detect.** `clippy::should_implement_trait` (a method named `from_str`, `add`, `next`, ...), `from_over_into`, `infallible_try_from`. Review: `to_<domain type>` methods on extension traits for `str`/`String`, free `parse_x` or `x_from_str` functions beside a type with no `TryFrom`/`FromStr`.
@@ -822,9 +826,10 @@ impl RequestBuilder {
 | Typestate builder | Methods move between `Builder<State>` types | Missing required parts or wrong order must not compile (API-13). |
 
 **Don't.**
-```rust,ignore
-pub fn fetch(url: &str, follow: bool, strict: bool) -> Response { .. }   // fetch(u, false, true)?
-pub fn connect(host: &str, port: u16, tls: Option<bool>, retries: u32, timeout: u64) { .. }
+```rust,ignore,expect=clippy::fn_params_excessive_bools+clippy::too_many_arguments
+# pub struct Response;
+pub fn fetch(url: &str, follow: bool, strict: bool) -> Response { Response }   // fetch(u, false, true)?
+pub fn connect(host: &str, port: u16, tls: Option<bool>, retries: u32, timeout: u64) {}
 ```
 
 **Detect.** `clippy::fn_params_excessive_bools` (threshold 1), `clippy::too_many_arguments` (threshold 4), `clippy::must_use_candidate`, `clippy::return_self_not_must_use`. Review: `set_` setters, a public `FooBuilder::new`, required values passed through setters and checked in `build`, recurring parameters in different orders.
@@ -1260,9 +1265,13 @@ impl FromIterator<u32> for Leaderboard {
 ```
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:deref-inherit
+# use std::ops::{Deref, DerefMut};
+# pub struct Leaderboard { scores: Vec<u32> }
 impl Deref for Leaderboard { type Target = Vec<u32>; fn deref(&self) -> &Vec<u32> { &self.scores } }
-impl DerefMut for Leaderboard { .. }   // board.push(7) now bypasses the ordering invariant
+impl DerefMut for Leaderboard {        // board.push(7) now bypasses the ordering invariant
+    fn deref_mut(&mut self) -> &mut Vec<u32> { &mut self.scores }
+}
 ```
 
 **Detect.** Scan `deref-inherit` (advisory). Review every `impl Deref`/`DerefMut`: is the type a pointer, a guard (`Box`, `Arc`, `MutexGuard`, `Cow`), or an owning collection derefing to its own borrowed view, read-only if it keeps an invariant? If not, it is a finding. On a pointer or guard, inherent `self` methods are a finding: make them associated functions.

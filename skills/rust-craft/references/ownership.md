@@ -87,11 +87,14 @@ impl Customer {
 }
 ```
 **Don't.**
-```rust,ignore
-pub fn word_count(text: &String) -> usize { .. }       // OWN-03: rejects &str, extra hop
-pub fn total(values: Vec<u64>) -> u64 { .. }            // OWN-01: forces a Vec, consumes it
-pub fn rename(&mut self, name: &str) { self.name = name.to_string(); } // OWN-02: hidden alloc
-pub fn name(&self) -> String { self.name.clone() }      // OWN-01: allocates on every read
+```rust,ignore,expect=clippy::ptr_arg+clippy::needless_pass_by_value+clippy::assigning_clones+scan:ptr-param
+pub fn word_count(text: &String) -> usize { text.split_whitespace().count() } // OWN-03: rejects &str, extra hop
+pub fn total(values: Vec<u64>) -> u64 { values.iter().sum() }                  // OWN-01: forces a Vec, consumes it
+# pub struct Customer { name: String }
+# impl Customer {
+pub fn rename(&mut self, name: &str) { self.name = name.to_owned(); } // OWN-02: hidden alloc
+pub fn name(&self) -> String { self.name.clone() }                    // OWN-01: allocates on every read
+# }
 ```
 **Detect.** `clippy::needless_pass_by_value`, `ptr_arg`, `borrowed_box`, `wrong_self_convention`. Review: any `.to_string()`/`.clone()` of a parameter inside the callee means the parameter should have been owned.
 **Exceptions.** `impl Into<String>` in non-constructor methods is fine when the method is builder-like; say so in the doc comment.
@@ -231,11 +234,27 @@ impl<'a> IntoIterator for &'a Queue {
 }
 ```
 **Don't.**
-```rust,ignore
-pub fn first_word<'a>(text: &'a str) -> &'a str { .. }  // needless_lifetimes
-pub fn after<'a>(haystack: &'a str, needle: &'a str) -> Option<&'a str> // E0106's help: `after(t, &format!(..))` then fails
-pub fn iter(&self) -> std::slice::Iter<u32> { .. }     // hidden lifetime: mismatched_lifetime_syntaxes
-fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result   // elided_lifetimes_in_paths (rust_2018_idioms)
+```rust,ignore,expect=clippy::needless_lifetimes+mismatched_lifetime_syntaxes+elided_lifetimes_in_paths
+# use std::fmt;
+pub fn first_word<'a>(text: &'a str) -> &'a str { text.split_whitespace().next().unwrap_or_default() } // needless_lifetimes
+# struct Queue { items: Vec<u32> }
+# impl Queue {
+pub fn iter(&self) -> std::slice::Iter<u32> { self.items.iter() } // hidden lifetime: mismatched_lifetime_syntaxes
+# }
+# impl fmt::Display for Queue {
+fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { write!(f, "{}", self.items.len()) } // elided_lifetimes_in_paths
+# }
+```
+The E0106 help, one `'a` on every input, fails at the first call with a temporary:
+```rust,ignore,expect=E0716
+pub fn after<'a>(haystack: &'a str, needle: &'a str) -> Option<&'a str> {
+    haystack.split_once(needle).map(|(_, rest)| rest)
+}
+
+pub fn value_len(text: &str, key: &str) -> usize {
+    let rest = after(text, &format!("{key}=")); // E0716: the temporary needle must outlive `rest`
+    rest.map_or(0, str::len)
+}
 ```
 **Detect.** `clippy::needless_lifetimes`, `elidable_lifetime_names`, `unused_lifetimes`, `redundant_lifetimes`. Since 1.89 rustc warns by default on `mismatched_lifetime_syntaxes`: an input written `&self` and an output path with the lifetime hidden (`Iter<u32>`). Write `'_` in every path type that carries a lifetime: `Iter<'_, T>`, `Formatter<'_>`, `Ref<'_, T>`, `Bencher<'_, '_>`. The template's `rust_2018_idioms` also denies hidden path lifetimes in parameters.
 
@@ -288,10 +307,12 @@ pub struct OrderService<'a> { repo: &'a PgRepo, cfg: &'a Config } // OWN-06: lif
 ### OWN-07 · Never `'static` to silence a lifetime error (H-07)
 **Why.** `'static` on a bound, `Box::leak`, or a global makes the error disappear by making the value immortal: memory leaks, tests share state, and the real ownership question stays unanswered. The honest fixes are: move the owned value in, scope the borrow (`thread::scope`), or share an `Arc`.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::disallowed_methods+scan:leak
+# #[derive(Clone)] struct Config;
+# fn spawn(_cfg: &'static Config) {}
 fn start(cfg: &Config) { let cfg: &'static Config = Box::leak(Box::new(cfg.clone())); spawn(cfg) } // H-07
 static mut CACHE: Vec<u8> = Vec::new();                                                           // H-07
-fn run<F: Fn() + 'static>(f: F)  // 'static added only because a borrow did not live long enough
+fn run<F: Fn() + 'static>(f: F) { f() } // 'static added only because a borrow did not live long enough
 ```
 **Detect.** `disallowed_methods` (`Box::leak`), `clippy::mem_forget`, `static_mut_refs`; scan for `'static` added in a diff; review every new `'static` bound: it is legitimate only when the value really is sent to an unscoped thread or task (then the caller moves an owned value in).
 **Exceptions.** `&'static str` literals and `const`/`static` immutable tables are fine; they are not escape hatches.
@@ -319,8 +340,14 @@ fn run<F: Fn() + 'static>(f: F)  // 'static added only because a borrow did not 
 **Detect.** `clippy::mem_replace_with_default` and `mem_replace_option_with_none` (style, denied) flag the long-hand `mem::replace` forms of `mem::take` and `Option::take`; `redundant_clone` catches local clones; review: a `.clone()` added in the same diff that fixed a borrow error (H-08).
 
 #### Shape: disjoint fields and helpers that take fields (E0499)
-```rust,ignore
+```rust,ignore,expect=E0499
+# pub struct Inventory { items: Vec<u32>, log: Vec<u32> }
+# impl Inventory {
+#     fn record(&mut self, qty: &u32) { self.log.push(*qty); }
+#     pub fn restock_all(&mut self) {
 for item in &mut self.items { self.record(item); } // E0499: `record(&mut self)` re-borrows all of self
+#     }
+# }
 ```
 ```rust
 /// Inventory with an audit log.
@@ -348,8 +375,11 @@ impl Inventory {
 ```
 
 #### Shape: `get_disjoint_mut` for two elements of one slice (E0499)
-```rust,ignore
-let src = &mut balances[from]; let dst = &mut balances[to]; // E0499 and H-04 panicking index
+```rust,ignore,expect=E0499
+# pub fn transfer(balances: &mut [u64], from: usize, to: usize) {
+let src = &mut balances[from]; let dst = &mut balances[to]; // E0499, and H-04 panicking index
+# std::mem::swap(src, dst);
+# }
 ```
 ```rust
 use std::slice::GetDisjointMutError;
@@ -385,8 +415,10 @@ pub fn transfer(
 Slice `get_disjoint_mut` (1.86) returns `Err` on overlap or out-of-range. `HashMap::get_disjoint_mut` panics on duplicate keys: check `from != to` first, or use the slice form.
 
 #### Shape: compute, then mutate (E0502, E0506)
-```rust,ignore
+```rust,ignore,expect=E0502
+# pub fn append_halves(scores: &mut Vec<u32>) {
 for s in scores.iter() { if *s > 100 { scores.push(*s / 2); } } // E0502: iterator still borrows
+# }
 ```
 ```rust
 /// Appends half of every large score.
@@ -399,9 +431,16 @@ pub fn append_halves(scores: &mut Vec<u32>) {
 The `collect` here is the fix, not waste: the new elements must exist before the vector can grow. When the computed thing is a single `Copy` value (`let max = v.iter().copied().max();`), no collection is needed.
 
 #### Shape: move out of `&mut` with `mem::take` / `mem::replace` / `Option::take` (E0507)
-```rust,ignore
-self.conn = match self.conn { Conn::Idle => .., open => open }; // E0507: cannot move out of `self.conn`
-let batch = self.batch.clone(); self.batch.clear();             // H-08: clone to dodge E0507
+```rust,ignore,expect=E0507
+# pub enum Conn { Idle, Open(Vec<u8>) }
+# pub struct Session { conn: Conn, batch: Vec<u8> }
+# impl Session {
+#     pub fn open_and_flush(&mut self) -> Vec<u8> {
+self.conn = match self.conn { Conn::Idle => Conn::Open(Vec::new()), open => open }; // E0507: cannot move out of `self.conn`
+let batch = self.batch.clone(); self.batch.clear();                                 // H-08: clone to dodge E0507
+#         batch
+#     }
+# }
 ```
 ```rust
 use std::mem;
@@ -488,10 +527,24 @@ impl Engine {
 A struct that wants to hold `&` into a sibling collection (`parent: &Node`, `current: &Item`) should hold an index or id instead and look it up at use. See §Graphs and cyclic data.
 
 #### Shape: move into the thread, or scope it (E0373, E0521)
-```rust,ignore
-let handle = spawner.spawn(|| sum(&values))?;        // E0373: borrows `values`
-spawner.spawn(move || self.names.len())?;            // E0521: `&self` escapes
-spawner.spawn(move || ctx.clone().names.len())?;     // H-08/OWN-14: clones the whole context
+```rust,ignore,expect=E0373+E0521
+# use std::io;
+# use std::thread::{self, JoinHandle};
+# fn sum(values: &[u64]) -> u64 { values.iter().fold(0, |a, v| a.saturating_add(*v)) }
+# pub fn start(values: Vec<u64>) -> io::Result<JoinHandle<u64>> {
+let handle = thread::Builder::new().spawn(|| sum(&values))?; // E0373: borrows `values`
+#     Ok(handle)
+# }
+# #[derive(Clone)]
+# pub struct AppContext { names: Vec<String> }
+# impl AppContext {
+#     pub fn count(&self) -> io::Result<(JoinHandle<usize>, JoinHandle<usize>)> {
+let first = thread::Builder::new().spawn(move || self.names.len())?; // E0521: `&self` escapes
+let ctx = self.clone();
+let second = thread::Builder::new().spawn(move || ctx.names.len())?; // H-08/OWN-14: clones the whole context
+#         Ok((first, second))
+#     }
+# }
 ```
 Threads start through `thread::Builder` and the spawn error propagates: `thread::spawn` and `Scope::spawn` panic when the OS refuses a thread and are denied by `disallowed-methods` (ASY-15).
 ```rust
@@ -582,9 +635,12 @@ pub fn word_frequencies(text: &str) -> HashMap<&str, usize> {
 }
 ```
 **Don't.**
-```rust,ignore
-if !counts.contains_key(word) { counts.insert(word, 0); } // double lookup
-*counts.get_mut(word).unwrap() += 1;                     // third lookup, H-02
+```rust,ignore,expect=clippy::map_entry+clippy::unwrap_used+scan:unwrap
+# use std::collections::HashMap;
+# fn count<'a>(counts: &mut HashMap<&'a str, usize>, word: &'a str) {
+if !counts.contains_key(&word) { counts.insert(word, 0); } // map_entry: double lookup
+*counts.get_mut(word).unwrap() += 1;                      // third lookup, H-02
+# }
 ```
 **Detect.** `clippy::map_entry`. Exception to the shape: for `String` keys looked up by `&str`, `entry` needs an owned key every call; use `get_mut` then `insert(key.to_owned(), ..)` on miss (see `HitCounter` below).
 
@@ -723,7 +779,7 @@ pub fn close(snapshot: Arc<Totals>) -> Option<Totals> {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:shared-mut
 pub struct App { state: Arc<Mutex<AppState>> } // no justification; every field behind one lock
 let shared = Rc::new(RefCell::new(node));    // tree with parent links: use an arena
 let totals = (*shared).clone();              // H-08: after the fan-out, `Arc::into_inner(shared)`

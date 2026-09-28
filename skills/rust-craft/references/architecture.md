@@ -114,6 +114,28 @@ The example simulates crates as modules of one crate: `app` stands for `ledger-a
 ```rust
 //! Ports and adapters. Each `mod` here stands in for a crate:
 //! `app` is `ledger-app`, `adapter_fs` is `ledger-adapter-fs`.
+#
+# /// Hidden stand-in for the decider in the next section (`ledger-domain`).
+# pub mod account {
+#     #[derive(Debug, Clone, PartialEq, Eq)]
+#     pub enum Command { Open(String), Deposit(u64) }
+#     #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#     pub enum Event { Opened(String), Deposited(u64) }
+#     #[derive(Debug, Default)]
+#     pub struct State { open: bool }
+#     #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#     pub enum Rejection { #[error("account is not open")] NotOpen }
+#     pub fn fold<'a>(history: impl IntoIterator<Item = &'a Event>) -> State {
+#         State { open: history.into_iter().any(|event| matches!(event, Event::Opened(_))) }
+#     }
+#     pub fn decide(command: &Command, state: &State) -> Result<Vec<Event>, Rejection> {
+#         match command {
+#             Command::Open(owner) => Ok(vec![Event::Opened(owner.clone())]),
+#             Command::Deposit(_) if !state.open => Err(Rejection::NotOpen),
+#             Command::Deposit(cents) => Ok(vec![Event::Deposited(*cents)]),
+#         }
+#     }
+# }
 
 /// Application layer: use cases and the ports they need.
 pub mod app {
@@ -219,7 +241,7 @@ pub mod adapter_fs {
     use thiserror::Error;
 
     use crate::account::Event;
-    use crate::ports::app::{EventStore, StreamId};
+    use crate::app::{EventStore, StreamId};
 
     /// File-backed [`EventStore`]. Single writer: not safe across processes.
     #[derive(Debug)]
@@ -297,11 +319,8 @@ pub mod adapter_fs {
         }
     }
 }
-```
 
-The in-memory fake implements the same port for tests. Put it in `#[cfg(test)]` when one crate uses it, or behind a `test-util` Cargo feature when several crates do (TST-09).
-
-```rust
+/// Tests drive the use case through an in-memory fake of the same port.
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -331,12 +350,12 @@ mod tests {
         fn append(
             &mut self,
             stream: &StreamId,
-            expected: usize,
+            expected_len: usize,
             events: &[Event],
         ) -> Result<(), Conflict> {
             let existing = self.streams.entry(stream.clone()).or_default();
-            if existing.len() != expected {
-                return Err(Conflict(expected, existing.len()));
+            if existing.len() != expected_len {
+                return Err(Conflict(expected_len, existing.len()));
             }
             existing.extend_from_slice(events);
             Ok(())
@@ -358,6 +377,7 @@ mod tests {
     }
 }
 ```
+The in-memory fake implements the same port as the file adapter. Keep it in `#[cfg(test)]` when one crate uses it, or put it behind a `test-util` Cargo feature when several crates do (TST-09).
 
 ## Functional core, imperative shell
 
@@ -511,9 +531,8 @@ pub fn view(state: &State) -> AccountView {
         },
     }
 }
-```
-Tests read as specifications:
-```rust
+
+/// Tests read as specifications: given history, when command, then events or view.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,7 +632,7 @@ impl<T> fmt::Debug for Id<T> {
 ```
 
 **Versioning.** Stored events outlive code. Change them additively (new optional fields with `#[serde(default)]`, new variants). For a breaking change, freeze the old shape as a private `V1` type, add the new shape, and upcast on read so `decide`/`evolve` see only the current type. Changing a persisted event shape is a schema migration and a HITL decision (H-16). The full compiling pattern is in `structured-output.md` §Versioning and upcasting.
-```rust,ignore
+```rust,fragment
 #[derive(Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 enum StoredEvent {
@@ -633,7 +652,7 @@ fn upcast(stored: StoredEvent) -> Event {  // decide/evolve only ever see the cu
 ### ARC-05 · One concept per module; `lib.rs` is a table of contents
 **Why.** A reader (or agent) orients from `lib.rs` in seconds when it lists modules and the deliberate public surface. Implementation in `lib.rs` hides the architecture and grows without bound.
 **Do.**
-```rust,ignore
+```rust,fragment
 //! Ledger domain: accounts as event-sourced deciders.
 
 mod account;
@@ -731,7 +750,7 @@ Owner: <human or team>
 
 Statics hold only caches and immutable data (`LazyLock` of a parsed table), whose value never changes what the program decides. A crate linked in two semver-incompatible versions gets two copies of every static, so state kept there silently splits. A `thread_local!` is global mutable state per thread: use it only for caches and scratch buffers, with `const { .. }` initialization (`clippy::missing_const_for_thread_local`), accessed through a single `with_borrow_mut` call that never re-enters the same key (a nested borrow panics).
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:global-mut
 static STORE: LazyLock<Mutex<HashMap<String, Vec<Event>>>> = LazyLock::new(Default::default); // global mutable state
 mod a { use super::b::helper; }  mod b { use super::a::Thing; }                               // module cycle
 ```
@@ -935,7 +954,7 @@ impl Config {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:env-var
 pub fn batch_size() -> usize {
     std::env::var("LEDGER_MAX_BATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(100) // deep env read; bad values silently become 100
 }
@@ -1004,8 +1023,9 @@ serde = { workspace = true, features = ["derive"] } # hides the gap in every tes
 ### ARC-14 · Binaries parse, wire, run and map exit codes
 **Why.** Logic in `main` cannot be unit-tested or reused. The composition root is the one place that knows every concrete type, so everything else can stay generic. Process-wide choices belong there too: a library that sets a `#[global_allocator]` makes every binary that sets its own fail to build, and a library that installs a subscriber takes logging away from the application (OUT-08). `main` returns `ExitCode` because `std::process::exit` runs no destructors on any thread: buffered output and `Drop` cleanup are lost (ERR-13).
 **Do.**
-```rust
+```rust,fragment
 //! Composition root: parse input, wire adapters to use cases, run, map to exit codes.
+//! This is `src/main.rs`; `arch_demo` is the library crate holding the modules above.
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -1014,8 +1034,8 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 use arch_demo::account::Command;
 use arch_demo::config::{Config, LogFormat};
-use arch_demo::ports::adapter_fs::JsonlStore;
-use arch_demo::ports::app::{self, HandleError, StreamId};
+use arch_demo::adapter_fs::JsonlStore;
+use arch_demo::app::{self, HandleError, StreamId};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -1103,7 +1123,7 @@ fn parse_args(args: impl Iterator<Item = OsString>) -> anyhow::Result<(StreamId,
 ```
 Rejections (business outcomes) and failures (infrastructure) get different exit codes. `anyhow` appears only here (ERR-06). Tracing is initialized here and nowhere else (OUT-08).
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:unwrap+scan:print+scan:exit
 fn main() {
     let dir = std::env::var("DIR").unwrap();                        // H-02
     let balance: u64 = fs::read_to_string(..).unwrap().parse().unwrap();

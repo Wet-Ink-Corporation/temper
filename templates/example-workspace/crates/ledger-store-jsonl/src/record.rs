@@ -66,15 +66,10 @@ enum EventV2<'a> {
     Opened { owner: Cow<'a, str> },
     Deposited { amount_cents: u64 },
     Withdrew { amount_cents: u64 },
-    // A unit struct in a newtype variant, not a unit variant: serde ignores
-    // `deny_unknown_fields` on unit variants of a tagged enum, but a unit
-    // struct refuses any field. Both forms write `{"type":"closed"}`.
-    Closed(ClosedV2),
+    // Braces, not a unit variant: serde ignores `deny_unknown_fields` on unit
+    // variants of a tagged enum. Both forms write the same JSON.
+    Closed {},
 }
-
-/// The body of a `closed` event: no fields.
-#[derive(Debug, Serialize, Deserialize)]
-struct ClosedV2;
 
 /// The tag written before the body, so it leads every line.
 #[derive(Serialize)]
@@ -96,7 +91,7 @@ impl<'a> From<&'a Recorded> for RecordV2<'a> {
             Event::Withdrew { amount } => EventV2::Withdrew {
                 amount_cents: amount.get(),
             },
-            Event::Closed => EventV2::Closed(ClosedV2),
+            Event::Closed => EventV2::Closed {},
         };
         Self {
             recorded_at_ms: recorded.recorded_at.as_unix_millis(),
@@ -119,7 +114,7 @@ impl TryFrom<RecordV2<'_>> for Recorded {
             EventV2::Withdrew { amount_cents } => Event::Withdrew {
                 amount: Cents::new(amount_cents),
             },
-            EventV2::Closed(ClosedV2) => Event::Closed,
+            EventV2::Closed {} => Event::Closed,
         };
         Ok(Self {
             event,
@@ -177,7 +172,7 @@ fn upcast_v1(record: RecordV1) -> RecordV2<'static> {
                 amount_cents: cents,
             },
         ),
-        RecordV1::Closed { at } => (at, EventV2::Closed(ClosedV2)),
+        RecordV1::Closed { at } => (at, EventV2::Closed {}),
     };
     RecordV2 {
         recorded_at_ms,

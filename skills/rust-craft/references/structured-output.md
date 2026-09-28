@@ -22,12 +22,11 @@ pub struct User { pub email: String, pub password_hash: String, pub is_admin: bo
 ```rust
 //! Wire DTO in, validated domain type out.
 
-use schemars::JsonSchema;
 use serde::Deserialize;
 use thiserror::Error;
 
 /// Inbound wire shape. Mirrors the JSON exactly; trusts nothing.
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateUserRequest {
     /// Email address as sent by the client.
@@ -119,6 +118,29 @@ impl TryFrom<CreateUserRequest> for NewUser {
             display_name: display_name.to_owned(),
             age_years: dto.age_years,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_request_converts() {
+        let dto: CreateUserRequest =
+            serde_json::from_str(r#"{"email":"a@b.io","displayName":" Ada "}"#)
+                .expect("valid json");
+        let user = NewUser::try_from(dto).expect("valid user");
+        assert_eq!(user.display_name(), "Ada");
+    }
+
+    #[test]
+    fn unknown_fields_are_refused() {
+        let error = serde_json::from_str::<CreateUserRequest>(
+            r#"{"email":"a@b.io","displayName":"Ada","isAdmin":true}"#,
+        )
+        .expect_err("isAdmin is not a field");
+        assert_eq!(error.classify(), serde_json::error::Category::Data);
     }
 }
 ```
@@ -589,7 +611,7 @@ fn count(path: &Path) -> io::Result<(usize, usize)> {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:print+scan:exit
 println!("Processing {path}...");                // progress on stdout corrupts JSON output
 println!("{}", serde_json::to_string_pretty(&all)?); // whole-run buffering, pretty JSON: not streamable
 std::process::exit(1);                           // skips destructors and buffered writer flush
@@ -600,29 +622,15 @@ std::process::exit(1);                           // skips destructors and buffer
 
 ### OUT-07 · Generate and snapshot JSON Schemas
 **Why.** A snapshot of the generated schema turns an accidental contract change (renamed field, new required field, loosened type) into a failing test with a readable diff.
-**Do.** Derive `schemars::JsonSchema` on public DTOs (as `CreateUserRequest` above) and snapshot the schema with `insta`:
-```rust
+**Do.** Derive `schemars::JsonSchema` on public DTOs (`CreateUserRequest` above) and snapshot the schema with `insta`. Adding `schemars`, and `insta` as a dev-dependency, is H-16:
+```rust,fragment
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateUserRequest { /* fields as above */ }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn valid_request_converts() {
-        let dto: CreateUserRequest =
-            serde_json::from_str(r#"{"email":"a@b.io","displayName":" Ada "}"#)
-                .expect("valid json");
-        let user = NewUser::try_from(dto).expect("valid user");
-        assert_eq!(user.display_name(), "Ada");
-    }
-
-    #[test]
-    fn unknown_fields_are_refused() {
-        let error = serde_json::from_str::<CreateUserRequest>(
-            r#"{"email":"a@b.io","displayName":"Ada","isAdmin":true}"#,
-        )
-        .expect_err("isAdmin is not a field");
-        assert_eq!(error.classify(), serde_json::error::Category::Data);
-    }
 
     #[test]
     fn schema_is_stable() {
@@ -702,7 +710,7 @@ pub fn import(rows: &[&str]) -> usize {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:print
 #[instrument]                                       // records `login` with Debug; any new field leaks
 pub fn authenticate(login: &Login) -> AuthOutcome {
     println!("login attempt for {} with {}", login.user, login.password.expose()); // print in a library; secret in output
@@ -785,7 +793,7 @@ Do not derive `Debug` on a struct holding a raw `String` password. A hand-writte
 **Why.** `Debug` output is unstable (derive formats may change, fields get added) and may expose internals. Parsing it, or showing it to users, couples them to implementation details.
 **Do.** Implement `Display` for types users see (errors via `thiserror`'s `#[error]`, ids, quantities); derive `Debug` everywhere (API-06), redacting where needed. Provide `FromStr` as the inverse of `Display` when a value round-trips through text: that pair is the type's own canonical text form (`acc-42`, `12.50 EUR`). Machine-readable output goes through `Serialize`/`Deserialize`, so the caller picks the format; never make `Display` or `FromStr` speak JSON or CSV.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:print
 let id: u64 = format!("{order:?}").trim_start_matches("OrderId(").trim_end_matches(')').parse()?; // parsing Debug
 eprintln!("error: {err:?}");                                                                       // Debug shown to users
 impl fmt::Display for Order { /* serde_json::to_string(self) */ }                                 // a wire format posing as text

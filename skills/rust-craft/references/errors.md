@@ -833,13 +833,18 @@ pub fn next_id(counter: &AtomicU64) -> Result<u64, IdsExhausted> {
 ```
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::as_conversions+scan:as-cast
+# use std::sync::atomic::{AtomicU64, Ordering};
+# static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+# pub struct Header { len: u32 }
+# pub fn untrusted(unit_cents: u64, quantity: u32, offset: usize, len: usize, people: u64, amounts: &[u64], header: &Header) {
 let total = unit_cents * u64::from(quantity);  // attacker-chosen quantity: panic or wrap
 let idx = offset + len;                        // then used to slice: H-04 as well
 let share = total / people;                    // people == 0 panics in release too
 let sum: u64 = amounts.iter().sum();           // `+` in a loop: panic or wrap
 let id = NEXT_ID.fetch_add(1, Ordering::Relaxed); // wraps to 0 and repeats ids
 let n = header.len as usize;                   // H-11
+# }
 ```
 
 **Detect.** `clippy::as_conversions`. Review: `+ - * / %`, `sum` and `product` on values that came from a request, file, or environment, and `fetch_add`/`fetch_sub` on counters whose values must stay unique. `clippy::arithmetic_side_effects` flags every unchecked operator, but it is not in the template, and a member crate cannot add lints next to `[lints] workspace = true`. To opt a parser, codec or money crate in, the human copies the workspace lint table into that crate's own `[lints]` (dropping `workspace = true`) and adds the lint. That is an H-05 decision, recorded in the charter.
@@ -978,9 +983,11 @@ fn reports_missing_workers() {
 ```
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::assertions_on_result_states
+# pub fn check(err: &std::num::ParseIntError, result: Result<u16, std::num::ParseIntError>) {
 assert_eq!(err.to_string(), "app.conf:2: `workers` must be a positive integer"); // brittle
 assert!(result.is_err());                                                          // any error passes (TST-05)
+# }
 ```
 
 **Detect.** Review test diffs for `to_string()` or `format!("{err}")` inside `assert_eq!`, and bare `is_err()` assertions.

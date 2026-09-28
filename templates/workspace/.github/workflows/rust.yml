@@ -7,7 +7,7 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "17 4 * * 1"       # Mondays 04:17 UTC: latest-deps and miri
+    - cron: "17 4 * * 1"       # Mondays 04:17 UTC: latest-deps, aarch64 and miri
   workflow_dispatch:
 
 permissions:
@@ -78,6 +78,20 @@ jobs:
           components: clippy
       - run: cargo update --verbose
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+
+  aarch64:
+    # Weakly ordered hardware: an ordering bug that x86-64 hides can fail here (TST-17).
+    # Required for crates with non-Relaxed atomics, Condvars or hand-written thread
+    # coordination; scheduled or on demand, like miri.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --locked --workspace --all-features
 
   miri:

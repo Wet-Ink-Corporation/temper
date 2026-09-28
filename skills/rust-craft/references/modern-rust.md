@@ -123,10 +123,16 @@ pub fn matching<'a>(names: &'a [String], needle: &str) -> impl Iterator<Item = &
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=E0597
 // No `use<'a>`: the result also captures `needle`'s lifetime.
-pub fn matching<'a>(names: &'a [String], needle: &str) -> impl Iterator<Item = &'a str> {..}
-let hits = { let q = String::from("AL"); matching(&names, &q) }; // E0597: `q` does not live long enough
+pub fn matching<'a>(names: &'a [String], needle: &str) -> impl Iterator<Item = &'a str> {
+#     let needle = needle.to_lowercase();
+#     names.iter().map(String::as_str).filter(move |name| name.to_lowercase().contains(&needle))
+# }
+# pub fn count_hits(names: &[String]) -> usize {
+let hits = { let q = String::from("AL"); matching(names, &q) }; // E0597: `q` does not live long enough
+#     hits.count()
+# }
 ```
 **Detect.** E0597/E0716 at a call site of an `impl Trait`-returning fn; review any `use<..>` that lists more than it needs, and leftover `+ '_` or `Captures` helpers from 2021.
 
@@ -223,7 +229,10 @@ pub fn classify(raw: &str) -> Token<'_> {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::manual_let_else+clippy::collapsible_if
+# use std::collections::BTreeMap;
+# pub enum PairError { MissingEquals { line: usize } }
+# pub fn parse(line_no: usize, line: &str, config: &BTreeMap<String, String>) -> Result<(), PairError> {
 let (key, value) = match line.split_once('=') {   // manual let-else
     Some(kv) => kv,
     None => return Err(PairError::MissingEquals { line: line_no }),
@@ -233,6 +242,8 @@ if let Some(flag) = config.get("enabled") {         // pyramid; use a let chain
         if let Some(raw) = config.get("port") { /* ... */ }
     }
 }
+#     Ok(())
+# }
 ```
 **Detect.** `clippy::manual_let_else`, `clippy::collapsible_if`, `clippy::collapsible_match`; review for nested `match` inside a match arm.
 
@@ -269,7 +280,7 @@ impl Document {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:lazy-static+scan:global-mut
 lazy_static! { static ref RESERVED: HashSet<&'static str> = /* ... */; } // extra dep + macro
 static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();               // global mutable state (ARC-09)
 ```
@@ -310,7 +321,7 @@ pub async fn retry<T, E>(
 ```
 Implementors may write `async fn load(&self, key: &str) -> ...` in the `impl`. Callers can pass `async || { calls += 1; ... }`.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:async-trait
 #[async_trait::async_trait]                       // boxes every call
 pub trait Store { async fn load(&self, key: &str) -> Result<Vec<u8>, StoreError>; }
 
@@ -334,7 +345,7 @@ pub fn legacy_len(name: String) -> usize {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:allow-attr+scan:expect-attr
 #[allow(clippy::needless_pass_by_value)] // denied: clippy::allow_attributes
 #[expect(clippy::unwrap_used)]           // denied: no reason, and no approval
 ```
@@ -525,7 +536,7 @@ pub fn labels(plugins: &[Box<dyn Plugin>]) -> Vec<String> {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:downcast
 trait Plugin: Named { fn as_named(&self) -> &dyn Named; fn as_any(&self) -> &dyn Any; }
 if let Some(p) = plugin.as_any().downcast_ref::<Upper>() { .. } // control flow by concrete type
 ```

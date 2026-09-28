@@ -1083,11 +1083,12 @@ fn main() -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("usage: serve <config.json>")?;
     let config = config::load(&path).context("loading configuration")?;
-    announce(&mut io::stdout().lock(), &config).context("writing startup banner")?;
+    announce(io::stdout().lock(), &config).context("writing startup banner")?;
     Ok(())
 }
 
-fn announce(out: &mut impl Write, config: &Config) -> io::Result<()> {
+/// Takes the writer by value (OWN-01); pass `&mut w` to keep using it.
+fn announce(mut out: impl Write, config: &Config) -> io::Result<()> {
     writeln!(
         out,
         "listening on :{} with {} workers",
@@ -1872,7 +1873,7 @@ fn run(args: &Args) -> anyhow::Result<bool> {
     Ok(all_ok)
 }
 
-fn write_entries(out: &mut impl Write, format: Format, paths: &[PathBuf]) -> io::Result<bool> {
+fn write_entries(mut out: impl Write, format: Format, paths: &[PathBuf]) -> io::Result<bool> {
     let mut all_ok = true;
     for path in paths {
         let entry = match std::fs::metadata(path) {
@@ -1890,7 +1891,7 @@ fn write_entries(out: &mut impl Write, format: Format, paths: &[PathBuf]) -> io:
         };
         match format {
             Format::Json => {
-                serde_json::to_writer(&mut *out, &entry)?;
+                serde_json::to_writer(&mut out, &entry)?;
                 writeln!(out)?;
             }
             Format::Text => writeln!(out, "{entry}")?,

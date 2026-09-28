@@ -4,7 +4,7 @@ description: Engineering standard for writing, changing, planning and reviewing 
 license: MIT
 compatibility: Rust edition 2024 on stable 1.96 or newer (the template's MSRV; written against 1.98). Portable Agent Skill; the temper plugin adds hook enforcement in Claude Code.
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   rule-registry: references/rules.md
 ---
 
@@ -26,8 +26,8 @@ These are enforced by the compiler lints in the repository templates, by the tem
 |---|---|
 | H-01 | No `unsafe` anywhere: no blocks, fns, impls or `unsafe(...)` attributes. The workspace sets `unsafe_code = "forbid"`. |
 | H-02 | No `.unwrap()`, `.expect()`, `unwrap_unchecked`, `unwrap_err()` or `expect_err()` in production code. Propagate with `?`, or handle the case. |
-| H-03 | No `panic!`, `todo!`, `unimplemented!` or `unreachable!` in production code. Encode invariants in types so the impossible case cannot be written (exhaustive `match`, newtypes, `NonZero`, typestate). |
-| H-04 | No panicking index or slice on data whose bounds are not proven by construction. Use `get`, iterators, slice patterns (`[first, rest @ ..]`), `split_first`, `split_at_checked` or `chunks_exact`. |
+| H-03 | No `panic!`, `todo!`, `unimplemented!` or `unreachable!` in production code. Encode invariants in types so the impossible case cannot be written (exhaustive `match`, newtypes, `NonZero`, typestate). No std call that panics on input you do not control: integer `/` and `%`, `thread::spawn`, `env::args`, `Duration::from_secs_f64` and the rest of the table in `references/escape-hatches.md`. |
+| H-04 | No panicking index or slice on data whose bounds are not proven by construction. Use `get`, iterators, slice patterns (`[first, rest @ ..]`), `split_first`, `split_at_checked`, `first_chunk` or `as_chunks`. `map[&k]` and `deque[i]` panic too, and no lint sees them: use `get` or `entry`. |
 | H-05 | No lint suppression. `#[allow]` and `#![allow]` are denied. `#[expect(lint, reason = "...")]` is an exception request that a human must approve. Never edit lint config, `clippy.toml`, `rustfmt.toml`, CI or hook config to make a check pass. |
 | H-06 | No debug leftovers: no `dbg!` anywhere, no commented-out code, and no `TODO` without a tracking reference. No print macros in production code. Libraries log with `tracing`. Binaries write through a locked handle, `writeln!(io::stdout().lock(), ..)?`, because `println!` panics on a closed pipe. |
 | H-07 | No ownership escape hatches: no `Box::leak`, `mem::forget`, `mem::transmute`, `static mut`, or `'static` bounds added to silence lifetime errors. `Rc<RefCell<_>>` and `Arc<Mutex<_>>` need a written justification that the state really is shared and mutable (OWN-11). |
@@ -35,13 +35,13 @@ These are enforced by the compiler lints in the repository templates, by the tem
 | H-09 | No stringly-typed or type-erased errors in library APIs. No `Result<_, String>`, `Box<dyn Error>`, `anyhow::Error` or `eyre::Report` in `pub` signatures of library crates. `anyhow` and `eyre` belong only at the binary edge. |
 | H-10 | No silently discarded failures. No `let _ = fallible();`, no `.ok();` to drop an error, no `unwrap_or_default()` that hides a failure the caller should see. |
 | H-11 | No lossy `as` numeric casts. Use `From`, `TryFrom`, `u64::from(x)`, `checked_*` or `saturating_*`. The workspace denies `clippy::as_conversions`. |
-| H-12 | Never weaken verification to get green. Do not delete, `#[ignore]`, loosen or rewrite a test's expectation, lower a lint level, skip a hook, or pass `--no-verify`. A red check means the code is wrong or the test is wrong. Decide which and say so explicitly. Changing a test's expectation is a HITL decision (H-16). |
-| H-13 | No unbounded resources: bounded channels, capped buffers for untrusted input, timeouts on external I/O, and no detached tasks. Every spawned task has an owner that joins or aborts it. |
-| H-14 | No blocking inside async code, and no lock guard held across `.await`. |
+| H-12 | Never weaken verification to get green. Do not delete, `#[ignore]`, loosen or rewrite a test's expectation, lower a lint level, skip a hook, pass `--no-verify` or `--ignore-rust-version`, or flip a manifest switch that stops tests running (`test`, `doctest`, `harness`, `autotests`). A red check means the code is wrong or the test is wrong. Decide which and say so explicitly. Changing a test's expectation is a HITL decision (H-16). |
+| H-13 | No unbounded resources: bounded channels, capped buffers for untrusted input, timeouts on external I/O, and no detached tasks or threads. Every spawned task or thread has an owner that joins or aborts it. |
+| H-14 | No blocking inside async code. No lock guard, `RefCell` borrow, entered tracing span or `watch::Ref` held across `.await`. `Drop` never blocks. |
 | H-15 | Zero warnings. `cargo fmt`, `clippy -D warnings`, tests and `rustdoc -D warnings` are all green. Every `pub` item has docs, and fallible ones have an `# Errors` section. |
-| H-16 | Some decisions belong to a human. Ask before acting on any of these: a new dependency (other than the pre-approved list in `.claude/temper.json`), a public API change or break, a lint or `unsafe` exception, a crate-boundary change, a schema or data migration, deleting or rewriting a test, or a performance-versus-clarity trade-off users will notice. Record the decision in the plan. |
+| H-16 | Some decisions belong to a human. Ask before acting on any of these: a new dependency (other than the pre-approved list in `.claude/temper.json`) or a dependency's major-version bump, a `[patch]` override, a `rust-version` raise, a public API change or break, a lint or `unsafe` exception, a crate-boundary change, a schema or data migration, deleting or rewriting a test, or a performance-versus-clarity trade-off users will notice. Record the decision in the plan. |
 
-Tests may use `unwrap`/`expect` (prefer `expect("why this holds")`) and `assert!` macros. They may not use `unsafe`, `dbg!`, `#[allow]`, sleeps (TST-10), or `#[ignore]` without a reason string.
+Tests may use `unwrap`/`expect` (prefer `expect("why this holds")`) and `assert!` macros. They may not use `unsafe`, `dbg!`, `#[allow]`, sleeps (TST-10), or `#[ignore]` (including `cfg_attr(miri, ignore)`) without a reason string.
 
 **When a request conflicts with an Iron rule** (for example, "just unwrap it" or "skip the tests"), don't stall and don't comply silently. Build the closest compliant version, such as a `Result` instead of `unwrap`. Then tell the user in one or two sentences what you did differently and why, and offer the sanctioned route if they still want the original: an exception request (H-05), or a decision recorded under H-16. The human can always overrule the standard, but only knowingly.
 
@@ -70,20 +70,25 @@ Use these unless the plan states a reason to deviate.
 | Decision | Default | Rules |
 |---|---|---|
 | Read-only string, sequence or path parameter | `&str`, `&[T]` or `impl IntoIterator<Item = T>`, `&Path` or `impl AsRef<Path>` | OWN-01, OWN-03 |
+| Reader or writer parameter | `R: Read`/`W: Write` by value (callers pass `&mut w`); parsers take `impl BufRead`, not a path | OWN-01, API-08 |
 | Parameter the callee stores | Owned `String` or `Vec<T>` (`impl Into<String>` for constructors and builders) | OWN-02 |
 | Usually borrows, sometimes allocates | `Cow<'_, str>` | OWN-10 |
 | Exposing contents | `impl Iterator<Item = &T> + '_` or `&[T]`, not a fresh `Vec` | OWN-13 |
-| Sharing | Single owner, then borrow, then move into the task, then `Arc<T>` immutable, then `Arc<Mutex<T>>` (justified). For graphs, use an arena with index handles. | OWN-11 |
-| Validated value | Newtype with private field, `TryFrom`/`FromStr` constructor ("parse, don't validate") | API-02, API-03 |
+| Sharing | Single owner, then borrow, then move into the task, then `Arc<T>` immutable, then `Arc<Mutex<T>>` (justified). For graphs, use an arena with index handles. Never expose `Arc`/`Mutex` in `pub` signatures: wrap them in a handle type. | OWN-11, API-23 |
+| Validated value | Newtype with private field, `TryFrom`/`FromStr` constructor ("parse, don't validate"), in its own module | API-02, API-03 |
+| Generic type | No bounds on the `struct`/`enum`; bounds on the `impl` blocks | API-21 |
+| Value-object arithmetic | `checked_add` returning `Option`/`Result`; `impl Add` only when it cannot overflow | API-22, ERR-09 |
 | Closed set of cases | `enum`, never bool flags or `Option<bool>` | API-02, API-10 |
 | Many optional parameters | Params struct with `Default`, or a builder. Typestate when call order matters. | API-10, API-13 |
 | Polymorphism | Generics by default. `dyn Trait` for heterogeneity or plug-ins. `enum` for a closed set. | API-09 |
-| Library error | `thiserror` enum per operation or module, `#[non_exhaustive]`, typed context fields | ERR-01..04 |
+| Library error | `thiserror` enum per operation or module, `#[non_exhaustive]`, typed context fields. A consuming fallible function hands its argument back in the error. | ERR-01..04, ERR-14 |
+| Teardown that can fail | `finish(self) -> Result`; `Drop` only logs as a fallback | ERR-13 |
 | Binary error | `anyhow` with `.context()` at each boundary; `main` returns `Result` or `ExitCode` | ERR-06 |
 | Visibility | Private, then `pub(crate)`, then deliberate `pub` re-exported from `lib.rs` | API-14, ARC-05 |
 | Module layout | `foo.rs` plus `foo/bar.rs`; no `mod.rs`, no `#[path]`; roughly 400 lines per file and 50 per function | ARC-06, CRF-02 |
 | Crate split | By dependency direction: domain, then application (ports), then adapters, then bin | ARC-02, ARC-03, ARC-07 |
 | Async | Only for I/O-bound work. Libraries stay runtime-agnostic and the binary picks the runtime. | ASY-01, ASY-02 |
+| Threads and shared state | `thread::scope` or named `thread::Builder` threads, all joined. A `Mutex` before atomics; every atomic ordering has a justifying comment. | ASY-10, ASY-13..17 |
 | Collections | `Vec` first. `HashMap` for lookup, `BTreeMap` when order is observable. Pre-size when the size is known. | PERF-02, PERF-06 |
 | External data | Deserialize into a DTO, then `TryFrom` into the domain type | OUT-01, OUT-05 |
 | Logging | `tracing` with structured fields and spans; no `println!` in libraries | OUT-08 |
@@ -130,7 +135,7 @@ Read the reference that matches the task before starting it. Read `references/ru
 | New crate, module layout, dependency direction, ports and adapters, event sourcing | `references/architecture.md` |
 | Writing or reviewing tests, TDD steps, fakes, property and snapshot tests | `references/testing.md` |
 | Hot paths, allocation, collections, I/O, profiling, release profile | `references/performance.md` |
-| async, tasks, channels, cancellation, locks, threads | `references/async-concurrency.md` |
+| async, tasks, channels, cancellation, locks, threads, atomics and memory ordering | `references/async-concurrency.md` |
 | serde, JSON or CLI output, schemas, versioning, tracing | `references/structured-output.md` |
 | Exploring, planning, context management, HITL, self-review, commits | `references/process.md` |
 | Reviewing a diff, scoring, verdict format, self-review checklist | `references/review-rubric.md` |
@@ -138,3 +143,4 @@ Read the reference that matches the task before starting it. Read `references/ru
 | Edition 2024 and recent stable features, replacing legacy crates | `references/modern-rust.md` |
 | Worked, compiling examples of the patterns above | `references/patterns.md` (long: grep for `^## ` and read only the pattern you need) |
 | A complete workspace to imitate (charters, layers, tests, CLI) | `templates/example-workspace/` in the temper plugin |
+| Where a rule came from, and outside advice deliberately not adopted | `references/sources.md` |

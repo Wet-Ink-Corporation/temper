@@ -20,7 +20,7 @@ Test code may use `unwrap`, `expect("why")`, `assert!`, indexing and panics (the
 
 **Do.** One cycle for `Account::withdraw` (code in TST-03 and TST-04 below): write `withdrawal_within_balance_returns_remaining_balance`; red is `E0599 no method named withdraw`; green is a `withdraw` that subtracts. Next cycle: `rejects_withdrawal_over_balance_and_keeps_balance`; red is the assertion failure (or the `attempt to subtract with overflow` panic); green adds `checked_sub` and the `InsufficientFunds` variant. Refactor: `let ... else` for the early return.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:weak-assert
 // Implementation written first, then a test that asserts whatever it returned.
 // The test cannot fail for the right reason because it never failed at all.
 #[test]
@@ -62,8 +62,8 @@ crates/shop/
 └── benches/encode.rs
 ```
 **Do.**
-```rust,ignore
-// tests/it/main.rs (compiled; shown as a sketch because it references sibling files)
+```rust,fragment
+// tests/it/main.rs (a sketch: it declares sibling files)
 //! Integration tests for `shop`, compiled as one binary.
 
 mod compile_fail;
@@ -80,6 +80,23 @@ Helpers in `support.rs` are `pub(crate)`, because plain `pub` trips `unreachable
 
 **Do.** Name `<outcome>_<condition>` in the domain's words. Separate the three phases with blank lines; comments only when the phases are not obvious.
 ```rust
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct Cents(pub u64);
+# #[derive(Debug, PartialEq, Eq)]
+# pub enum WithdrawError { InsufficientFunds { balance: Cents, requested: Cents } }
+# #[derive(Debug, PartialEq, Eq)]
+# pub struct Account { balance: Cents }
+# impl Account {
+#     pub fn with_balance(balance: Cents) -> Self { Self { balance } }
+#     pub fn withdraw(&mut self, amount: Cents) -> Result<Cents, WithdrawError> {
+#         let Some(rest) = self.balance.0.checked_sub(amount.0) else {
+#             return Err(WithdrawError::InsufficientFunds { balance: self.balance, requested: amount });
+#         };
+#         self.balance = Cents(rest);
+#         Ok(self.balance)
+#     }
+# }
+#
 #[test]
 fn rejects_withdrawal_over_balance_and_keeps_balance() {
     let mut account = Account::with_balance(Cents(10));
@@ -99,7 +116,7 @@ fn rejects_withdrawal_over_balance_and_keeps_balance() {
 Two asserts are fine when they describe one behavior (reject *and* leave state untouched). Several Act steps in one test are not.
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:weak-assert
 #[test]
 fn test_account() {           // name says nothing; three behaviors; later ones never run if the first fails
     let mut a = Account::with_balance(Cents(10));
@@ -116,6 +133,23 @@ fn test_account() {           // name says nothing; three behaviors; later ones 
 
 **Do.**
 ```rust
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct Cents(pub u64);
+# #[derive(Debug, PartialEq, Eq)]
+# pub enum WithdrawError { InsufficientFunds { balance: Cents, requested: Cents } }
+# #[derive(Debug, PartialEq, Eq)]
+# pub struct Account { balance: Cents }
+# impl Account {
+#     pub fn with_balance(balance: Cents) -> Self { Self { balance } }
+#     pub fn withdraw(&mut self, amount: Cents) -> Result<Cents, WithdrawError> {
+#         let Some(rest) = self.balance.0.checked_sub(amount.0) else {
+#             return Err(WithdrawError::InsufficientFunds { balance: self.balance, requested: amount });
+#         };
+#         self.balance = Cents(rest);
+#         Ok(self.balance)
+#     }
+# }
+#
 #[test]
 fn withdrawal_within_balance_returns_remaining_balance() -> Result<(), WithdrawError> {
     // Arrange
@@ -135,7 +169,7 @@ Mixed error types: return `Result<(), Box<dyn std::error::Error>>` in tests (tes
 **Why.** Doctests are the documentation users copy. An example with `unwrap()` teaches `unwrap()`; one that does not run can drift from the API silently.
 
 **Do.** End the example with a hidden `# Ok::<(), ErrorType>(())` line: rustdoc wraps the body in a `main` that returns the block's value, so `?` works. The type annotation is required because nothing else names the error type. A hidden `# fn main() -> Result<(), E> { .. # }` wrapper does the same job in more lines.
-```rust,ignore
+```rust,fragment
 /// Decodes lowercase hex into bytes.
 ///
 /// # Examples
@@ -153,7 +187,7 @@ Mixed error types: return `Result<(), Box<dyn std::error::Error>>` in tests (tes
 pub fn decode(hex: &str) -> Result<Vec<u8>, DecodeError> { /* ... */ }
 ```
 When the example needs a value a doctest cannot build (an open connection, a pool), write the body inside a hidden function that takes it as a parameter. It type-checks against the real API but never runs, so keep assertions out of it, and never add a `#[doc(hidden)] pub` constructor just for docs (API-14):
-```rust,ignore
+```rust,fragment
 /// ```
 /// # fn demo(conn: &mut shop::Connection<shop::Open>) -> Result<(), shop::SendError> {
 /// conn.send(b"ping")?;
@@ -174,6 +208,24 @@ Examples under `examples/` follow production rules too: `main` returns `Result` 
 - When a variant carries a field you cannot or should not construct (an `io::Error`, a timestamp), match structurally with `assert_matches!` (stable since 1.96, `use std::assert_matches;`) or `assert!(matches!(..))` (ERR-11).
 - Never compare `Display` strings of errors; messages are for humans and change (ERR-11).
 ```rust
+# use std::assert_matches;
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct Cents(pub u64);
+# #[derive(Debug, PartialEq, Eq)]
+# pub enum WithdrawError { InsufficientFunds { balance: Cents, requested: Cents } }
+# #[derive(Debug, PartialEq, Eq)]
+# pub struct Account { balance: Cents }
+# impl Account {
+#     pub fn with_balance(balance: Cents) -> Self { Self { balance } }
+#     pub fn withdraw(&mut self, amount: Cents) -> Result<Cents, WithdrawError> {
+#         let Some(rest) = self.balance.0.checked_sub(amount.0) else {
+#             return Err(WithdrawError::InsufficientFunds { balance: self.balance, requested: amount });
+#         };
+#         self.balance = Cents(rest);
+#         Ok(self.balance)
+#     }
+# }
+#
 #[test]
 fn rejection_reports_requested_amount() {
     let mut account = Account::with_balance(Cents(0));
@@ -190,11 +242,14 @@ fn rejection_reports_requested_amount() {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:weak-assert
+# #[test]
+# fn weak_assertions() {
 assert!(place_order(&mut repo, &clock, cmd).is_ok());          // any Ok passes
 assert!(result.is_err());                                      // any error passes
 assert_eq!(err.to_string(), "quantity must be at least one");  // couples to wording
 assert!(order.quantity > 0);                                   // expected value unknown
+# }
 ```
 
 **Tautologies.** For a constant or a table, assert the property it must have (spacing, ordering, round-trip), not its literal value:
@@ -227,6 +282,42 @@ When only such a test could kill a mutant, the mutant is definitional: exclude i
 
 **Do.** Production code depends on port traits (ARC-03): `OrderRepository` (`find(&self, OrderId) -> Result<Option<Order>, StorageError>`, `save(&mut self, Order) -> Result<(), StorageError>`) and `Clock` (`now(&self) -> UnixSeconds`). `place_order(&mut impl OrderRepository, &impl Clock, PlaceOrder)` never touches I/O or the system clock. Tests pass fakes:
 ```rust
+# use std::collections::HashMap;
+# #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+# pub struct OrderId(pub u64);
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct UnixSeconds(pub u64);
+# #[derive(Debug, Clone, PartialEq, Eq)]
+# pub struct PlaceOrder { pub id: OrderId, pub sku: String, pub quantity: u32 }
+# #[derive(Debug, Clone, PartialEq, Eq)]
+# pub struct Order { pub id: OrderId, pub sku: String, pub placed_at: UnixSeconds }
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct StorageError;
+# #[derive(Debug, PartialEq, Eq)]
+# pub enum PlaceOrderError { Storage(StorageError) }
+# pub trait OrderRepository {
+#     fn find(&self, id: OrderId) -> Result<Option<Order>, StorageError>;
+#     fn save(&mut self, order: Order) -> Result<(), StorageError>;
+# }
+# pub trait Clock { fn now(&self) -> UnixSeconds; }
+# pub fn place_order(
+#     repo: &mut impl OrderRepository, clock: &impl Clock, cmd: PlaceOrder,
+# ) -> Result<OrderId, PlaceOrderError> {
+#     let order = Order { id: cmd.id, sku: cmd.sku, placed_at: clock.now() };
+#     repo.save(order).map_err(PlaceOrderError::Storage)?;
+#     Ok(cmd.id)
+# }
+#
+# #[cfg(test)]
+# mod tests {
+# use super::*;
+# const NOW: UnixSeconds = UnixSeconds(1_700_000_000);
+# struct PlaceOrderBuilder(PlaceOrder);
+# fn a_place_order() -> PlaceOrderBuilder {
+#     PlaceOrderBuilder(PlaceOrder { id: OrderId(1), sku: "SKU-1".to_owned(), quantity: 1 })
+# }
+# impl PlaceOrderBuilder { fn build(self) -> PlaceOrder { self.0 } }
+#
 // Inside `#[cfg(test)] mod tests` of the module that defines `place_order`.
 /// In-memory fake of the repository port: real behavior, no I/O.
 #[derive(Debug, Default)]
@@ -278,6 +369,7 @@ fn surfaces_storage_failure() {
 
     assert_eq!(result, Err(PlaceOrderError::Storage(StorageError)));
 }
+# }
 ```
 Fakes used by several test files go in `tests/it/support.rs`. When other crates need them, put them behind one feature named `test-util` (tokio's name for the same thing), enabled only from other crates' `[dev-dependencies]`. The feature only adds items (fakes, builders); it never changes the behaviour of existing code, which would be a test-only branch (API-16).
 ```toml
@@ -304,6 +396,11 @@ mock.expect_find().times(1).returning(|_| Ok(None)); // asserts call count, not 
 
 Part of TST-14. **Why.** A builder with valid defaults lets each test state only the field it is about, so adding a field to the type touches one function, not fifty literals.
 ```rust
+# #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+# pub struct OrderId(pub u64);
+# #[derive(Debug, Clone, PartialEq, Eq)]
+# pub struct PlaceOrder { pub id: OrderId, pub sku: String, pub quantity: u32 }
+#
 /// Test data builder: valid defaults, override only what the test is about.
 struct PlaceOrderBuilder(PlaceOrder);
 
@@ -340,6 +437,31 @@ Usage: `place_order(&mut repo, &FixedClock(NOW), a_place_order().quantity(0).bui
 
 **Do.** Typical properties: round-trip (`decode(encode(x)) == x`), invariants (output shape), no-panic on arbitrary input, and algebraic laws (idempotence, commutativity, `evolve` then `decide` consistency). Keep one example test per property for readability. Commit `proptest-regressions/` files: they are the regression suite for past shrunk failures.
 ```rust
+# #[derive(Debug, PartialEq, Eq)]
+# pub enum DecodeError { OddLength, InvalidDigit { index: usize } }
+# pub fn nibble(c: u8) -> Option<u8> {
+#     match c { b'0'..=b'9' => Some(c - b'0'), b'a'..=b'f' => Some(c - b'a' + 10), _ => None }
+# }
+# pub fn encode(bytes: &[u8]) -> String {
+#     let digit = |n: u8| char::from(if n < 10 { b'0' + n } else { b'a' + n - 10 });
+#     bytes.iter().flat_map(|&b| [digit(b >> 4), digit(b & 0xf)]).collect()
+# }
+# pub fn decode(hex: &str) -> Result<Vec<u8>, DecodeError> {
+#     let (pairs, []) = hex.as_bytes().as_chunks::<2>() else { return Err(DecodeError::OddLength) };
+#     let digit = |c, index| nibble(c).ok_or(DecodeError::InvalidDigit { index });
+#     let byte = |(i, &[hi, lo]): (usize, &[u8; 2])| {
+#         let index = i.saturating_mul(2);
+#         Ok((digit(hi, index)? << 4) | digit(lo, index.saturating_add(1))?)
+#     };
+#     pairs.iter().enumerate().map(byte).collect()
+# }
+#
+# #[cfg(test)]
+# mod tests {
+# use super::*;
+# use proptest::collection::vec;
+# use proptest::prelude::*;
+#
 // In `#[cfg(test)] mod tests` with `use proptest::collection::vec; use proptest::prelude::*;`
 proptest! {
     #[test]
@@ -362,6 +484,7 @@ proptest! {
         let _outcome = decode(&input);
     }
 }
+# }
 ```
 Use `prop_assert*!` inside `proptest!` so failures shrink instead of aborting. Bound generated sizes (`0..256`) so the suite stays fast (TST-15). A property that re-implements the function under test proves nothing; state a relation, not the algorithm.
 
@@ -373,7 +496,7 @@ Use `prop_assert*!` inside `proptest!` so failures shrink instead of aborting. B
 **Why.** Hand-written expected strings for rendered text or JSON are tedious, so people assert on fragments and miss regressions. A snapshot captures the whole output and turns every change into a reviewable diff.
 
 **Do.** `insta` with the `json` and `redactions` features (dev-dependency; adding it is H-16). Redact values that are volatile by nature (generated ids, times you do not control); inject the clock where you can instead (TST-10).
-```rust
+```rust,fragment
 #[test]
 fn renders_lines_and_total() -> fmt::Result {
     let mut text = String::new();
@@ -401,6 +524,8 @@ Workflow: a new or changed snapshot fails the test and writes a `.snap.new`. Run
 
 **Do.** Pin the guarantee with `trybuild` and a committed `.stderr` (below). That is the only form that checks *why* the code fails to compile. A `compile_fail` doctest is useful documentation, but on stable rustdoc its error code (`compile_fail,E0599`) is **not checked**: a typo or an unrelated type error also "passes". Use a doctest to show the illegal call, and trybuild to prove it:
 ```rust
+# use std::marker::PhantomData;
+#
 /// A connection in state `S`.
 ///
 /// Sending requires an open connection; this does not compile:
@@ -417,7 +542,7 @@ pub struct Connection<S> {
 }
 ```
 The proof: `trybuild` (a pre-approved dev-dependency in the template) inside the integration binary:
-```rust,ignore
+```rust,fragment
 // tests/it/compile_fail.rs (compiled as part of the `it` binary)
 #[test]
 fn typestate_misuse_is_rejected_at_compile_time() {
@@ -444,6 +569,26 @@ Each `tests/ui/<case>.rs` has a committed `<case>.stderr`. Generate it once with
 
 **Do.** `#[tokio::test(start_paused = true)]` freezes the tokio clock; when every task is idle it jumps straight to the next timer, so time-based tests run instantly and elapsed times are exact. Requires tokio's `test-util` feature in dev-dependencies.
 ```rust
+# use std::time::Duration;
+# use tokio::time::Instant;
+# const INTERVAL: Duration = Duration::from_millis(250);
+# #[derive(Debug, PartialEq, Eq)]
+# pub struct NotReady;
+# pub async fn wait_until_ready(
+#     mut ready: impl FnMut() -> bool + Send, interval: Duration, timeout: Duration,
+# ) -> Result<u32, NotReady> {
+#     let deadline = Instant::now().checked_add(timeout).ok_or(NotReady)?;
+#     let mut probes = 0_u32;
+#     loop {
+#         probes = probes.saturating_add(1);
+#         if ready() { return Ok(probes); }
+#         if Instant::now().checked_add(interval).is_none_or(|next| next > deadline) {
+#             return Err(NotReady);
+#         }
+#         tokio::time::sleep(interval).await;
+#     }
+# }
+#
 #[tokio::test(start_paused = true)]
 async fn succeeds_on_third_probe_after_two_intervals() {
     let mut probes = 0;
@@ -467,7 +612,7 @@ Here `Instant` is `tokio::time::Instant`; `std::time::Instant` ignores the pause
 
 Tests of blocking or coordination code (ASY-16) order threads with a `Barrier`, a channel or `join`, never a sleep, and assert that the wait really blocked: count wakeups or predicate checks and bound the count, so a wait that degraded into a spin fails.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:sleep
 spawn_worker();
 std::thread::sleep(Duration::from_millis(200)); // hope the worker finished: slow and flaky
 assert_eq!(counter.load(Ordering::SeqCst), 1);
@@ -531,7 +676,7 @@ The testing face of H-12: removing a test or changing what it expects is a human
 name = "encode"
 harness = false
 ```
-```rust
+```rust,fragment
 //! Benchmarks for hex encoding and decoding (TST-16).
 
 fn main() {

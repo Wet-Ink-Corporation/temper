@@ -12,7 +12,7 @@ PROMPT="${1:-Add a mul function to the calc crate that multiplies two u32 values
 cd "$WORK"
 mkdir -p crates/calc/src
 cp "$PLUGIN/templates/workspace/Cargo.toml" "$PLUGIN/templates/workspace/clippy.toml" "$PLUGIN/templates/workspace/rustfmt.toml" .
-sed -i.bak '/^thiserror = "2"$/d' Cargo.toml && rm -f Cargo.toml.bak
+sed -i.bak '/^thiserror = /d' Cargo.toml && rm -f Cargo.toml.bak
 cat > crates/calc/Cargo.toml <<'TOML'
 [package]
 name = "calc"

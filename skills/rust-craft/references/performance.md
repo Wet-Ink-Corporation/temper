@@ -119,11 +119,20 @@ impl LastRequest {
 ```
 For an owned source the same reuse is `dst.clone_from(&src)`.
 **Don't.**
-```rust,ignore
-let ids: Vec<_> = orders.iter().map(|o| o.id).collect(); for id in ids { .. } // needless_collect
-for line in lines { let mut buf = String::new(); .. }                         // alloc per iteration
+```rust,ignore,expect=clippy::needless_collect+clippy::assigning_clones
+# pub struct Order { id: u64 }
+# pub struct Input<'a> { orders: &'a [Order], lines: &'a [&'a str], path: &'a str }
+# pub struct Report { path: String, total: u64, lens: usize, kept: Vec<String> }
+# impl Report {
+#     pub fn update(&mut self, input: &Input<'_>, names: Vec<String>) {
+#         let Input { orders, lines, path } = *input;
+let ids: Vec<_> = orders.iter().map(|o| o.id).collect(); self.total = ids.into_iter().sum(); // needless_collect
+for line in lines { let mut buf = String::new(); buf.push_str(line); self.lens += buf.len(); } // alloc per iteration
 let kept: Vec<_> = names.into_iter().filter(|n| !n.is_empty()).collect();    // copy instead of retain
 self.path = path.to_owned();                                                  // assigning_clones: drops the old buffer
+#         self.kept = kept;
+#     }
+# }
 ```
 **Detect.** `clippy::needless_collect` (nursery, enabled in the template), `assigning_clones` (pedantic), `manual_memcpy`, `extend_with_drain`; dhat's "total blocks" per call site; review allocations inside loops.
 Also: `Vec::with_capacity` only when the size is known or bounded (never from untrusted input without a cap, PERF-10); `shrink_to_fit` only after a large, lasting shrink; `extend` over repeated `push`; `drain(..)`/`mem::take` to reuse storage. A hot-path API that produces a buffer offers the caller-owned `*_into` form, and the allocating form wraps it (OWN-17).
@@ -170,10 +179,16 @@ pub fn join_names<'a>(names: &[&'a str]) -> Cow<'a, str> {
 }
 ```
 **Don't.**
-```rust,ignore
-for i in 0..xs.len() { total += xs[i] * ys[i]; } // needless_range_loop, H-04, bounds check per step
-assert!(a.len() >= n); for i in 0..n { s += a[i]; } // H-03 panic path to hoist the check; still H-04
-for w in bytes.chunks_exact(4) { .. }             // chunks_exact_to_as_chunks: use as_chunks::<4>()
+```rust,ignore,expect=clippy::needless_range_loop+clippy::indexing_slicing+clippy::chunks_exact_to_as_chunks+scan:assert-in-prod
+# pub fn dot(xs: &[u32], ys: &[u32]) -> u32 { let mut total = 0;
+for i in 0..xs.len() { total += xs[i] * ys[i]; } // indexing_slicing (H-04): a bounds check per step; zip instead
+# total }
+# pub fn prefix_sum(a: &[u32], n: usize) -> u32 { let mut s = 0;
+assert!(a.len() >= n, "a is too short"); for i in 0..n { s += a[i]; } // H-03 panic path to hoist the check; needless_range_loop, H-04
+# s }
+# pub fn words(bytes: &[u8]) -> usize { let mut words = 0;
+for w in bytes.chunks_exact(4) { words += w.len() / 4; } // chunks_exact_to_as_chunks: use as_chunks::<4>()
+# words }
 ```
 **Detect.** `clippy::needless_range_loop`, `indexing_slicing`, `explicit_counter_loop`, `chunks_exact_to_as_chunks`.
 
@@ -221,10 +236,17 @@ pub fn cache_key(tenant: &str, id: u32) -> Result<String, fmt::Error> {
 }
 ```
 **Don't.**
-```rust,ignore
-out.push_str(&format!("{}:{}", tenant, id));                 // format_push_string: two allocations
-fn fmt(&self, f: ..) -> fmt::Result { f.write_str(&self.to_string()) } // recursion or double work
-log_line(&format!("{id}")) // in a hot loop: pass `id` and format at the sink
+```rust,ignore,expect=clippy::format_push_string+clippy::recursive_format_impl
+# use std::fmt;
+# pub struct Row { id: u32 }
+# fn log_line(_line: &str) {}
+# pub fn key(out: &mut String, tenant: &str, id: u32) {
+out.push_str(&format!("{tenant}:{id}"));                 // format_push_string: two allocations
+log_line(&format!("{id}")); // in a hot loop: pass `id` and format at the sink
+# }
+# impl fmt::Display for Row {
+fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.to_string()) } // recursion
+# }
 ```
 **Detect.** `clippy::format_push_string`, `format_collect`, `to_string_in_format_args`, `inefficient_to_string`, `unnecessary_to_owned`, `or_fun_call` (nursery, enabled in the template: `ok_or(Error::Missing(format!(..)))` builds the string even on success).
 Also: for one-off `Display` adapters, `std::fmt::from_fn` (1.93) avoids a wrapper type; it needs `rust-version` 1.93 or later (the template sets 1.96). Return `&str`/`Cow<'_, str>` instead of `String` when input usually passes through (OWN-10). `tracing` fields format lazily, so do not pre-format log messages.
@@ -294,11 +316,14 @@ mod tests {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::large_enum_variant+clippy::vec_box
+# use std::sync::Arc;
+# pub struct Item(u64);
+# pub struct Config;
 pub enum Message { Ping, Snapshot([u8; 256]) } // large_enum_variant: every Ping is 257 bytes
-let items: Vec<Box<Item>> = ..;               // vec_box: extra alloc + indirection per element
-struct Client { inner: Arc<Inner> }           // with `struct Inner { config: Arc<Config> }`:
-                                              // two pointer hops per read; lift hot fields up
+pub struct Batch { items: Vec<Box<Item>> }     // vec_box: extra alloc + indirection per element
+pub struct Client { inner: Arc<Inner> }        // with `Inner` below: two pointer hops per read;
+pub struct Inner { config: Arc<Config> }       // lift hot fields up
 ```
 **Detect.** `clippy::large_enum_variant`, `vec_box`, `box_collection`, `large_futures`, `large_stack_arrays`; `size_of` assertions and future-size tests; review: an `Arc` inside a type that is itself shared through `Arc`, unless both levels are shared independently; `-Zprint-type-sizes` on nightly only when investigating.
 Layout facts: `repr(Rust)` reorders fields to minimize padding, so do not hand-order for size. Niches are free: `Option<Box<T>>`, `Option<&T>`, `Option<NonZero<u32>>` are the size of the inner type. Use `u32` indices instead of `usize` in large index-heavy structures only with measurement, converting without `as` (ownership.md §Graphs). Struct-of-arrays beats array-of-structs when a hot loop reads one field of many elements.
@@ -325,7 +350,7 @@ Layout facts: `repr(Rust)` reorders fields to minimize padding, so do not hand-o
 
 ## Hashing
 
-### PERF-06 (continued) · Faster hashers only for keys an attacker cannot control
+### Faster hashers only for keys an attacker cannot control (PERF-06)
 **Why.** std `HashMap` uses randomly keyed SipHash-1-3, which resists HashDoS: an attacker who controls keys (HTTP headers, JSON object keys, user names) cannot force every insert into one bucket. Faster non-cryptographic hashers (foldhash, FxHash) are much faster on small keys but weaken or drop that guarantee (FxHash is unseeded). Use them only for keys the program generates (interned ids, internal indices), only with a benchmark, and adding the crate is H-16.
 **Do.** Once a workspace adopts a fast hasher, ban the std types in `clippy.toml` (a protected file, H-05) in the same change, so nothing uses them by accident. Use the hasher crate's own aliases: a local `type FastMap<K, V> = HashMap<K, V, ..>` names the banned type and is itself flagged.
 ```toml
@@ -442,11 +467,18 @@ fn main() -> io::Result<()> {
 }
 ```
 **Don't.**
-```rust,ignore
-for r in &records { println!("{r}"); }            // lock + line flush per row; panics on EPIPE
+```rust,ignore,expect=clippy::print_stdout+clippy::unbuffered_bytes+scan:print
+# use std::fs::{self, File};
+# use std::io::{self, BufRead, Read, Write};
+# use std::path::Path;
+# pub fn all(records: &[u32], untrusted_path: &Path, reader: impl BufRead, p: &Path) -> io::Result<usize> {
+for r in records { println!("{r}"); }             // lock + line flush per row; panics on EPIPE
 let text = fs::read_to_string(untrusted_path)?;   // unbounded memory (PERF-10)
-for line in reader.lines() { .. }                 // a String per line, no length cap
-let mut f = File::create(p)?; for r in rs { writeln!(f, "{r}")?; } // syscall per line
+let mut n = 0; for line in reader.lines() { n += line?.len(); } // a String per line, no length cap
+let mut f = File::create(p)?; for r in records { writeln!(f, "{r}")?; } // syscall per line
+for b in File::open(p)?.bytes() { n += usize::from(b? == b'\n'); } // unbuffered_bytes: a syscall per byte
+#     Ok(n + text.len())
+# }
 ```
 **Detect.** `clippy::print_stdout` (denied), `unbuffered_bytes` (perf, denied: `.bytes()` on an unbuffered reader); review: `File` used without `BufReader`/`BufWriter` in a loop; `BufWriter` dropped without `flush()`; whole-file reads or `lines()` on inputs with no size bound.
 Also: byte-oriented input skips UTF-8 validation with `read_until(b'\n', &mut Vec<u8>)` on the same capped reader. Library functions take `impl Read`/`impl Write` by value (OWN-01), so the caller decides buffering and locking and passes `&mut w` to keep the writer. Async I/O follows the same rules with `tokio::io::BufWriter`.
@@ -514,9 +546,11 @@ pub fn decode(code: u8, value: u32) -> Result<u32, BadCode> {
 }
 ```
 **Don't.**
-```rust,ignore
-#[inline(always)] pub fn parse_everything<R: Read>(r: R) -> .. { /* 200 lines */ } // inline_always: bloat, no benchmark
-fn apply_all(rules: &dyn Rule, prices: &[u64]) // dyn in the innermost hot loop without measurement
+```rust,ignore,expect=clippy::inline_always
+# use std::io::{self, Read};
+# pub trait Rule { fn apply(&self, cents: u64) -> u64; }
+#[inline(always)] pub fn parse_everything<R: Read>(mut r: R) -> io::Result<u64> { /* 200 lines */ io::copy(&mut r, &mut io::sink()) } // inline_always: bloat, no benchmark
+fn apply_all(rules: &dyn Rule, prices: &[u64]) -> Vec<u64> { prices.iter().map(|p| rules.apply(*p)).collect() } // dyn in the innermost hot loop without measurement
 ```
 **Detect.** `clippy::inline_always` (pedantic, denied by the gate); `cargo llvm-lines` for the functions with the most monomorphized copies; review `#[inline]` on large or crate-private functions (useless: generic and crate-local functions are already inlinable). `#[inline]` helps small non-generic `pub` functions called across crates when LTO is off; cite the benchmark. `cold_path` and `#[cold]` are measured too.
 
@@ -682,10 +716,16 @@ pub fn spawn_worker(catalog: &Catalog, id: usize) -> io::Result<JoinHandle<usize
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=clippy::clone_on_ref_ptr+clippy::rc_buffer
+# use std::sync::Arc;
+# #[derive(Clone)] pub struct Config;
+# pub struct Catalog { names: Arc<[Arc<str>]> }
+# pub fn per_request(catalog: &Catalog, config: &Config) -> (Arc<[Arc<str>]>, Arc<Config>) {
 let names = catalog.names.clone();   // clone_on_ref_ptr: is this a refcount or a deep copy?
 let cfg = Arc::new(config.clone());   // per request: build the Arc once at startup
-struct Shared { data: Arc<Vec<u8>> }  // rc_buffer: double indirection, use Arc<[u8]>
+#     (names, cfg)
+# }
+pub struct Shared { data: Arc<Vec<u8>> } // rc_buffer: double indirection, use Arc<[u8]>
 ```
 **Detect.** `clippy::clone_on_ref_ptr`, `rc_buffer`, `redundant_clone`. For byte buffers sliced and passed between network stages, `bytes::Bytes` gives cheap sub-slicing (dependency, H-16).
 
@@ -764,9 +804,18 @@ impl CacheStats {
 let lines = self.lines.lock()?;
 for l in lines.iter() { writeln!(file, "{l}")?; }   // I/O while every producer waits
 let guard = state.lock()?; worker.join()?;         // join under a lock: the worker may need it
-let guard = state.lock()?; client.send(&guard).await; // H-14: guard across .await
 let r = cache.read()?; if r.get(&k).is_none() { cache.write()?.insert(k, v); } // upgrade while `r` lives: deadlock
 hits: Mutex<u64>, total: Mutex<u64>,               // one invariant, two locks: readers see it broken
+```
+```rust,ignore,expect=clippy::await_holding_lock+clippy::future_not_send
+# use std::future::{Ready, ready};
+# use std::sync::{Mutex, PoisonError};
+# pub struct State(Vec<u8>);
+# fn send(_state: &State) -> Ready<()> { ready(()) }
+# pub async fn publish(state: &Mutex<State>) {
+let guard = state.lock().unwrap_or_else(PoisonError::into_inner);
+send(&guard).await; // H-14: guard held across .await, and the future is no longer `Send`
+# }
 ```
 **Detect.** `clippy::significant_drop_tightening`, `significant_drop_in_scrutinee` (nursery, enabled in the template), `await_holding_lock`; review: any blocking call, allocation-heavy work, or call into unknown code inside a guard's scope; a read guard alive where `write()` is taken; fields that must agree split across locks.
 

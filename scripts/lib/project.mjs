@@ -91,7 +91,7 @@ export const DEFAULT_CONFIG = {
   },
   protected: [
     '**/clippy.toml', '**/.clippy.toml', '**/rustfmt.toml', '**/.rustfmt.toml', '**/deny.toml',
-    'rust-toolchain', 'rust-toolchain.toml', '.cargo/**', '.claude/**', '.github/workflows/**',
+    'rust-toolchain', 'rust-toolchain.toml', '.cargo/**', '.claude/**', '.github/**',
     '.githooks/**', 'CLAUDE.md', 'AGENTS.md',
   ],
   scanner: { exempt: [] },         // [{ rule: 'H-01', paths: ['crates/ffi-sys/**'] }]

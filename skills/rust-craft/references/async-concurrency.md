@@ -104,7 +104,7 @@ impl<T: Store> DynStore for T {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:async-trait
 #[async_trait::async_trait]                                 // boxes every call; MOD-04
 pub trait Store { async fn get(&self, key: &str) -> ...; }  // public, no Send bound, so:
 fn spawn_lookup<S: Store + 'static>(s: S) { tokio::spawn(async move { s.get("k").await }); } // error: future is not Send
@@ -200,7 +200,7 @@ pub async fn supervise(
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:detached-spawn
 tokio::spawn(async move { sync_forever(db).await });  // detached: nobody joins, errors vanish
 ```
 **Detect.** A `tokio::spawn(` or `thread::Builder` spawn whose `JoinHandle` is not bound, stored or returned; `let _ = ...spawn`; a `JoinError` handled without checking `is_panic`.
@@ -289,7 +289,7 @@ Rule: every future inside `select!` is on the "yes" rows, or is created once out
 **Do.** Use async equivalents (`tokio::time::sleep`, `tokio::fs`, async clients). Move CPU work and unavoidable blocking calls to the blocking pool and await the handle, which returns `Result<T, JoinError>`: `task::spawn_blocking(move || fnv1a(&bytes)).await`.
 `spawn_blocking` tasks cannot be aborted once running, and the pool is large (hundreds of threads) but finite; for sustained CPU-heavy work use a rayon pool and a `oneshot` for the result. `tokio::task::block_in_place` panics on a `current_thread` runtime (including default `#[tokio::test]`) and suspends everything else running in the same task (siblings in `join!`/`select!`); prefer `spawn_blocking`.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:sleep
 async fn handler() { std::thread::sleep(Duration::from_secs(1)); }  // blocks a worker thread
 async fn load(p: &Path) -> io::Result<String> { std::fs::read_to_string(p) } // blocking I/O
 ```

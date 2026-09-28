@@ -121,7 +121,6 @@ missing_assert_message = "warn"                         # H-03
 assertions_on_result_states = "warn"                    # TST-05
 renamed_function_params = "warn"                        # API-18
 empty_drop = "warn"                                     # ERR-13
-empty_enum_variants_with_brackets = "warn"              # pairs with empty_structs_with_brackets
 negative_feature_names = "warn"                         # API-16
 redundant_feature_names = "warn"                        # API-16
 cargo_common_metadata = "warn"                          # ARC-01: fires only once a crate can publish
