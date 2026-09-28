@@ -652,6 +652,7 @@ assert_eq!(counter.load(Ordering::SeqCst), 1);
 - `#[cfg(...)]`-ing a test out (including `#![cfg(not(miri))]`), gating it behind a feature CI does not enable, moving it to a target that is not run, or changing `test`, `doctest`, `harness` or `autotests` in a manifest so that tests stop running.
 - Accepting snapshots blindly: `cargo insta accept`, `cargo insta test --accept`, `INSTA_UPDATE=always`, or `TRYBUILD=overwrite` without reading every diff.
 - Lowering lints or skipping checks: `#[allow]`, `#[expect]` without approval (H-05), editing `[lints]`, `clippy.toml`, `rustfmt.toml`, CI or hook config, `--no-verify`, `SKIP=` variables.
+- Raising the lint baseline: `temper baseline --update`, deleting it and running `--init` again, restoring an older copy, or editing `.claude/temper-baseline.json`. Lowering it with `temper baseline --tighten` is always fine.
 - Weakening the check's input: shrinking proptest ranges or case counts to dodge a failing case, deleting `proptest-regressions` entries.
 
 **Do instead.**

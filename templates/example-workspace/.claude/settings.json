@@ -23,7 +23,11 @@
       "Bash(git diff *)",
       "Bash(git status *)",
       "Bash(git log *)",
-      "Bash(git show *)"
+      "Bash(git show *)",
+      "Bash(node .claude/temper/temper.mjs baseline --check*)",
+      "Bash(node .claude/temper/temper.mjs baseline --tighten*)",
+      "Bash(node .claude/temper/temper.mjs report*)",
+      "Bash(node .claude/temper/temper.mjs gate*)"
     ],
     "ask": [
       "Edit(**/clippy.toml)",

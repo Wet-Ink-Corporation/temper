@@ -15,6 +15,8 @@ Checks:
   4. Scanner claims agree at the rule-ID level: every registry row whose Enforced-by says
      `scan` has a RULES entry carrying its ID, and every RULES entry's ID is a row whose
      Enforced-by says `scan`. A mismatch means retagging the rule or the row.
+  5. scripts/lib/rulemap.json matches a fresh generation by tests/gen_rulemap.py (same
+     lint resolution as checks 1-2), so the gate and reports map findings to current rules.
 
 Conventions:
   * A lint is `clippy::name` or a bare backticked snake_case name that is a clippy or
@@ -31,6 +33,7 @@ Conventions:
 Exit 0 when every claim holds, 1 otherwise, 2 when the toolchain cannot be queried.
 """
 import bisect
+import importlib.util
 import json
 import os
 import re
@@ -279,6 +282,14 @@ def main():
                 counts['keys'] += 1
                 if key not in scan:
                     bad.append((f'{rel}:{line_of(off)}', f'cites scanner key `{key}`, which scan.mjs does not define'))
+
+    # 5: the generated rule map is fresh
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('gen_rulemap', Path(__file__).resolve().parent / 'gen_rulemap.py')
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    for msg in gen.stale(ROOT, sys.modules[__name__], default):
+        bad.append(('scripts/lib/rulemap.json', msg))
 
     for where, msg in bad:
         print(f'{where}: {msg}')

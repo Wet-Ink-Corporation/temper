@@ -1,5 +1,7 @@
 // The gate: fmt (auto-fix), the escape-hatch scan of changed files, the
 // member-manifest check, clippy -D warnings, tests and rustdoc -D warnings.
+// When .claude/temper-baseline.json exists, clippy and rustdoc ratchet against
+// it instead (baseline.mjs): only new code and count increases fail.
 // Results are cached per tree fingerprint so repeated Stop/SubagentStop checks
 // cost nothing.
 import fs from 'node:fs';
@@ -10,6 +12,8 @@ import {
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
 import { parseToml } from './toml.mjs';
 import { memberProblems, membersFromToml, ownLintsMember, splitProblems } from './manifest.mjs';
+import { collectFindings, mergeCollections, isComplete, writeCachedFindings } from './findings.mjs';
+import { readBaseline, baselineExists, ratchet, renderRatchet, debtLine, changedLines, renamedSince } from './baseline.mjs';
 
 const has = (cmd, args) => run(cmd, args, { timeoutMs: 20000 }).code === 0;
 
@@ -30,6 +34,27 @@ export function defaultSteps(cfg) {
   return steps;
 }
 
+/**
+ * Steps when `.claude/temper-baseline.json` exists: clippy and rustdoc run in
+ * ratchet mode (collect every finding, fail only on new code and increases);
+ * tests and doctests are unchanged. Still one clippy run. The doc step ratchets
+ * everything collected by then, the rustdoc findings included (the same
+ * comparison CI's `baseline --check` makes).
+ */
+export function ratchetSteps(cfg) {
+  const steps = defaultSteps(cfg).map((s) => {
+    if (s.name === 'clippy') {
+      const sources = cfg.gate.scan === false ? ['clippy'] : ['clippy', 'scan'];
+      return { name: 'clippy', ratchet: sources, scope: sources, cmd: ['temper', 'baseline', '--check', `(${sources.join(', ')})`] };
+    }
+    if (s.name === 'doc') return { name: 'doc', ratchet: ['rustdoc'], scope: null, cmd: ['temper', 'baseline', '--check', '(rustdoc)'] };
+    return s;
+  });
+  const last = steps.filter((s) => s.ratchet).at(-1);
+  if (last) last.final = true;
+  return steps;
+}
+
 function summarize(name, out) {
   const lines = out.split(/\r?\n/);
   let keep;
@@ -47,7 +72,10 @@ function summarize(name, out) {
 /** Scan changed .rs files against their base-revision content: new hard hits fail the gate. */
 export function scanChanged(proj, base) {
   const out = { hard: [], ask: [], soft: [] };
-  for (const rel of rustChanges(proj, base).filter((f) => f.endsWith('.rs'))) {
+  const files = rustChanges(proj, base).filter((f) => f.endsWith('.rs'));
+  // A moved or renamed file (staged or not) is compared with its content at the old path.
+  const renames = files.length ? renamedSince(proj, base) : new Map();
+  for (const rel of files) {
     const abs = path.join(proj.gitRoot ?? proj.root, rel);
     const after = readText(abs);
     if (after === null) continue;
@@ -55,7 +83,7 @@ export function scanChanged(proj, base) {
     const crateRel = krate ? relTo(krate.dir, abs) : rel;
     const kind = krate ? classifyPath(crateRel, krate.hasLib) : 'prod';
     const build = isBuildScript(crateRel);
-    const before = showAt(proj, base, rel) ?? '';
+    const before = showAt(proj, base, renames.get(norm(rel)) ?? rel) ?? '';
     const exempt = (h) => (proj.config.scanner.exempt ?? []).some((e) => e.rule === h.id && (e.paths ?? []).some((p) => globMatch(p, rel)));
     const fresh = newHits(scanSource(before, { kind, build }).hits, scanSource(after, { kind, build }).hits).filter((h) => !exempt(h));
     for (const h of fresh) out[h.severity]?.push({ ...h, file: rel });
@@ -200,8 +228,17 @@ export function runGate(proj, opts = {}) {
     if (!m.ok) return finish(proj, fp, steps, true, cachePath);
   }
 
-  // 5. cargo steps, fail fast
-  for (const step of cfg.gate.steps ?? defaultSteps(cfg)) {
+  // 5. cargo steps, fail fast. With a baseline, clippy and rustdoc ratchet
+  // against it; a gate.steps override in temper.json always wins.
+  const ratcheting = !cfg.gate.steps && baselineExists(proj.root);
+  const rs = { collection: null, baseline: null, changed: undefined };
+  for (const step of cfg.gate.steps ?? (ratcheting ? ratchetSteps(cfg) : defaultSteps(cfg))) {
+    if (step.ratchet) {
+      const s = ratchetStep(proj, step, rs, { base: opts.base, prefix: path.join(logs, fp), fp });
+      steps.push(s);
+      if (!s.ok) break;
+      continue;
+    }
     const t = Date.now();
     const [cmd, ...args] = step.cmd;
     const r = run(cmd, args, { cwd, env: { ...env, ...(step.env ?? {}) }, timeoutMs: cfg.gate.stepTimeoutSec * 1000 });
@@ -213,6 +250,50 @@ export function runGate(proj, opts = {}) {
     if (!ok) break;
   }
   return finish(proj, fp, steps, true, cachePath);
+}
+
+/**
+ * One ratchet step: collect this step's sources, merge them into the gate's
+ * collection, and ratchet the step's lints against the baseline. The complete
+ * collection is cached for `temper report` and the reviewer.
+ */
+function ratchetStep(proj, step, rs, { base, prefix, fp }) {
+  const t = Date.now();
+  if (!rs.baseline) {
+    try { rs.baseline = readBaseline(proj.root); } catch (e) {
+      return { name: step.name, ok: false, ms: Date.now() - t, ratchet: true, summary: `${e.message}. Restore it from git; changing it is a human decision (H-12).` };
+    }
+  }
+  const part = collectFindings(proj, { cfg: proj.config, sources: step.ratchet, logPrefix: prefix, reuse: rs.collection });
+  rs.collection = rs.collection ? mergeCollections(rs.collection, part) : part;
+  if (rs.changed === undefined) {
+    rs.notes = new Set();
+    try { rs.changed = changedLines(proj, base); } catch (e) {
+      // An implicit base that is not a commit here (a TEMPER_BASE from another repository): diff against HEAD.
+      try { rs.changed = changedLines(proj, 'HEAD'); rs.first = `${e.message}; compared with HEAD instead`; } catch { rs.changed = null; rs.first = `${e.message}; only the totals were compared`; }
+    }
+  }
+  const res = ratchet(rs.collection, rs.baseline, { proj, changed: rs.changed, base, sources: step.scope ?? undefined, checkRaised: false });
+  // The last ratchet step also compares the baseline with the one at the session base (a flag, like --check).
+  const all = ratchet(rs.collection, rs.baseline, { proj, changed: rs.changed, base, checkRaised: Boolean(step.final) });
+  const raised = all.raised.length
+    ? [`BASELINE RAISED since ${(all.base ?? '').slice(0, 12)}: ${all.raised.length} count(s) higher in .claude/temper-baseline.json (accepted debt grew; a human decision, H-12):`,
+      ...all.raised.slice(0, 30).map((x) => `  ${x.crate} ${x.lint}: ${x.from} -> ${x.to}`)]
+    : [];
+  const notes = [rs.first, ...res.notes, res.mode === 'totals' ? 'no base revision: only the totals were compared' : null]
+    .filter((n) => n && !rs.notes.has(n));
+  for (const n of notes) rs.notes.add(n);
+  res.notes = notes;
+  if (isComplete(rs.collection, proj.config)) writeCachedFindings(proj, fp, { ...rs.collection, ratchet: all }, { base });
+  const log = Object.values(part.logs ?? {})[0];
+  return {
+    name: step.name, ok: res.ok, ms: Date.now() - t, ratchet: true,
+    summary: [res.ok ? [`no new findings and no counts above the baseline (${step.scope ? step.scope.join(', ') : 'all sources'})`, ...notes.map((n) => `note: ${n}`)].join('\n') : renderRatchet(res), ...raised].join('\n'),
+    ...(all.raised.length ? { raised: all.raised } : {}),
+    debt: debtLine(all),
+    counts: { new_code: res.new_code.length, increases: res.increases.length, fixed: all.fixed_count, legacy: all.legacy_total, baseline: all.baseline_total, errors: res.errors.length },
+    ...(log ? { log } : {}),
+  };
 }
 
 function tail(name, out) {
@@ -247,11 +328,13 @@ export function renderGate(res) {
   }
   const head = res.steps.map((s) => `${s.name} ${s.ok ? 'ok' : 'FAILED'}`).join(' | ');
   const fails = res.steps.filter((s) => !s.ok).map((s) => `--- ${s.name} ---\n${s.summary}${s.log ? `\n(full log: ${s.log})` : ''}`).join('\n');
-  const passes = res.steps.filter((s) => s.ok && s.name.includes('test')).map((s) => `${s.name}: ${s.summary}`).join('\n');
+  const passes = res.steps.filter((s) => s.ok && (s.name.includes('test') || s.ratchet)).map((s) => `${s.name}: ${s.summary}`).join('\n');
   const exc = res.steps.flatMap((s) => s.exceptions ?? []);
+  const debt = res.steps.filter((s) => s.debt).at(-1)?.debt;
   return [
     `temper gate: ${res.ok ? 'GREEN' : 'RED'} (fingerprint ${res.fp ?? 'n/a'}${res.cached ? ', cached' : ''})`,
     head, fails, passes,
     exc.length ? `lint exceptions in the diff (need human approval, H-05): ${exc.join('; ')}` : '',
+    res.ok && debt ? `ratchet against the baseline: ${debt}` : '',
   ].filter(Boolean).join('\n');
 }

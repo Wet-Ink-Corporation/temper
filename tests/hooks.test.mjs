@@ -404,3 +404,87 @@ test('gate manifests step with git: only problems new since the base fail', { sk
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
+
+test('Bash: temper baseline --init/--update are refused unless TEMPER_ALLOW_RAISE asks the human (H-12); --tighten, --check and status run freely', () => {
+  for (const cmd of [
+    'node "$TEMPER_CLI" baseline --init',
+    'node "${TEMPER_CLI}" baseline --update',
+    'node .claude/temper/temper.mjs baseline --update',
+    'node "/opt/plugins/temper/scripts/temper.mjs" baseline --init --no-cache',
+    'cargo fmt --all && node "$TEMPER_CLI" baseline --update',
+    'temper baseline --init',
+    'node .claude/temper/temper.mjs baseline "--update"',
+    "node .claude/temper/temper.mjs baseline '--init'",
+    'T=.claude/temper/temper.mjs; node $T baseline --update',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /H-12[\s\S]*TEMPER_ALLOW_RAISE=1/, cmd);
+  }
+  for (const cmd of ['TEMPER_ALLOW_RAISE=1 node "$TEMPER_CLI" baseline --init', 'export TEMPER_ALLOW_RAISE=1', 'env TEMPER_ALLOW_RAISE=1 node .claude/temper/temper.mjs baseline --update']) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'ask', cmd);
+    assert.match(reason(res), /H-12/, cmd);
+  }
+  for (const cmd of [
+    'node "$TEMPER_CLI" baseline --tighten',
+    'node .claude/temper/temper.mjs baseline --check --base "origin/main" --findings-out target/temper/findings.json',
+    'node "$TEMPER_CLI" baseline',
+    'node "$TEMPER_CLI" gate',
+    "git commit -m 'record baseline --init output'",
+    'grep -- --update notes.md',
+  ]) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: git checkout/restore/stash of a .claude path, and git show into .claude/, ask (H-12)', () => {
+  for (const cmd of [
+    'git checkout HEAD~3 -- .claude/temper-baseline.json',
+    'git restore --source=HEAD~3 .claude/temper-baseline.json',
+    'git stash && git checkout old-branch -- .claude',
+    'git restore --source=main -- ./.claude/settings.json',
+    'git show HEAD~2:.claude/settings.json > .claude/settings.json',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'ask', cmd);
+    assert.match(reason(res), /older verification configuration/, cmd);
+  }
+  for (const cmd of ['git checkout -b feature', 'git stash', 'git restore src/lib.rs', 'git show HEAD:Cargo.lock > /tmp/old.lock', 'git checkout origin/main -- Cargo.lock',
+    'git checkout -- .claude/temper-baseline.json', 'git checkout HEAD -- .claude/temper-baseline.json', 'git restore .claude/temper-baseline.json', 'git restore --staged .claude/temper-baseline.json']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)', () => {
+  for (const cmd of [
+    'echo {} > .claude/temper-baseline.json',
+    "sed -i 's/: 3/: 4/' .claude/temper-baseline.json",
+    'jq . x.json | tee .claude/temper-baseline.json',
+    'cp /tmp/old.json .claude/temper-baseline.json',
+    'mv new.json ./.claude/temper-baseline.json',
+    "python3 -c \"open('.claude/temper-baseline.json','w').write('{}')\"",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /baseline --tighten/, cmd);
+    assert.match(reason(res), /human/, cmd);
+  }
+  for (const cmd of ['cat .claude/temper-baseline.json', 'git diff .claude/temper-baseline.json', 'cp .claude/temper-baseline.json /tmp/bl.json', 'jq .totals .claude/temper-baseline.json > /tmp/t.json']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+  const write = writeTo('.claude/temper-baseline.json', '{"temper_baseline":1,"totals":{}}\n');
+  assert.equal(decision(write), 'ask');
+  assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
+});
+
+test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
+  for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /vendored temper CLI/, cmd);
+  }
+  for (const cmd of ['cp .claude/temper/temper.mjs /tmp/x', 'node .claude/temper/temper.mjs baseline --check', 'cat .claude/temper/VERSION', 'diff -r .claude/temper scripts']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});

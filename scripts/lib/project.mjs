@@ -184,6 +184,56 @@ export function pruneMarkers(maxAgeDays = 7) {
   }
 }
 
+/**
+ * Where temper may write an output (`baseline --findings-out`, `report --out`):
+ * under the project's target/ or .temper/ after every symlink is resolved, with
+ * no `..`, and never onto a symlink. So an allow-listed command cannot be aimed
+ * at sources or configuration, not even through a symlinked directory.
+ * @param {string} root the project root
+ * @param {string} out the path as given (relative to the cwd)
+ * @param {{ dir?: boolean, files?: string[] }} opts `dir`: `out` is a directory
+ *   to write into (it may be target/ or .temper/ itself); `files`: the names
+ *   that will be written inside it
+ * @returns {string|null} the absolute path, or null when refused
+ */
+export function safeOutputPath(root, out, { dir = false, files = [] } = {}) {
+  if (!out || norm(String(out)).split('/').includes('..')) return null;
+  const abs = path.resolve(out);
+  const rel = relTo(root, abs);
+  if (!(dir ? /^(?:target|\.temper)(?:\/.|$)/ : /^(?:target|\.temper)\/./).test(rel)) return null;
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return null; } };
+  const realRoot = real(root) ?? path.resolve(root);
+  const allowed = ['target', '.temper'].map((d) => {
+    const p = path.join(root, d);
+    try { fs.lstatSync(p); } catch { return path.join(realRoot, d); } // not there yet: it will be created under the root
+    return real(p); // a dangling link resolves to null and allows nothing
+  }).filter(Boolean);
+  // The deepest existing ancestor of the directory that will hold the output, resolved.
+  let existing = dir ? abs : path.dirname(abs);
+  const rest = [];
+  for (;;) {
+    try { fs.lstatSync(existing); break; } catch { /* not there yet */ }
+    const up = path.dirname(existing);
+    if (up === existing) return null;
+    rest.unshift(path.basename(existing));
+    existing = up;
+  }
+  const resolvedBase = real(existing);
+  if (!resolvedBase) return null; // a dangling symlink on the way
+  const resolved = path.join(resolvedBase, ...rest);
+  if (!allowed.some((a) => resolved === a || resolved.startsWith(`${a}${path.sep}`))) return null;
+  const finals = dir ? files.map((f) => path.join(abs, f)) : [abs];
+  for (const f of finals) { try { if (fs.lstatSync(f).isSymbolicLink()) return null; } catch { /* not there yet */ } }
+  return abs;
+}
+
+/** A revision as a commit sha of this repository, or null when it does not resolve. */
+export function resolveRev(proj, rev) {
+  if (!proj?.gitRoot || !rev) return null;
+  const r = git(proj.gitRoot, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]);
+  return r.code === 0 ? r.stdout.trim() || null : null;
+}
+
 export function headRev(proj) {
   if (!proj.gitRoot) return null;
   const r = git(proj.gitRoot, ['rev-parse', 'HEAD']);
@@ -192,7 +242,8 @@ export function headRev(proj) {
 
 export function baseRev(proj, sid) {
   const t = readText(path.join(sessionDir(proj, sid), 'base'));
-  return (t && t.trim()) || headRev(proj);
+  // A recorded base that no longer resolves (history rewritten, another repository): HEAD.
+  return (t && t.trim() && resolveRev(proj, t.trim())) || headRev(proj);
 }
 
 export function setBase(proj, sid, force) {
@@ -244,6 +295,14 @@ const RELEVANT_PATHSPECS = [
 ];
 const EXCLUDE = ['.temper', 'target'];
 
+/**
+ * The committed lint baseline (temper baseline). It changes the gate's verdict,
+ * so it is part of the fingerprint, but it is not a Rust change on its own.
+ */
+export const BASELINE_FILE = '.claude/temper-baseline.json';
+const FINGERPRINT_PATHSPECS = [...RELEVANT_PATHSPECS, `:(literal)${BASELINE_FILE}`];
+const inFingerprint = (rel) => RUST_RELEVANT.test(rel) || rel === BASELINE_FILE;
+
 function untracked(proj) {
   const r = git(proj.gitRoot, ['ls-files', '--others', '--exclude-standard', '-z']);
   if (r.code !== 0) return [];
@@ -285,16 +344,25 @@ function walkRust(root) {
 export function fingerprint(proj, base) {
   const h = createHash('sha256');
   if (proj.gitRoot) {
+    // The tree is the base commit plus the diff, so the commits are part of the key:
+    // otherwise every clean tree hashes the same and a cached result from another
+    // commit would be reused. HEAD always counts; a base that does not resolve here
+    // (a TEMPER_BASE from another repository) is replaced by HEAD.
+    const head = resolveRev(proj, 'HEAD');
+    const rev = (base ? resolveRev(proj, base) : null) ?? head;
+    h.update(`head:${head ?? ''}\nrev:${rev ?? ''}\n`);
     const args = ['diff', '--no-color', '--binary', '--no-ext-diff'];
-    if (base) args.push(base);
-    args.push('--', ...RELEVANT_PATHSPECS, ...EXCLUDE.map((x) => `:(exclude)${x}`));
+    if (rev) args.push(rev);
+    args.push('--', ...FINGERPRINT_PATHSPECS, ...EXCLUDE.map((x) => `:(exclude)${x}`));
     h.update(git(proj.gitRoot, args).stdout);
-    for (const f of untracked(proj).filter((u) => RUST_RELEVANT.test(norm(u))).sort()) {
+    for (const f of untracked(proj).filter((u) => inFingerprint(norm(u))).sort()) {
       h.update(`\n?${f}\n`);
       try { h.update(fs.readFileSync(path.join(proj.gitRoot, f))); } catch { /* vanished */ }
     }
   } else {
-    for (const f of walkRust(proj.root).sort()) {
+    const baseline = path.join(proj.root, ...BASELINE_FILE.split('/'));
+    const files = walkRust(proj.root).concat(fs.existsSync(baseline) ? [baseline] : []);
+    for (const f of files.sort()) {
       h.update(`\n${relTo(proj.root, f)}\n`);
       try { h.update(fs.readFileSync(f)); } catch { /* vanished */ }
     }

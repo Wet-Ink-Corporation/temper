@@ -17,10 +17,10 @@ A skill is advice that the model chooses to load. Rules the model can't skip hav
 | 4. Pre-write scanner | `PreToolUse` lexes the file as it would look after the edit and refuses newly introduced escape hatches, citing rule and fix. It also reads code in doctest fences, which clippy never sees. A member `Cargo.toml` without `[lints] workspace = true`, or with its own `[profile]`, is refused. | Yes | Catches hatches before they reach disk, with actionable feedback. Also catches the ones no lint sees: silent `Err` arms, `map[&k]`, `unwrap` in doc examples |
 | 5. Human gates | `PreToolUse` → `ask` for lint and CI config edits, new dependencies and crates, `#[expect]` exceptions, removed tests, manifest switches that stop tests running (`test`, `doctest`, `harness`, `autotests`), `[patch]`, `rust-version` and edition changes, blind snapshot acceptance | Yes | H-05, H-12, H-16: the decisions agents must not make alone |
 | 6. Anti-bypass | `PreToolUse:Bash` refuses shell writes to `.rs` files and `Cargo.lock`, `--no-verify`, `--ignore-rust-version`, and `-A`/`--cap-lints`; `Cargo.lock` edits are refused outright (PROC-13); the gate re-scans every changed file | Yes (heuristic for shell) | Routing around layers 3 and 4 |
-| 7. Completion gate | `Stop` runs fmt, the scan, a manifest check (lint inheritance, no member profiles), clippy `-D warnings`, tests and rustdoc (cached per tree fingerprint), then requires an **approving review bound to that exact fingerprint** | Yes | "Done" means green and independently reviewed. `Status: WIP` or `Status: BLOCKED` is the honest exit. |
+| 7. Completion gate | `Stop` runs fmt, the scan, a manifest check (lint inheritance, no member profiles), clippy `-D warnings` (or the baseline ratchet), tests and rustdoc (cached per tree fingerprint), then requires an **approving review bound to that exact fingerprint** | Yes | "Done" means green and independently reviewed. `Status: WIP` or `Status: BLOCKED` is the honest exit. |
 | 8. Independent review | `temper:rust-reviewer` runs in a fresh context with the skill preloaded and read-only tools (`gate --check`). Its verdict JSON is validated by `SubagentStop`: an approval with majors, a red gate, or unread changed files is refused. | The validation is deterministic | Judgment calls tools can't make: clone justification, API shape, architecture |
 | 9. CI | The same gate in `.github/workflows/rust.yml`, SHA-pinned and `--locked`, plus each crate built alone, feature combinations (`cargo hack`), unused dependencies (`cargo machete`), the MSRV, and scheduled latest-deps, aarch64 and Miri jobs; Dependabot for bumps | Yes | Everything that happened outside Claude Code |
-| 10. Measurement | `temper stats` (telemetry of denials, blocks and verdicts) and `claude plugin eval` suites in `evals/` | n/a | Whether the enforcement actually changes outcomes |
+| 10. Measurement | `temper report` (per-crate compliance scorecard, published by CI), `temper stats` (telemetry of denials, blocks and verdicts) and `claude plugin eval` suites in `evals/` | n/a | Where the codebase stands, and whether the enforcement changes outcomes |
 
 ## Install
 
@@ -58,19 +58,47 @@ Then, in a Rust repository, run `/temper:setup`. It installs the workspace lints
   "preapprovedDependencies": ["thiserror", "anyhow", "serde", "serde_json", "tracing", "tracing-subscriber", "proptest", "insta", "trybuild", "divan", "criterion", "tempfile"],
   "gate": { "allFeatures": true, "doc": true, "scan": true, "stepTimeoutSec": 900, "steps": null },
   "protected": ["**/clippy.toml", ".claude/**", "..."],
-  "scanner": { "exempt": [{ "rule": "H-01", "paths": ["crates/ffi-sys/**"] }] }
+  "scanner": { "exempt": [{ "rule": "H-01", "paths": ["crates/ffi-sys/**"] }] },
+  "manifests": { "ownLints": [] }
 }
 ```
 
-`review` can be `required`, `advisory` or `off`. The `TEMPER_DISABLE=1` environment variable turns every hook off; that is an emergency switch for a human, not something for agents.
+`review` can be `required`, `advisory` or `off`. `manifests.ownLints` lists members a human approved to carry their own full `[lints]` table instead of inheriting the workspace's (an FFI `-sys` crate, an arithmetic-lint opt-in); the hook asks on any change to those tables. The `TEMPER_DISABLE=1` environment variable turns every hook off; that is an emergency switch for a human, not something for agents.
 
 ## CLI
 
-`node scripts/temper.mjs <gate [--check]|scan|status|setup|stats>`. It has no dependencies, needs Node 18 or later, and runs on Windows, macOS and Linux. Hooks call it in exec form (`node <script>`), so no shell quoting is involved.
+`node scripts/temper.mjs <command>`. It has no dependencies, needs Node 18 or later, and runs on Windows, macOS and Linux. Hooks call it in exec form (`node <script>`), so no shell quoting is involved. `/temper:setup` also copies it into the repository at `.claude/temper/`, so CI and the pre-commit hook can run it without the plugin.
+
+| Command | Purpose |
+|---|---|
+| `gate [--check] [--no-cache] [--json]` | fmt, scan, manifests, clippy, tests, rustdoc; ratchet mode when a baseline exists |
+| `scan [FILES..] [--all] [--json]` | the escape-hatch scanner |
+| `baseline [--init \| --update \| --tighten \| --check [--base REF] [--findings-out FILE]] [--json] [--locked] [--no-cache]` | record, lower or check the lint baseline (`--init` and `--update` are human decisions). Without a baseline, `--check` requires zero findings. |
+| `report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html] [--locked]` | the compliance scorecard: `report.json`, `report.md`, `report.html` (`--out` and `--findings-out` stay under `target/` or `.temper/`) |
+| `status`, `stats`, `setup [--dry-run] [--force]` | tree and gate state; enforcement telemetry; install the templates |
 
 ## Brownfield adoption
 
-Every check compares against the session's base revision, so only *new* violations block. That makes the scanner a ratchet: legacy code doesn't stop work, and `/temper:audit` plans the paydown crate by crate.
+Legacy code must not stop work, and new code must meet the standard. temper does both with ratchets:
+
+- **The pre-write scanner and the manifest check** compare against the session's base revision, so only violations the change introduces block.
+- **Clippy, rustdoc and the scanner at the gate** compare against a committed **lint baseline**, `.claude/temper-baseline.json`, which counts findings per crate and lint. With a baseline present, the gate, CI and the pre-commit hook fail only on a finding in a line the change added or modified, or on a crate's count for a lint rising (which catches a new warning on an untouched line). Everything else is legacy debt: reported, not blocking. Without a baseline, zero findings are required, as before.
+- **Touched means yours.** A legacy finding on a line you edit or move counts as new code (CRF-08). Renames, including unstaged ones and renamed crates, are recognised. Moving legacy code between files or functions is a change like any other: fix what you move.
+- **Suppressions cannot hide behind the baseline.** `#[allow]` or `#[expect]` of a lint the workspace forbids always fails, as it would under `-D warnings`.
+- **Tests are not baselined.** A red legacy suite is fixed, or triaged with `#[ignore = "reason"]` as a human decision, before adoption.
+- **One platform.** Findings depend on the host's `cfg`s. Record and tighten the baseline on the platform CI runs. `--check`, `--init` and `--update` warn when the host differs from the one the baseline records; `--tighten` refuses, because counts lowered on another platform can fail CI on lines nobody touched. Pass `--any-host` only when the workspace has no platform-specific code.
+
+The rollout:
+
+1. Run `cargo fmt --all` and commit that on its own first. Otherwise the first gate run reformats legacy lines and they count as changed; `baseline --init` refuses an unformatted tree for this reason.
+2. On a branch, run `/temper:setup`. It installs the templates, vendors the CLI into `.claude/temper/`, merges the workspace lint table (you approve each protected edit), writes a charter per crate and offers to record the baseline. Review every "(inferred, confirm)" line in the charters: they are what agents read first.
+3. Record the baseline (`TEMPER_ALLOW_RAISE=1 temper baseline --init`; inside Claude Code the hook asks you) and commit it with the setup. From then on, new code meets the full standard and legacy code keeps building.
+4. Run `/temper:audit` for the remediation plan (`.temper/audit.md`), and pay the debt down crate by crate, each crate as its own reviewed change. Run `temper baseline --tighten` after each; the count only goes down. Raising it (`--update`) is a human decision (H-12): the CLI refuses it inside an agent session unless `TEMPER_ALLOW_RAISE=1` is set, and the hook asks. On a pull request, CI compares the baseline with the base branch's and flags any raise in the report and the PR comment.
+5. Watch it in CI: every run publishes `temper report` as an artifact and a step summary, and a separate job with the only write permission comments the change on pull requests.
+
+## Compliance reporting
+
+`temper report` turns the findings into a scorecard: findings by severity (MUST, SHOULD, CONSIDER, and lints the standard does not cite), iron-rule findings called out, and per crate a status (`clean`, `debt`, `regressed`), counts, new and fixed against the baseline, lint inheritance, charter presence and top rules; then the top rules and files. It writes JSON for tooling, Markdown for the step summary and pull-request comment, and a self-contained HTML page. Per-change evidence stays with the change: the gate result and the reviewer's scored verdict (12 rubric dimensions, findings by rule ID) are stored per tree fingerprint under `.git/temper/`.
 
 ## Using the standard with other agents
 
@@ -85,6 +113,7 @@ python3 tests/doc_examples.py       # every code block in the skill: Do blocks c
 python3 tests/registry.py           # every rule has one section; every cited rule ID exists; counts match
 python3 tests/lint-claims.py        # every lint and scanner key the standard cites exists and is enabled
 claude plugin validate --strict .   # manifest + frontmatter
+tests/e2e/brownfield.sh             # the lint baseline end to end on a legacy fixture (no model calls)
 tests/e2e/smoke.sh                  # a real headless session with the plugin (a few model calls)
 claude plugin eval . --allow-tools Write Edit --scaffold --trust-plugin --runs 3   # behavioral evals vs no-plugin baseline
 ```

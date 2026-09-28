@@ -92,7 +92,7 @@ export function sessionStart(input) {
     `- The standard is the skill \`temper:rust-craft\`. It ${loaded ? 'is loaded in this session' : 'has not been loaded in this session yet'}. Edits to .rs and Cargo.toml files are refused until it has been loaded in the current agent context.`,
     `- Iron rules (production code): ${IRON_RULES.join('; ')}.`,
     '- Workflow: orient, frame, plan (.temper/plans/), red, green, refactor, self-review, gate, independent review by the temper:rust-reviewer subagent, then report with the Status block.',
-    `- Gate command: ${gateCmd()} (also available as: node "$TEMPER_CLI" gate). It runs cargo fmt, the escape-hatch scan, the member-manifest check, clippy -D warnings, tests and rustdoc -D warnings, cached per tree fingerprint.`,
+    `- Gate command: ${gateCmd()} (also available as: node "$TEMPER_CLI" gate). It runs cargo fmt, the escape-hatch scan, the member-manifest check, clippy -D warnings, tests and rustdoc -D warnings, cached per tree fingerprint. When .claude/temper-baseline.json exists, clippy and rustdoc findings ratchet against it: legacy debt passes; findings on changed lines and counts above the baseline fail.`,
     '- A turn that changed Rust ends when the gate is green and temper:rust-reviewer has approved the current tree. To pause instead, the final message carries a line "Status: WIP" or "Status: BLOCKED" with the reason or question.',
     '- Edits to lint, format, toolchain, CI, hook and agent configuration, new dependencies, lint exceptions and removed tests are routed to the human for approval.',
     `- Session base revision: ${base ?? 'none (no git)'}. Current state: ${state}.`,
@@ -349,6 +349,58 @@ const shellWrites = (target, { copies = false } = {}) => {
 const SHELL_WRITE_RS = shellWrites('\\.rs');
 const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock', { copies: true });
 const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
+const SHELL_WRITE_BASELINE = shellWrites('temper-baseline\\.json', { copies: true });
+const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/[\\w./-]*', { copies: true });
+const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.';
+
+const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
+
+/** Shell segments of a command with quotes removed (`"--update"` and `'x'` read as `--update` and `x`). */
+const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
+  .map((seg) => seg.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_m, a, b) => a ?? b ?? ''));
+
+/**
+ * `temper baseline --init` / `--update` through the plugin CLI, the vendored copy
+ * (`node .claude/temper/temper.mjs`), `$TEMPER_CLI`, or any variable holding the
+ * CLI path (`node $T baseline --update`). They record the current findings as
+ * accepted debt, so they weaken verification (H-12). Quotes do not hide a flag.
+ */
+export function baselineRaise(cmd) {
+  for (const seg of unquotedSegments(cmd)) {
+    const call = /(?:^|[\s=])(?:\S*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:--?\S+\s+)*baseline\b(.*)$/.exec(seg);
+    if (!call) continue;
+    const flag = /(?:^|\s)--?(init|update)(?![\w-])/.exec(call[1]);
+    if (flag) return `--${flag[1]}`;
+  }
+  return null;
+}
+
+/**
+ * git commands that put an older `.claude/` (the baseline, settings, the vendored
+ * CLI) back into the working tree: checkout/restore/stash naming a `.claude`
+ * path, and `git show ... >` redirected into `.claude/`. Restoring from HEAD or
+ * the index (`git checkout -- f`, `git restore f`) undoes one's own edit and passes.
+ */
+export function claudeRestore(cmd) {
+  for (const seg of unquotedSegments(cmd)) {
+    const m = /\bgit\s+(?:(?:-C|-c)\s+\S+\s+)*(checkout|restore|stash)\b(.*)$/.exec(seg);
+    if (m && /(?:^|[\s=:/])\.claude(?:\/|\s|$)|temper-baseline\.json/.test(m[2])) {
+      const args = m[2].trim().split(/\s+/).filter(Boolean);
+      let source = null;
+      if (m[1] === 'checkout') {
+        const dd = args.indexOf('--');
+        const before = (dd === -1 ? args.slice(0, -1) : args.slice(0, dd)).filter((a) => !a.startsWith('-'));
+        source = before[0] ?? null; // no tree-ish: the index
+      } else if (m[1] === 'restore') {
+        const s = args.findIndex((a) => a === '-s' || a === '--source' || a.startsWith('--source=') || /^-s./.test(a));
+        if (s !== -1) source = args[s].includes('=') ? args[s].slice(args[s].indexOf('=') + 1) : /^-s./.test(args[s]) ? args[s].slice(2) : args[s + 1];
+      } else source = 'stash';
+      if (source !== null && source !== 'HEAD' && source !== '@') return seg.trim();
+    }
+    if (/\bgit\s+(?:-C\s+\S+\s+)*show\b[^>]*>\s*\S*(?:^|\/|\s)?\.claude\//.test(seg)) return seg.trim();
+  }
+  return null;
+}
 
 /** Command segments with quoted strings blanked, so flags inside messages do not count. */
 const segments = (cmd) => cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''").split(/&&|\|\||[;|\n]/);
@@ -389,6 +441,28 @@ export function preBash(input) {
   if (SHELL_WRITE_TOML.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { file: 'Cargo.toml' });
     return deny(MANIFEST_SHELL_DENY);
+  }
+  if (SHELL_WRITE_BASELINE.some((re) => re.test(cmd))) {
+    telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
+    return deny(BASELINE_SHELL_DENY);
+  }
+  if (/TEMPER_ALLOW_RAISE/.test(cmd)) {
+    telemetry(proj, input, 'ask', { via: 'TEMPER_ALLOW_RAISE' });
+    return ask(`temper: this command sets TEMPER_ALLOW_RAISE, which lets \`temper baseline --init\`/\`--update\` record every current finding as accepted legacy debt, so the gate and CI stop failing on it. Raising the baseline weakens verification (H-12): approve only if you asked for it.`);
+  }
+  if (SHELL_WRITE_VENDORED.some((re) => re.test(cmd))) {
+    telemetry(proj, input, 'deny-shell-write', { file: '.claude/temper/' });
+    return deny(VENDORED_SHELL_DENY);
+  }
+  const raise = baselineRaise(cmd);
+  if (raise) {
+    telemetry(proj, input, 'deny-baseline-raise', { via: `baseline ${raise}` });
+    return deny(`temper: \`temper baseline ${raise}\` records every current finding as accepted legacy debt (H-12), so it is the human's decision, and the CLI refuses it inside Claude Code. To request it, run the same command prefixed with \`TEMPER_ALLOW_RAISE=1\`: the human will be asked to approve it. (\`baseline --tighten\` and \`--check\` never raise it and run freely.)`);
+  }
+  const restore = claudeRestore(cmd);
+  if (restore) {
+    telemetry(proj, input, 'ask', { via: 'git-restore-claude' });
+    return ask(`temper: \`${restore.slice(0, 160)}\` puts older verification configuration back into .claude/ (the lint baseline, settings or the vendored CLI). An older baseline can accept more debt (H-12): approve only if you asked for it.`);
   }
   if (segments(cmd).some((seg) => isCargo(seg) && /(?:^|\s)--ignore-rust-version(?![\w-])/.test(seg))) {
     telemetry(proj, input, 'deny-ignore-rust-version', {});

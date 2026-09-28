@@ -458,6 +458,16 @@ export const RULES = [
     lints: [],
   },
   {
+    // E0453 ("incompatible with previous forbid") is a hard error that `--cap-lints warn`
+    // hides, so the ratchet collection checks it here. Needs the forbidden lints
+    // (`scanSource(src, { forbid })`); without them it finds nothing.
+    key: 'forbid-override', id: 'H-05', find: forbidOverrides,
+    ctx: { prod: 'hard', bin: 'hard', example: 'hard', test: 'hard' },
+    msg: '`#[allow]`/`#[expect]` of a lint the workspace forbids (E0453 without --cap-lints)',
+    fix: 'Remove the attribute and fix the code: a forbidden lint admits no exception (H-05). Changing the forbid is a human decision.',
+    lints: [],
+  },
+  {
     key: 'erased-error', id: 'H-09', find: erasedErrors,
     ctx: { prod: 'hard', bin: null, example: null, test: null },
     msg: 'public library signature returns an erased error',
@@ -488,6 +498,31 @@ const PUB_SIG_BAD = [
 ];
 
 // ------------------------------------------------------------ custom finders
+
+/** `#[allow(..)]` / `#[expect(..)]` (inner or outer, also inside `cfg_attr`) naming a forbidden lint. */
+function forbidOverrides(env) {
+  if (!env.forbid?.size) return [];
+  const out = [];
+  const attr = /#\s*!?\s*\[/g;
+  let a;
+  while ((a = attr.exec(env.code))) {
+    const open = env.code.indexOf('[', a.index);
+    const body = env.code.slice(open + 1, matchPair(env.code, open, '[', ']'));
+    const level = /\b(allow|expect)\s*\(/g;
+    let m;
+    while ((m = level.exec(body))) {
+      const lp = m.index + m[0].length - 1;
+      const inner = body.slice(lp + 1, matchPair(body, lp, '(', ')'));
+      for (const item of splitTop(inner)) {
+        const lint = item.replace(/\s+/g, '');
+        if (/^[a-z_][a-z0-9_]*(?:::[a-z_][a-z0-9_]*)?$/.test(lint) && env.forbid.has(lint)) {
+          out.push({ offset: a.index, severity: 'hard', msg: `\`#[${m[1]}(${lint})]\` overrides a lint the workspace forbids (E0453 without --cap-lints)` });
+        }
+      }
+    }
+  }
+  return out;
+}
 
 function expectAttrs(env) {
   const out = [];
@@ -765,10 +800,10 @@ function regexMatches(rule, env) {
   return out;
 }
 
-function makeEnv(src, kind, build) {
+function makeEnv(src, kind, build, forbid) {
   const { code, comments } = maskRust(src);
   const idx = lineIndex(code);
-  const env = { src, code, comments, idx, kind, build, regions: testRegions(code) };
+  const env = { src, code, comments, idx, kind, build, forbid, regions: testRegions(code) };
   const lazy = (name, fn) => Object.defineProperty(env, name, { get() { const v = fn(); Object.defineProperty(env, name, { value: v }); return v; }, configurable: true });
   lazy('consts', () => constRegions(code));
   lazy('traitImpls', () => traitImplRegions(code));
@@ -779,11 +814,12 @@ function makeEnv(src, kind, build) {
 /**
  * Scan one Rust source.
  * @param {string} src
- * @param {{kind: 'prod'|'bin'|'example'|'test', build?: boolean}} opts
+ * @param {{kind: 'prod'|'bin'|'example'|'test', build?: boolean, forbid?: Set<string>}} opts
  *   `build`: the file is a build script (only changes fix texts).
+ *   `forbid`: lints the crate forbids (`unsafe_code`, `clippy::x`), for the forbid-override rule.
  */
-export function scanSource(src, { kind, build = false }) {
-  const env = makeEnv(src, kind, build);
+export function scanSource(src, { kind, build = false, forbid = null }) {
+  const env = makeEnv(src, kind, build, forbid);
   const { code, idx, regions } = env;
   const hits = [];
   const push = (rule, offset, severity, extra = {}) => {

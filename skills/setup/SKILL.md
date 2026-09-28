@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Install the rust-craft enforcement templates into this Rust repository (workspace lints, clippy/rustfmt/deny config, toolchain pin, CLAUDE.md/AGENTS.md hierarchy, path-scoped rules, CI workflow, git pre-commit hook, temper config) and write a charter for every crate.
+description: Install the rust-craft enforcement templates into this Rust repository (workspace lints, clippy/rustfmt/deny config, toolchain pin, CLAUDE.md/AGENTS.md hierarchy, path-scoped rules, CI workflow, git pre-commit hook, temper config, the vendored temper CLI), write a charter for every crate, and record a lint baseline for existing code.
 disable-model-invocation: true
 allowed-tools: Bash(node *) Bash(cargo metadata *) Bash(git config *)
 ---
@@ -34,8 +34,14 @@ Fill in the crate map in the root `AGENTS.md` the same way.
 ## 5. Git hook
 If the user agrees, run `git config core.hooksPath .githooks` so the pre-commit gate runs locally.
 
-## 6. Baseline
-Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" scan --all` and `cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -40`. Report the counts per rule. On an existing codebase the numbers will be large, and that is expected: the hooks only block *new* violations (a ratchet), so legacy code does not stop anyone working. Offer `/temper:audit` for a remediation plan.
+## 6. Baseline (existing code)
+Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" baseline`. If it reports findings, explain to the user in plain words: with the lint table merged, the gate and CI would now fail on legacy code. Recording a baseline makes them fail only on new findings (findings in changed lines, or a crate's count rising), while legacy debt is reported but does not block.
+
+- If the workspace does not build, stop and report the errors: a baseline cannot record lints for a crate that does not compile.
+- If `cargo fmt --all -- --check` fails, ask the user to run `cargo fmt --all` and commit it on its own first. `--init` refuses an unformatted tree, because the gate's formatting pass would otherwise turn every reformatted legacy line into a changed line.
+- Run `cargo test --workspace -q 2>&1 | tail -5`. If tests fail, say so: tests are not baselined. The user fixes them, or triages each with `#[ignore = "reason"]`, a human decision (H-12).
+- Otherwise ask with AskUserQuestion whether to record the baseline now (recommended for existing code). On yes, run `TEMPER_ALLOW_RAISE=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" baseline --init`. The hook asks the user to confirm, because recording or raising a baseline is an H-12 decision; the CLI refuses it inside an agent session without that variable. Tell them to commit `.claude/temper-baseline.json` with the setup, and to record and tighten it on the platform CI uses.
+- Then run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" report --out .temper/report` and give the headline numbers from `.temper/report/report.md`. Offer `/temper:audit` for a remediation plan.
 
 ## 7. Report
-List the files created or changed, the charters written (with the "(inferred, confirm)" items the user should check), and the baseline numbers.
+List the files created or changed (including the vendored CLI under `.claude/temper/`, which CI and the pre-commit hook run), the charters written (with the "(inferred, confirm)" items the user should check), whether a baseline was recorded, and the headline numbers from the report.

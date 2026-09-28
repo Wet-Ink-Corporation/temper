@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.2.0 (2026-09-28)
+
+This release makes temper usable on existing codebases and reports compliance.
+
+### Lint baseline (brownfield ratchet)
+
+Before this release the gate, CI and the pre-commit hook ran `cargo clippy -- -D warnings` over the whole workspace. Merging the lint table into a legacy repository therefore turned every agent turn and every CI run red. The scanner and the manifest check already blocked only new violations; clippy and rustdoc did not. The README's claim that legacy code does not stop work was wrong for them.
+
+**Recording.** `temper baseline --init` records clippy, rustdoc and scanner findings per crate and lint in `.claude/temper-baseline.json`, which you commit. It also records the crate directories and the host platform.
+- Findings are collected with `--cap-lints warn`, so every crate is checked even when its dependencies have deny-level findings.
+- Findings raised inside a macro are attributed to the call site.
+- `--init` refuses an unformatted tree.
+
+**The ratchet.** With a baseline, the gate, CI and the pre-commit hook fail only on:
+- a finding in a line added, modified or moved since the session base or the pull request's merge base (renames are recognised, including unstaged ones and renamed crates);
+- a crate's count for a lint rising, which catches a new warning on an untouched line;
+- an `#[allow]` or `#[expect]` of a lint the workspace forbids.
+
+Legacy findings are reported, not blocking.
+
+**Without a baseline**, `baseline --check` requires zero findings, as `-D warnings` did. CI therefore always runs one lint step through the vendored CLI.
+
+**Changing the baseline.**
+- `--tighten` lowers counts after debt is paid and never raises them. It refuses on a host other than the one the baseline records, since counts lowered there can fail CI on untouched lines; `--any-host` overrides that for workspaces with no platform-specific code.
+- `--update` raises them. That is a human decision (H-12): the CLI refuses it inside an agent session unless `TEMPER_ALLOW_RAISE=1` is set, and the Bash hook asks. The hook also asks on restoring an older baseline with `git checkout` or `git restore`, and it refuses shell writes to the file.
+- The gate and CI compare the baseline with the base's copy and flag any raise in the gate summary, the pull-request report and the step summary. A raise is shown, never failed, so a human-approved `--update` still merges.
+
+**Rule mapping.** Findings map to rule IDs and levels through `scripts/lib/rulemap.json`, which is generated from `rules.md` and checked for freshness by `tests/lint-claims.py`.
+
+**Tests are not baselined.**
+
+### Compliance report
+
+`temper report` writes `report.json`, `report.md` and a self-contained `report.html`. It contains:
+- findings by severity, with iron-rule findings called out;
+- a per-crate scorecard: status (`clean`, `debt` or `regressed`), counts, new and fixed findings against the baseline, lint inheritance, charter presence and top rules;
+- the top rules and files;
+- findings in new code;
+- any baseline raise.
+
+CI publishes it on every run as an artifact and a step summary. A separate job, the only one with `pull-requests: write`, keeps one pull-request comment up to date.
+
+### Distribution and setup
+
+- `/temper:setup` copies the CLI into the repository at `.claude/temper/`, so CI and the pre-commit hook run it without the plugin.
+- Setup now offers to record a baseline for existing code, after checking formatting and tests.
+- `/temper:audit` builds its numbers from the report.
+
+### CI template
+
+- The gate job uses `fetch-depth: 0` and a single `Lint (temper)` step, with plain clippy only when the vendored CLI is absent. It runs a report step and uploads the report as an artifact.
+- The pull-request comment lives in its own `report-comment` job.
+- Every checkout sets `persist-credentials: false`.
+- The MSRV, latest-deps and aarch64 jobs no longer fail on legacy warnings when a baseline exists.
+
+### Fixes
+
+- The tree fingerprint now includes the resolved commit. Before, every clean tree had the same fingerprint, so a gate result cached for one commit could be reused for another. A base from another repository is now ignored instead of producing an empty diff.
+
 ## 1.1.0 (2026-09-28)
 
 The standard was reviewed against ten outside sources: the Rust API Guidelines, Effective Rust, the Rust Performance Book, Rust Atomics and Locks, Rust Design Patterns, the Cargo Book, the std docs, Miri, Microsoft's Pragmatic Rust Guidelines and leonardomso/rust-skills. `skills/rust-craft/references/sources.md` records what was taken from each source, and what was left out and why.
