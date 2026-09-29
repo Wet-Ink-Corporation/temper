@@ -87,6 +87,11 @@ Legacy code must not stop work, and new code must meet the standard. temper does
 - **Suppressions cannot hide behind the baseline.** `#[allow]` or `#[expect]` of a lint the workspace forbids always fails, as it would under `-D warnings`.
 - **Tests are not baselined.** A red legacy suite is fixed, or triaged with `#[ignore = "reason"]` as a human decision, before adoption.
 - **One platform.** Findings depend on the host's `cfg`s. Record and tighten the baseline on the platform CI runs. `--check`, `--init` and `--update` warn when the host differs from the one the baseline records; `--tighten` refuses, because counts lowered on another platform can fail CI on lines nobody touched. Pass `--any-host` only when the workspace has no platform-specific code.
+- **A raise is shown, not failed.** Inside Claude Code a raise is stopped at the source: the CLI refuses it and the hook asks you. A raise made anywhere else (your own terminal, another agent) appears as `BASELINE RAISED`, with the change for each lint, in the gate, the step summary and the pull-request comment, and the merge goes through. A red build means the code regressed; a raise is a question for the reviewer.
+- **For a hard sign-off**, as on a team or client repository, add `/.claude/temper-baseline.json @owner-or-team` to `.github/CODEOWNERS` and turn on "Require review from Code Owners" in branch protection or a ruleset. It has three costs:
+  - It gates `--tighten` too, which slows paying debt down and leaves the baseline loose.
+  - GitHub never counts an author's approval of their own pull request, so a sole owner needs a ruleset bypass for their own changes.
+  - Code owners on private repositories need a paid GitHub plan.
 
 The rollout:
 

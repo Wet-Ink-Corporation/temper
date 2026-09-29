@@ -1,7 +1,7 @@
 {
   "name": "temper",
   "displayName": "Temper: rust-craft enforcement",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "The rust-craft Rust engineering standard (ownership, APIs, errors, architecture, TDD, performance, async, structured output, no escape hatches) plus the hooks, subagents and gates that make agents follow it: skill-load gate, pre-write escape-hatch scanner, protected config, completion gate with fingerprint-bound independent review, a lint-baseline ratchet for existing codebases, and a compliance report.",
   "author": { "name": "Ryan Britton", "email": "ryan.britton@wet-ink.net" },
   "homepage": "https://github.com/Wet-Ink-Corporation/temper",

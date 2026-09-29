@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 (2026-09-28)
+
+Documentation only.
+- The README's Brownfield adoption section now explains why a raised baseline is flagged but never fails the build. Inside Claude Code a raise is stopped at the source; anywhere else it is a question for the reviewer.
+- It also gives a one-line CODEOWNERS recipe for repositories that want a hard sign-off, with its costs: it gates `--tighten` too, a sole owner cannot approve their own pull request, and private repositories need a paid GitHub plan.
+
 ## 1.2.0 (2026-09-28)
 
 This release makes temper usable on existing codebases and reports compliance.
