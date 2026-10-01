@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Windows fixes.
+- `temper baseline --init` on an unformatted tree named the file by the verbatim path cargo reports on Windows (`//?/C:/.../src/lib.rs`) instead of `src/lib.rs`. Paths are now made relative after stripping the `\\?\` prefix.
+- `temper report` and `temper setup` in a copy of temper without `report.mjs` or `vendor.mjs` crashed with `ERR_MODULE_NOT_FOUND` on Windows instead of saying the command is not available in this copy.
+- The unit tests skip their symlink cases on a host that cannot create symlinks (Windows without Developer Mode), and CI runs them on Windows.
+
 ## 1.2.2 (2026-10-01)
 
 The marketplace in this repository is named `temper`, so the install is now `claude plugin marketplace add Wet-Ink-Corporation/temper`, then `claude plugin install temper@temper`. The `wet-ink` name stays free for a marketplace of all Wet Ink plugins (Weigh-In: wi-d75e63).

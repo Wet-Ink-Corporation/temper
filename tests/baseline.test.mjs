@@ -15,6 +15,7 @@ import {
 import { discover, fingerprint, BASELINE_FILE, safeOutputPath } from '../scripts/lib/project.mjs';
 import { runGate, renderGate } from '../scripts/lib/gate.mjs';
 import { collectFindings } from '../scripts/lib/findings.mjs';
+import { canSymlink } from './fixtures/can-symlink.mjs';
 
 const hasGit = spawnSync('git', ['--version']).status === 0;
 const hasCargo = spawnSync('cargo', ['--version']).status === 0;
@@ -253,6 +254,7 @@ test('output paths: under target/ or .temper/ after resolving symlinks, never on
     assert.equal(safeOutputPath(root, p('.temper/f.json')), p('.temper/f.json'));
     assert.equal(safeOutputPath(root, p('target')), null, 'a file must be below target/');
     assert.equal(safeOutputPath(root, p('target'), { dir: true }), p('target'));
+    if (!canSymlink) return;
     fs.mkdirSync(p('target'));
     fs.symlinkSync(p('crates/a/src'), p('target/src'));
     fs.symlinkSync(p('.github'), p('target/gh'));
@@ -598,9 +600,11 @@ test('CLI: usage errors, a bad --base or --findings-out, and raises inside Claud
       assert.equal(r.code, 2, out);
       assert.match(r.out, /--findings-out .* refused: write findings under target\/ or \.temper\//, out);
     }
-    fs.mkdirSync(path.join(dir, 'target'));
-    fs.symlinkSync(path.join(dir, 'Cargo.toml'), path.join(dir, 'target', 'link.json'));
-    assert.equal(cli(dir, ['baseline', '--check', '--findings-out', 'target/link.json']).code, 2, 'not onto a symlink');
+    if (canSymlink) {
+      fs.mkdirSync(path.join(dir, 'target'));
+      fs.symlinkSync(path.join(dir, 'Cargo.toml'), path.join(dir, 'target', 'link.json'));
+      assert.equal(cli(dir, ['baseline', '--check', '--findings-out', 'target/link.json']).code, 2, 'not onto a symlink');
+    }
     assert.equal(cli(dir, ['baseline', '--check', '--any-host']).code, 2, '--any-host is for --tighten only');
     const badBase = cli(dir, ['baseline', '--check', '--base', 'origin/mian']);
     assert.equal(badBase.code, 2);

@@ -133,8 +133,14 @@ export function globMatch(pattern, rel) {
   return new RegExp(`^${re}$`).test(norm(rel));
 }
 
+// cargo and rustfmt on Windows can report verbatim paths (\\?\C:\..., //?/C:/...), which
+// path.relative treats as a different root from C:\...
+const unverbatim = (p) => (process.platform === 'win32'
+  ? p.replace(/^[\\/]{2}\?[\\/](UNC[\\/])?/i, (_m, unc) => (unc ? '\\\\' : ''))
+  : p);
+
 export function relTo(root, file) {
-  return norm(path.relative(root, path.resolve(file)));
+  return norm(path.relative(unverbatim(root), path.resolve(unverbatim(file))));
 }
 
 /** Crate root (dir with a Cargo.toml containing [package]) for a file. */

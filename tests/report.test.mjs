@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { buildReport, renderMarkdown, renderHtml, reportOutDir, MD_MAX_LINES } from '../scripts/lib/report.mjs';
 import { ratchet } from '../scripts/lib/baseline.mjs';
 import { sample, sampleRaised, RULEMAP } from './fixtures/report-sample.mjs';
+import { canSymlink } from './fixtures/can-symlink.mjs';
 
 const REPORT_MJS = fileURLToPath(new URL('../scripts/lib/report.mjs', import.meta.url));
 const META = { generated: '2026-09-28T12:00:00.000Z', version: '9.9.9', base: 'origin/main', title: 'ws', rulemap: RULEMAP };
@@ -343,9 +344,11 @@ test('report: --out stays under target/ or .temper/', () => {
     for (const bad of ['src', '.github/workflows', '.claude', 'target/../src', 'targets/x', path.join(os.tmpdir(), 'elsewhere')]) {
       assert.equal(reportOutDir(root, path.isAbsolute(bad) ? bad : path.join(root, bad)), null, bad);
     }
-    fs.mkdirSync(path.join(root, 'target'));
-    fs.symlinkSync(path.join(root, 'src'), path.join(root, 'target', 'link'));
-    assert.equal(reportOutDir(root, path.join(root, 'target', 'link')), null, 'a symlink');
+    if (canSymlink) {
+      fs.mkdirSync(path.join(root, 'target'));
+      fs.symlinkSync(path.join(root, 'src'), path.join(root, 'target', 'link'));
+      assert.equal(reportOutDir(root, path.join(root, 'target', 'link')), null, 'a symlink');
+    }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -422,11 +425,13 @@ test('report CLI: usage errors, refused paths and unusable input exit 2', () => 
       assert.match(r.stderr, /refused: write the report under target\/ or \.temper\//);
     }
     assert.equal(fs.existsSync(path.join(dir, 'src')), false);
-    fs.mkdirSync(path.join(dir, 'target', 'out'));
-    fs.symlinkSync(path.join(dir, 'victim.rs'), path.join(dir, 'target', 'out', 'report.md'));
-    assert.equal(runCli(dir, ['--findings', 'target/findings.json', '--out', 'target/out']).status, 2, 'a report file that is a symlink');
-    assert.equal(fs.existsSync(path.join(dir, 'victim.rs')), false);
-    fs.rmSync(path.join(dir, 'target', 'out'), { recursive: true });
+    if (canSymlink) {
+      fs.mkdirSync(path.join(dir, 'target', 'out'));
+      fs.symlinkSync(path.join(dir, 'victim.rs'), path.join(dir, 'target', 'out', 'report.md'));
+      assert.equal(runCli(dir, ['--findings', 'target/findings.json', '--out', 'target/out']).status, 2, 'a report file that is a symlink');
+      assert.equal(fs.existsSync(path.join(dir, 'victim.rs')), false);
+      fs.rmSync(path.join(dir, 'target', 'out'), { recursive: true });
+    }
     const noGit = runCli(dir, ['--findings', 'target/findings.json', '--out', 'target/out', '--base', 'origin/main']);
     assert.equal(noGit.status, 2);
     assert.match(noGit.stderr, /--base needs a git repository/);

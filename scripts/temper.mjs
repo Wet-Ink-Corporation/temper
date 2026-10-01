@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
-import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp } from './lib/project.mjs';
+import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm } from './lib/project.mjs';
 import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
@@ -346,7 +346,7 @@ async function optionalModule(rel, what, { quiet = false } = {}) {
   try {
     return await import(rel);
   } catch (e) {
-    if (e?.code === 'ERR_MODULE_NOT_FOUND' && String(e.message).includes(rel.replace('./', ''))) {
+    if (e?.code === 'ERR_MODULE_NOT_FOUND' && norm(String(e.message)).includes(rel.replace('./', ''))) {
       if (!quiet) process.stderr.write(`temper: ${what} is not available in this copy of temper (${rel.replace('./', 'scripts/')} is missing).\n`);
       return null;
     }
