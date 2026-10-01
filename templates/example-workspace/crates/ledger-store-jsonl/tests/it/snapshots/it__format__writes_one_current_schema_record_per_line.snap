@@ -1,0 +1,8 @@
+---
+source: crates/ledger-store-jsonl/tests/it/format.rs
+assertion_line: 18
+expression: written
+---
+{"schema_version":2,"recorded_at_ms":1767225600000,"event":{"type":"opened","owner":"Ada Lovelace"}}
+{"schema_version":2,"recorded_at_ms":1767225660000,"event":{"type":"deposited","amount_cents":1250}}
+{"schema_version":2,"recorded_at_ms":1767225720000,"event":{"type":"withdrew","amount_cents":250}}

@@ -1,0 +1,17 @@
+[package]
+name = "ledger-domain"
+description = "Pure account rules for the ledger: value types and the account decider"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

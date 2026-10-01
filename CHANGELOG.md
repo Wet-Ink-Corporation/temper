@@ -1,0 +1,204 @@
+# Changelog
+
+## 1.2.1 (2026-09-28)
+
+Documentation only.
+- The README's Brownfield adoption section now explains why a raised baseline is flagged but never fails the build. Inside Claude Code a raise is stopped at the source; anywhere else it is a question for the reviewer.
+- It also gives a one-line CODEOWNERS recipe for repositories that want a hard sign-off, with its costs: it gates `--tighten` too, a sole owner cannot approve their own pull request, and private repositories need a paid GitHub plan.
+
+## 1.2.0 (2026-09-28)
+
+This release makes temper usable on existing codebases and reports compliance.
+
+### Lint baseline (brownfield ratchet)
+
+Before this release the gate, CI and the pre-commit hook ran `cargo clippy -- -D warnings` over the whole workspace. Merging the lint table into a legacy repository therefore turned every agent turn and every CI run red. The scanner and the manifest check already blocked only new violations; clippy and rustdoc did not. The README's claim that legacy code does not stop work was wrong for them.
+
+**Recording.** `temper baseline --init` records clippy, rustdoc and scanner findings per crate and lint in `.claude/temper-baseline.json`, which you commit. It also records the crate directories and the host platform.
+- Findings are collected with `--cap-lints warn`, so every crate is checked even when its dependencies have deny-level findings.
+- Findings raised inside a macro are attributed to the call site.
+- `--init` refuses an unformatted tree.
+
+**The ratchet.** With a baseline, the gate, CI and the pre-commit hook fail only on:
+- a finding in a line added, modified or moved since the session base or the pull request's merge base (renames are recognised, including unstaged ones and renamed crates);
+- a crate's count for a lint rising, which catches a new warning on an untouched line;
+- an `#[allow]` or `#[expect]` of a lint the workspace forbids.
+
+Legacy findings are reported, not blocking.
+
+**Without a baseline**, `baseline --check` requires zero findings, as `-D warnings` did. CI therefore always runs one lint step through the vendored CLI.
+
+**Changing the baseline.**
+- `--tighten` lowers counts after debt is paid and never raises them. It refuses on a host other than the one the baseline records, since counts lowered there can fail CI on untouched lines; `--any-host` overrides that for workspaces with no platform-specific code.
+- `--update` raises them. That is a human decision (H-12): the CLI refuses it inside an agent session unless `TEMPER_ALLOW_RAISE=1` is set, and the Bash hook asks. The hook also asks on restoring an older baseline with `git checkout` or `git restore`, and it refuses shell writes to the file.
+- The gate and CI compare the baseline with the base's copy and flag any raise in the gate summary, the pull-request report and the step summary. A raise is shown, never failed, so a human-approved `--update` still merges.
+
+**Rule mapping.** Findings map to rule IDs and levels through `scripts/lib/rulemap.json`, which is generated from `rules.md` and checked for freshness by `tests/lint-claims.py`.
+
+**Tests are not baselined.**
+
+### Compliance report
+
+`temper report` writes `report.json`, `report.md` and a self-contained `report.html`. It contains:
+- findings by severity, with iron-rule findings called out;
+- a per-crate scorecard: status (`clean`, `debt` or `regressed`), counts, new and fixed findings against the baseline, lint inheritance, charter presence and top rules;
+- the top rules and files;
+- findings in new code;
+- any baseline raise.
+
+CI publishes it on every run as an artifact and a step summary. A separate job, the only one with `pull-requests: write`, keeps one pull-request comment up to date.
+
+### Distribution and setup
+
+- `/temper:setup` copies the CLI into the repository at `.claude/temper/`, so CI and the pre-commit hook run it without the plugin.
+- Setup now offers to record a baseline for existing code, after checking formatting and tests.
+- `/temper:audit` builds its numbers from the report.
+
+### CI template
+
+- The gate job uses `fetch-depth: 0` and a single `Lint (temper)` step, with plain clippy only when the vendored CLI is absent. It runs a report step and uploads the report as an artifact.
+- The pull-request comment lives in its own `report-comment` job.
+- Every checkout sets `persist-credentials: false`.
+- The MSRV, latest-deps and aarch64 jobs no longer fail on legacy warnings when a baseline exists.
+
+### Fixes
+
+- The tree fingerprint now includes the resolved commit. Before, every clean tree had the same fingerprint, so a gate result cached for one commit could be reused for another. A base from another repository is now ignored instead of producing an empty diff.
+
+## 1.1.0 (2026-09-28)
+
+The standard was reviewed against ten outside sources: the Rust API Guidelines, Effective Rust, the Rust Performance Book, Rust Atomics and Locks, Rust Design Patterns, the Cargo Book, the std docs, Miri, Microsoft's Pragmatic Rust Guidelines and leonardomso/rust-skills. `skills/rust-craft/references/sources.md` records what was taken from each source, and what was left out and why.
+
+### Standard (rust-craft)
+
+**18 new rules** (182 in total):
+
+| Area | Rule | What it requires |
+|---|---|---|
+| Ownership | OWN-17 | No out-parameters. |
+| API | API-21 | No trait bounds on type definitions. |
+| API | API-22 | Operators never overflow. |
+| API | API-23 | No `Arc`/`Mutex` in public signatures. |
+| Errors | ERR-13 | Explicit `finish(self) -> Result`; `Drop` only logs. |
+| Errors | ERR-14 | Hand the consumed argument back in the error. |
+| Architecture | ARC-16 | Every crate builds on its own. |
+| Architecture | ARC-17 | Build-script rules. |
+| Tests | TST-17 | Miri and aarch64 CI for concurrency code. |
+| Tests | TST-18 | Pin the dependency behaviour you rely on. |
+| Performance | PERF-13 | Cache-line padding, only on measured contention. |
+| Concurrency | ASY-13 | Atomic ordering justification. |
+| Concurrency | ASY-14 | Lock discipline, including guards in `if let`/`match` scrutinees, which edition 2024 did not fix. |
+| Concurrency | ASY-15 | `thread::Builder` instead of the panicking `thread::spawn`. |
+| Concurrency | ASY-16 | `Condvar::wait_while`, and no spinning. |
+| Concurrency | ASY-17 | No home-made primitives. |
+| Craft | CRF-11 | Docs describe the contract, not the history. |
+| Process | PROC-13 | Never hand-edit `Cargo.lock`. |
+
+**About 90 existing rules sharpened.** The largest changes:
+- The panicking-APIs table grew by about 25 verified entries, and one entry was corrected: `Instant - Instant` saturates.
+- The memory-ordering cheat sheet was replaced; "unsure → `SeqCst`" was wrong.
+- Other additions:
+  - `as_`/`to_`/`into_` cost semantics;
+  - readers and writers taken by value;
+  - dyn-compatibility guards;
+  - one public path per item;
+  - no `# Arguments` doc sections;
+  - caret-floor dependency requirements;
+  - profile defaults versus per-application choices;
+  - `#[non_exhaustive]` only at published boundaries.
+
+**Examples.**
+- Fixed examples that failed the template's own gate (PERF-03 `chunks_exact`) or taught a bug:
+  - the ASY-10 scope panic;
+  - the Decider `evolve` wildcard;
+  - parsers returning `Option`.
+- Full sketches now live once in `patterns.md`, with ten new patterns (23–32).
+
+**`SKILL.md`.** The iron rules, design defaults and router were updated. It is still under the 5k-token re-attachment budget.
+
+### Enforcement
+
+**Template lints.**
+- rustc: `ambiguous_negative_literals`, `redundant_imports`.
+- clippy:
+  - `needless_collect`
+  - `or_fun_call`
+  - `significant_drop_in_scrutinee`
+  - `debug_assert_with_mut_call`
+  - `future_not_send`
+  - `too_long_first_doc_paragraph`
+  - `missing_assert_message`
+  - `assertions_on_result_states`
+  - `renamed_function_params`
+  - `empty_drop`
+  - `negative_feature_names`
+  - `redundant_feature_names`
+  - `cargo_common_metadata`
+
+**`clippy.toml`.**
+- `disallowed-methods`: `thread::spawn`, `Scope::spawn`, `env::args`, `env::vars`, float `Duration` constructors and arithmetic.
+- `await-holding-invalid-types`: tracing span guards, `watch::Ref`.
+- `upper-case-acronyms-aggressive`.
+
+**Profiles.** New `dev` (line tables only; no debug info for dependencies), `profiling` and `bench` profiles.
+
+**Scanner.**
+- New rules:
+  - `unwrap` inside doctest fences, which clippy never sees;
+  - silent `Err` arms;
+  - `thread::spawn`;
+  - `compiler_fence`;
+  - `#[global_allocator]` in libraries;
+  - advisories for `map[&k]`, `SeqCst`, `fetch_update`, glob re-exports, struct bounds, operator impls, `get_` getters, primitive type aliases and more.
+- Compile-time assertions are no longer flagged.
+- `cfg_attr(.., ignore)` without a reason is now caught.
+
+**Hooks.**
+- A member `Cargo.toml` that does not inherit the workspace lints, or that declares its own `[profile]`, is refused. Previously a new crate silently got none of the escape-hatch lints. The check is a ratchet: only new violations block. Human-approved exceptions are listed in `.claude/temper.json` under `manifests.ownLints`.
+- Asks before:
+  - manifest switches that stop tests (`test`, `doctest`, `harness`, `autotests`);
+  - `[patch]`/`[replace]`;
+  - `rust-version`/`edition` changes;
+  - new crates;
+  - dependency major-version bumps;
+  - new `#[ignore]`s;
+  - `cargo add`/`cargo remove`.
+- Refuses:
+  - `Cargo.lock` edits;
+  - shell writes to `Cargo.lock`/`Cargo.toml`;
+  - `--ignore-rust-version`.
+
+**Gate.** A `manifests` step checks lint inheritance and member profiles. It also runs when cargo is unavailable.
+
+**CI template.**
+- Actions pinned to commit SHAs, `permissions: contents: read`, and `--locked` everywhere.
+- The MSRV job now really runs 1.96. It used to be overridden by `rust-toolchain.toml`.
+- New steps: a per-crate build (ARC-16), `cargo hack` feature powerset, `cargo machete`.
+- Scheduled latest-deps, aarch64 and Miri jobs.
+- Dependabot, with `lockfile-only`.
+- `deny.toml` fixed so `cargo deny check` passes on real dependency trees.
+
+### Example workspace
+
+- It meets every new rule.
+- `evolve` enumerates impossible `(state, event)` pairs.
+- Writers are taken by value.
+- Exit codes are mapped through a `match`, and the deviation from the house convention is recorded in the charter.
+- Crate roots have a quick start and a list of features.
+- It passes under Miri: no UB, no leaks, no deadlocks.
+
+### Verification
+
+- `tests/doc_examples.py`: every Do block in the skill (329 blocks) compiles, passes clippy and runs its tests under the template lints. Every annotated Don't block fires the diagnostic it claims.
+- `tests/registry.py`: every rule has exactly one section, every cited ID exists, and the counts match.
+- `tests/lint-claims.py`: now also checks Detect lines and scanner claims by rule ID.
+- New `tests/hooks.test.mjs` and `tests/toml.test.mjs`.
+
+## 1.0.0 (2026-09-27)
+
+Initial release:
+- the rust-craft skill (164 rules);
+- the implementer, reviewer and architect subagents;
+- the skill gate, pre-write scanner, protected config and fingerprint-bound completion gate;
+- the workspace and example templates;
+- evals.

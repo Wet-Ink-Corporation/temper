@@ -1,0 +1,71 @@
+{
+  "description": "temper: enforce the rust-craft standard (skill gate, escape-hatch scan, protected config, completion gate with independent review).",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "session-start"], "timeout": 30 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "user-prompt"], "timeout": 15 }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "pre-edit"], "timeout": 30 }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "pre-bash"], "timeout": 15 }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "pre-handback"], "timeout": 60 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill|Read",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "post-tool"], "timeout": 15 }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "rust-(implementer|reviewer|architect)$",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "subagent-start"], "timeout": 120 }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "rust-(implementer|reviewer)$",
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "subagent-stop"], "timeout": 1200, "statusMessage": "temper: checking gate / verdict" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "stop"], "timeout": 1200, "statusMessage": "temper: running the Rust gate" }
+        ]
+      }
+    ]
+  }
+}

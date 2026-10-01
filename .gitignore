@@ -19,3 +19,11 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# temper
+# Weigh-In's local ledger; the committed decision records live in .kb/
+.weighin/
+# Reports and plans generated while working in this repository
+.temper/
+# Bytecode from the Python checks in tests/
+__pycache__/
