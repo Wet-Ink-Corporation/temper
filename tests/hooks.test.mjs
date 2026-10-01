@@ -343,6 +343,9 @@ test('gate manifests step without git: every problem counts', { skip: !cargo && 
 });
 
 test('gate without cargo still checks member manifests (TOML only)', () => {
+  // The fixture's broken manifests are fixed by the test above, which is skipped without cargo.
+  write('crates/legacy/Cargo.toml', MEMBER.replace('ledger-domain', 'legacy'));
+  write('crates/profiled/Cargo.toml', MEMBER.replace('ledger-domain', 'profiled'));
   const proj = discover(ws);
   const savedPath = process.env.PATH;
   try {
