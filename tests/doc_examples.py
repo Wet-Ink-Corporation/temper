@@ -43,8 +43,9 @@ Inside rust blocks:
 
 Generated workspace: under a temp dir (or --out). It takes the template's
 `rust-toolchain.toml`, `clippy.toml`, `[workspace.package]`, profiles and
-`[workspace.lints]` from templates/workspace at run time, runs fully offline
-(`--offline`, registry cache only) under the pinned toolchain, and ignores
+`[workspace.lints]` from templates/workspace at run time, compiles offline
+(`--offline`, registry cache only; `--fetch` fills the cache first, as CI does
+on a fresh machine) under the pinned toolchain, and ignores
 RUSTFLAGS/CARGO_TARGET_DIR from the environment. Build artifacts go to a
 persistent cache (--target-dir, default ~/.cache/temper/doc-examples-target) so
 dependencies compile once.
@@ -417,6 +418,21 @@ def run_cargo(args, ws, env, target_dir, timeout):
         raise HarnessError(f'cannot run cargo: {e}') from e
 
 
+def fetch_dependencies(ws, env, timeout, log):
+    """Download the generated workspace's dependencies; every later cargo call runs --offline."""
+    log('doc_examples: cargo fetch')
+    try:
+        online = {k: v for k, v in env.items() if k != 'CARGO_NET_OFFLINE'}
+        r = subprocess.run(['cargo', 'fetch'], cwd=ws, env=online, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as e:
+        raise HarnessError(f'`cargo fetch` timed out after {timeout}s') from e
+    except OSError as e:
+        raise HarnessError(f'cannot run cargo: {e}') from e
+    if r.returncode != 0:
+        raise HarnessError(f'`cargo fetch` failed: {r.stderr.strip()[-600:]}')
+
+
 def block_files(ws, crate, blocks):
     """Map generated file paths to (block, line offset). lib.rs lines map to fence lines."""
     src = (ws / 'crates' / crate / 'src').resolve()
@@ -784,6 +800,8 @@ def main(argv):
     ap.add_argument('--target-dir', default=os.path.join(cache, 'temper', 'doc-examples-target'),
                     help='cargo target dir, reused across runs (default: %(default)s)')
     ap.add_argument('--no-test', action='store_true', help='skip `cargo test`')
+    ap.add_argument('--fetch', action='store_true',
+                    help='run `cargo fetch` before the offline build, for a machine without a registry cache (CI)')
     ap.add_argument('--scanner', default=str(SCAN_MJS), help='scan.mjs to use (default: %(default)s)')
     ap.add_argument('--timeout', type=int, default=1800, help='seconds per cargo command (default: %(default)s)')
     ap.add_argument('--skill-dir', default=str(SKILL), help='skill to check (default: %(default)s)')
@@ -833,6 +851,8 @@ def main(argv):
         target_dir.mkdir(parents=True, exist_ok=True)
         try:
             write_workspace(ws, do_blocks, dont_blocks)
+            if args.fetch:
+                fetch_dependencies(ws, env, args.timeout, log)
             final, dropped = compile_rounds(ws, env, target_dir, 'doc-examples', do_blocks, args.timeout, log)
             check_do(do_blocks, final, dropped)
             final_d, dropped_d = compile_rounds(ws, env, target_dir, 'dont-examples', dont_blocks, args.timeout, log)

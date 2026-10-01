@@ -1,0 +1,12 @@
+{
+  "name": "wet-ink",
+  "description": "Wet Ink Corporation plugins for Claude Code.",
+  "owner": { "name": "Ryan Britton", "email": "ryan.britton@wet-ink.net" },
+  "plugins": [
+    {
+      "name": "temper",
+      "source": "./",
+      "description": "The rust-craft Rust engineering standard, enforced: skill-load gate, pre-write escape-hatch scanner, protected config, and a completion gate that requires an independent, fingerprint-bound review; a lint-baseline ratchet for existing codebases; and a compliance report."
+    }
+  ]
+}

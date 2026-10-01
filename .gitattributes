@@ -1,0 +1,10 @@
+# LF in the repository and in every checkout, on every platform. The git hooks,
+# shell scripts and vendored CLI run on Linux and macOS, and the tests compare
+# text byte for byte.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.zip binary
+*.plugin binary
