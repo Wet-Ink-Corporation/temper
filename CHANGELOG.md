@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2 (2026-10-01)
+
+The marketplace in this repository is named `temper`, so the install is now `claude plugin marketplace add Wet-Ink-Corporation/temper`, then `claude plugin install temper@temper`. The `wet-ink` name stays free for a marketplace of all Wet Ink plugins (Weigh-In: wi-d75e63).
+- The workspace and example templates' `.claude/settings.json` declare the `temper` marketplace and enable `temper@temper`.
+- A repository set up with an earlier version keeps `wet-ink` in its `.claude/settings.json`. Rename the `extraKnownMarketplaces` key to `temper` and the `enabledPlugins` entry to `temper@temper`.
+
 ## 1.2.1 (2026-09-28)
 
 Documentation only.

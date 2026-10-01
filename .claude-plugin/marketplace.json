@@ -1,6 +1,6 @@
 {
-  "name": "wet-ink",
-  "description": "Wet Ink Corporation plugins for Claude Code.",
+  "name": "temper",
+  "description": "temper, from Wet Ink Corporation: the rust-craft Rust standard for Claude Code, enforced.",
   "owner": { "name": "Ryan Britton", "email": "ryan.britton@wet-ink.net" },
   "plugins": [
     {

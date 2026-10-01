@@ -27,7 +27,7 @@ A skill is advice that the model chooses to load. Rules the model can't skip hav
 ```bash
 # as a marketplace (this repository)
 claude plugin marketplace add Wet-Ink-Corporation/temper
-claude plugin install temper@wet-ink
+claude plugin install temper@temper
 
 # or for one session while developing
 claude --plugin-dir /path/to/temper

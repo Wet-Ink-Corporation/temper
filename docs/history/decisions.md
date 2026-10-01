@@ -1,6 +1,6 @@
-# Decision log (1.1 and 1.2)
+# Decision log
 
-This page lists every question raised through [Weigh-In](https://github.com/Wet-Ink-Corporation/weigh-in) while temper 1.1 and 1.2 were built. That covers questions an agent raised, assumptions it made, deferrals and its own calls. Each one was decided by the owner, defaulted as a reversible call, or dismissed. Anchors were rewritten to be relative to this repository. Line numbers are as they were when the item was raised.
+This page lists every question raised through [Weigh-In](https://github.com/Wet-Ink-Corporation/weigh-in) while temper 1.1 and 1.2 were built and while this repository was set up. That covers questions an agent raised, assumptions it made, deferrals and its own calls. Each one was decided by the owner, defaulted as a reversible call, or dismissed. Anchors were rewritten to be relative to this repository. Line numbers are as they were when the item was raised.
 
 ## Decided by the owner
 
@@ -11,6 +11,8 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-e4c765](../../.kb/_intake/decisions/wi-e4c765-should-non-exhaustive-apply-only-at-published.md) | Should `#[non_exhaustive]` apply only at published crate boundaries, keeping workspace-internal enums (errors, Decider events) exhaustive? | Published crates only (API-05). |
 | [wi-cc1518](../../.kb/_intake/decisions/wi-cc1518-should-i-build-temper-baseline-a-committed.md) | Should temper build a committed lint baseline used by the gate and CI, plus a per-crate compliance report, and correct the README's brownfield claim? | Build both (1.2.0). |
 | [wi-d23383](../../.kb/_intake/decisions/wi-d23383-should-ci-fail-rather-than-only-flag-when-a.md) | Should CI fail, rather than only flag, when a pull request raises the committed lint baseline? | Flag only. The README gives a CODEOWNERS recipe for repositories that want a hard sign-off (1.2.1). B (flag plus CODEOWNERS) was chosen first, then reversed after a comparison: CODEOWNERS also gates `--tighten`, and it deadlocks repositories with a single owner. |
+| [wi-d75e63](../../.kb/_intake/decisions/wi-d75e63-should-the-temper-repository-itself-be-the-wet.md) | Should this repository be the `wet-ink` marketplace, or should that name be kept for a marketplace of all Wet Ink plugins? | Rename this repository's marketplace to `temper` (`temper@temper`, 1.2.2), so `wet-ink` stays free. |
+| [wi-96caeb](../../.kb/_intake/decisions/wi-96caeb-should-docs-history-the-agents-working-notes.md) | Should `docs/history/`, which includes a few verbatim sentences quoted from the source books, stay in the repository pushed to GitHub? | Keep all of it. The repository was private when this was decided. |
 
 ## Defaults taken without the owner
 
@@ -32,9 +34,11 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 | wi-cd9821 | Should `baseline --tighten` refuse, rather than warn, on a host other than the one the baseline records? | Refuse unless `--any-host` | Counts lowered on another platform can fail CI on lines nobody touched. | `scripts/temper.mjs:303` |
 | wi-06d675 | Should code moved from one place to another count as new code for the ratchet? | Moved lines count as new | Exact-match move detection would let a deleted `unwrap` line reappear elsewhere unchecked. File and crate renames are recognised. | `CHANGELOG.md:17` |
 | wi-d26284 | Should 1.2.0 ship without re-running the evals? | Shipped without them | 1.2 changed three passages of skill text, and the smoke session ran the changed gate path green. The evals have since run on 1.2.1 ([evals.md](evals.md)). | `.claude-plugin/plugin.json:4` |
+| wi-12f51b | Should the commits that seed this repository be authored as ryan.britton@wet-ink.net rather than the GitHub noreply address? | ryan.britton@wet-ink.net | Every earlier temper commit and `plugin.json` use it. If GitHub shows the commits as unlinked, add the address to the account rather than rewriting history. | `.claude-plugin/plugin.json:6` |
 
 ## Dismissed
 
 | Item | Question | Why |
 |---|---|---|
 | wi-fd7154 | Is the new plugin and marketplace description wording acceptable? | Not useful: descriptive wording, and no behaviour depends on it. |
+| wi-a61c52 | Should the LICENSE name Wet Ink Corporation rather than "Ryan Britton / Wet Ink Corporation"? | Already answered: the owner wrote this LICENSE when creating the repository (initial commit 7429197). |

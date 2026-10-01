@@ -26,7 +26,7 @@ These files were written for the agents doing the work, and they are kept as wri
 
 ## Decisions
 
-[`decisions.md`](decisions.md) lists every question raised through Weigh-In while building 1.1 and 1.2. It covers the owner's decisions, the defaults taken without the owner, and the dismissed items. The full records for the decisions are in [`.kb/_intake/decisions/`](../../.kb/_intake/decisions/).
+[`decisions.md`](decisions.md) lists every question raised through Weigh-In, from 1.1 through the setup of this repository: the owner's decisions, the defaults taken without the owner, and the dismissed items. The full records for the decisions are in [`.kb/_intake/decisions/`](../../.kb/_intake/decisions/).
 
 ## Evals
 

@@ -1,6 +1,6 @@
 {
   "extraKnownMarketplaces": {
-    "wet-ink": {
+    "temper": {
       "source": {
         "source": "github",
         "repo": "Wet-Ink-Corporation/temper"
@@ -8,7 +8,7 @@
     }
   },
   "enabledPlugins": {
-    "temper@wet-ink": true
+    "temper@temper": true
   },
   "permissions": {
     "allow": [
