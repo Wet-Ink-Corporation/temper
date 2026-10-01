@@ -12,7 +12,7 @@ import {
   BASELINE_PATH, readBaseline, writeBaseline, renderBaseline, baselineFrom, tighten, parseDiff, changedLines, ratchet,
   renderRatchet, debtLine, diffTotals,
 } from '../scripts/lib/baseline.mjs';
-import { discover, fingerprint, BASELINE_FILE, safeOutputPath } from '../scripts/lib/project.mjs';
+import { discover, fingerprint, BASELINE_FILE, safeOutputPath, relTo } from '../scripts/lib/project.mjs';
 import { runGate, renderGate } from '../scripts/lib/gate.mjs';
 import { collectFindings } from '../scripts/lib/findings.mjs';
 import { canSymlink } from './fixtures/can-symlink.mjs';
@@ -242,6 +242,20 @@ test('the temporary index writes no untracked file content into .git/objects', {
     assert.ok(!got.has('data.csv'), 'only Rust sources and manifests are diffed');
     assert.ok(objects() - before < 64, `.git/objects grew by ${objects() - before} KB`);
   } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+});
+
+test('relTo: one directory spelled with an 8.3 short name and a long name is the same root', (t) => {
+  if (process.platform !== 'win32') { t.skip('Windows only'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-long-directory-name-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src', 'lib.rs'), '');
+    const short = spawnSync('cmd', ['/d', '/c', `for %I in ("${root}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true }).stdout.trim();
+    if (!short || short.toLowerCase() === root.toLowerCase()) { t.skip('8.3 names are off on this volume'); return; }
+    assert.equal(relTo(root, path.join(short, 'src', 'lib.rs')), 'src/lib.rs');
+    assert.equal(relTo(short, path.join(root, 'src', 'lib.rs')), 'src/lib.rs');
+    assert.equal(relTo(root, path.join(short, 'src', 'new.rs')), 'src/new.rs', 'a file not yet on disk');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test('output paths: under target/ or .temper/ after resolving symlinks, never onto one', () => {

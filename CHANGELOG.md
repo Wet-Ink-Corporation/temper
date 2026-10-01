@@ -4,6 +4,7 @@
 
 Windows fixes.
 - `temper baseline --init` on an unformatted tree named the file by the verbatim path cargo reports on Windows (`//?/C:/.../src/lib.rs`) instead of `src/lib.rs`. Paths are now made relative after stripping the `\\?\` prefix.
+- Paths under a directory with an 8.3 short name (`C:\Users\RUNNER~1\...`, as TEMP often is) were reported relative to the long name git gives the root, as `../../RUNNER~1/...`. Both are now compared in their long form when they differ. This affected every relative path temper prints or keys on, including the nested-workspace hint of `baseline --init`.
 - `temper report` and `temper setup` in a copy of temper without `report.mjs` or `vendor.mjs` crashed with `ERR_MODULE_NOT_FOUND` on Windows instead of saying the command is not available in this copy.
 - The unit tests skip their symlink cases on a host that cannot create symlinks (Windows without Developer Mode), and CI runs them on Windows.
 

@@ -139,8 +139,27 @@ const unverbatim = (p) => (process.platform === 'win32'
   ? p.replace(/^[\\/]{2}\?[\\/](UNC[\\/])?/i, (_m, unc) => (unc ? '\\\\' : ''))
   : p);
 
+// The long, real form of a path that may not exist yet: its nearest existing ancestor
+// through realpath, plus the rest.
+function longPath(p) {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    const parent = path.dirname(p);
+    return parent === p ? p : path.join(longPath(parent), path.basename(p));
+  }
+}
+
 export function relTo(root, file) {
-  return norm(path.relative(unverbatim(root), path.resolve(unverbatim(file))));
+  const r = unverbatim(root);
+  const f = path.resolve(unverbatim(file));
+  const rel = path.relative(r, f);
+  // Windows also spells one directory two ways: 8.3 short names (C:\Users\RUNNER~1) from
+  // TEMP and the cwd, long names from git. Compare the long forms when the lexical ones differ.
+  if (process.platform === 'win32' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+    return norm(path.relative(longPath(r), longPath(f)));
+  }
+  return norm(rel);
 }
 
 /** Crate root (dir with a Cargo.toml containing [package]) for a file. */
