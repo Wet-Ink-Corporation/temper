@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>temper compliance: ledger (regressed, baseline raised)</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f6f3;
+  --surface: #ffffff;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --ink-3: #6b6a65;
+  --line: #e1e0d9;
+  --code-bg: #efeee9;
+  --good: #0ca30c; --good-ink: #006300; --good-bg: #e5f3e5;
+  --warn: #fab219; --warn-ink: #7a4d00; --warn-bg: #fdf0d2;
+  --crit: #d03b3b; --crit-ink: #a51f1f; --crit-bg: #fbe7e7;
+  --sev-must: #1c5cab; --sev-should: #5598e7; --sev-consider: #9ec5f4; --sev-unmapped: #c3c2b7;
+  --bar: #86b6ef;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-3: #a3a29a;
+    --line: #2f2f2c;
+    --code-bg: #2a2a27;
+    --good-ink: #5fd35f; --good-bg: #122a14;
+    --warn-ink: #fbbf3c; --warn-bg: #30250b;
+    --crit-ink: #f58a8a; --crit-bg: #361515;
+    --sev-must: #9ec5f4; --sev-should: #5598e7; --sev-consider: #256abf; --sev-unmapped: #52514e;
+    --bar: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 var(--font); }
+.page { max-width: 1120px; margin: 0 auto; padding: 28px 16px 48px; }
+h1 { font-size: 26px; line-height: 1.2; margin: 2px 0 6px; overflow-wrap: anywhere; }
+h2 { font-size: 18px; margin: 36px 0 4px; }
+p { margin: 0; }
+a { color: inherit; text-underline-offset: 2px; }
+code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; overflow-wrap: break-word; }
+td.path code { overflow-wrap: anywhere; }
+.eyebrow { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); }
+.meta, .hint { font-size: 13.5px; color: var(--ink-2); }
+.hint { margin-bottom: 10px; }
+.status { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; margin-top: 18px; padding: 14px 16px;
+  border-radius: 12px; border: 1px solid var(--line); border-left: 5px solid var(--st); background: var(--st-bg); }
+.status p { flex: 1 1 320px; }
+.status-clean { --st: var(--good); --st-bg: var(--good-bg); }
+.status-debt { --st: var(--warn); --st-bg: var(--warn-bg); }
+.status-regressed, .status-failing, .status-error { --st: var(--crit); --st-bg: var(--crit-bg); }
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 7px; border-radius: 999px; font-size: 13px;
+  font-weight: 650; white-space: nowrap; border: 1px solid currentColor; }
+.status .pill { font-size: 14px; text-transform: uppercase; letter-spacing: .03em; background: var(--surface); }
+.glyph { font-size: .95em; }
+.pill-clean { color: var(--good-ink); }
+.pill-debt { color: var(--warn-ink); }
+.pill-regressed, .pill-failing, .pill-error { color: var(--crit-ink); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 14px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 13px; }
+.kpi-alert { border-top: 4px solid var(--crit); }
+.kpi-label { font-size: 13.5px; color: var(--ink-2); }
+.kpi-value { font-size: 30px; font-weight: 650; line-height: 1.15; margin: 4px 0 2px; }
+.kpi-value small { font-size: 17px; font-weight: 600; color: var(--ink-2); }
+.kpi-sub { font-size: 13px; color: var(--ink-2); }
+.sev { margin-top: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.sevbar { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); }
+.sevbar span { display: block; min-width: 3px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 18px; list-style: none; padding: 0; margin: 10px 0 0; font-size: 13.5px; color: var(--ink-2); }
+.legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.s-must { background: var(--sev-must); } .s-should { background: var(--sev-should); }
+.s-consider { background: var(--sev-consider); } .s-unmapped { background: var(--sev-unmapped); }
+.compare { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); }
+.compare b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+tbody tr:last-child td { border-bottom: 0; }
+th { font-size: 12.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; background: var(--surface); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.nowrap { white-space: nowrap; }
+td.muted, .muted { color: var(--ink-3); }
+.warn-text { color: var(--warn-ink); font-weight: 600; }
+.scorecard { min-width: 900px; }
+.scorecard th:first-child, .scorecard td:first-child { position: sticky; left: 0; background: var(--surface); box-shadow: 1px 0 0 var(--line); }
+.rules { min-width: 680px; }
+.rules td.text { min-width: 300px; }
+.files { min-width: 560px; }
+.findings { min-width: 760px; }
+.pairs { min-width: 480px; }
+td.path { min-width: 220px; }
+td.msg { min-width: 280px; }
+.lvl { display: inline-block; font-size: 11.5px; font-weight: 650; letter-spacing: .04em; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink-2); }
+.lvl-MUST { color: var(--ink); border-color: var(--ink-3); }
+.count { width: 130px; }
+.count-in { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.track { flex: 0 0 64px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar { display: block; height: 100%; border-radius: 3px; background: var(--bar); min-width: 3px; }
+.count-in .n { min-width: 4ch; text-align: right; }
+.more { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+.errors { margin: 8px 0 0; padding-left: 20px; font-size: 14px; }
+.notes { margin: 8px 0 0; padding-left: 20px; font-size: 13.5px; color: var(--ink-2); }
+.raised { margin-top: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); border-left: 5px solid var(--warn); background: var(--warn-bg); }
+.raised-head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; margin-bottom: 12px; }
+.raised-head > span:last-child { flex: 1 1 320px; }
+.pill-raised { color: var(--warn-ink); background: var(--surface); font-size: 14px; text-transform: uppercase; letter-spacing: .03em; }
+.errors li { margin: 2px 0; overflow-wrap: anywhere; }
+footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line); }
+.prov { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; margin: 6px 0 0; font-size: 13px; color: var(--ink-2); }
+.prov dt { font-weight: 600; }
+.prov dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .page { padding-top: 20px; }
+  h1 { font-size: 22px; }
+  .kpis { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .kpi-value { font-size: 26px; }
+  .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  /* Top rules as cards: id, level and count on one line, the rule text below. */
+  .rules, .rules tbody { display: block; min-width: 0; }
+  .rules thead { display: none; }
+  .rules tr { display: grid; grid-template-columns: auto auto 1fr; align-items: center; column-gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .rules tbody tr:last-child { border-bottom: 0; }
+  .rules td { padding: 0; border: 0; }
+  .rules td.count { width: auto; }
+  .rules td.text { grid-column: 1 / -1; min-width: 0; margin-top: 4px; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+<header>
+<p class="eyebrow">temper compliance report</p>
+<h1>ledger</h1>
+<p class="meta">commit <code>9f3c2e1a7b4d</code> · toolchain 1.98.1 · generated 2026-10-01 16:00 UTC</p>
+</header>
+<section class="status status-regressed" aria-label="Status"><span class="pill pill-regressed"><span class="glyph" aria-hidden="true">✕</span>regressed</span><p>4 new findings since <code>origin/main</code> (3 on changed lines; 1 crate/lint count above the baseline on untouched lines): the ratchet fails. 195 legacy findings stay within the baseline. <a href="#new-code">See the new-code findings.</a></p></section>
+<section class="raised" aria-labelledby="raised">
+<p class="raised-head"><span id="raised" class="pill pill-raised"><span class="glyph" aria-hidden="true">▲</span>Baseline raised</span><span>2 counts higher in <code>.claude/temper-baseline.json</code> since <code>5e1f00d2c4b3</code>: the accepted debt grew. Raising the baseline is a human decision (H-12); check that this change was meant to.</span></p>
+<div class="table-wrap"><table class="pairs"><thead><tr><th scope="col">Crate</th><th scope="col">Lint</th><th scope="col" class="num">Before</th><th scope="col" class="num">Now</th><th scope="col" class="num">Change</th></tr></thead><tbody><tr><td class="nowrap"><code>ledger-sync</code></td><td><code>clippy::unwrap_used</code></td><td class="num">9</td><td class="num">12</td><td class="num">+3</td></tr><tr><td class="nowrap"><code>ledger-sync</code></td><td><code>missing_docs</code></td><td class="num">6</td><td class="num">10</td><td class="num">+4</td></tr></tbody></table></div>
+
+</section>
+<section class="kpis" aria-label="Headline numbers">
+<div class="kpi"><p class="kpi-label">MUST findings</p><p class="kpi-value">144</p><p class="kpi-sub">of 198 findings</p></div>
+<div class="kpi"><p class="kpi-label">Iron-rule (H) findings</p><p class="kpi-value">144</p><p class="kpi-sub">escape hatches: unwrap, panics, casts…</p></div>
+<div class="kpi kpi-alert"><p class="kpi-label">New findings</p><p class="kpi-value">4</p><p class="kpi-sub">since <code>origin/main</code></p></div>
+<div class="kpi"><p class="kpi-label">Fixed since baseline</p><p class="kpi-value">5</p><p class="kpi-sub">baseline: 199 findings</p></div>
+<div class="kpi"><p class="kpi-label">Crates clean</p><p class="kpi-value">2<small> / 6</small></p><p class="kpi-sub">2 with debt · 2 regressed</p></div>
+</section>
+<section class="sev" aria-label="Findings by severity"><div class="sevbar" aria-hidden="true"><span class="s-must" style="flex-grow:144"></span><span class="s-should" style="flex-grow:36"></span><span class="s-consider" style="flex-grow:5"></span><span class="s-unmapped" style="flex-grow:13"></span></div><ul class="legend"><li><span class="sw s-must" aria-hidden="true"></span>MUST <b>144</b></li><li><span class="sw s-should" aria-hidden="true"></span>SHOULD <b>36</b></li><li><span class="sw s-consider" aria-hidden="true"></span>CONSIDER <b>5</b></li><li><span class="sw s-unmapped" aria-hidden="true"></span>unmapped <b>13</b></li></ul><p class="compare">Against the baseline of <b>199</b> (updated 2026-09-01): <b>195</b> legacy · <b>4</b> new · <b>5</b> fixed.</p></section>
+<section aria-labelledby="crates"><h2 id="crates">Crate scorecard</h2>
+<p class="hint"><b>clean</b>: no MUST findings · <b>debt</b>: MUST findings, all within the baseline · <b>regressed</b>: new findings since the baseline. Lints: inherits the workspace lint table. Charter: has an <code>AGENTS.md</code>.</p>
+<div class="table-wrap"><table class="scorecard"><thead><tr><th scope="col">Crate</th><th scope="col">Status</th><th scope="col" class="num">MUST</th><th scope="col" class="num">SHOULD</th><th scope="col" class="num">Other</th><th scope="col" class="num">H</th><th scope="col" class="num">New</th><th scope="col" class="num">Fixed</th><th scope="col">Lints</th><th scope="col">Charter</th><th scope="col">Top rules</th></tr></thead><tbody><tr><td class="nowrap"><code>ledger-app</code></td><td><span class="pill pill-regressed"><span class="glyph" aria-hidden="true">✕</span>regressed</span></td><td class="num">26</td><td class="num">11</td><td class="num">0</td><td class="num">26</td><td class="num">1</td><td class="num">0</td><td>yes</td><td>yes</td><td class="nowrap">H-02 <span class="muted">12</span>, API-11 <span class="muted">6</span>, H-04 <span class="muted">6</span></td></tr><tr><td class="nowrap"><code>ledger-cli</code></td><td><span class="pill pill-regressed"><span class="glyph" aria-hidden="true">✕</span>regressed</span></td><td class="num">19</td><td class="num">3</td><td class="num">4</td><td class="num">19</td><td class="num">3</td><td class="num">0</td><td>yes</td><td><span class="warn-text">no</span></td><td class="nowrap">H-02 <span class="muted">9</span>, H-06 <span class="muted">8</span>, MOD-02 <span class="muted">3</span></td></tr><tr><td class="nowrap"><code>ledger-store-jsonl</code></td><td><span class="pill pill-debt"><span class="glyph" aria-hidden="true">!</span>debt</span></td><td class="num">55</td><td class="num">8</td><td class="num">2</td><td class="num">55</td><td class="num">0</td><td class="num">3</td><td>yes</td><td>yes</td><td class="nowrap">H-02 <span class="muted">17</span>, H-11 <span class="muted">12</span>, H-15 <span class="muted">10</span></td></tr><tr><td class="nowrap"><code>ledger-sync</code></td><td><span class="pill pill-debt"><span class="glyph" aria-hidden="true">!</span>debt</span></td><td class="num">44</td><td class="num">8</td><td class="num">9</td><td class="num">44</td><td class="num">0</td><td class="num">0</td><td><span class="warn-text">no</span></td><td><span class="warn-text">no</span></td><td class="nowrap">H-02 <span class="muted">12</span>, API-15 <span class="muted">10</span>, H-15 <span class="muted">10</span></td></tr><tr><td class="nowrap"><code>ledger-domain</code></td><td><span class="pill pill-clean"><span class="glyph" aria-hidden="true">✓</span>clean</span></td><td class="num">0</td><td class="num">6</td><td class="num">3</td><td class="num">0</td><td class="num">0</td><td class="num">2</td><td>yes</td><td>yes</td><td class="nowrap">API-11 <span class="muted">4</span>, MOD-02 <span class="muted">2</span></td></tr><tr><td class="nowrap"><code>ledger-bench</code></td><td><span class="pill pill-clean"><span class="glyph" aria-hidden="true">✓</span>clean</span></td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td>yes</td><td>yes</td><td class="nowrap"><span class="muted">–</span></td></tr></tbody></table></div>
+</section>
+<section aria-labelledby="rules"><h2 id="rules">Top rules</h2>
+<p class="hint">Findings per rule; a finding that breaks two rules counts for both.</p>
+<div class="table-wrap"><table class="rules"><thead><tr><th scope="col">Rule</th><th scope="col">Level</th><th scope="col" class="num">Findings</th><th scope="col">Rule text</th></tr></thead><tbody><tr><td class="nowrap"><b>H-02</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:100%"></span></span><span class="n">50</span></span></td><td class="text">No <code>unwrap</code>/<code>expect</code>/<code>unwrap_unchecked</code>/<code>unwrap_err</code>/<code>expect_err</code> in production code, including doctest examples.</td></tr><tr><td class="nowrap"><b>H-15</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:50%"></span></span><span class="n">25</span></span></td><td class="text">Zero warnings.</td></tr><tr><td class="nowrap"><b>API-15</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:46%"></span></span><span class="n">23</span></span></td><td class="text">Document every public item: purpose in a one-line summary, an <code># Examples</code> doctest for primary entry points, and <code># Errors</code> for…</td></tr><tr><td class="nowrap"><b>H-04</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:46%"></span></span><span class="n">23</span></span></td><td class="text">No panicking index or slice on data whose bounds are not proven by construction.</td></tr><tr><td class="nowrap"><b>H-11</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:36%"></span></span><span class="n">18</span></span></td><td class="text">No lossy <code>as</code> numeric casts, including enum discriminants: map a fieldless enum to a code with an exhaustive <code>match</code> in <code>From</code>.</td></tr><tr><td class="nowrap"><b>API-11</b></td><td><span class="lvl lvl-SHOULD">SHOULD</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:30%"></span></span><span class="n">15</span></span></td><td class="text">Mark values that must be used <code>#[must_use]</code>: pure constructors, builders, iterators and computed results.</td></tr><tr><td class="nowrap"><b>H-08</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:24%"></span></span><span class="n">12</span></span></td><td class="text">No clones to appease the borrow checker.</td></tr><tr><td class="nowrap"><b>CRF-02</b></td><td><span class="lvl lvl-SHOULD">SHOULD</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:18%"></span></span><span class="n">9</span></span></td><td class="text">A function does one thing at one level of abstraction.</td></tr><tr><td class="nowrap"><b>H-06</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:16%"></span></span><span class="n">8</span></span></td><td class="text">No <code>dbg!</code>.</td></tr><tr><td class="nowrap"><b>OWN-13</b></td><td><span class="lvl lvl-SHOULD">SHOULD</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:14%"></span></span><span class="n">7</span></span></td><td class="text">Return iterators or slices instead of allocating a collection the caller only iterates.</td></tr><tr><td class="nowrap"><b>H-03</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:10%"></span></span><span class="n">5</span></span></td><td class="text">No <code>panic!</code>/<code>todo!</code>/<code>unimplemented!</code>/<code>unreachable!</code> in production code, and no call to a std API that panics on input the code does not…</td></tr><tr><td class="nowrap"><b>MOD-02</b></td><td><span class="lvl lvl-SHOULD">SHOULD</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:10%"></span></span><span class="n">5</span></span></td><td class="text">Use <code>let ... else</code> for early exits, <code>if let</code> chains instead of nested <code>if let</code>, and <code>if let</code> guards in match arms (1.95+).</td></tr><tr><td class="nowrap"><b>OWN-15</b></td><td><span class="lvl lvl-CONSIDER">CONSIDER</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:10%"></span></span><span class="n">5</span></span></td><td class="text">Use <code>Box&lt;str&gt;</code>, <code>Box&lt;[T]&gt;</code>, <code>Arc&lt;str&gt;</code> or <code>Arc&lt;[T]&gt;</code> for immutable owned data that never grows.</td></tr><tr><td class="nowrap"><b>H-10</b></td><td><span class="lvl lvl-MUST">MUST</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:6%"></span></span><span class="n">3</span></span></td><td class="text">No silently discarded failures (<code>let _ =</code>, <code>.ok();</code>, empty <code>Err</code> arms, masking defaults).</td></tr><tr><td class="nowrap"><b>PERF-11</b></td><td><span class="lvl lvl-SHOULD">SHOULD</span></td><td class="num count"><span class="count-in"><span class="track" aria-hidden="true"><span class="bar" style="width:6%"></span></span><span class="n">3</span></span></td><td class="text">Make refcount clones explicit with <code>Arc::clone(&amp;x)</code>.</td></tr></tbody></table></div>
+<p class="more">Lints no rule cites (unmapped): <code>clippy::semicolon_if_nothing_returned</code> 13.</p>
+</section>
+<section aria-labelledby="files"><h2 id="files">Top files by MUST findings</h2>
+<div class="table-wrap"><table class="files"><thead><tr><th scope="col">File</th><th scope="col" class="num">MUST</th><th scope="col" class="num">H</th><th scope="col" class="num">All</th><th scope="col">Crate</th></tr></thead><tbody><tr><td class="path"><code>crates/ledger-sync/src/peer/handshake_protocol_negotiation.rs</code></td><td class="num">16</td><td class="num">16</td><td class="num">17</td><td class="nowrap">ledger-sync</td></tr><tr><td class="path"><code>crates/ledger-store-jsonl/src/record.rs</code></td><td class="num">15</td><td class="num">15</td><td class="num">17</td><td class="nowrap">ledger-store-jsonl</td></tr><tr><td class="path"><code>crates/ledger-store-jsonl/src/store.rs</code></td><td class="num">12</td><td class="num">12</td><td class="num">12</td><td class="nowrap">ledger-store-jsonl</td></tr><tr><td class="path"><code>crates/ledger-store-jsonl/src/lock.rs</code></td><td class="num">10</td><td class="num">10</td><td class="num">13</td><td class="nowrap">ledger-store-jsonl</td></tr><tr><td class="path"><code>crates/ledger-store-jsonl/src/lib.rs</code></td><td class="num">9</td><td class="num">9</td><td class="num">14</td><td class="nowrap">ledger-store-jsonl</td></tr><tr><td class="path"><code>crates/ledger-sync/src/backoff.rs</code></td><td class="num">9</td><td class="num">9</td><td class="num">12</td><td class="nowrap">ledger-sync</td></tr><tr><td class="path"><code>crates/ledger-app/src/ledger.rs</code></td><td class="num">9</td><td class="num">9</td><td class="num">10</td><td class="nowrap">ledger-app</td></tr><tr><td class="path"><code>crates/ledger-store-jsonl/src/record/v1.rs</code></td><td class="num">9</td><td class="num">9</td><td class="num">9</td><td class="nowrap">ledger-store-jsonl</td></tr><tr><td class="path"><code>crates/ledger-sync/src/wire.rs</code></td><td class="num">7</td><td class="num">7</td><td class="num">12</td><td class="nowrap">ledger-sync</td></tr><tr><td class="path"><code>crates/ledger-cli/src/main.rs</code></td><td class="num">7</td><td class="num">7</td><td class="num">8</td><td class="nowrap">ledger-cli</td></tr><tr><td class="path"><code>crates/ledger-sync/src/replicator.rs</code></td><td class="num">6</td><td class="num">6</td><td class="num">12</td><td class="nowrap">ledger-sync</td></tr><tr><td class="path"><code>crates/ledger-app/src/clock.rs</code></td><td class="num">6</td><td class="num">6</td><td class="num">10</td><td class="nowrap">ledger-app</td></tr><tr><td class="path"><code>crates/ledger-cli/src/output.rs</code></td><td class="num">6</td><td class="num">6</td><td class="num">10</td><td class="nowrap">ledger-cli</td></tr><tr><td class="path"><code>crates/ledger-app/src/event_store.rs</code></td><td class="num">6</td><td class="num">6</td><td class="num">8</td><td class="nowrap">ledger-app</td></tr><tr><td class="path"><code>crates/ledger-cli/src/args.rs</code></td><td class="num">6</td><td class="num">6</td><td class="num">8</td><td class="nowrap">ledger-cli</td></tr></tbody></table></div>
+</section>
+<section aria-labelledby="new-code"><h2 id="new-code">New-code findings</h2>
+<p class="hint">Findings on lines added or changed since <code>origin/main</code>. You touch it, you fix it.</p>
+<div class="table-wrap"><table class="findings"><thead><tr><th scope="col">Location</th><th scope="col">Lint</th><th scope="col">Rules</th><th scope="col">Level</th><th scope="col">Message</th></tr></thead><tbody><tr><td class="path"><code>crates/ledger-cli/src/output.rs:185</code></td><td class="nowrap"><code>clippy::unwrap_used</code></td><td class="nowrap">H-02</td><td><span class="lvl lvl-MUST">MUST</span></td><td class="msg">used <code>unwrap()</code> on a <code>Result</code> value</td></tr><tr><td class="path"><code>crates/ledger-cli/src/main.rs:63</code></td><td class="nowrap"><code>clippy::unwrap_used</code></td><td class="nowrap">H-02</td><td><span class="lvl lvl-MUST">MUST</span></td><td class="msg">used <code>unwrap()</code> on a <code>Result</code> value</td></tr><tr><td class="path"><code>crates/ledger-cli/src/args.rs:82</code></td><td class="nowrap"><code>clippy::print_stdout</code></td><td class="nowrap">H-06</td><td><span class="lvl lvl-MUST">MUST</span></td><td class="msg">use of <code>println!</code></td></tr></tbody></table></div>
+<h2 id="increases">Counts above the baseline on untouched lines</h2>
+<p class="hint">A crate now has more findings of a lint than the baseline allows, beyond the new-code findings above: a change can make unchanged code warn (a signature change, for instance).</p>
+<div class="table-wrap"><table class="pairs"><thead><tr><th scope="col">Crate</th><th scope="col">Lint</th><th scope="col" class="num">Baseline</th><th scope="col" class="num">Now</th><th scope="col" class="num">Change</th></tr></thead><tbody><tr><td class="nowrap"><code>ledger-app</code></td><td><code>clippy::indexing_slicing</code></td><td class="num">5</td><td class="num">6</td><td class="num">+1</td></tr></tbody></table></div>
+<h2 id="fixed">Fixed since the baseline</h2>
+<p class="hint">Once the ratchet passes, <code>temper baseline --tighten</code> locks these in.</p>
+<div class="table-wrap"><table class="pairs"><thead><tr><th scope="col">Crate</th><th scope="col">Lint</th><th scope="col" class="num">Baseline</th><th scope="col" class="num">Now</th><th scope="col" class="num">Change</th></tr></thead><tbody><tr><td class="nowrap"><code>ledger-domain</code></td><td><code>missing_docs</code></td><td class="num">2</td><td class="num">0</td><td class="num">−2</td></tr><tr><td class="nowrap"><code>ledger-store-jsonl</code></td><td><code>clippy::unwrap_used</code></td><td class="num">20</td><td class="num">17</td><td class="num">−3</td></tr></tbody></table></div>
+</section>
+<footer aria-label="Provenance"><p class="eyebrow">Provenance</p>
+<dl class="prov"><dt>Generated</dt><dd>2026-10-01 16:00 UTC</dd><dt>Collected</dt><dd>2026-09-28 14:02 UTC</dd><dt>Commit</dt><dd>9f3c2e1a7b4d5c6e8f9a0b1c2d3e4f5a6b7c8d9e</dd><dt>Toolchain</dt><dd>1.98.1</dd><dt>temper</dt><dd>1.2.1</dd><dt>Ratchet</dt><dd>diff+totals against origin/main, computed by baseline --check</dd><dt>Baseline</dt><dd>199 findings at 1a2b3c4d5e6f, updated 2026-09-01</dd><dt>Source</dt><dd>file target/temper/findings.json</dd></dl>
+</footer>
+</main>
+</body>
+</html>

@@ -105,6 +105,8 @@ The rollout:
 
 `temper report` turns the findings into a scorecard: findings by severity (MUST, SHOULD, CONSIDER, and lints the standard does not cite), iron-rule findings called out, and per crate a status (`clean`, `debt`, `regressed`), counts, new and fixed against the baseline, lint inheritance, charter presence and top rules; then the top rules and files. It writes JSON for tooling, Markdown for the step summary and pull-request comment, and a self-contained HTML page. Per-change evidence stays with the change: the gate result and the reviewer's scored verdict (12 rubric dimensions, findings by rule ID) are stored per tree fingerprint under `.git/temper/`.
 
+A sample, built from a test fixture of a six-crate workspace with legacy debt, one regressed crate and a raised baseline: [`docs/examples/sample-report.md`](docs/examples/sample-report.md). The `.html` and `.json` beside it are the same report in the other two formats.
+
 ## Using the standard with other agents
 
 `skills/rust-craft/` is a plain Agent Skill: its frontmatter uses spec fields only and its paths are relative. Copy it to wherever Codex, Gemini or Junie read skills, and use the root `AGENTS.md` template, which carries the iron rules in tool-neutral form. Enforcement layers 1 and 9 (lints and CI) apply to every agent and every human. Layers 3 to 8 are specific to Claude Code.
@@ -112,15 +114,23 @@ The rollout:
 ## Development
 
 ```bash
-node --test tests/*.test.mjs        # scanner, hook and manifest unit tests
+tests/ci.sh                         # everything below that needs no model call, as CI runs it (--quick skips Rust builds)
+node --test tests/*.test.mjs        # scanner, hook, manifest, baseline, report and vendor unit tests
 python3 tests/doc_examples.py       # every code block in the skill: Do blocks compile, pass clippy and tests
                                     # under the template lints; Don't blocks fire the diagnostic they claim
+                                    # (--fetch on a machine without a registry cache)
 python3 tests/registry.py           # every rule has one section; every cited rule ID exists; counts match
 python3 tests/lint-claims.py        # every lint and scanner key the standard cites exists and is enabled
-claude plugin validate --strict .   # manifest + frontmatter
+python3 tests/gen_rulemap.py --check  # scripts/lib/rulemap.json matches rules.md
+claude plugin validate --strict .claude-plugin/plugin.json   # plugin manifest + frontmatter
+claude plugin validate --strict .   # the marketplace manifest
 tests/e2e/brownfield.sh             # the lint baseline end to end on a legacy fixture (no model calls)
 tests/e2e/smoke.sh                  # a real headless session with the plugin (a few model calls)
 claude plugin eval . --allow-tools Write Edit --scaffold --trust-plugin --runs 3   # behavioral evals vs no-plugin baseline
 ```
+
+CI (`.github/workflows/ci.yml`) runs the manifest checks and `tests/ci.sh` on every push to `main` and every pull request. The smoke test and the evals call a model, so they run by hand before a release.
+
+The repository also keeps the record behind the code: `docs/history/` holds the design specs, independent reviews and source findings each release was built from, `.kb/_intake/decisions/` holds the decisions settled through Weigh-In, and `docs/examples/` holds a sample compliance report.
 
 Eval runs that grant `Bash` need an OS sandbox (WSL2 on Windows) and the sandbox hides `~/.rustup`, so the suite grades static outcomes (skill loaded, no escape hatches in the produced file, honest reply, review verdict) rather than running cargo. `tests/e2e/smoke.sh` covers the gate end to end.

@@ -1,0 +1,798 @@
+{
+  "temper_report": 1,
+  "title": "ledger",
+  "status": "regressed",
+  "status_text": "4 new findings since `origin/main` (3 on changed lines; 1 crate/lint count above the baseline on untouched lines): the ratchet fails. 195 legacy findings stay within the baseline.",
+  "totals": {
+    "findings": 198,
+    "must": 144,
+    "should": 36,
+    "consider": 5,
+    "unmapped": 13,
+    "h": 144,
+    "errors": 0,
+    "exceptions": 0,
+    "new": 4,
+    "fixed": 5,
+    "legacy": 195,
+    "baseline": 199,
+    "new_code": 3,
+    "raised": 2
+  },
+  "crates_summary": {
+    "total": 6,
+    "clean": 2,
+    "debt": 2,
+    "regressed": 2
+  },
+  "baseline": {
+    "present": true,
+    "total": 199,
+    "created": "2026-08-14T09:12:00.000Z",
+    "updated": "2026-09-01T16:40:00.000Z",
+    "commit": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+    "toolchain": "1.98.1",
+    "host": null
+  },
+  "ratchet": {
+    "mode": "diff+totals",
+    "ok": false,
+    "base": "origin/main",
+    "merge_base": "5e1f00d2c4b3a2918273645546372819a0b1c2d3",
+    "notes": [],
+    "computed_by": "baseline --check"
+  },
+  "sources": [
+    "clippy",
+    "rustdoc",
+    "scan"
+  ],
+  "crates": [
+    {
+      "name": "ledger-app",
+      "dir": "crates/ledger-app",
+      "in_workspace": true,
+      "lints_inherited": true,
+      "charter": true,
+      "must": 26,
+      "should": 11,
+      "consider": 0,
+      "unmapped": 0,
+      "other": 0,
+      "total": 37,
+      "h": 26,
+      "new": 1,
+      "fixed": 0,
+      "baseline_total": 36,
+      "status": "regressed",
+      "top_rules": [
+        {
+          "id": "H-02",
+          "count": 12
+        },
+        {
+          "id": "API-11",
+          "count": 6
+        },
+        {
+          "id": "H-04",
+          "count": 6
+        }
+      ]
+    },
+    {
+      "name": "ledger-cli",
+      "dir": "crates/ledger-cli",
+      "in_workspace": true,
+      "lints_inherited": true,
+      "charter": false,
+      "must": 19,
+      "should": 3,
+      "consider": 0,
+      "unmapped": 4,
+      "other": 4,
+      "total": 26,
+      "h": 19,
+      "new": 3,
+      "fixed": 0,
+      "baseline_total": 23,
+      "status": "regressed",
+      "top_rules": [
+        {
+          "id": "H-02",
+          "count": 9
+        },
+        {
+          "id": "H-06",
+          "count": 8
+        },
+        {
+          "id": "MOD-02",
+          "count": 3
+        }
+      ]
+    },
+    {
+      "name": "ledger-store-jsonl",
+      "dir": "crates/ledger-store-jsonl",
+      "in_workspace": true,
+      "lints_inherited": true,
+      "charter": true,
+      "must": 55,
+      "should": 8,
+      "consider": 2,
+      "unmapped": 0,
+      "other": 2,
+      "total": 65,
+      "h": 55,
+      "new": 0,
+      "fixed": 3,
+      "baseline_total": 68,
+      "status": "debt",
+      "top_rules": [
+        {
+          "id": "H-02",
+          "count": 17
+        },
+        {
+          "id": "H-11",
+          "count": 12
+        },
+        {
+          "id": "H-15",
+          "count": 10
+        }
+      ]
+    },
+    {
+      "name": "ledger-sync",
+      "dir": "crates/ledger-sync",
+      "in_workspace": true,
+      "lints_inherited": false,
+      "charter": false,
+      "must": 44,
+      "should": 8,
+      "consider": 3,
+      "unmapped": 6,
+      "other": 9,
+      "total": 61,
+      "h": 44,
+      "new": 0,
+      "fixed": 0,
+      "baseline_total": 61,
+      "status": "debt",
+      "top_rules": [
+        {
+          "id": "H-02",
+          "count": 12
+        },
+        {
+          "id": "API-15",
+          "count": 10
+        },
+        {
+          "id": "H-15",
+          "count": 10
+        }
+      ]
+    },
+    {
+      "name": "ledger-domain",
+      "dir": "crates/ledger-domain",
+      "in_workspace": true,
+      "lints_inherited": true,
+      "charter": true,
+      "must": 0,
+      "should": 6,
+      "consider": 0,
+      "unmapped": 3,
+      "other": 3,
+      "total": 9,
+      "h": 0,
+      "new": 0,
+      "fixed": 2,
+      "baseline_total": 11,
+      "status": "clean",
+      "top_rules": [
+        {
+          "id": "API-11",
+          "count": 4
+        },
+        {
+          "id": "MOD-02",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "ledger-bench",
+      "dir": "crates/ledger-bench",
+      "in_workspace": true,
+      "lints_inherited": true,
+      "charter": true,
+      "must": 0,
+      "should": 0,
+      "consider": 0,
+      "unmapped": 0,
+      "other": 0,
+      "total": 0,
+      "h": 0,
+      "new": 0,
+      "fixed": 0,
+      "baseline_total": 0,
+      "status": "clean",
+      "top_rules": []
+    }
+  ],
+  "top_rules": [
+    {
+      "id": "H-02",
+      "count": 50,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `unwrap`/`expect`/`unwrap_unchecked`/`unwrap_err`/`expect_err` in production code, including doctest examples."
+    },
+    {
+      "id": "H-15",
+      "count": 25,
+      "level": "MUST",
+      "family": "H",
+      "title": "Zero warnings."
+    },
+    {
+      "id": "API-15",
+      "count": 23,
+      "level": "MUST",
+      "family": "API",
+      "title": "Document every public item: purpose in a one-line summary, an `# Examples` doctest for primary entry points, and `# Errors` for…"
+    },
+    {
+      "id": "H-04",
+      "count": 23,
+      "level": "MUST",
+      "family": "H",
+      "title": "No panicking index or slice on data whose bounds are not proven by construction."
+    },
+    {
+      "id": "H-11",
+      "count": 18,
+      "level": "MUST",
+      "family": "H",
+      "title": "No lossy `as` numeric casts, including enum discriminants: map a fieldless enum to a code with an exhaustive `match` in `From`."
+    },
+    {
+      "id": "API-11",
+      "count": 15,
+      "level": "SHOULD",
+      "family": "API",
+      "title": "Mark values that must be used `#[must_use]`: pure constructors, builders, iterators and computed results."
+    },
+    {
+      "id": "H-08",
+      "count": 12,
+      "level": "MUST",
+      "family": "H",
+      "title": "No clones to appease the borrow checker."
+    },
+    {
+      "id": "CRF-02",
+      "count": 9,
+      "level": "SHOULD",
+      "family": "CRF",
+      "title": "A function does one thing at one level of abstraction."
+    },
+    {
+      "id": "H-06",
+      "count": 8,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `dbg!`."
+    },
+    {
+      "id": "OWN-13",
+      "count": 7,
+      "level": "SHOULD",
+      "family": "OWN",
+      "title": "Return iterators or slices instead of allocating a collection the caller only iterates."
+    },
+    {
+      "id": "H-03",
+      "count": 5,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `panic!`/`todo!`/`unimplemented!`/`unreachable!` in production code, and no call to a std API that panics on input the code does not…"
+    },
+    {
+      "id": "MOD-02",
+      "count": 5,
+      "level": "SHOULD",
+      "family": "MOD",
+      "title": "Use `let ... else` for early exits, `if let` chains instead of nested `if let`, and `if let` guards in match arms (1.95+)."
+    },
+    {
+      "id": "OWN-15",
+      "count": 5,
+      "level": "CONSIDER",
+      "family": "OWN",
+      "title": "Use `Box<str>`, `Box<[T]>`, `Arc<str>` or `Arc<[T]>` for immutable owned data that never grows."
+    },
+    {
+      "id": "H-10",
+      "count": 3,
+      "level": "MUST",
+      "family": "H",
+      "title": "No silently discarded failures (`let _ =`, `.ok();`, empty `Err` arms, masking defaults)."
+    },
+    {
+      "id": "PERF-11",
+      "count": 3,
+      "level": "SHOULD",
+      "family": "PERF",
+      "title": "Make refcount clones explicit with `Arc::clone(&x)`."
+    }
+  ],
+  "top_files": [
+    {
+      "file": "crates/ledger-sync/src/peer/handshake_protocol_negotiation.rs",
+      "crate": "ledger-sync",
+      "must": 16,
+      "h": 16,
+      "total": 17
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/record.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 15,
+      "h": 15,
+      "total": 17
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/store.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 12,
+      "h": 12,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/lock.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 10,
+      "h": 10,
+      "total": 13
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/lib.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 9,
+      "h": 9,
+      "total": 14
+    },
+    {
+      "file": "crates/ledger-sync/src/backoff.rs",
+      "crate": "ledger-sync",
+      "must": 9,
+      "h": 9,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-app/src/ledger.rs",
+      "crate": "ledger-app",
+      "must": 9,
+      "h": 9,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/record/v1.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 9,
+      "h": 9,
+      "total": 9
+    },
+    {
+      "file": "crates/ledger-sync/src/wire.rs",
+      "crate": "ledger-sync",
+      "must": 7,
+      "h": 7,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-cli/src/main.rs",
+      "crate": "ledger-cli",
+      "must": 7,
+      "h": 7,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-sync/src/replicator.rs",
+      "crate": "ledger-sync",
+      "must": 6,
+      "h": 6,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-app/src/clock.rs",
+      "crate": "ledger-app",
+      "must": 6,
+      "h": 6,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-cli/src/output.rs",
+      "crate": "ledger-cli",
+      "must": 6,
+      "h": 6,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-app/src/event_store.rs",
+      "crate": "ledger-app",
+      "must": 6,
+      "h": 6,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-cli/src/args.rs",
+      "crate": "ledger-cli",
+      "must": 6,
+      "h": 6,
+      "total": 8
+    }
+  ],
+  "new_code": [
+    {
+      "crate": "ledger-cli",
+      "file": "crates/ledger-cli/src/output.rs",
+      "line": 185,
+      "lint": "clippy::unwrap_used",
+      "rules": [
+        "H-02"
+      ],
+      "severity": "must",
+      "message": "used `unwrap()` on a `Result` value"
+    },
+    {
+      "crate": "ledger-cli",
+      "file": "crates/ledger-cli/src/main.rs",
+      "line": 63,
+      "lint": "clippy::unwrap_used",
+      "rules": [
+        "H-02"
+      ],
+      "severity": "must",
+      "message": "used `unwrap()` on a `Result` value"
+    },
+    {
+      "crate": "ledger-cli",
+      "file": "crates/ledger-cli/src/args.rs",
+      "line": 82,
+      "lint": "clippy::print_stdout",
+      "rules": [
+        "H-06"
+      ],
+      "severity": "must",
+      "message": "use of `println!`"
+    }
+  ],
+  "increases": [
+    {
+      "crate": "ledger-app",
+      "lint": "clippy::indexing_slicing",
+      "baseline": 5,
+      "current": 6
+    },
+    {
+      "crate": "ledger-cli",
+      "lint": "clippy::print_stdout",
+      "baseline": 4,
+      "current": 5
+    },
+    {
+      "crate": "ledger-cli",
+      "lint": "clippy::unwrap_used",
+      "baseline": 4,
+      "current": 6
+    }
+  ],
+  "untouched_increases": [
+    {
+      "crate": "ledger-app",
+      "lint": "clippy::indexing_slicing",
+      "baseline": 5,
+      "current": 6
+    }
+  ],
+  "fixed": [
+    {
+      "crate": "ledger-domain",
+      "lint": "missing_docs",
+      "baseline": 2,
+      "current": 0
+    },
+    {
+      "crate": "ledger-store-jsonl",
+      "lint": "clippy::unwrap_used",
+      "baseline": 20,
+      "current": 17
+    }
+  ],
+  "raised": [
+    {
+      "crate": "ledger-sync",
+      "lint": "clippy::unwrap_used",
+      "from": 9,
+      "to": 12
+    },
+    {
+      "crate": "ledger-sync",
+      "lint": "missing_docs",
+      "from": 6,
+      "to": 10
+    }
+  ],
+  "unmapped_lints": [
+    {
+      "lint": "clippy::semicolon_if_nothing_returned",
+      "count": 13
+    }
+  ],
+  "exceptions": [],
+  "errors": [],
+  "rule_counts": [
+    {
+      "id": "H-02",
+      "count": 50,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `unwrap`/`expect`/`unwrap_unchecked`/`unwrap_err`/`expect_err` in production code, including doctest examples."
+    },
+    {
+      "id": "H-15",
+      "count": 25,
+      "level": "MUST",
+      "family": "H",
+      "title": "Zero warnings."
+    },
+    {
+      "id": "API-15",
+      "count": 23,
+      "level": "MUST",
+      "family": "API",
+      "title": "Document every public item: purpose in a one-line summary, an `# Examples` doctest for primary entry points, and `# Errors` for…"
+    },
+    {
+      "id": "H-04",
+      "count": 23,
+      "level": "MUST",
+      "family": "H",
+      "title": "No panicking index or slice on data whose bounds are not proven by construction."
+    },
+    {
+      "id": "H-11",
+      "count": 18,
+      "level": "MUST",
+      "family": "H",
+      "title": "No lossy `as` numeric casts, including enum discriminants: map a fieldless enum to a code with an exhaustive `match` in `From`."
+    },
+    {
+      "id": "API-11",
+      "count": 15,
+      "level": "SHOULD",
+      "family": "API",
+      "title": "Mark values that must be used `#[must_use]`: pure constructors, builders, iterators and computed results."
+    },
+    {
+      "id": "H-08",
+      "count": 12,
+      "level": "MUST",
+      "family": "H",
+      "title": "No clones to appease the borrow checker."
+    },
+    {
+      "id": "CRF-02",
+      "count": 9,
+      "level": "SHOULD",
+      "family": "CRF",
+      "title": "A function does one thing at one level of abstraction."
+    },
+    {
+      "id": "H-06",
+      "count": 8,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `dbg!`."
+    },
+    {
+      "id": "OWN-13",
+      "count": 7,
+      "level": "SHOULD",
+      "family": "OWN",
+      "title": "Return iterators or slices instead of allocating a collection the caller only iterates."
+    },
+    {
+      "id": "H-03",
+      "count": 5,
+      "level": "MUST",
+      "family": "H",
+      "title": "No `panic!`/`todo!`/`unimplemented!`/`unreachable!` in production code, and no call to a std API that panics on input the code does not…"
+    },
+    {
+      "id": "MOD-02",
+      "count": 5,
+      "level": "SHOULD",
+      "family": "MOD",
+      "title": "Use `let ... else` for early exits, `if let` chains instead of nested `if let`, and `if let` guards in match arms (1.95+)."
+    },
+    {
+      "id": "OWN-15",
+      "count": 5,
+      "level": "CONSIDER",
+      "family": "OWN",
+      "title": "Use `Box<str>`, `Box<[T]>`, `Arc<str>` or `Arc<[T]>` for immutable owned data that never grows."
+    },
+    {
+      "id": "H-10",
+      "count": 3,
+      "level": "MUST",
+      "family": "H",
+      "title": "No silently discarded failures (`let _ =`, `.ok();`, empty `Err` arms, masking defaults)."
+    },
+    {
+      "id": "PERF-11",
+      "count": 3,
+      "level": "SHOULD",
+      "family": "PERF",
+      "title": "Make refcount clones explicit with `Arc::clone(&x)`."
+    }
+  ],
+  "file_counts": [
+    {
+      "file": "crates/ledger-sync/src/peer/handshake_protocol_negotiation.rs",
+      "crate": "ledger-sync",
+      "must": 16,
+      "h": 16,
+      "total": 17
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/record.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 15,
+      "h": 15,
+      "total": 17
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/store.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 12,
+      "h": 12,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/lock.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 10,
+      "h": 10,
+      "total": 13
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/lib.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 9,
+      "h": 9,
+      "total": 14
+    },
+    {
+      "file": "crates/ledger-sync/src/backoff.rs",
+      "crate": "ledger-sync",
+      "must": 9,
+      "h": 9,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-app/src/ledger.rs",
+      "crate": "ledger-app",
+      "must": 9,
+      "h": 9,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-store-jsonl/src/record/v1.rs",
+      "crate": "ledger-store-jsonl",
+      "must": 9,
+      "h": 9,
+      "total": 9
+    },
+    {
+      "file": "crates/ledger-sync/src/wire.rs",
+      "crate": "ledger-sync",
+      "must": 7,
+      "h": 7,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-cli/src/main.rs",
+      "crate": "ledger-cli",
+      "must": 7,
+      "h": 7,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-sync/src/replicator.rs",
+      "crate": "ledger-sync",
+      "must": 6,
+      "h": 6,
+      "total": 12
+    },
+    {
+      "file": "crates/ledger-app/src/clock.rs",
+      "crate": "ledger-app",
+      "must": 6,
+      "h": 6,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-cli/src/output.rs",
+      "crate": "ledger-cli",
+      "must": 6,
+      "h": 6,
+      "total": 10
+    },
+    {
+      "file": "crates/ledger-app/src/event_store.rs",
+      "crate": "ledger-app",
+      "must": 6,
+      "h": 6,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-cli/src/args.rs",
+      "crate": "ledger-cli",
+      "must": 6,
+      "h": 6,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-sync/src/lib.rs",
+      "crate": "ledger-sync",
+      "must": 6,
+      "h": 6,
+      "total": 8
+    },
+    {
+      "file": "crates/ledger-app/src/projection/balances.rs",
+      "crate": "ledger-app",
+      "must": 5,
+      "h": 5,
+      "total": 9
+    },
+    {
+      "file": "crates/ledger-domain/src/money.rs",
+      "crate": "ledger-domain",
+      "must": 0,
+      "h": 0,
+      "total": 6
+    },
+    {
+      "file": "crates/ledger-domain/src/lib.rs",
+      "crate": "ledger-domain",
+      "must": 0,
+      "h": 0,
+      "total": 2
+    },
+    {
+      "file": "crates/ledger-domain/src/account.rs",
+      "crate": "ledger-domain",
+      "must": 0,
+      "h": 0,
+      "total": 1
+    }
+  ],
+  "provenance": {
+    "generated": "2026-10-01T16:00:00.000Z",
+    "collected": "2026-09-28T14:02:11.000Z",
+    "commit": "9f3c2e1a7b4d5c6e8f9a0b1c2d3e4f5a6b7c8d9e",
+    "toolchain": "1.98.1",
+    "temper": "1.2.1",
+    "base": "origin/main",
+    "source": "file target/temper/findings.json"
+  }
+}
