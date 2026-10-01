@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.3 (2026-10-01)
 
 Windows fixes.
 - `temper baseline --init` on an unformatted tree named the file by the verbatim path cargo reports on Windows (`//?/C:/.../src/lib.rs`) instead of `src/lib.rs`. Paths are now made relative after stripping the `\\?\` prefix.
