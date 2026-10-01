@@ -1,0 +1,13 @@
+# The workflows pin actions by SHA; Dependabot keeps those pins current.
+# Majors are left out of the group, so each arrives as its own PR.
+# The Rust toolchain and Claude Code CLI versions in ci.yml are bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

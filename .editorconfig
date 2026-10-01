@@ -1,0 +1,8 @@
+# LF and UTF-8 without a BOM everywhere, to match .gitattributes: the hooks and
+# scripts run on Linux and macOS, and the tests compare text byte for byte.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
