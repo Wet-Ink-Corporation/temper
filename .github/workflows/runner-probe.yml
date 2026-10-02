@@ -1,0 +1,61 @@
+name: Runner probe
+
+# One-off probe for plan step 0.9 (docs/plans/v1-readiness.md): confirms the
+# runner labels the temper 2.0 release pipeline needs (D5) are available to
+# this internal repository, and measures a cold Rust build on each, to size
+# the CI budget. Manual trigger only; it never runs on push or pull request.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Probe (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - name: Host
+        run: |
+          {
+            echo "### ${{ matrix.runner }}"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| arch | $(uname -m) |"
+            echo "| cpus | $(getconf _NPROCESSORS_ONLN 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-?}") |"
+            echo "| node | $(node -p 'process.platform + "-" + process.arch + " " + process.version') |"
+            echo "| rustc host | $(rustc -vV | sed -n 's/^host: //p') |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Cold builds of the example workspace
+        working-directory: templates/example-workspace
+        run: |
+          t() { local s=$SECONDS; "$@"; echo "| \`$*\` | $((SECONDS - s)) s |" >> "$GITHUB_STEP_SUMMARY"; }
+          echo "| command | time |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          t cargo fetch --locked
+          t cargo build --release --locked --workspace
+          t cargo clippy --locked --workspace --all-targets
+          t cargo test --locked --workspace
+      - name: Unit tests (Node CLI)
+        run: |
+          s=$SECONDS
+          node --test tests/*.test.mjs
+          echo "| \`node --test\` | $((SECONDS - s)) s |" >> "$GITHUB_STEP_SUMMARY"
