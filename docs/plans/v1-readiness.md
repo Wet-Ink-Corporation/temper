@@ -83,14 +83,14 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 
 | Step | Work | Size | Who |
 |---|---|---|---|
-| 0.1 | **Protect `main`** with a ruleset: require a PR, require the `Checks` and `Unit tests (Windows)` status checks, block force-push and deletion, and give the owner a bypass for emergencies. Protect `v*` tags. (G1) | S | Owner |
+| 0.1 | ~~**Protect `main`** with a ruleset: require a PR, require the `Checks` and `Unit tests (Windows)` status checks, block force-push and deletion, and give the owner a bypass for emergencies. Protect `v*` tags.~~ Done by the owner, 2026-10-02. (G1) | S | Done |
 | 0.2 | ~~**Commit the 2.0 port plan** to `docs/plans/temper-2-rust-port.md` and repoint the decision-record anchors.~~ Done; the file is verbatim, so every `:line` anchor still resolves. At 2.0.0 it moves to `docs/history/2.0-rust-port/`, as the plan's §7 says. (G2) | S | Done |
 | 0.3 | **Add contributor files**: a root `CLAUDE.md`/`AGENTS.md` for developing temper itself (layout, `tests/ci.sh`, the vendored-copy rule, the version-bump checklist). Shape it so the port's phase 0a can extend it with the crate map and decisions log (§1.1) rather than replace it, `CONTRIBUTING.md`, `.github/CODEOWNERS`, a PR template with the release checklist boxes, issue templates (bug, false positive or negative, rule proposal), and `SECURITY.md`. (G4) | M | Agent |
 | 0.4 | **Set up the backlog**: labels (`area:standard`, `area:hooks`, `area:cli`, `area:templates`, `area:evals`, `type:bug`, `type:false-positive`, `pilot`), milestones (`v1 live`, `2.0`), and one issue per step of phases 1 to 5 of this plan. (G3) | S | Agent; owner approves |
 | 0.5 | **Bring `docs/history/decisions.md` up to date** with wi-30ed25 and D1 to D17: the owner's decisions in the first table, and D7 to D9 (wi-f22cef, wi-2f31ee, wi-e9386f) in the two-way defaults table with their anchors in the port plan. (G6) | S | Agent |
 | 0.6 | **Bootstrap agent and cloud sessions**: a `SessionStart` hook or environment setup script that installs the pinned toolchain (1.98.1 with clippy and rustfmt) and Node 22, so `tests/ci.sh` runs green in a fresh container. (G7) | S | Agent |
-| 0.7 | **Decide the audience and visibility** for v1: internal org only, or public. This decides who can install from the marketplace and whether `docs/history/` needs another look, since wi-96caeb was decided while the repository was private. (G8) | S | Owner (Weigh-In) |
-| 0.8 | **Reserve the crates.io names and the `@wet-ink` npm scope** per D1 and D2. This is a public, one-way action and does not depend on any port code. The port plan notes that the `wet-ink` npm org's availability was never verified (the org page returned 403 to an anonymous request); D1's option B, `@wetink`, is the fallback. (G9) | S | Owner |
+| 0.7 | ~~**Decide the audience and visibility** for v1.~~ Decided 2026-10-02: **internal for now**. v1 targets Wet Ink org members, who install from the marketplace with their GitHub auth. Revisit before any public release, including `docs/history/` (wi-96caeb was decided while the repository was private). (G8) | S | Done |
+| 0.8 | **Reserve the crates.io names and the `@wet-ink` npm scope** per D1 and D2. The `@wet-ink` npm org was created by the owner on 2026-10-02. The four crate names (`temper-cli`, `temper-domain`, `temper-app`, `temper-host`) were still free on 2026-10-02. They are reserved by publishing a `0.0.0` placeholder of each (`MIT OR Apache-2.0`, metadata pointing at this repository). That first publish also has to happen before crates.io trusted publishing (D12) can be configured, because trusted publishing applies only to crates that already exist. It needs a crates.io token from the owner's account, scoped to `publish-new` for `temper-*`, short-lived and revoked afterwards. (G9) | S | Owner (token); agent or owner publishes |
 | 0.9 | **Check the port's other external prerequisites now**, since each has lead time and none needs code. GitHub's arm64 hosted runners (`ubuntu-24.04-arm`, `windows-11-arm`, needed for D5) may not be available, or may be billed differently, for an `internal` repository than for a public one, so confirm them for this repo, which links to 0.7. Also confirm Actions minutes for the extra CI the port adds: Rust on 3 OSes, MSRV, the parity harness, and a registry-corpus scan on 2 OSes. | S | Owner |
 
 ### Phase 1: harden 1.x (milestone `v1 live`, released as 1.3.0)
@@ -152,7 +152,7 @@ The plan's own order is phases 0a to 8: workspace skeleton, distribution spike, 
 
 ## Suggested order of work
 
-1. **This week:** 0.1, 0.7, 0.8 and 0.9 (owner), and 0.3 to 0.6 (agent PRs). 0.2 is done. After this, everything goes through PRs.
+1. **This week:** the crate names (0.8) and 0.9 (owner), and 0.3 to 0.6 (agent PRs). 0.1, 0.2 and 0.7 are done, as is the npm org. After this, everything goes through PRs.
 2. **Next:** phase 1 and 3.1 to 3.2 in parallel. Start phase 2 adoption (2.1 to 2.2) as soon as 1.2 and 1.3 land, since the pilot needs elapsed time more than effort.
 3. **Then:** fix the pilot findings, run the go-live checklist, and release v1.
 4. **Then:** temper 2.0, from its committed plan, starting with the pre-port steps in phase 5.
