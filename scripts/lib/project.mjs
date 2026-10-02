@@ -154,9 +154,11 @@ export function relTo(root, file) {
   const r = unverbatim(root);
   const f = path.resolve(unverbatim(file));
   const rel = path.relative(r, f);
-  // Windows also spells one directory two ways: 8.3 short names (C:\Users\RUNNER~1) from
-  // TEMP and the cwd, long names from git. Compare the long forms when the lexical ones differ.
-  if (process.platform === 'win32' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+  // One directory can be spelled two ways: through a symlinked ancestor (macOS TMPDIR under
+  // /var, a link to the /private/var that cargo reports) or, on Windows, with 8.3 short names
+  // (C:\Users\RUNNER~1) from TEMP and the cwd against long names from git. Compare the real,
+  // long forms when the lexical ones put the file outside the root.
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
     return norm(path.relative(longPath(r), longPath(f)));
   }
   return norm(rel);
