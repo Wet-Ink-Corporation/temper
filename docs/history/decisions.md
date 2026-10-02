@@ -70,4 +70,5 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 |---|---|---|
 | 0.7 | Who is v1 for, and what visibility does the repository have? | Internal for now: Wet Ink org members. Revisit before any public release. |
 | 0.9 | Which runners build the arm64 targets? | GitHub's standard arm64 runners, confirmed for this repository with `runner-probe.yml`. |
-| 0.9 | How much CI does the port run? | Tiered: Linux on every PR; Windows and macOS on PRs that touch code and on `main`; the corpus scan weekly and on `release/*`; the release matrix on `release/*` only. Plus Actions budget alerts. |
+| 0.9 | How much CI does the port run? | Tiered: Linux on every PR; Windows and macOS on PRs that touch code and on `main`; the corpus scan weekly and on `release/*`; the release matrix on `release/*` only. Plus Actions budget alerts. The macOS part is parked; see the next row. |
+| 0.9 | Should CI run a macOS job? | Parked until the repository goes public. macOS minutes count 10× against the included minutes, and the runner probe's macOS run covers it on demand. Decided 2026-10-02. |
