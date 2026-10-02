@@ -13,6 +13,9 @@ import re
 import sys
 
 HOOKS = pathlib.Path(__file__).resolve().parents[2] / 'hooks' / 'hooks.json'
+# Events whose hooks run but are not reported as hook_started in the parent session's stream
+# (seen on Claude Code 2.1.286 and 2.1.288). Their evidence is in .git/temper/telemetry.jsonl.
+NOT_STREAMED = {'SubagentStop': 'not reported by stream-json; a recorded "verdict" in telemetry shows it ran'}
 
 
 def short(x, n=240):
@@ -53,5 +56,5 @@ for event, matcher in registered():
             if name.split(':', 1)[0] == event
             and (pat is None or pat.search(name.split(':', 1)[1] if ':' in name else ''))}
     label = f'{event}[{matcher}]' if matcher else event
-    detail = ', '.join(f'{k} x{v}' for k, v in sorted(hits.items())) or 'NOT FIRED'
+    detail = ', '.join(f'{k} x{v}' for k, v in sorted(hits.items())) or NOT_STREAMED.get(event, 'NOT FIRED')
     print(f'  {label:<60} {detail}')

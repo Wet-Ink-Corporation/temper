@@ -47,6 +47,8 @@ mod tests {
 RS
 printf 'target/\n.temper/\n' > .gitignore
 git init -q && git add -A && git -c user.email=smoke@example.com -c user.name=smoke commit -qm init
+# A TEMPER_BASE in this shell belongs to another session (the one running this script, say).
+unset TEMPER_BASE
 ${CLAUDE_BIN:-claude} -p --plugin-dir "$PLUGIN" --permission-mode acceptEdits \
   --allowedTools "Bash Read Write Edit Glob Grep Skill Agent" --max-turns 60 \
   --output-format stream-json --verbose "$PROMPT" < /dev/null > "$WORK.jsonl"
