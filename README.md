@@ -24,6 +24,11 @@ A skill is advice that the model chooses to load. Rules the model can't skip hav
 
 ## Install
 
+Requirements:
+- **Claude Code 2.1.286 or later.** The end-to-end smoke test passes on 2.1.286 and 2.1.288, and every hook in `hooks/hooks.json` was confirmed to run on both ([results](docs/history/evals.md#smoke-runs)). Older releases are untested.
+- **Node 18 or later** on the `PATH` that Claude Code sees. On Windows it must be a real `node.exe`; see [troubleshooting](docs/troubleshooting.md#windows).
+- **git**, and the Rust toolchain that `rust-toolchain.toml` pins (1.98.1 in the template), with clippy and rustfmt.
+
 ```bash
 # as a marketplace (this repository)
 claude plugin marketplace add Wet-Ink-Corporation/temper

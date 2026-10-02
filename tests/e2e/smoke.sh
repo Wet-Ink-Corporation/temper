@@ -3,8 +3,10 @@
 # loaded, on a throwaway Rust repository. Costs a few model calls.
 #
 #   tests/e2e/smoke.sh [prompt]
+#   CLAUDE_BIN="npx --yes @anthropic-ai/claude-code@2.1.286" tests/e2e/smoke.sh   # a pinned release
 #
-# Prints the hook decisions, tool calls and final reply, then the temper status.
+# Prints the hook decisions, tool calls and final reply, which registered hooks fired, then the
+# temper status.
 set -euo pipefail
 PLUGIN="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d)"
@@ -45,7 +47,9 @@ mod tests {
 RS
 printf 'target/\n.temper/\n' > .gitignore
 git init -q && git add -A && git -c user.email=smoke@example.com -c user.name=smoke commit -qm init
-claude -p --plugin-dir "$PLUGIN" --permission-mode acceptEdits \
+# A TEMPER_BASE in this shell belongs to another session (the one running this script, say).
+unset TEMPER_BASE
+${CLAUDE_BIN:-claude} -p --plugin-dir "$PLUGIN" --permission-mode acceptEdits \
   --allowedTools "Bash Read Write Edit Glob Grep Skill Agent" --max-turns 60 \
   --output-format stream-json --verbose "$PROMPT" < /dev/null > "$WORK.jsonl"
 # The transcript lives outside the repo: files inside it are part of the reviewed tree.
