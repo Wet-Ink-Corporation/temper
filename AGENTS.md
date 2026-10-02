@@ -1,0 +1,72 @@
+# temper (this repository)
+
+This repository is temper itself: the Claude Code plugin that ships the rust-craft standard and its enforcement. It is also the `temper` marketplace that users install from. This file is for anyone working **on** temper, human or agent. The README explains how to **use** temper.
+
+## `main` is what users get
+
+Marketplace users install whatever `main` holds, so every merge to `main` reaches them.
+- All changes go through a pull request with green CI. A ruleset protects `main`: the `Checks` and `Unit tests (Windows)` checks are required, and force-push is blocked.
+- Keep `main` releasable. A change that is not ready for users waits on its branch.
+- Versions and releases follow the checklist below.
+
+## Layout
+
+| Path | What it is |
+|---|---|
+| `skills/rust-craft/` | The standard: `SKILL.md`, and `references/` with the rule registry `rules.md` (182 rules) and its sources |
+| `skills/{setup,implement,review,gate,audit}/` | The `/temper:*` commands |
+| `agents/` | `rust-architect`, `rust-implementer`, `rust-reviewer` |
+| `hooks/hooks.json` | Hook registrations; every hook runs `node scripts/temper.mjs hook <event>` |
+| `scripts/temper.mjs`, `scripts/lib/` | The CLI and hook engine: Node 18+, no dependencies |
+| `templates/workspace/` | What `/temper:setup` installs in a user repository |
+| `templates/example-workspace/` | A complete reference workspace that passes its own gate. Its `.claude/temper/` is a vendored copy of `scripts/`. |
+| `tests/` | Node unit tests, Python consistency checks, e2e scripts, fixtures |
+| `evals/` | `claude plugin eval` cases |
+| `docs/plans/` | Live plans: `v1-readiness.md` (the road to v1) and `temper-2-rust-port.md` (the 2.0 port) |
+| `docs/history/` | Specs, reviews, findings and the decision log behind each release |
+| `.kb/_intake/decisions/` | Weigh-In decision records (generated; see below) |
+| `.claude-plugin/` | `plugin.json` (the version lives here) and `marketplace.json` |
+
+## Commands
+
+| Purpose | Command |
+|---|---|
+| Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the two that compile Rust) |
+| Unit tests | `node --test tests/*.test.mjs` |
+| Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
+| Every code block in the standard | `python3 tests/doc_examples.py` (add `--fetch` without a warm registry cache) |
+| Plugin and marketplace manifests | `claude plugin validate --strict .claude-plugin/plugin.json` and `claude plugin validate --strict .` |
+| Brownfield e2e, no model calls | `bash tests/e2e/brownfield.sh` |
+| Headless smoke session, a few model calls | `bash tests/e2e/smoke.sh` |
+| Behavioural evals (model calls, costs money) | `claude plugin eval . --allow-tools Write Edit --scaffold --trust-plugin --runs 3` |
+
+Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rust-toolchain.toml` with clippy and rustfmt. In Claude Code cloud sessions, `.claude/hooks/session-start.sh` installs the toolchain.
+
+## Rules of the road
+
+- **The vendored copy.** `templates/example-workspace/.claude/temper/` must match `scripts/` byte for byte, and its `VERSION` must match `plugin.json`; `tests/ci.sh` checks both. After changing `scripts/`:
+  ```bash
+  v=templates/example-workspace/.claude/temper
+  cp scripts/temper.mjs "$v/" && rm -f "$v"/lib/* && cp scripts/lib/* "$v/lib/"
+  node -p 'require("./.claude-plugin/plugin.json").version' > "$v/VERSION"
+  ```
+- **The rule map.** After editing `skills/rust-craft/references/rules.md`, run `python3 tests/gen_rulemap.py` to regenerate `scripts/lib/rulemap.json`, then sync the vendored copy.
+- **Code in the standard is tested.** Every code block in `skills/rust-craft/` is compiled and linted by `tests/doc_examples.py`. "Do" blocks must pass, and "Don't" blocks must fire the diagnostic they claim.
+- **Rule IDs are permanent.** Never renumber or reuse one. Every cited ID must exist (`tests/registry.py`).
+- **Decisions.** Questions that need the owner go through Weigh-In. The records in `.kb/_intake/decisions/` are generated, so do not hand-edit them, except to repoint an anchor. Each decision is also listed in `docs/history/decisions.md`.
+- **No `CLAUDE.md` at the repository root.** The repository root is the plugin root, and `claude plugin validate --strict` rejects a root `CLAUDE.md`, because a plugin never loads it. Project memory for working here is `.claude/CLAUDE.md`, which imports this file.
+- **Scratch work** goes in `.temper/` (gitignored). A plan that others need goes in `docs/plans/`.
+- **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, and the Claude Code CLI version in `ci.yml`. Dependabot bumps the SHA-pinned actions.
+
+## Release checklist
+
+Until the release workflow from plan step 3.1 exists:
+1. Bump `version` in `.claude-plugin/plugin.json`, and add a `## X.Y.Z (date)` section to `CHANGELOG.md`.
+2. Sync the vendored copy (above), including `VERSION`.
+3. `bash tests/ci.sh` is green. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
+4. Merge the PR. The merge is the release for marketplace users.
+5. Tag `vX.Y.Z` on the merge commit, and create the GitHub release from the CHANGELOG section.
+
+## When the 2.0 port starts
+
+Phase 0a of `docs/plans/temper-2-rust-port.md` adds a Cargo workspace at the repository root. This file then gains the workspace charter: the crate map, the layer rules and a decisions log, in the shape of `templates/workspace/AGENTS.md`. The commands above gain the cargo steps.

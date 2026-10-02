@@ -1,0 +1,4 @@
+# The owner reviews everything. Only the owner can merge to main, through the
+# ruleset's bypass, so "Require review from Code Owners" is left off: GitHub
+# never counts an author's approval of their own pull request.
+* @Ryan-Britton
