@@ -63,7 +63,7 @@ Then, in a Rust repository, run `/temper:setup`. It installs the workspace lints
 }
 ```
 
-`review` can be `required`, `advisory` or `off`. `manifests.ownLints` lists members a human approved to carry their own full `[lints]` table instead of inheriting the workspace's (an FFI `-sys` crate, an arithmetic-lint opt-in); the hook asks on any change to those tables. The `TEMPER_DISABLE=1` environment variable turns every hook off; that is an emergency switch for a human, not something for agents.
+`review` can be `required`, `advisory` or `off`. `manifests.ownLints` lists members a human approved to carry their own full `[lints]` table instead of inheriting the workspace's (an FFI `-sys` crate, an arithmetic-lint opt-in); the hook asks on any change to those tables. The `TEMPER_DISABLE=1` environment variable turns every hook off; that is an emergency switch for a human, not something for agents ([how to use it](docs/troubleshooting.md#the-emergency-switch-temper_disable1)).
 
 ## CLI
 
@@ -136,6 +136,19 @@ A temper checkout serves as `<temper>` in step 3. The plugin's own copy, under C
 `temper report` turns the findings into a scorecard: findings by severity (MUST, SHOULD, CONSIDER, and lints the standard does not cite), iron-rule findings called out, and per crate a status (`clean`, `debt`, `regressed`), counts, new and fixed against the baseline, lint inheritance, charter presence and top rules; then the top rules and files. It writes JSON for tooling, Markdown for the step summary and pull-request comment, and a self-contained HTML page. Per-change evidence stays with the change: the gate result and the reviewer's scored verdict (12 rubric dimensions, findings by rule ID) are stored per tree fingerprint under `.git/temper/`.
 
 A sample, built from a test fixture of a six-crate workspace with legacy debt, one regressed crate and a raised baseline: [`docs/examples/sample-report.md`](docs/examples/sample-report.md). The `.html` and `.json` beside it are the same report in the other two formats.
+
+## Troubleshooting
+
+[`docs/troubleshooting.md`](docs/troubleshooting.md) covers:
+- what each hook denial, question and Stop block means, and how to clear it;
+- gate timeouts on large workspaces;
+- Windows notes;
+- how to report a problem.
+
+The short version:
+- Run `node .claude/temper/temper.mjs status` to see the gate and review state for the current tree.
+- Read the full step logs in `.git/temper/logs/`.
+- If temper itself is broken, start Claude Code with `TEMPER_DISABLE=1` to turn every hook off. That is for a human, never an agent. CI and the pre-commit hook still run.
 
 ## Using the standard with other agents
 

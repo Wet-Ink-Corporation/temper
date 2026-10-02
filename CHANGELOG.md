@@ -8,6 +8,12 @@ Fixes found by the runner probe on macOS and Windows runners.
 
 Documentation.
 - The README has an Upgrading section: how an adopted repository moves its plugin and its vendored CLI (`.claude/temper/`) to a new release, what `temper setup --dry-run` reports, what `--force` overwrites, what to re-run, and what to review in the diff.
+- New [`docs/troubleshooting.md`](docs/troubleshooting.md), linked from the README. It covers:
+  - every hook denial, question and Stop block, and how to clear it;
+  - `TEMPER_DISABLE=1` as the human emergency switch, and how to set it, since hooks inherit Claude Code's environment;
+  - gate timeouts on large workspaces: the 900 s step timeout against the 1200 s hook timeout, and warming the cache;
+  - Windows notes;
+  - how to report a problem.
 
 Upgrading from 1.2.x: `scripts/lib/project.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --force`, restore the template files you customised, and commit the result as its own pull request. The README's Upgrading section has the steps.
 
