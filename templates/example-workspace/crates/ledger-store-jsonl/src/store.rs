@@ -1,7 +1,7 @@
 //! One append-only JSON Lines file per account.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use ledger_app::{EventStore, Recorded, Version};
@@ -171,6 +171,11 @@ impl EventStore for JsonlStore {
 
 /// Create the root and the stream file as needed, then take the exclusive lock
 /// that serializes check-then-append across writers.
+///
+/// The file is opened read-write, not in append mode: on Windows an
+/// append-mode handle lacks the right to truncate, which repairing a torn tail
+/// and rolling back a failed batch both need. Under the exclusive lock the
+/// writer places each batch at an explicit offset instead.
 fn open_locked_for_append(root: &Path, path: &Path) -> Result<File, StoreError> {
     let write_error = |source| StoreError::Write {
         path: path.to_owned(),
@@ -179,17 +184,18 @@ fn open_locked_for_append(root: &Path, path: &Path) -> Result<File, StoreError> 
     fs::create_dir_all(root).map_err(write_error)?;
     let file = OpenOptions::new()
         .read(true)
-        .append(true)
+        .write(true)
         .create(true)
+        .truncate(false)
         .open(path)
         .map_err(write_error)?;
     file.lock().map_err(write_error)?;
     Ok(file)
 }
 
-/// Encode the whole batch in memory, append it with one write and sync it.
-/// On failure, cut the file back to `committed_len` so no reader ever sees
-/// part of a batch.
+/// Encode the whole batch in memory, write it with one write at
+/// `committed_len` and sync it. On failure, cut the file back to
+/// `committed_len` so no reader ever sees part of a batch.
 fn write_batch(
     path: &Path,
     file: &File,
@@ -200,7 +206,7 @@ fn write_batch(
     let written = events
         .iter()
         .try_for_each(|recorded| record::encode(recorded, &mut batch))
-        .and_then(|()| write_and_sync(file, &batch));
+        .and_then(|()| write_and_sync(file, committed_len, &batch));
     let Err(write) = written else {
         return Ok(());
     };
@@ -218,7 +224,8 @@ fn write_batch(
     }
 }
 
-fn write_and_sync(mut file: &File, batch: &[u8]) -> io::Result<()> {
+fn write_and_sync(mut file: &File, offset: u64, batch: &[u8]) -> io::Result<()> {
+    file.seek(SeekFrom::Start(offset))?;
     file.write_all(batch)?;
     file.sync_data()
 }

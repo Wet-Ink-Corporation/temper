@@ -60,3 +60,9 @@ jobs:
       - name: Unit tests
         shell: bash
         run: node --test tests/*.test.mjs
+      # The reference workspace ships to users; its store must work on Windows too
+      # (append-mode handles there cannot truncate, which the crash repair needs).
+      - name: Example workspace tests
+        shell: bash
+        working-directory: templates/example-workspace
+        run: cargo test --locked --workspace
