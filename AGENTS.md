@@ -54,6 +54,7 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 - **Code in the standard is tested.** Every code block in `skills/rust-craft/` is compiled and linted by `tests/doc_examples.py`. "Do" blocks must pass, and "Don't" blocks must fire the diagnostic they claim.
 - **Rule IDs are permanent.** Never renumber or reuse one. Every cited ID must exist (`tests/registry.py`).
 - **Decisions.** Questions that need the owner go through Weigh-In. The records in `.kb/_intake/decisions/` are generated, so do not hand-edit them, except to repoint an anchor. Each decision is also listed in `docs/history/decisions.md`.
+- **No `CLAUDE.md` at the repository root.** The repository root is the plugin root, and `claude plugin validate --strict` rejects a root `CLAUDE.md`, because a plugin never loads it. Project memory for working here is `.claude/CLAUDE.md`, which imports this file.
 - **Scratch work** goes in `.temper/` (gitignored). A plan that others need goes in `docs/plans/`.
 - **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, and the Claude Code CLI version in `ci.yml`. Dependabot bumps the SHA-pinned actions.
 
