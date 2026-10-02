@@ -61,7 +61,7 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 ## Release checklist
 
 Until the release workflow from plan step 3.1 exists:
-1. Bump `version` in `.claude-plugin/plugin.json`, and add a `## X.Y.Z (date)` section to `CHANGELOG.md`.
+1. Bump `version` in `.claude-plugin/plugin.json`, and add a `## X.Y.Z (date)` section to `CHANGELOG.md`. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
 2. Sync the vendored copy (above), including `VERSION`.
 3. `bash tests/ci.sh` is green. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
 4. Merge the PR. The merge is the release for marketplace users.
