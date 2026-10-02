@@ -258,6 +258,23 @@ test('relTo: one directory spelled with an 8.3 short name and a long name is the
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('relTo: one directory reached through a symlinked ancestor and through its real path is the same root', (t) => {
+  // macOS: TMPDIR is under /var, a symlink to /private/var, and cargo reports the real path.
+  if (!canSymlink) { t.skip('cannot create symlinks here'); return; }
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-symlinked-root-'));
+  try {
+    const real = path.join(base, 'private', 'ws');
+    fs.mkdirSync(path.join(real, 'crates', 'legacy'), { recursive: true });
+    fs.writeFileSync(path.join(real, 'crates', 'legacy', 'Cargo.toml'), '');
+    fs.symlinkSync(path.join(base, 'private'), path.join(base, 'var'), 'dir');
+    const linked = path.join(base, 'var', 'ws');
+    assert.equal(relTo(real, path.join(linked, 'crates', 'legacy', 'Cargo.toml')), 'crates/legacy/Cargo.toml');
+    assert.equal(relTo(linked, path.join(real, 'crates', 'legacy', 'Cargo.toml')), 'crates/legacy/Cargo.toml');
+    assert.equal(relTo(real, path.join(linked, 'src', 'new.rs')), 'src/new.rs', 'a file not yet on disk');
+    assert.equal(relTo(real, path.join(base, 'elsewhere.rs')), '../../elsewhere.rs', 'a file outside stays outside');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test('output paths: under target/ or .temper/ after resolving symlinks, never onto one', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-safe-'));
   try {
