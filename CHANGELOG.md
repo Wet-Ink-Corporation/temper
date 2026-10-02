@@ -6,6 +6,14 @@ Fixes found by the runner probe on macOS and Windows runners.
 - On macOS, paths under a symlinked directory were reported relative to the wrong root. TMPDIR is under `/var`, a link to `/private/var`, and cargo reports the real path, so `crates/legacy/Cargo.toml` came out as `../../../../private/var/.../crates/legacy/Cargo.toml`. The 1.2.3 fix for Windows 8.3 names now applies on every platform: when the lexical path leaves the root, both sides are compared in their real form.
 - The example workspace's JSONL store could not repair a torn tail or roll back a failed batch on Windows, because an append-mode handle there lacks the right to truncate (`PermissionDenied`). The store now opens stream files read-write and writes each batch at an explicit offset under its exclusive lock. CI now runs the example workspace's tests on Windows.
 
+Documentation.
+- New [`docs/troubleshooting.md`](docs/troubleshooting.md), linked from the README. It covers:
+  - every hook denial, question and Stop block, and how to clear it;
+  - `TEMPER_DISABLE=1` as the human emergency switch, and how to set it, since hooks inherit Claude Code's environment;
+  - gate timeouts on large workspaces: the 900 s step timeout against the 1200 s hook timeout, and warming the cache;
+  - Windows notes;
+  - how to report a problem.
+
 ## 1.2.3 (2026-10-01)
 
 Windows fixes.
