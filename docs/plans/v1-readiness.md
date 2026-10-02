@@ -1,6 +1,6 @@
 # temper: repository evaluation and the plan to v1 live
 
-Written 2026-10-02, against `main` at `57810da`.
+Written 2026-10-02, against `main` at `57810da`. Updated the same day to review the 2.0 port plan, now committed as [`temper-2-rust-port.md`](temper-2-rust-port.md).
 
 ## What "v1 live" means here
 
@@ -26,7 +26,7 @@ The temper 2.0 Rust port (wi-30ed25, D1 to D17) comes **after** v1 live, not bef
 | Tests | Strong | 140 unit tests (139 pass, 1 platform skip). Registry, lint-claim, rule-map and vendored-copy checks pass, and so do the doc examples and the brownfield e2e. All ran locally on 2026-10-02. CI runs on Linux and Windows. |
 | Behavioural evals | Thin | 3 cases, and only one separates the two arms (`refuses-unwrap-under-pressure`, +0.67). The mean Δ is +0.22. `docs/history/evals.md` already says harder cases are needed. |
 | Real-world use | **None** | No adopting repository. Several defaults say "check in the first repository that adopts the template" (for example wi-a9eb36, Dependabot `lockfile-only`). |
-| temper 2.0 (Rust port) | Decided, not started | 18 decision records (wi-30ed25 and D1 to D17; D7 to D9 have no record). No Rust crates in the repo. **The port plan the records cite, `.temper/plans/temper-2-rust-port.md`, is not in git** (`.temper/` is gitignored). |
+| temper 2.0 (Rust port) | Fully specified, not started | A detailed plan ([`temper-2-rust-port.md`](temper-2-rust-port.md)) and all 17 decisions settled: the owner decided 14, plus the licence, and D7 to D9 are two-way defaults (wi-f22cef, wi-2f31ee, wi-e9386f) with no record in `.kb/`. No Rust code yet; the plan's next step is its phase 0a. The plan sizes the port at ~26,000 lines across ~110 files, at least, which is several times the current engine. |
 
 ### Source control and repository setup
 
@@ -42,14 +42,34 @@ The temper 2.0 Rust port (wi-30ed25, D1 to D17) comes **after** v1 live, not bef
 | # | Gap | Why it matters |
 |---|---|---|
 | G1 | Every change is pushed straight to `main`. There have been 0 pull requests and 0 issues. | Nothing reviewed the changes or gated them on CI. Run #3 (the `temper 1.2.3` commit) was red on `main` until the next commit fixed it. A plugin that requires reviewed, gated changes should be built that way itself. |
-| G2 | The 2.0 port plan exists only in the owner's local, gitignored `.temper/plans/`. | 18 committed decisions anchor to line numbers in a file nobody else can read. One lost laptop loses the plan. |
+| G2 | The 2.0 port plan existed only in the owner's local, gitignored `.temper/plans/`. **Fixed** by committing it to `docs/plans/temper-2-rust-port.md` and repointing the decision-record anchors (step 0.2). | 18 committed decisions anchored to line numbers in a file nobody else could read. |
 | G3 | There is no backlog. No issues, milestones or labels exist, and remaining work lives in chat sessions and `docs/history/` prose. | Nobody, human or agent, can see what is next or what is blocked. |
 | G4 | There are no contributor files for this repository: no root `CLAUDE.md`/`AGENTS.md`, `CONTRIBUTING.md`, `CODEOWNERS`, PR or issue templates, or `SECURITY.md`. | Agents working here rediscover the release checklist each time: bump `plugin.json`, the vendored `VERSION`, sync `templates/example-workspace/.claude/temper/`, and update the CHANGELOG. |
 | G5 | Releases are made by hand. Five of the six releases were published retroactively, all within 5 seconds at 01:55Z on 2026-10-02. | Nothing checks that the tag, `plugin.json`, the CHANGELOG heading and the vendored `VERSION` agree, or that the evals and smoke test ran. |
-| G6 | `docs/history/decisions.md` stops at the repository setup. | It omits the 2.0 decisions (wi-30ed25, D1 to D17), so the index and the records disagree. |
+| G6 | `docs/history/decisions.md` stops at the repository setup. | It omits the 2.0 decisions (wi-30ed25, D1 to D17), so the index and the records disagree. The two-way defaults D7 to D9 appear only in the port plan's decisions table. |
 | G7 | Cloud and agent sessions have no environment bootstrap. | `tests/ci.sh` fails at "lint and scanner claims" until the pinned 1.98.1 toolchain is installed (seen in this session). |
 | G8 | The repository is `internal`. | `claude plugin marketplace add Wet-Ink-Corporation/temper` works only for org members with GitHub auth. That may be right, but it should be decided before go-live rather than discovered then. |
 | G9 | A time-sensitive item is open: D2 says "reserve the names now". | `temper-cli`, `temper-domain`, `temper-app` and `temper-host` were free on crates.io on 2026-10-02. Anyone can take them. |
+
+### The 2.0 port plan
+
+**What is strong.** Every decision is settled, and each has its options and trade-offs written down. Nothing users rely on changes by accident:
+- invariants that tests can check;
+- a test map that fails CI if any of the 140 Node tests is dropped without saying so;
+- a differential harness that compares the two engines, including a scanner corpus run over the whole cargo registry;
+- state files that both engines can read, in both directions.
+
+The port order puts the riskiest work first: distribution, then the scanner's regex semantics. Users run 1.x untouched until the cutover. The scope is held firmly: no rule changes, no syn, and no async runtime.
+
+**What it changes about the v1 plan:**
+- **`main` is the distribution channel.** The plan relies on this: marketplace users install whatever `main` holds (§4, step 9). That is already true for 1.x, so every merge to `main` reaches users. This makes 0.1 (protect `main`) the most urgent step. It also means a 1.x release is a merge, not just a tag, and phase 3 is designed with that in mind.
+- **Do the pilot before the port.** The parity harness pins the scanner's behaviour for the length of the port, so problems the pilot finds are cheapest to fix in 1.x first. This adds to the reasons for v1 first (see phase 5).
+- **External setup has lead time.** The npm org, the crate names, the arm64 runners, the `release` environment and the trusted publishers are owner actions with no code dependency. They are now steps 0.8 and 0.9, so they are not discovered at the port's phase 0b.
+- **The repository will dogfood temper.** Phase 0a puts a Cargo workspace at the repository root with temper's own lints and charters, so this repository's contributor setup (0.3) should be written to grow into that, not be replaced by it.
+
+**Small gaps in the plan itself** (to note in it, not blockers):
+- It does not say how a 1.x patch release ships while the port is in progress. With the strangler on `main`, a 1.x fix merged to `main` ships alongside an unused Rust workspace in the plugin directory. That works, but it should be stated.
+- Its `Progress` section ends at "Next: Phase 0a". Once phase 0 of this plan exists, the port should be tracked as issues in the `2.0` milestone (0.4) rather than only in that section.
 
 ---
 
@@ -64,13 +84,14 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 | Step | Work | Size | Who |
 |---|---|---|---|
 | 0.1 | **Protect `main`** with a ruleset: require a PR, require the `Checks` and `Unit tests (Windows)` status checks, block force-push and deletion, and give the owner a bypass for emergencies. Protect `v*` tags. (G1) | S | Owner |
-| 0.2 | **Commit the 2.0 port plan** to `docs/plans/temper-2-rust-port.md`. Rewrite the decision-record anchors from `.temper/plans/…` to the committed path, or add a note mapping them. (G2) | S | Owner provides the file; agent commits |
-| 0.3 | **Add contributor files**: a root `CLAUDE.md`/`AGENTS.md` for developing temper itself (layout, `tests/ci.sh`, the vendored-copy rule, the version-bump checklist), `CONTRIBUTING.md`, `.github/CODEOWNERS`, a PR template with the release checklist boxes, issue templates (bug, false positive or negative, rule proposal), and `SECURITY.md`. (G4) | M | Agent |
+| 0.2 | ~~**Commit the 2.0 port plan** to `docs/plans/temper-2-rust-port.md` and repoint the decision-record anchors.~~ Done; the file is verbatim, so every `:line` anchor still resolves. At 2.0.0 it moves to `docs/history/2.0-rust-port/`, as the plan's §7 says. (G2) | S | Done |
+| 0.3 | **Add contributor files**: a root `CLAUDE.md`/`AGENTS.md` for developing temper itself (layout, `tests/ci.sh`, the vendored-copy rule, the version-bump checklist). Shape it so the port's phase 0a can extend it with the crate map and decisions log (§1.1) rather than replace it, `CONTRIBUTING.md`, `.github/CODEOWNERS`, a PR template with the release checklist boxes, issue templates (bug, false positive or negative, rule proposal), and `SECURITY.md`. (G4) | M | Agent |
 | 0.4 | **Set up the backlog**: labels (`area:standard`, `area:hooks`, `area:cli`, `area:templates`, `area:evals`, `type:bug`, `type:false-positive`, `pilot`), milestones (`v1 live`, `2.0`), and one issue per step of phases 1 to 5 of this plan. (G3) | S | Agent; owner approves |
-| 0.5 | **Bring `docs/history/decisions.md` up to date** with wi-30ed25 and D1 to D17. Record what happened to D7 to D9 (defaulted, dismissed or still open). (G6) | S | Agent |
+| 0.5 | **Bring `docs/history/decisions.md` up to date** with wi-30ed25 and D1 to D17: the owner's decisions in the first table, and D7 to D9 (wi-f22cef, wi-2f31ee, wi-e9386f) in the two-way defaults table with their anchors in the port plan. (G6) | S | Agent |
 | 0.6 | **Bootstrap agent and cloud sessions**: a `SessionStart` hook or environment setup script that installs the pinned toolchain (1.98.1 with clippy and rustfmt) and Node 22, so `tests/ci.sh` runs green in a fresh container. (G7) | S | Agent |
 | 0.7 | **Decide the audience and visibility** for v1: internal org only, or public. This decides who can install from the marketplace and whether `docs/history/` needs another look, since wi-96caeb was decided while the repository was private. (G8) | S | Owner (Weigh-In) |
-| 0.8 | **Reserve the crates.io names and the `@wet-ink` npm scope** per D1 and D2, if they are still wanted. This is a public, one-way action and does not depend on any port code. (G9) | S | Owner |
+| 0.8 | **Reserve the crates.io names and the `@wet-ink` npm scope** per D1 and D2. This is a public, one-way action and does not depend on any port code. The port plan notes that the `wet-ink` npm org's availability was never verified (the org page returned 403 to an anonymous request); D1's option B, `@wetink`, is the fallback. (G9) | S | Owner |
+| 0.9 | **Check the port's other external prerequisites now**, since each has lead time and none needs code. GitHub's arm64 hosted runners (`ubuntu-24.04-arm`, `windows-11-arm`, needed for D5) may not be available, or may be billed differently, for an `internal` repository than for a public one, so confirm them for this repo, which links to 0.7. Also confirm Actions minutes for the extra CI the port adds: Rust on 3 OSes, MSRV, the parity harness, and a registry-corpus scan on 2 OSes. | S | Owner |
 
 ### Phase 1: harden 1.x (milestone `v1 live`, released as 1.3.0)
 
@@ -101,7 +122,7 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 
 | Step | Work | Size |
 |---|---|---|
-| 3.1 | **Add a release workflow** (from 1.5): tag `v*`, then `tests/ci.sh`, the manifest validation and the version-agreement check, then a GitHub release with notes from the CHANGELOG. Run it from a protected `release` environment that requires the owner's approval, the same pattern D12 sets for 2.0. | M |
+| 3.1 | **Add a release workflow** (from 1.5): tag `v*`, then `tests/ci.sh`, the manifest validation and the version-agreement check, then a GitHub release with notes from the CHANGELOG. Run it from a protected `release` environment that requires the owner's approval, the same pattern D12 sets for 2.0. Merging to `main` is what ships to marketplace users, so use the flow the port plan defines for 2.0 (§4): a `release/<version>` branch, the checks, the GitHub release, then the owner merges to `main`. That way 1.x and 2.0 share one process. | M |
 | 3.2 | **Write a versioning policy** in `CONTRIBUTING.md`: what counts as breaking for temper. A new MUST rule that fails existing code, a changed hook decision, a template change that needs migration, or a CLI flag or exit-code change is major or minor. A docs-only change is a patch. | S |
 | 3.3 | **Pre-release model checks**: `tests/e2e/smoke.sh` and the eval suite run before every minor release. Results are appended to `docs/history/evals.md` and linked from the PR. Optionally make them a `workflow_dispatch` job with an API-key secret in the `release` environment. | S |
 
@@ -120,18 +141,18 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 
 ### Phase 5: after v1, temper 2.0 (the Rust port)
 
-The decisions are already made (wi-30ed25, D1 to D17). Start from the committed port plan (0.2) and add the pilot findings to it before writing code. The order follows the decisions:
-1. A workspace of four crates plus `xtask` (D3), with MSRV 1.96 (D4), the approved dependencies only (D10), and an `MIT OR Apache-2.0` licence (wi-4679b3). Built under temper's own standard, as the first dogfood of temper on temper.
-2. A parity harness that holds 2.0 byte-identical to 1.x, apart from the approved divergences (D16).
-3. A release pipeline for six targets (D5): npm platform packages under `@wet-ink` (D1), crates.io lockstep publishing (D2), and OIDC trusted publishing from the protected `release` environment (D12).
-4. The plugin launcher, the cargo fallback with hybrid pending behaviour (D6), and PATH export at SessionStart (D17).
-5. User-side changes: `.claude/temper-version` (D14), CI installing temper via `taiki-e/install-action` (D13), and `temper setup --migrate` (D15). Node removed at 2.0.0 (D11).
+Follow [`temper-2-rust-port.md`](temper-2-rust-port.md). It is ready to build from. Before its phase 0a starts:
+1. **Fold in the pilot findings.** Fix every scanner false positive or rule problem the pilot finds in 1.x *before* the port starts. During the port, the parity harness holds the Rust and Node engines byte-identical, and the plan forbids rule changes inside it, so a rule fix made mid-port has to be made twice, or it waits for 2.x.
+2. **Confirm the prerequisites from 0.8 and 0.9**: the npm org, the crate names, the arm64 runners, and the CI budget. Also set up the `release` environment with the owner as required reviewer, and the npm and crates.io trusted publishers (D12). The plan's phase 0b publishes `2.0.0-alpha.1` publicly to npm, which needs all of these.
+3. **Add the port's CI jobs as required checks** in the 0.1 ruleset as they land. That covers the Rust jobs, MSRV, and the parity harness until cutover.
+
+The plan's own order is phases 0a to 8: workspace skeleton, distribution spike, fallback build, scanner, the hot-path hooks, session and verdict handling, gate, baseline, report, setup and migrate, then the cutover to 2.0.0. A subcommand graduates to Rust once its parity cases pass on all three OSes.
 
 ---
 
 ## Suggested order of work
 
-1. **This week:** 0.1, 0.2, 0.7 and 0.8 (owner), and 0.3 to 0.6 (agent PRs). After this, everything goes through PRs.
+1. **This week:** 0.1, 0.7, 0.8 and 0.9 (owner), and 0.3 to 0.6 (agent PRs). 0.2 is done. After this, everything goes through PRs.
 2. **Next:** phase 1 and 3.1 to 3.2 in parallel. Start phase 2 adoption (2.1 to 2.2) as soon as 1.2 and 1.3 land, since the pilot needs elapsed time more than effort.
 3. **Then:** fix the pilot findings, run the go-live checklist, and release v1.
-4. **Then:** temper 2.0.
+4. **Then:** temper 2.0, from its committed plan, starting with the pre-port steps in phase 5.

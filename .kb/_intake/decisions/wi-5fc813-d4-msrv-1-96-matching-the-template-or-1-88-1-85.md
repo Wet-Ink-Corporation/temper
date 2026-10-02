@@ -33,7 +33,7 @@ D4 · MSRV 1.96 matching the template, or 1.88/1.85 for a wider cargo-fallback r
 
 The MSRV is the oldest compiler the cargo fallback can build with on a user's machine.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-5fc813`. Anchor: `.temper/plans/temper-2-rust-port.md:54`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-5fc813`. Anchor: `docs/plans/temper-2-rust-port.md:54`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ Edition-2024 floor; no let-chains
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:54`: The fallback build compiles on the user's default toolchain, so the MSRV is the oldest compiler a fallback user can have.
-- `.temper/plans/temper-2-rust-port.md:55`: A) 1.96, as in templates/workspace/Cargo.toml. Consistent with the standard (assert_matches! in tests, ...)
-- `.temper/plans/temper-2-rust-port.md:56`: B) 1.88: let-chains, a wider fallback reach, and no assert_matches! (tests use matches!).
+- `docs/plans/temper-2-rust-port.md:54`: The fallback build compiles on the user's default toolchain, so the MSRV is the oldest compiler a fallback user can have.
+- `docs/plans/temper-2-rust-port.md:55`: A) 1.96, as in templates/workspace/Cargo.toml. Consistent with the standard (assert_matches! in tests, ...)
+- `docs/plans/temper-2-rust-port.md:56`: B) 1.88: let-chains, a wider fallback reach, and no assert_matches! (tests use matches!).
 
 ## Decision outcome
 

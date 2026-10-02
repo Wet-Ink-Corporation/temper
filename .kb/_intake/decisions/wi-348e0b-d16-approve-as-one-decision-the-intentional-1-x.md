@@ -33,7 +33,7 @@ D16 · approve as one decision the intentional 1.x divergences in plan §2.4 (JS
 
 These are the only places 2.0 behaves differently from 1.x; everything else is held byte-identical by the parity harness.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-348e0b`. Anchor: `.temper/plans/temper-2-rust-port.md:137`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-348e0b`. Anchor: `docs/plans/temper-2-rust-port.md:137`.
 
 ## Decision drivers
 
@@ -65,8 +65,8 @@ Keep every 1.x behaviour byte-identical, including the quirks
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:138`: Approve the list in §2.4 as a whole. Every other observable behaviour stays byte-identical, and the parity harness enforces that.
-- `.temper/plans/temper-2-rust-port.md:32`: D16 | Intentional divergences from 1.x behaviour, and retired tests (H-12)
+- `docs/plans/temper-2-rust-port.md:138`: Approve the list in §2.4 as a whole. Every other observable behaviour stays byte-identical, and the parity harness enforces that.
+- `docs/plans/temper-2-rust-port.md:32`: D16 | Intentional divergences from 1.x behaviour, and retired tests (H-12)
 
 ## Decision outcome
 

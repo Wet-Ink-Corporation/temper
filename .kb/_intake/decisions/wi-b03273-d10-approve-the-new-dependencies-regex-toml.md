@@ -33,7 +33,7 @@ D10 · approve the new dependencies regex, toml (preserve_order), sha2 and wait-
 
 rust-craft makes new dependencies a human decision; these four are the only non-pre-approved crates the engine needs.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-b03273`. Anchor: `.temper/plans/temper-2-rust-port.md:100`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-b03273`. Anchor: `docs/plans/temper-2-rust-port.md:100`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ Drop sha2 or wait-timeout and hand-roll them
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:213`: temper-domain: regex, toml (std, parse, preserve_order), sha2, serde (derive), serde_json, thiserror
-- `.temper/plans/temper-2-rust-port.md:215`: temper-host: wait-timeout, thiserror
-- `.temper/plans/temper-2-rust-port.md:110`: dunce: verbatim-path stripping is ported.
+- `docs/plans/temper-2-rust-port.md:213`: temper-domain: regex, toml (std, parse, preserve_order), sha2, serde (derive), serde_json, thiserror
+- `docs/plans/temper-2-rust-port.md:215`: temper-host: wait-timeout, thiserror
+- `docs/plans/temper-2-rust-port.md:110`: dunce: verbatim-path stripping is ported.
 - `README.md:58`: preapprovedDependencies: thiserror, anyhow, serde, serde_json, tracing, ... proptest, insta, ... tempfile
 
 ## Decision outcome

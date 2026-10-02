@@ -33,7 +33,7 @@ D6 · while the cargo fallback build is pending or has failed: hybrid (SessionSt
 
 When no prebuilt binary resolves, temper either blocks agents until the cargo build finishes or lets them work unenforced.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-4abeef`. Anchor: `.temper/plans/temper-2-rust-port.md:64`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-4abeef`. Anchor: `docs/plans/temper-2-rust-port.md:64`.
 
 ## Decision drivers
 
@@ -66,10 +66,10 @@ Synchronous build at SessionStart; Rust edits denied with retry; other hooks pas
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:65`: The fallback is needed only when no prebuilt binary resolves: an unsupported platform, a failed or skipped npm install, or --plugin-dir
-- `.temper/plans/temper-2-rust-port.md:66`: A) Fail closed. Every enforcing hook denies or blocks with "temper's engine is not available: <reason>".
-- `.temper/plans/temper-2-rust-port.md:67`: B) Degrade (fail open). Each session gets one notice: "temper is not enforcing". Everything is allowed.
-- `.temper/plans/temper-2-rust-port.md:69`: C) SessionStart builds synchronously when no binary exists (timeout 30 -> 900 s).
+- `docs/plans/temper-2-rust-port.md:65`: The fallback is needed only when no prebuilt binary resolves: an unsupported platform, a failed or skipped npm install, or --plugin-dir
+- `docs/plans/temper-2-rust-port.md:66`: A) Fail closed. Every enforcing hook denies or blocks with "temper's engine is not available: <reason>".
+- `docs/plans/temper-2-rust-port.md:67`: B) Degrade (fail open). Each session gets one notice: "temper is not enforcing". Everything is allowed.
+- `docs/plans/temper-2-rust-port.md:69`: C) SessionStart builds synchronously when no binary exists (timeout 30 -> 900 s).
 
 ## Decision outcome
 

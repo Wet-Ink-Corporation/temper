@@ -33,7 +33,7 @@ D17 · have SessionStart export TEMPER_BIN and prepend the binary's directory to
 
 The 2.0 pre-commit hook calls temper; inside Claude sessions it only finds the plugin's binary if SessionStart puts it on PATH.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-1d4cd6`. Anchor: `.temper/plans/temper-2-rust-port.md:140`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-1d4cd6`. Anchor: `docs/plans/temper-2-rust-port.md:140`.
 
 ## Decision drivers
 
@@ -58,8 +58,8 @@ Users install temper themselves for the pre-commit hook
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:141`: A) SessionStart appends export TEMPER_BIN and export PATH to CLAUDE_ENV_FILE. Without it, the 2.0 pre-commit hook fails inside Claude sessions for anyone who has not also run cargo binstall temper-cli. The directory contains only the temper binary.
-- `.temper/plans/temper-2-rust-port.md:142`: B) No PATH change. The pre-commit hook then needs temper installed separately (it prints how).
+- `docs/plans/temper-2-rust-port.md:141`: A) SessionStart appends export TEMPER_BIN and export PATH to CLAUDE_ENV_FILE. Without it, the 2.0 pre-commit hook fails inside Claude sessions for anyone who has not also run cargo binstall temper-cli. The directory contains only the temper binary.
+- `docs/plans/temper-2-rust-port.md:142`: B) No PATH change. The pre-commit hook then needs temper installed separately (it prints how).
 
 ## Decision outcome
 

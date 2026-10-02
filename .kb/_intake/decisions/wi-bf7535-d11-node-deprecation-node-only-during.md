@@ -33,7 +33,7 @@ D11 · Node deprecation: Node only during development as an opt-in delegate, wit
 
 Shipping two engines in 2.0 gives users an escape hatch but doubles what must stay correct.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-bf7535`. Anchor: `.temper/plans/temper-2-rust-port.md:112`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-bf7535`. Anchor: `docs/plans/temper-2-rust-port.md:112`.
 
 ## Decision drivers
 
@@ -58,9 +58,9 @@ Node delegates per subcommand only on main during the port; 2.0.0 deletes it exc
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:113`: A) Strangler on main during development only ... delegates per subcommand to Rust when TEMPER_ENGINE=rust
-- `.temper/plans/temper-2-rust-port.md:114`: B) Ship 2.0 with the Node engine kept behind TEMPER_ENGINE=node and delete it in 2.1.
-- `.temper/plans/temper-2-rust-port.md:135`: a 1.x repository keeps working untouched: its vendored copy is self-contained
+- `docs/plans/temper-2-rust-port.md:113`: A) Strangler on main during development only ... delegates per subcommand to Rust when TEMPER_ENGINE=rust
+- `docs/plans/temper-2-rust-port.md:114`: B) Ship 2.0 with the Node engine kept behind TEMPER_ENGINE=node and delete it in 2.1.
+- `docs/plans/temper-2-rust-port.md:135`: a 1.x repository keeps working untouched: its vendored copy is self-contained
 
 ## Decision outcome
 

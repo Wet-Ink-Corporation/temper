@@ -33,7 +33,7 @@ D15 · migrate 1.x repos with temper setup --migrate, rewriting only files whose
 
 Moving a 1.x repo to 2.0 means changing its CI workflow, pre-commit hook and settings, which users may have customised.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-cdcecc`. Anchor: `.temper/plans/temper-2-rust-port.md:130`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-cdcecc`. Anchor: `docs/plans/temper-2-rust-port.md:130`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ Overwrite the files with the 2.0 templates
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:132`: A) temper setup --migrate ... replaces rust.yml, pre-commit, settings.json allow-list entries and AGENTS.md command rows only when the file's SHA-256 equals one of the shipped 1.x template versions. Otherwise it prints the exact manual edits.
-- `.temper/plans/temper-2-rust-port.md:134`: C) Rewrite the files regardless: no, it would clobber customised CI.
-- `.temper/plans/temper-2-rust-port.md:135`: Either way, a 1.x repository keeps working untouched: its vendored copy is self-contained and the baseline format does not change.
+- `docs/plans/temper-2-rust-port.md:132`: A) temper setup --migrate ... replaces rust.yml, pre-commit, settings.json allow-list entries and AGENTS.md command rows only when the file's SHA-256 equals one of the shipped 1.x template versions. Otherwise it prints the exact manual edits.
+- `docs/plans/temper-2-rust-port.md:134`: C) Rewrite the files regardless: no, it would clobber customised CI.
+- `docs/plans/temper-2-rust-port.md:135`: Either way, a 1.x repository keeps working untouched: its vendored copy is self-contained and the baseline format does not change.
 
 ## Decision outcome
 
