@@ -101,6 +101,36 @@ The rollout:
 4. Run `/temper:audit` for the remediation plan (`.temper/audit.md`), and pay the debt down crate by crate, each crate as its own reviewed change. Run `temper baseline --tighten` after each; the count only goes down. Raising it (`--update`) is a human decision (H-12): the CLI refuses it inside an agent session unless `TEMPER_ALLOW_RAISE=1` is set, and the hook asks. On a pull request, CI compares the baseline with the base branch's and flags any raise in the report and the PR comment.
 5. Watch it in CI: every run publishes `temper report` as an artifact and a step summary, and a separate job with the only write permission comments the change on pull requests.
 
+## Upgrading
+
+An adopted repository runs two copies of temper:
+- **The plugin** runs the hooks inside Claude Code. It updates through the marketplace.
+- **The vendored CLI** in `.claude/temper/` runs in CI and the pre-commit hook. It changes only when you re-run setup and commit the result. Its version is in `.claude/temper/VERSION`.
+
+Move both to the new release together, in one pull request:
+
+1. **Update the plugin.** Run `claude plugin marketplace update temper` and then `claude plugin update temper@temper`, then restart Claude Code. From then on the hooks run the new version, while CI still runs the old vendored copy until step 4 is merged.
+2. **Read the CHANGELOG** sections between the version in `.claude/temper/VERSION` and the new one. Releases that change the templates or the vendored CLI include upgrade steps.
+3. **Preview, on a branch.** Run `/temper:setup` (it shows the plan before writing), or run `node <temper>/scripts/temper.mjs setup --dry-run` from a temper checkout. Three kinds of line matter:
+   - `drift  .claude/temper/ differs from temper 1.3.0 (the copy says 1.2.3): lib/project.mjs (changed); rerun with --force to replace it`: the vendored CLI is out of date. `up to date with temper X` means it is current.
+   - `skip   <file> (exists; compare with <template>)`: setup never overwrites an existing template file without `--force`. It does not check whether that file differs from the template.
+   - `manual Cargo.toml: …`: setup never edits the root manifest. This line appears only when it has no `[workspace.lints]`.
+4. **Refresh.** Choose "install and overwrite" in `/temper:setup`, or run `setup --force`. This replaces the vendored CLI, removing files the new release no longer ships. It also overwrites **every template file that exists**, and prints `update` for each one whether or not it changed, so `git status` and `git diff` are the real record. Then:
+   - Restore the files you customised: `git checkout -- AGENTS.md CLAUDE.md .claude/temper.json` and any others you edited (usually `.claude/settings.json`, `.claude/rules/*.md` and `.github/workflows/rust.yml`). If the template changed too, merge its change in by hand.
+   - Merge any change to `[workspace.lints]` or `[workspace.package]` in the new `templates/workspace/Cargo.toml` into your root manifest by hand. Each one is a protected edit, so Claude Code asks you to approve it.
+5. **Re-run the checks.** Run `cargo fmt --all`, then `node .claude/temper/temper.mjs gate --no-cache` and `node .claude/temper/temper.mjs baseline --check`.
+   - New lints or a toolchain bump can add findings. Fix them, or record them with `baseline --update`. That is a human decision (H-12): run it as `TEMPER_ALLOW_RAISE=1 node .claude/temper/temper.mjs baseline --update` in your own terminal, on the platform CI runs.
+   - If the counts went down, run `baseline --tighten`.
+6. **Review the diff** before committing:
+   - `.claude/temper/`: the changed files and `VERSION` should match the release.
+   - `.github/workflows/rust.yml`, `rust-toolchain.toml` and `.github/dependabot.yml`: new jobs, new SHA pins, a new toolchain.
+   - `.claude/settings.json`: the marketplace and plugin names, for example the 1.2.2 rename to `temper@temper`.
+   - The lint tables, `clippy.toml` and `deny.toml`: what the gate now enforces.
+   - `.claude/temper-baseline.json`: any raise shows as `BASELINE RAISED` in the pull-request report. Approve it deliberately.
+7. **Merge** the upgrade as its own pull request (`temper X.Y.Z`), so CI runs the new vendored CLI on an otherwise unchanged tree. Ask everyone who works in the repository to update their plugin too, so that the hooks and CI enforce the same release.
+
+A temper checkout serves as `<temper>` in step 3. The plugin's own copy, under Claude Code's plugin directory, works as well.
+
 ## Compliance reporting
 
 `temper report` turns the findings into a scorecard: findings by severity (MUST, SHOULD, CONSIDER, and lints the standard does not cite), iron-rule findings called out, and per crate a status (`clean`, `debt`, `regressed`), counts, new and fixed against the baseline, lint inheritance, charter presence and top rules; then the top rules and files. It writes JSON for tooling, Markdown for the step summary and pull-request comment, and a self-contained HTML page. Per-change evidence stays with the change: the gate result and the reviewer's scored verdict (12 rubric dimensions, findings by rule ID) are stored per tree fingerprint under `.git/temper/`.
