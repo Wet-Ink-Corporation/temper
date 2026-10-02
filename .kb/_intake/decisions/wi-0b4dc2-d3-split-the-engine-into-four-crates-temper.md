@@ -33,7 +33,7 @@ D3 · split the engine into four crates (temper-domain, temper-app, temper-host,
 
 With four crates publishing (D2), the split becomes four public crates whose boundaries cargo enforces.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-0b4dc2`. Anchor: `.temper/plans/temper-2-rust-port.md:48`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-0b4dc2`. Anchor: `docs/plans/temper-2-rust-port.md:48`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ Everything in temper-cli as modules
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:49`: A) Four crates. temper-domain is pure (no I/O). temper-app holds the use cases and the ports. temper-host holds the std adapters.
-- `.temper/plans/temper-2-rust-port.md:50`: B) Two crates: temper-domain and temper-cli, with app and host as modules of the binary. Fewer manifests, but the app layer could reach std directly.
-- `.temper/plans/temper-2-rust-port.md:51`: C) One crate: the least ceremony and the weakest enforcement.
+- `docs/plans/temper-2-rust-port.md:49`: A) Four crates. temper-domain is pure (no I/O). temper-app holds the use cases and the ports. temper-host holds the std adapters.
+- `docs/plans/temper-2-rust-port.md:50`: B) Two crates: temper-domain and temper-cli, with app and host as modules of the binary. Fewer manifests, but the app layer could reach std directly.
+- `docs/plans/temper-2-rust-port.md:51`: C) One crate: the least ceremony and the weakest enforcement.
 - `.kb/_intake/decisions/wi-222f58-d2-crates-io-publish-four-crates-temper-cli.md`: D2 decided: publish temper-cli, temper-domain, temper-app, temper-host
 
 ## Decision outcome

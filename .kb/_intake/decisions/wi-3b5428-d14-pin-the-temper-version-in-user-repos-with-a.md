@@ -33,7 +33,7 @@ D14 · pin the temper version in user repos with a new one-line file, .claude/te
 
 CI, the pre-commit hook and status checks all need to know which temper version the repo expects.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-3b5428`. Anchor: `.temper/plans/temper-2-rust-port.md:126`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-3b5428`. Anchor: `docs/plans/temper-2-rust-port.md:126`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ The workflow holds the version literal
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:128`: B) A cliVersion field in .claude/temper.json: one file fewer, but the pre-commit hook would need a JSON parser.
-- `.temper/plans/temper-2-rust-port.md:129`: C) A literal in rust.yml only: the pre-commit hook cannot see it.
-- `.temper/plans/temper-2-rust-port.md:675`: .githooks/pre-commit: if .claude/temper-version exists, it requires temper on PATH ... warns when temper --version differs from the pin
+- `docs/plans/temper-2-rust-port.md:128`: B) A cliVersion field in .claude/temper.json: one file fewer, but the pre-commit hook would need a JSON parser.
+- `docs/plans/temper-2-rust-port.md:129`: C) A literal in rust.yml only: the pre-commit hook cannot see it.
+- `docs/plans/temper-2-rust-port.md:675`: .githooks/pre-commit: if .claude/temper-version exists, it requires temper on PATH ... warns when temper --version differs from the pin
 
 ## Decision outcome
 

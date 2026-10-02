@@ -32,7 +32,7 @@ D12 · publishing credentials: OIDC trusted publishing to npm and crates.io from
 
 Whoever holds the publishing credential can ship code that runs in every user's hooks.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-6aac03`. Anchor: `.temper/plans/temper-2-rust-port.md:117`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-6aac03`. Anchor: `docs/plans/temper-2-rust-port.md:117`.
 
 ## Decision drivers
 
@@ -57,8 +57,8 @@ NPM_TOKEN and CARGO_REGISTRY_TOKEN repository secrets
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:118`: A) npm trusted publishing (OIDC, --provenance) and crates.io trusted publishing (rust-lang/crates-io-auth-action), both only from a protected release environment
-- `.temper/plans/temper-2-rust-port.md:119`: B) NPM_TOKEN and CARGO_REGISTRY_TOKEN repository secrets: simpler, but long-lived credentials.
+- `docs/plans/temper-2-rust-port.md:118`: A) npm trusted publishing (OIDC, --provenance) and crates.io trusted publishing (rust-lang/crates-io-auth-action), both only from a protected release environment
+- `docs/plans/temper-2-rust-port.md:119`: B) NPM_TOKEN and CARGO_REGISTRY_TOKEN repository secrets: simpler, but long-lived credentials.
 
 ## Decision outcome
 

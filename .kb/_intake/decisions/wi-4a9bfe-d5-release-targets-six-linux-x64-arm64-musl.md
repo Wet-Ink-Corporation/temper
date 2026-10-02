@@ -32,7 +32,7 @@ D5 · release targets: six (linux x64/arm64 musl static, macOS x64/arm64, Window
 
 Each target is a platform you promise prebuilt binaries for and must keep building every release.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-4a9bfe`. Anchor: `.temper/plans/temper-2-rust-port.md:59`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-4a9bfe`. Anchor: `docs/plans/temper-2-rust-port.md:59`.
 
 ## Decision drivers
 
@@ -57,9 +57,9 @@ Windows arm64 users get the cargo fallback build
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:60`: A) Six packages, including win32-arm64 ... built natively on a windows-11-arm runner.
-- `.temper/plans/temper-2-rust-port.md:61`: B) The five required targets: win32-arm64 users get the fallback build.
-- `.temper/plans/temper-2-rust-port.md:62`: Linux binaries are x86_64/aarch64-unknown-linux-musl, fully static
+- `docs/plans/temper-2-rust-port.md:60`: A) Six packages, including win32-arm64 ... built natively on a windows-11-arm runner.
+- `docs/plans/temper-2-rust-port.md:61`: B) The five required targets: win32-arm64 users get the fallback build.
+- `docs/plans/temper-2-rust-port.md:62`: Linux binaries are x86_64/aarch64-unknown-linux-musl, fully static
 
 ## Decision outcome
 

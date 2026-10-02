@@ -33,7 +33,7 @@ D13 · have user CI install temper via taiki-e/install-action (cargo-binstall fr
 
 Every user repo's CI must install a matching temper binary before running the gate.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-37c1df`. Anchor: `.temper/plans/temper-2-rust-port.md:121`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-37c1df`. Anchor: `docs/plans/temper-2-rust-port.md:121`.
 
 ## Decision drivers
 
@@ -65,9 +65,9 @@ Download the release archive and verify the checksum
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:122`: A) taiki-e/install-action with tool: temper-cli@${{ steps.temper.outputs.version }}, SHA-pinned. Recommended. Through its cargo-binstall fallback ...
-- `.temper/plans/temper-2-rust-port.md:123`: B) cargo install temper-cli --locked --version X: about a minute per cold run, cached by Swatinem/rust-cache.
-- `.temper/plans/temper-2-rust-port.md:124`: C) curl the release asset plus sha256sum -c: no crates.io needed, but 8 lines of YAML per job.
+- `docs/plans/temper-2-rust-port.md:122`: A) taiki-e/install-action with tool: temper-cli@${{ steps.temper.outputs.version }}, SHA-pinned. Recommended. Through its cargo-binstall fallback ...
+- `docs/plans/temper-2-rust-port.md:123`: B) cargo install temper-cli --locked --version X: about a minute per cold run, cached by Swatinem/rust-cache.
+- `docs/plans/temper-2-rust-port.md:124`: C) curl the release asset plus sha256sum -c: no crates.io needed, but 8 lines of YAML per job.
 
 ## Decision outcome
 

@@ -33,7 +33,7 @@ License the new crates MIT (matching plugin.json and LICENSE) rather than the te
 
 A published crate version's licence can't be changed after the fact.
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-4679b3`. Anchor: `.temper/plans/temper-2-rust-port.md:1`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-4679b3`. Anchor: `docs/plans/temper-2-rust-port.md:1`.
 
 ## Decision drivers
 

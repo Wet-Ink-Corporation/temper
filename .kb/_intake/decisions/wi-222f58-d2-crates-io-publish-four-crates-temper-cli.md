@@ -32,7 +32,7 @@ D2 · crates.io: publish four crates (temper-cli with binary `temper`, temper-do
 
 crates.io names are permanent and anyone can register the free ones today.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-222f58`. Anchor: `.temper/plans/temper-2-rust-port.md:42`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-222f58`. Anchor: `docs/plans/temper-2-rust-port.md:42`.
 
 ## Decision drivers
 
@@ -64,9 +64,9 @@ A single temper-cli crate with the layers as modules
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:43`: temper and temper-core are taken (an unrelated game engine, and Temper-lang).
+- `docs/plans/temper-2-rust-port.md:43`: temper and temper-core are taken (an unrelated game engine, and Temper-lang).
 - `crates.io API`: temper-cli, temper-domain, temper-app, temper-host return 404 (free) on 2026-10-02
-- `.temper/plans/temper-2-rust-port.md:46`: C) Publish one crate holding all the layers as modules ... loses the cargo tree enforcement of the layers
+- `docs/plans/temper-2-rust-port.md:46`: C) Publish one crate holding all the layers as modules ... loses the cargo tree enforcement of the layers
 
 ## Decision outcome
 

@@ -32,7 +32,7 @@ D1 · npm scope and names: publish the binaries as @wet-ink/temper-<platform>-<a
 
 The six npm package names are permanent once published and every plugin install resolves them.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-836680`. Anchor: `.temper/plans/temper-2-rust-port.md:35`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-836680`. Anchor: `docs/plans/temper-2-rust-port.md:35`.
 
 ## Decision drivers
 
@@ -64,8 +64,8 @@ temper-cli-linux-x64 and five siblings
 
 ## Evidence
 
-- `.temper/plans/temper-2-rust-port.md:36`: A) @wet-ink/temper-linux-x64 and so on, scoped under a new npm org wet-ink. Recommended.
-- `.temper/plans/temper-2-rust-port.md:40`: The plugin root's package.json ("private": true) is the main package and is never published.
+- `docs/plans/temper-2-rust-port.md:36`: A) @wet-ink/temper-linux-x64 and so on, scoped under a new npm org wet-ink. Recommended.
+- `docs/plans/temper-2-rust-port.md:40`: The plugin root's package.json ("private": true) is the main package and is never published.
 - `registry.npmjs.org/temper`: unscoped temper is taken (HTTP 200, checked 2026-10-02)
 - `registry.npmjs.org/@wet-ink%2ftemper-linux-x64`: free (HTTP 404); whether the wet-ink org exists is unconfirmed
 
