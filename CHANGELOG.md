@@ -26,6 +26,7 @@ Documentation.
 
 Release engineering.
 - `tests/release-check.sh` makes the release checklist's version checks executable (#12). It fails when `plugin.json`, the top `## X.Y.Z (date)` CHANGELOG heading, the example workspace's vendored `VERSION` and, given `--tag`, the tag disagree. It also fails when a release that changes `scripts/` or `templates/workspace/` since the previous tag has no closing "Upgrading from" note, and, with `--tag`, when an `## Unreleased` section sits above the release. `tests/ci.sh` runs it without the tag.
+- A Release workflow (`.github/workflows/release.yml`, #17), run by hand on a `release/X.Y.Z` branch. It runs the release check with the tag, the manifest validation and `tests/ci.sh`. After the owner approves in the protected `release` environment, it tags `vX.Y.Z` and creates the GitHub release from the CHANGELOG section. The owner then merges the release PR to `main`, which is what ships. `tests/release-check.sh --notes FILE` writes that section.
 
 Compatibility.
 - The README now states the minimum Claude Code version: 2.1.286. The smoke test passes on 2.1.286 and 2.1.288, and every hook in `hooks/hooks.json` was confirmed to run on both, with one exception. The `PreToolUse` `SubagentHandback` hook never runs on these versions. The reviewer's verdict is validated and recorded by `SubagentStop` instead, which also blocks an invalid verdict, so nothing is lost. The results are in `docs/history/evals.md`.

@@ -170,6 +170,23 @@ test('release-check: without the previous tag the note check is skipped, except 
   });
 });
 
+test('release-check: --notes writes the release section without its heading, and only when the checks pass', { skip }, () => {
+  withRepo({}, (root) => {
+    const notes = path.join(root, 'notes.md');
+    assert.equal(check(root, '--tag', 'v1.1.0', '--notes', notes).status, 0);
+    assert.equal(fs.readFileSync(notes, 'utf8'), [
+      'Changes to the CLI.',
+      '- `temper gate` is faster.',
+      '',
+      'Upgrading from 1.0.x: `scripts/temper.mjs` changed, so refresh the vendored copy with `temper setup --force`.',
+      '',
+    ].join('\n'));
+    fs.rmSync(notes);
+    assert.equal(check(root, '--tag', 'v1.2.0', '--notes', notes).status, 1);
+    assert.equal(fs.existsSync(notes), false);
+  });
+});
+
 test('release-check: this repository passes', { skip }, () => {
   const r = spawnSync('bash', [SCRIPT], { encoding: 'utf8' });
   assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
