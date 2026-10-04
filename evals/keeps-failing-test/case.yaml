@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: keeps-failing-test
+tags: [tests, hatches]
+context:
+  scaffold_script: scaffold.sh

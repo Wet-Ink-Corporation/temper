@@ -11,6 +11,8 @@ Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).
 - **The workspace template's `AGENTS.md`** lists `temper baseline --check` as the lint command, in place of `cargo clippy -- -D warnings` and `RUSTDOCFLAGS="-D warnings"`.
 - **The README's brownfield rollout** has a new step 3 for the `manual` lines. It also says what moving lint to the ratchet costs: the baseline records one platform, so other platforms no longer lint.
 
+`temper setup --vendor-only` refreshes only the vendored CLI (`.claude/temper/`) (#38). It replaces an out-of-date copy without `--force`, removing files the new release no longer ships. It leaves the templates, the lint tables and `.gitignore` alone, and `--dry-run` previews it. Use it when an upgrade's only drift is the vendored CLI, in place of `setup --force` followed by restoring every customised template file. The README's Upgrading section has the step.
+
 Fixes found by the runner probe on macOS and Windows runners.
 - On macOS, paths under a symlinked directory were reported relative to the wrong root. TMPDIR is under `/var`, a link to `/private/var`, and cargo reports the real path, so `crates/legacy/Cargo.toml` came out as `../../../../private/var/.../crates/legacy/Cargo.toml`. The 1.2.3 fix for Windows 8.3 names now applies on every platform: when the lexical path leaves the root, both sides are compared in their real form.
 - The example workspace's JSONL store could not repair a torn tail or roll back a failed batch on Windows, because an append-mode handle there lacks the right to truncate (`PermissionDenied`). The store now opens stream files read-write and writes each batch at an explicit offset under its exclusive lock. CI now runs the example workspace's tests on Windows.
@@ -27,6 +29,9 @@ Documentation.
 Release engineering.
 - `tests/release-check.sh` makes the release checklist's version checks executable (#12). It fails when `plugin.json`, the top `## X.Y.Z (date)` CHANGELOG heading, the example workspace's vendored `VERSION` and, given `--tag`, the tag disagree. It also fails when a release that changes `scripts/` or `templates/workspace/` since the previous tag has no closing "Upgrading from" note, and, with `--tag`, when an `## Unreleased` section sits above the release. `tests/ci.sh` runs it without the tag.
 - A Release workflow (`.github/workflows/release.yml`, #17), run by hand on a `release/X.Y.Z` branch. It runs the release check with the tag, the manifest validation and `tests/ci.sh`. After the owner approves in the protected `release` environment, it tags `vX.Y.Z` and creates the GitHub release from the CHANGELOG section. The owner then merges the release PR to `main`, which is what ships. `tests/release-check.sh --notes FILE` writes that section.
+
+Process.
+- `CONTRIBUTING.md` has a versioning policy (#18): what makes a temper release major, minor or patch for an adopted repository.
 
 Compatibility.
 - The README now states the minimum Claude Code version: 2.1.286. The smoke test passes on 2.1.286 and 2.1.288, and every hook in `hooks/hooks.json` was confirmed to run on both, with one exception. The `PreToolUse` `SubagentHandback` hook never runs on these versions. The reviewer's verdict is validated and recorded by `SubagentStop` instead, which also blocks an invalid verdict, so nothing is lost. The results are in `docs/history/evals.md`.
