@@ -33,6 +33,7 @@ Marketplace users install whatever `main` holds, so every merge to `main` reache
 |---|---|
 | Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the two that compile Rust) |
 | Unit tests | `node --test tests/*.test.mjs` |
+| Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |
 | Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
 | Every code block in the standard | `python3 tests/doc_examples.py` (add `--fetch` without a warm registry cache) |
 | Plugin and marketplace manifests | `claude plugin validate --strict .claude-plugin/plugin.json` and `claude plugin validate --strict .` |
@@ -61,11 +62,12 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 ## Release checklist
 
 Until the release workflow from plan step 3.1 exists:
-1. Bump `version` in `.claude-plugin/plugin.json`, and add a `## X.Y.Z (date)` section to `CHANGELOG.md`. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
+1. Bump `version` in `.claude-plugin/plugin.json`, and turn `## Unreleased` in `CHANGELOG.md` into a `## X.Y.Z (date)` section. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
 2. Sync the vendored copy (above), including `VERSION`.
-3. `bash tests/ci.sh` is green. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
-4. Merge the PR. The merge is the release for marketplace users.
-5. Tag `vX.Y.Z` on the merge commit, and create the GitHub release from the CHANGELOG section.
+3. `bash tests/release-check.sh --tag vX.Y.Z` passes. It needs the tags (`git fetch --tags`), and fails when the versions or the tag disagree, when an `## Unreleased` section is left above the release, or when the "Upgrading from" note is missing.
+4. `bash tests/ci.sh` is green; it runs the release check without the tag. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
+5. Merge the PR. The merge is the release for marketplace users.
+6. Tag `vX.Y.Z` on the merge commit, and create the GitHub release from the CHANGELOG section.
 
 ## When the 2.0 port starts
 

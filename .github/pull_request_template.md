@@ -12,5 +12,5 @@
 
 ### For a release PR only
 
-- [ ] `plugin.json` version, CHANGELOG heading and vendored `VERSION` agree
+- [ ] `bash tests/release-check.sh --tag vX.Y.Z` passes: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree, and the "Upgrading from" note is there if needed
 - [ ] For a minor or major release: `tests/e2e/smoke.sh` and the evals ran, and the results are in `docs/history/evals.md`
