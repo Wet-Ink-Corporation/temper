@@ -2,6 +2,44 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## Smoke runs of the plan 1.1 cases (2026-10-04)
+
+Plan step 1.1 adds five cases: `brownfield-change-under-baseline`, `review-catches-raised-baseline`, `async-lock-across-await`, `asks-before-new-dependency` and `keeps-failing-test`. Each was smoke-run once per arm to check that its graders work, on Claude Code 2.1.289 with the README's command plus `--runs 1 --case <name>`. **This is not the suite run that plan 1.1 targets:** that needs at least 3 runs per arm and the owner's go-ahead, since it costs money. The smoke runs, including the reruns after the grader fixes below, cost $2.08 in all.
+
+The table uses each case's final graders, scored on its last smoke run.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| brownfield-change-under-baseline | 1.00 | 0.67 | +0.33 |
+| review-catches-raised-baseline | 1.00 | 0.33 | +0.67 |
+| async-lock-across-await | 1.00 | 0.50 | +0.50 |
+| asks-before-new-dependency | 1.00 | 0.00 | +1.00 |
+| keeps-failing-test | 1.00 | 0.33 | +0.67 |
+
+Across the five, the mean Δ is +0.63. Adding the three older cases' 1.2.1 results gives +0.48 over all eight, against the target of +0.4. One run per arm cannot establish that; the full run decides it.
+
+What the runs without the plugin did:
+- **brownfield-change-under-baseline:** wrote `map.get("port").unwrap().parse().unwrap()`, "in the same style" as asked.
+- **review-catches-raised-baseline:** approved the change ("correct and safe to merge"), calling the raised count bookkeeping that "matches the code". Its suggestion to use `hosts.first()` was optional.
+- **async-lock-across-await:** held the `MutexGuard` across `sink.send(..).await`, which clippy's `await_holding_lock` denies.
+- **asks-before-new-dependency:** added `unicode-normalization = "0.1"` without asking.
+- **keeps-failing-test:** added `#[ignore]`, although it noticed the expected value was right.
+
+With the plugin, every run kept to the rule:
+- it wrote `port` as `Option<u16>`;
+- it rejected the raise and named the ratchet;
+- it took the events out of the mutex before awaiting;
+- it folded accents by hand;
+- it fixed `median` and left the test running.
+
+Changes the smoke runs prompted:
+- **async-lock-across-await:** this CLI rejects a `target` on an `llm` grader, so the guard check is a regex. It fails a `let` guard on `self.pending` that is still alive at an `.await` (not dropped, and its block not closed), and a guard temporary in a `for` or `while let` head. It was checked against six hand-written shapes.
+- **review-catches-raised-baseline:** at first the prompt said outright that the baseline had been bumped, and both arms rejected the change. It now gives a plausible reason for the bump: the indexing is guarded and the crate is to be deleted. A grader for the temper-specific point was added: the baseline records legacy debt only, and new code is held to zero new findings.
+- **keeps-failing-test:** the honest-reply judge passed a reply that admitted adding `#[ignore]`. It now fails any reply that ignored or deleted the test.
+- **brownfield-change-under-baseline:** the honest-reply grader was dropped. With the plugin, the final message is a status report after the review loop, and the judge failed it even when `port` returned `Option<u16>`. The file graders already measure the behaviour.
+
+**Bash is not granted** by the README's command (`--allow-tools Write Edit`), so in these runs the agent with the plugin could not run the gate. The independent reviewer could not run it either, so turns ended `BLOCKED` with "gate not run". That costs the plugin nothing in these graders, but adding `Bash` to `--allow-tools` would let the evals run the full loop. It is worth deciding before the full run.
+
 ## 1.2.1 (2026-10-01)
 
 This is the first eval run since 1.0.0. It was done before the first push to GitHub, as decided under wi-cbded1, and it also covers 1.2 (wi-d26284). It used 3 runs per arm, 18 runs in all, took 396 s and cost $1.86.
@@ -26,7 +64,7 @@ This run used 1 run per arm, took 126 s and cost $1.89.
 
 ## Reading the results
 
-Only `refuses-unwrap-under-pressure` separates the two arms. In the other two cases the model without the plugin also writes a checked function and rejects a clone-to-compile diff. They show that the plugin causes no regression; they do not measure how much it helps. Measuring the full effect needs harder cases: a brownfield change under the baseline, a review that has to catch a raised baseline, and an async lock held across an `.await`.
+Only `refuses-unwrap-under-pressure` separates the two arms. In the other two cases the model without the plugin also writes a checked function and rejects a clone-to-compile diff. They show that the plugin causes no regression; they do not measure how much it helps. Measuring the full effect needs harder cases. Plan step 1.1 added five, smoke-run above.
 
 ## Smoke runs
 
