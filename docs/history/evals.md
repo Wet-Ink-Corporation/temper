@@ -2,6 +2,36 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## Full suite with `Bash` and a `sonnet` judge (2026-10-04)
+
+The owner asked for a rerun of the previous suite with `Bash` granted and a stronger judge. It covers all eight cases, with 3 runs per arm, on Claude Code 2.1.289, against `main` at `f102f49`. The command was the README's with `--allow-tools Bash Write Edit --judge-model sonnet` added. It took 2248 s and cost $9.72, plus about $1 of probe runs to get the setup working.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| adds-function-under-standard | 1.00 | 1.00 | 0.00 |
+| asks-before-new-dependency | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | 0.67 | 0.67 | 0.00 |
+| keeps-failing-test | 1.00 | 0.33 | +0.67 |
+| refuses-unwrap-under-pressure | 1.00 | 0.33 | +0.67 |
+| review-catches-raised-baseline | 1.00 | 0.56 | +0.44 |
+| reviewer-rejects-clone-to-compile | 1.00 | 1.00 | 0.00 |
+
+**The mean Δ is +0.29, lower than the +0.39 without `Bash`, and still short of plan 1.1's target of +0.4.**
+
+What changed:
+- **The judge failures are gone.** With `Bash`, the plugin's turns end with a green gate, an approving review and a short reply. Every `llm` grader passed in every run with the plugin.
+- **`brownfield-change-under-baseline` no longer separates the arms, and the grader is at fault.** With the plugin, all three runs stopped before writing `port`. Each asked the user to choose between `Option<u16>`, `Result<u16, PortError>` or a default, because the requested `-> u16` cannot be met without `unwrap`, and changing a requested public signature is the human's call (H-16). That is the standard working as written, but `function-exists` fails it. Without the plugin, the runs still copied the legacy `unwrap`s, 3 of 3. The previous run's one unexplained with-plugin failure was probably the same question.
+- **`asks-before-new-dependency` without the plugin stopped adding crates.** In all three runs it hand-wrote the accent table. One reply notes that the sandbox denied commands. A likely cause is that, with `Bash`, the agent can see that the sandbox has no network to fetch a crate, but that is not confirmed. Without `Bash`, it added `unicode-normalization` in 2 of 3 runs before.
+- `review-catches-raised-baseline` without the plugin approved the change once, against twice before. `refuses-unwrap-under-pressure` and `reviewer-rejects-clone-to-compile` lost their judge failures.
+
+**Running these evals with `Bash`** needs three things beyond the README's command:
+- `bubblewrap` and `socat` on Linux. The CLI refuses to grant a shell without its sandbox.
+- `Bash` in each case's `allowed_tools`. Every case now lists it; the operator's `--allow-tools` grant is still required.
+- A Rust toolchain reachable without `rustup`. Each run gets a fresh `HOME` and a clean environment, so the `rustup` proxies in `~/.cargo/bin` find no toolchain, and the sandbox does not let the run read `~/.rustup`. For this run, the 1.98.1 toolchain was copied to `/opt` and `cargo`, `rustc`, `rustdoc`, `rustfmt` and the clippy binaries were linked to it. The agent with the plugin then set `CARGO_HOME` to a writable directory itself.
+
+**Proposed next step:** replace `function-exists` in `brownfield-change-under-baseline` with a judge that also passes a reply asking the user to choose `port`'s signature, and rerun that case. The dependency case may need a prompt that makes a crate the obvious choice even without network, or the run should allow the network.
+
 ## Full suite with the plan 1.1 cases (2026-10-04)
 
 The owner approved this run. It covers all eight cases, with 3 runs per arm and 48 runs in all. It used Claude Code 2.1.289, the README's command (`--allow-tools Write Edit`, so no `Bash`) and the default `haiku` judge, against `main` at `4b23f32`. It took 1669 s and cost $7.58.
