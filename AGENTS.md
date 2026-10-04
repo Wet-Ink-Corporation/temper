@@ -61,13 +61,13 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 
 ## Release checklist
 
-Until the release workflow from plan step 3.1 exists:
-1. Bump `version` in `.claude-plugin/plugin.json`, and turn `## Unreleased` in `CHANGELOG.md` into a `## X.Y.Z (date)` section. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
+A release goes through `.github/workflows/release.yml`, the flow the 2.0 port plan defines (§4):
+1. Branch `release/X.Y.Z` from `main`. Bump `version` in `.claude-plugin/plugin.json`, and turn `## Unreleased` in `CHANGELOG.md` into a `## X.Y.Z (date)` section. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
 2. Sync the vendored copy (above), including `VERSION`.
-3. `bash tests/release-check.sh --tag vX.Y.Z` passes. It needs the tags (`git fetch --tags`), and fails when the versions or the tag disagree, when an `## Unreleased` section is left above the release, or when the "Upgrading from" note is missing.
-4. `bash tests/ci.sh` is green; it runs the release check without the tag. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
-5. Merge the PR. The merge is the release for marketplace users.
-6. Tag `vX.Y.Z` on the merge commit, and create the GitHub release from the CHANGELOG section.
+3. `bash tests/release-check.sh --tag vX.Y.Z` passes. It needs the tags (`git fetch --tags`), and fails when the versions or the tag disagree, when an `## Unreleased` section is left above the release, or when the "Upgrading from" note is missing. `bash tests/ci.sh` is green; it runs the release check without the tag. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
+4. Open the release PR to `main`.
+5. Run the Release workflow on `release/X.Y.Z` (Actions, or `gh workflow run release.yml --ref release/X.Y.Z -f version=X.Y.Z`). Its `check` job runs the release check with the tag, the manifest validation and `tests/ci.sh`. Its `publish` job waits for the owner's approval in the `release` environment, then tags `vX.Y.Z` on the checked commit and creates the GitHub release from the CHANGELOG section. A re-run after the release exists does nothing.
+6. The owner merges the release PR with a merge commit, not a squash, so the tag stays in `main`'s history. The merge is the release for marketplace users.
 
 ## When the 2.0 port starts
 

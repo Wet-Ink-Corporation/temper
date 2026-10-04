@@ -20,16 +20,21 @@
 # With --tag, an `## Unreleased` section above the release heading also fails:
 # a release ships its whole CHANGELOG section.
 #
+# --notes FILE writes the release's CHANGELOG section, without its heading, to
+# FILE: the GitHub release notes. It is written only when every check passes.
+#
 # --root DIR checks another checkout (the tests use it); the default is this one.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 tag=""
 base=""
+notes=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --tag) tag="${2:?--tag needs a value}"; shift 2 ;;
     --base) base="${2:?--base needs a value}"; shift 2 ;;
+    --notes) notes="${2:?--notes needs a value}"; case "$notes" in /*) ;; *) notes="$PWD/$notes" ;; esac; shift 2 ;;
     --root) root="${2:?--root needs a value}"; shift 2 ;;
     *) echo "release-check: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -107,5 +112,18 @@ note_check
 
 if [ "$fail" = 0 ]; then
   ok "versions agree: $plugin${tag:+ ($tag)}"
+  if [ -n "$notes" ]; then
+    # The section between its heading and the next one, without the blank
+    # lines at either end.
+    awk -v v="$plugin" '
+      /^## / { if (inside) exit; if ($2 == v) { inside=1; next } }
+      inside { lines[++n] = $0 }
+      END {
+        first = 1; while (first <= n && lines[first] ~ /^[[:space:]]*$/) first++
+        last = n; while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+        for (i = first; i <= last; i++) print lines[i]
+      }' CHANGELOG.md > "$notes"
+    ok "wrote the $plugin release notes to $notes"
+  fi
 fi
 exit "$fail"
