@@ -681,6 +681,41 @@ test('CLI: --init refuses unformatted code', { skip: !hasCargo && 'cargo not ins
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('CLI: setup reports strict lint steps and the test exemptions an existing clippy.toml lacks', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-adopt-'));
+  try {
+    fs.writeFileSync(path.join(ws, 'Cargo.toml'), '[workspace]\nmembers = []\n');
+    fs.writeFileSync(path.join(ws, 'clippy.toml'), 'too-many-lines-threshold = 80\nallow-unwrap-in-tests = true # theirs\n');
+    fs.mkdirSync(path.join(ws, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.github', 'workflows', 'ci.yml'), [
+      'jobs:', '  check:', '    steps:',
+      '      - run: cargo clippy --workspace --all-targets -- -D warnings',
+      '      - run: cargo test --workspace',
+      '      - run: cargo doc --no-deps', '        env:', '          RUSTDOCFLAGS: -D warnings',
+      '      - run: cargo build', '        env:', '          RUSTFLAGS: -D warnings',
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(ws, 'CLAUDE.md'), '# Repo\n\nGate: `cargo clippy -- -Dwarnings`.\n');
+    fs.mkdirSync(path.join(ws, '.github'), { recursive: true });
+    fs.writeFileSync(path.join(ws, '.github', 'pull_request_template.md'), '- [ ] tests pass\n');
+    const r = cli(ws, ['setup', '--dry-run']);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /manual clippy\.toml: add allow-expect-in-tests = true, allow-panic-in-tests = true, allow-indexing-slicing-in-tests = true, allow-print-in-tests = true, allow-dbg-in-tests = false;/);
+    assert.doesNotMatch(r.out, /add allow-unwrap-in-tests/);
+    // clippy, rustdoc and rustc alike: each fails on legacy warnings that the baseline accepts.
+    assert.match(r.out, /manual \.github\/workflows\/ci\.yml:4,8,11: denies every warning/);
+    assert.match(r.out, /manual CLAUDE\.md:3: denies every warning/);
+    assert.doesNotMatch(r.out, /pull_request_template/);
+    assert.match(r.out, /run `cargo machete`/);
+    // Nothing is written in a dry run.
+    assert.ok(!fs.existsSync(path.join(ws, '.github', 'workflows', 'rust.yml')));
+    // Once setup has installed the template workflow, its own guarded strict steps are not flagged.
+    const applied = cli(ws, ['setup']);
+    assert.equal(applied.code, 0, applied.out);
+    assert.doesNotMatch(applied.out, /manual \.github\/workflows\/rust\.yml/);
+    assert.doesNotMatch(applied.out, /manual AGENTS\.md/);
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
 test('CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nomod-'));
   try {
