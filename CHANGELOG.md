@@ -11,6 +11,8 @@ Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).
 - **The workspace template's `AGENTS.md`** lists `temper baseline --check` as the lint command, in place of `cargo clippy -- -D warnings` and `RUSTDOCFLAGS="-D warnings"`.
 - **The README's brownfield rollout** has a new step 3 for the `manual` lines. It also says what moving lint to the ratchet costs: the baseline records one platform, so other platforms no longer lint.
 
+`temper setup --vendor-only` refreshes only the vendored CLI (`.claude/temper/`) (#38). It replaces an out-of-date copy without `--force`, removing files the new release no longer ships. It leaves the templates, the lint tables and `.gitignore` alone, and `--dry-run` previews it. Use it when an upgrade's only drift is the vendored CLI, in place of `setup --force` followed by restoring every customised template file. The README's Upgrading section has the step.
+
 Fixes found by the runner probe on macOS and Windows runners.
 - On macOS, paths under a symlinked directory were reported relative to the wrong root. TMPDIR is under `/var`, a link to `/private/var`, and cargo reports the real path, so `crates/legacy/Cargo.toml` came out as `../../../../private/var/.../crates/legacy/Cargo.toml`. The 1.2.3 fix for Windows 8.3 names now applies on every platform: when the lexical path leaves the root, both sides are compared in their real form.
 - The example workspace's JSONL store could not repair a torn tail or roll back a failed batch on Windows, because an append-mode handle there lacks the right to truncate (`PermissionDenied`). The store now opens stream files read-write and writes each batch at an explicit offset under its exclusive lock. CI now runs the example workspace's tests on Windows.
