@@ -80,7 +80,7 @@ Then, in a Rust repository, run `/temper:setup`. It installs the workspace lints
 | `scan [FILES..] [--all] [--json]` | the escape-hatch scanner |
 | `baseline [--init \| --update \| --tighten \| --check [--base REF] [--findings-out FILE]] [--json] [--locked] [--no-cache]` | record, lower or check the lint baseline (`--init` and `--update` are human decisions). Without a baseline, `--check` requires zero findings. |
 | `report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html] [--locked]` | the compliance scorecard: `report.json`, `report.md`, `report.html` (`--out` and `--findings-out` stay under `target/` or `.temper/`) |
-| `status`, `stats`, `setup [--dry-run] [--force]` | tree and gate state; enforcement telemetry; install the templates |
+| `status`, `stats`, `setup [--dry-run] [--force \| --vendor-only]` | tree and gate state; enforcement telemetry; install the templates (`--vendor-only`: refresh only the vendored CLI in `.claude/temper/`) |
 
 ## Brownfield adoption
 
@@ -125,7 +125,9 @@ Move both to the new release together, in one pull request:
    - `drift  .claude/temper/ differs from temper 1.3.0 (the copy says 1.2.3): lib/project.mjs (changed); rerun with --force to replace it`: the vendored CLI is out of date. `up to date with temper X` means it is current.
    - `skip   <file> (exists; compare with <template>)`: setup never overwrites an existing template file without `--force`. It does not check whether that file differs from the template.
    - `manual Cargo.toml: …`: setup never edits the root manifest. This line appears only when it has no `[workspace.lints]`.
-4. **Refresh.** Choose "install and overwrite" in `/temper:setup`, or run `setup --force`. This replaces the vendored CLI, removing files the new release no longer ships. It also overwrites **every template file that exists**, and prints `update` for each one whether or not it changed, so `git status` and `git diff` are the real record. Then:
+4. **Refresh.** If the vendored CLI is the only drift, which is the case when the release changes `scripts/` but not `templates/workspace/`, run `setup --vendor-only` and go on to step 5. It replaces `.claude/temper/`, removing files the new release no longer ships, and touches nothing else: no template file, no lint table, no `.gitignore`. Preview it with `setup --vendor-only --dry-run`.
+
+   Otherwise, choose "install and overwrite" in `/temper:setup`, or run `setup --force`. This replaces the vendored CLI, removing files the new release no longer ships. It also overwrites **every template file that exists**, and prints `update` for each one whether or not it changed, so `git status` and `git diff` are the real record. Then:
    - Restore the files you customised: `git checkout -- AGENTS.md CLAUDE.md .claude/temper.json` and any others you edited (usually `.claude/settings.json`, `.claude/rules/*.md` and `.github/workflows/rust.yml`). If the template changed too, merge its change in by hand.
    - Merge any change to `[workspace.lints]` or `[workspace.package]` in the new `templates/workspace/Cargo.toml` into your root manifest by hand. Each one is a protected edit, so Claude Code asks you to approve it.
 5. **Re-run the checks.** Run `cargo fmt --all`, then `node .claude/temper/temper.mjs gate --no-cache` and `node .claude/temper/temper.mjs baseline --check`.

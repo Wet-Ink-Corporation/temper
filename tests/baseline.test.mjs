@@ -716,6 +716,57 @@ test('CLI: setup reports strict lint steps and the test exemptions an existing c
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 
+test('CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else', () => {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-vendor-only-'));
+  try {
+    const manifest = '[workspace]\nmembers = []\n';
+    fs.writeFileSync(path.join(ws, 'Cargo.toml'), manifest);
+    fs.writeFileSync(path.join(ws, 'clippy.toml'), 'too-many-lines-threshold = 80\n');
+    fs.writeFileSync(path.join(ws, '.gitignore'), 'target/\n');
+    const before = () => ({
+      manifest: fs.readFileSync(path.join(ws, 'Cargo.toml'), 'utf8'),
+      clippy: fs.readFileSync(path.join(ws, 'clippy.toml'), 'utf8'),
+      gitignore: fs.readFileSync(path.join(ws, '.gitignore'), 'utf8'),
+    });
+    const kept = before();
+    const top = () => fs.readdirSync(ws).sort();
+
+    // A missing copy is created, and nothing else: no templates, no .gitignore line, no manual lines.
+    const created = cli(ws, ['setup', '--vendor-only']);
+    assert.equal(created.code, 0, created.out);
+    assert.match(created.out, /^temper setup --vendor-only in /);
+    assert.match(created.out, /create \.claude\/temper\/ \(temper /);
+    assert.doesNotMatch(created.out, /manual|append|AGENTS\.md|rust\.yml|cargo machete|charter/);
+    assert.deepEqual(top(), ['.claude', '.gitignore', 'Cargo.toml', 'clippy.toml']);
+    assert.deepEqual(fs.readdirSync(path.join(ws, '.claude')), ['temper']);
+    assert.deepEqual(before(), kept);
+
+    // An out-of-date copy is replaced without --force; a dry run only reports it.
+    const vendored = path.join(ws, '.claude', 'temper');
+    const gate = path.join(vendored, 'lib', 'gate.mjs');
+    const fresh = fs.readFileSync(gate, 'utf8');
+    fs.writeFileSync(gate, '// an older release\n');
+    fs.writeFileSync(path.join(vendored, 'lib', 'retired.mjs'), 'export {};\n');
+    fs.writeFileSync(path.join(vendored, 'VERSION'), '1.0.0\n');
+    const dry = cli(ws, ['setup', '--vendor-only', '--dry-run']);
+    assert.equal(dry.code, 0, dry.out);
+    assert.match(dry.out, /^\[dry run\] temper setup --vendor-only in /);
+    assert.match(dry.out, /update \.claude\/temper\/ to temper .*lib\/gate\.mjs \(changed\).*lib\/retired\.mjs \(not in temper /);
+    assert.equal(fs.readFileSync(gate, 'utf8'), '// an older release\n');
+    const refreshed = cli(ws, ['setup', '--vendor-only']);
+    assert.equal(refreshed.code, 0, refreshed.out);
+    assert.match(refreshed.out, /update \.claude\/temper\/ to temper /);
+    assert.equal(fs.readFileSync(gate, 'utf8'), fresh);
+    assert.ok(!fs.existsSync(path.join(vendored, 'lib', 'retired.mjs')));
+    assert.notEqual(fs.readFileSync(path.join(vendored, 'VERSION'), 'utf8'), '1.0.0\n');
+    assert.deepEqual(top(), ['.claude', '.gitignore', 'Cargo.toml', 'clippy.toml']);
+    assert.deepEqual(before(), kept);
+
+    const again = cli(ws, ['setup', '--vendor-only']);
+    assert.match(again.out, /skip {3}\.claude\/temper\/ \(up to date with temper /);
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
 test('CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nomod-'));
   try {
@@ -734,8 +785,13 @@ test('CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs
     const setup = cli(ws, ['setup', '--dry-run'], copy);
     assert.equal(setup.code, 0, setup.out);
     assert.match(setup.out, /skip {3}\.claude\/temper\/ \(this temper copy cannot vendor itself: scripts\/lib\/vendor\.mjs is missing\)/);
+    const vendorOnly = cli(ws, ['setup', '--vendor-only'], copy);
+    assert.equal(vendorOnly.code, 2, vendorOnly.out);
+    assert.match(vendorOnly.out, /`temper setup --vendor-only` is not available in this copy of temper \(scripts\/lib\/vendor\.mjs is missing\)/);
+    assert.ok(!fs.existsSync(path.join(ws, '.claude')));
     const usage = cli(ws, [], copy);
     assert.match(usage.out, /baseline \[--init \| --update \| --tighten \| --check/);
     assert.match(usage.out, /report \[--findings FILE\]/);
+    assert.match(usage.out, /setup \[--dry-run\] \[--force \| --vendor-only\]/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

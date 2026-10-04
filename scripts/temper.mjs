@@ -6,6 +6,7 @@
 //   temper scan [files..] [--all] [--json]
 //   temper status              fingerprint, changed files, gate and review state
 //   temper setup [--dry-run] [--force]   install repo templates (lints, rules, charters, CI) and vendor the CLI
+//   temper setup --vendor-only [--dry-run]   refresh only the vendored CLI (.claude/temper/)
 //   temper stats               enforcement telemetry summary
 //   temper baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]
 //                              lint baseline for legacy code: status, record, lower, or ratchet
@@ -364,6 +365,7 @@ async function setup(args) {
   const dry = args.includes('--dry-run');
   const force = args.includes('--force');
   const root = discover(process.cwd())?.root ?? process.cwd();
+  if (args.includes('--vendor-only')) return setupVendorOnly(root, dry);
   const tpl = path.join(pluginRoot, 'templates', 'workspace');
   const actions = [];
   const copy = (srcRel, dstRel = srcRel) => {
@@ -424,6 +426,18 @@ async function setup(args) {
 }
 
 /**
+ * `setup --vendor-only`: replace `.claude/temper/` with this temper's CLI, as an upgrade does, and
+ * nothing else. The templates, the lint tables and `.gitignore` are left as they are.
+ */
+async function setupVendorOnly(root, dry) {
+  const vendor = await optionalModule('./lib/vendor.mjs', '`temper setup --vendor-only`');
+  if (!vendor) return 2;
+  const { actions } = vendor.vendorTool(root, { dry, force: true });
+  process.stdout.write(`${dry ? '[dry run] ' : ''}temper setup --vendor-only in ${root}\n${actions.map((a) => `  ${a}`).join('\n')}\n`);
+  return 0;
+}
+
+/**
  * Lines in CI workflows and contributor docs that deny every warning (`-D warnings`), as
  * [path, line numbers] pairs. A file identical to temper's template is skipped: its strict steps
  * run only without the vendored CLI.
@@ -476,7 +490,7 @@ const code = await (async () => {
     case 'baseline': return baseline(rest);
     case 'report': return report(rest);
     default:
-      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status | setup [--dry-run] [--force] | stats\n'
+      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status | setup [--dry-run] [--force | --vendor-only] | stats\n'
         + '              | baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]\n'
         + '              | report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]>\n');
       return cmd ? 2 : 0;
