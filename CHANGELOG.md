@@ -27,6 +27,9 @@ Documentation.
 Release engineering.
 - `tests/release-check.sh` makes the release checklist's version checks executable (#12). It fails when `plugin.json`, the top `## X.Y.Z (date)` CHANGELOG heading, the example workspace's vendored `VERSION` and, given `--tag`, the tag disagree. It also fails when a release that changes `scripts/` or `templates/workspace/` since the previous tag has no closing "Upgrading from" note, and, with `--tag`, when an `## Unreleased` section sits above the release. `tests/ci.sh` runs it without the tag.
 
+Process.
+- `CONTRIBUTING.md` has a versioning policy (#18): what makes a temper release major, minor or patch for an adopted repository.
+
 Compatibility.
 - The README now states the minimum Claude Code version: 2.1.286. The smoke test passes on 2.1.286 and 2.1.288, and every hook in `hooks/hooks.json` was confirmed to run on both, with one exception. The `PreToolUse` `SubagentHandback` hook never runs on these versions. The reviewer's verdict is validated and recorded by `SubagentStop` instead, which also blocks an invalid verdict, so nothing is lost. The results are in `docs/history/evals.md`.
 - `tests/e2e/smoke.sh` ends with a table of which registered hooks ran. It takes `CLAUDE_BIN` to test a pinned release, and it no longer inherits `TEMPER_BASE` from the session that runs it.

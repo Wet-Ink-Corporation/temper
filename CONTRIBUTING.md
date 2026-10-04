@@ -23,4 +23,35 @@ Questions that belong to the owner (new dependencies, crate boundaries, lint exc
 
 ## Versioning
 
-temper follows semantic versioning. Which changes count as major, minor or patch for a plugin that enforces a standard is defined in plan step 3.2 ([`docs/plans/v1-readiness.md`](docs/plans/v1-readiness.md)). Until then, ask the owner on the PR.
+temper follows [semantic versioning](https://semver.org/). The version is `version` in `.claude-plugin/plugin.json`; `tests/release-check.sh` keeps the CHANGELOG heading, the vendored `VERSION` and the tag in step with it.
+
+**What the version promises.** An adopted repository runs two copies of temper:
+- **The plugin** (skills, agents, hooks) updates through the marketplace. Every merge to `main` reaches it at the next plugin update, whatever the version says.
+- **The vendored CLI** (`.claude/temper/`, which CI and the pre-commit hook run) changes only when the repository re-runs setup.
+
+The version tells an adopted repository what an update does to it. A patch never needs action. A minor release can block new work it allowed before, but never fails code nobody touched. A major release can fail an untouched tree or needs a migration.
+
+| Change | Level |
+|---|---|
+| A CLI command or flag is removed or renamed, or an exit code changes meaning | major |
+| A committed file (`.claude/temper-baseline.json`, `.claude/temper.json`) changes format so that an older vendored CLI cannot read it, or a newer one cannot read the old file | major |
+| A new or tightened MUST rule, hook decision or lint fails code that the previous release passed and nobody has touched, despite a committed baseline | major |
+| The install changes: the plugin or marketplace name, or a higher minimum Claude Code or Node version | major |
+| A template change that an adopted repository must migrate by hand to keep CI green | major |
+| A new or tightened MUST rule, or a new template lint, that the baseline ratchet absorbs: legacy code is reported, only new or changed code fails | minor |
+| A hook that now denies, asks or blocks where it allowed before (a changed hook decision), for new edits only | minor |
+| A new CLI command, flag or JSON field; a new exit code for a case that used to be an error | minor |
+| A template change that `temper setup --force` applies, with an "Upgrading from" note in the CHANGELOG | minor |
+| A new SHOULD rule, a new skill, agent or command, or new guidance in the standard | minor |
+| A fix that makes a hook, the scanner or the CLI do what the rules and the docs already say: a false positive removed, a crash or a platform bug fixed | patch |
+| Docs, tests, evals, and this repository's own CI and tooling | patch |
+
+Where two rows apply, the higher level wins.
+- A false-negative fix that starts denying code the rule always forbade is a patch only if the ratchet absorbs it. If it fails untouched code, it is major.
+- Until 2.0.0, a major change waits for the next major release unless the owner decides otherwise on the PR.
+
+Every user-visible change gets a CHANGELOG entry under `## Unreleased`. A release that changes `scripts/` or `templates/workspace/` ends its section with an "Upgrading from X.Y" note. The release checklist is in [`AGENTS.md`](AGENTS.md).
+
+**History.** No repository had adopted temper before 1.3, so the earlier releases were numbered without this table. 1.2.0 (the baseline) was minor, and 1.2.1 (docs) and 1.2.3 (Windows fixes) were patches, as the table has them. Two would be major today:
+- 1.1.0 added rules and template lints before the baseline existed, so they could fail untouched code;
+- 1.2.2 renamed the marketplace, which changes the install.
