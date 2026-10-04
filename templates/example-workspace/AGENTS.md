@@ -18,9 +18,9 @@ Dependencies point inward: domain, then application, then adapters, then binarie
 | Purpose | Command |
 |---|---|
 | Format | `cargo fmt --all` |
-| Lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| Lint | `node .claude/temper/temper.mjs baseline --check`: clippy, rustdoc and temper's scan. With no baseline it is as strict as `-D warnings`; with `.claude/temper-baseline.json` it fails only on new findings, where plain `cargo clippy -- -D warnings` would fail on every legacy one |
 | Test | `cargo nextest run --workspace` (or `cargo test --workspace`), plus `cargo test --doc --workspace` |
-| Docs | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` |
+| Docs | `cargo doc --workspace --no-deps` (rustdoc lints are part of Lint) |
 | Each crate alone | `for p in ledger-domain ledger-app ledger-store-jsonl ledger-cli; do cargo check -p "$p"; done` |
 | MSRV | `cargo +1.96 check --workspace --all-targets --locked` |
 | Supply chain | `cargo deny check` |

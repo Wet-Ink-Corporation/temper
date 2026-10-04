@@ -13,7 +13,7 @@ Set this repository up so that the rust-craft standard is enforced by the compil
 ```!
 node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" setup --dry-run
 ```
-Show the user this plan in plain words: what will be created, what will be skipped because it already exists, and what needs a manual merge. Ask for confirmation with AskUserQuestion. Offer "install" (recommended), "install and overwrite existing templates", and "cancel".
+Show the user this plan in plain words: what will be created, what will be skipped because it already exists, and what needs a manual merge. Each `manual` line is a change to a file the repository already owns: a workflow step or documented command with `-D warnings`, which fails on legacy findings once the lint table is merged; `allow-*-in-tests` keys an existing `clippy.toml` lacks; or the manifest merge (step 3). Offer to make each one after the install, as a protected edit the user approves. Ask for confirmation with AskUserQuestion. Offer "install" (recommended), "install and overwrite existing templates", and "cancel".
 
 ## 2. Install
 Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" setup`, adding `--force` only if the user chose to overwrite.

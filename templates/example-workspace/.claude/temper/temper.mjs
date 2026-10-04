@@ -389,6 +389,21 @@ async function setup(args) {
   } else {
     copy('Cargo.toml');
   }
+  // An existing clippy.toml stays the repository's, but without the template's test exemptions
+  // the restriction lints fire in test code, and the baseline records that as debt.
+  if (!force) {
+    const have = readText(path.join(root, 'clippy.toml'));
+    if (have !== null) {
+      const missing = (readText(path.join(tpl, 'clippy.toml')) ?? '').split('\n')
+        .map((l) => l.replace(/#.*/, '').trim())
+        .filter((l) => /^allow-[a-z-]+-in-tests\s*=/.test(l))
+        .filter((l) => !new RegExp(`^\\s*${l.split('=')[0].trim()}\\s*=`, 'm').test(have));
+      if (missing.length) actions.push(`manual clippy.toml: add ${missing.join(', ')}; without them the restriction lints fire in test code and the baseline counts it as debt`);
+    }
+  }
+  for (const [rel, lines] of strictLints(root, tpl)) {
+    actions.push(`manual ${rel}:${lines.join(',')}: denies every warning, which fails on each legacy finding once the lint tables are merged; lint with \`temper baseline --check\`, and build and document without -D warnings`);
+  }
   const vendor = await optionalModule('./lib/vendor.mjs', 'vendoring', { quiet: true });
   if (vendor) {
     const v = vendor.vendorTool(root, { dry, force });
@@ -404,7 +419,32 @@ async function setup(args) {
   }
   process.stdout.write(`${dry ? '[dry run] ' : ''}temper setup in ${root}\n${actions.map((a) => `  ${a}`).join('\n')}\n`);
   process.stdout.write('\nNext: give every crate a charter (copy templates/crate/AGENTS.md and CLAUDE.md into each crate root and fill it in).\n');
+  process.stdout.write('Before the first push, run `cargo machete`: rust.yml fails on an unused dependency.\n');
   return 0;
+}
+
+/**
+ * Lines in CI workflows and contributor docs that deny every warning (`-D warnings`), as
+ * [path, line numbers] pairs. A file identical to temper's template is skipped: its strict steps
+ * run only without the vendored CLI.
+ */
+function strictLints(root, tpl) {
+  const wf = path.join('.github', 'workflows');
+  let workflows = [];
+  try {
+    workflows = fs.readdirSync(path.join(root, wf)).filter((f) => /\.ya?ml$/.test(f)).map((f) => path.join(wf, f));
+  } catch (e) {
+    if (e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR') throw e;
+  }
+  const docs = ['CLAUDE.md', 'AGENTS.md', 'CONTRIBUTING.md', path.join('.github', 'pull_request_template.md'), path.join('.github', 'PULL_REQUEST_TEMPLATE.md')];
+  const hits = [];
+  for (const rel of [...workflows, ...docs]) {
+    const text = readText(path.join(root, rel));
+    if (text === null || text === readText(path.join(tpl, rel))) continue;
+    const lines = text.split('\n').flatMap((l, i) => (/-D ?warnings\b/.test(l) ? [i + 1] : []));
+    if (lines.length) hits.push([rel.split(path.sep).join('/'), lines]);
+  }
+  return hits;
 }
 
 function stats() {

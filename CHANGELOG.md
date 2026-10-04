@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).
+- **`rust.yml`'s `msrv` job** reads the MSRV from `rust-version` in the root `Cargo.toml`. Before, it was hard-coded to 1.96, so it failed in any repository whose `rust-version` is newer, because cargo refuses a toolchain older than `rust-version`. It also gains the `Baseline mode` step that the other jobs have, so with a baseline it no longer fails on legacy warnings once the MSRV is 1.97 or later.
+- **`temper setup` reports what an adopting repository has to change by hand.** It adds:
+  - a `manual` line for each workflow or contributor doc (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, the PR template) that uses `-D warnings`. Those steps fail on every legacy finding once the lint tables are merged.
+  - a `manual` line listing the `allow-*-in-tests` keys that an existing `clippy.toml` lacks. Without them, the restriction lints fire in test code and the baseline records it as debt. In redkiln-rs, that was 5,541 findings.
+  - a reminder to run `cargo machete` before the first push.
+- **The workspace template's `AGENTS.md`** lists `temper baseline --check` as the lint command, in place of `cargo clippy -- -D warnings` and `RUSTDOCFLAGS="-D warnings"`.
+- **The README's brownfield rollout** has a new step 3 for the `manual` lines. It also says what moving lint to the ratchet costs: the baseline records one platform, so other platforms no longer lint.
+
 Fixes found by the runner probe on macOS and Windows runners.
 - On macOS, paths under a symlinked directory were reported relative to the wrong root. TMPDIR is under `/var`, a link to `/private/var`, and cargo reports the real path, so `crates/legacy/Cargo.toml` came out as `../../../../private/var/.../crates/legacy/Cargo.toml`. The 1.2.3 fix for Windows 8.3 names now applies on every platform: when the lexical path leaves the root, both sides are compared in their real form.
 - The example workspace's JSONL store could not repair a torn tail or roll back a failed batch on Windows, because an append-mode handle there lacks the right to truncate (`PermissionDenied`). The store now opens stream files read-write and writes each batch at an explicit offset under its exclusive lock. CI now runs the example workspace's tests on Windows.
