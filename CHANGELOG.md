@@ -24,6 +24,9 @@ Documentation.
   - Windows notes;
   - how to report a problem.
 
+Release engineering.
+- `tests/release-check.sh` makes the release checklist's version checks executable (#12). It fails when `plugin.json`, the top `## X.Y.Z (date)` CHANGELOG heading, the example workspace's vendored `VERSION` and, given `--tag`, the tag disagree. It also fails when a release that changes `scripts/` or `templates/workspace/` since the previous tag has no closing "Upgrading from" note, and, with `--tag`, when an `## Unreleased` section sits above the release. `tests/ci.sh` runs it without the tag.
+
 Process.
 - `CONTRIBUTING.md` has a versioning policy (#18): what makes a temper release major, minor or patch for an adopted repository.
 
