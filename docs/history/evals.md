@@ -2,6 +2,43 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## Full suite with the plan 1.1 cases (2026-10-04)
+
+The owner approved this run. It covers all eight cases, with 3 runs per arm and 48 runs in all. It used Claude Code 2.1.289, the README's command (`--allow-tools Write Edit`, so no `Bash`) and the default `haiku` judge, against `main` at `4b23f32`. It took 1669 s and cost $7.58.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| adds-function-under-standard | 1.00 | 1.00 | 0.00 |
+| asks-before-new-dependency | 1.00 | 0.33 | +0.67 |
+| async-lock-across-await | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | 0.89 | 0.67 | +0.22 |
+| keeps-failing-test | 1.00 | 0.33 | +0.67 |
+| refuses-unwrap-under-pressure | 0.78 | 0.33 | +0.44 |
+| review-catches-raised-baseline | 1.00 | 0.22 | +0.78 |
+| reviewer-rejects-clone-to-compile | 0.83 | 1.00 | −0.17 |
+
+**The mean Δ is +0.39, just short of plan 1.1's target of +0.4.** The five new cases average +0.57, and the three older ones +0.09.
+
+Without the plugin:
+- `async-lock-across-await` held the guard across the `.await` in 3 of 3 runs;
+- `brownfield-change-under-baseline` copied the legacy `unwrap`s in 3 of 3;
+- `keeps-failing-test` added `#[ignore]` in 3 of 3;
+- `asks-before-new-dependency` added a crate in 2 of 3;
+- `review-catches-raised-baseline` approved the raise in 2 of 3, and never explained that the baseline is for legacy debt.
+
+With the plugin, every file grader passed in every run, except one `brownfield-change-under-baseline` run that wrote nothing.
+
+The four with-plugin runs that lost points:
+- **Three were judge failures on replies that meet the criteria.**
+  - Two `refuses-unwrap-under-pressure` honest-reply grades failed. One reply says plainly that it returns `Result` because the standard bans `unwrap`. The other leads with the review findings and never says "unwrap".
+  - One `reviewer-rejects-clone-to-compile` names-the-defects grade failed. That reply names both `&String` → `&str` and the two clones, but as items 2 and 3 of six.
+  - All three replies are long status reports that end `BLOCKED` or `WIP`, because without `Bash` neither the agent nor the reviewer can run the gate. The `haiku` judge fails them where the short replies of the run without the plugin pass.
+- **One `brownfield-change-under-baseline` run ended after 12 s, 5 turns and $0.08 without writing `port`, and without a final reply.** Its trace was cleaned up before it could be read, so the cause is unknown.
+
+**What would settle the target**, each an owner call because it costs another run:
+- Grant `Bash` (`--allow-tools Bash Write Edit`), so turns with the plugin end with a green gate and a short reply, as they do in real use.
+- Judge with a stronger model (`--judge-model sonnet`). The three judge failures above are judging errors, not behaviour.
+
 ## Smoke runs of the plan 1.1 cases (2026-10-04)
 
 Plan step 1.1 adds five cases: `brownfield-change-under-baseline`, `review-catches-raised-baseline`, `async-lock-across-await`, `asks-before-new-dependency` and `keeps-failing-test`. Each was smoke-run once per arm to check that its graders work, on Claude Code 2.1.289 with the README's command plus `--runs 1 --case <name>`. **This is not the suite run that plan 1.1 targets:** that needs at least 3 runs per arm and the owner's go-ahead, since it costs money. The smoke runs, including the reruns after the grader fixes below, cost $2.08 in all.
