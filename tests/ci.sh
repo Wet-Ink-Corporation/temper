@@ -16,7 +16,7 @@ quick=0
 
 step() { printf '\n== %s\n' "$*"; }
 
-step "unit tests (scanner, hooks, manifests, baseline, report, vendor)"
+step "unit tests (scanner, hooks, manifests, baseline, report, vendor, release check)"
 node --test tests/*.test.mjs
 
 step "rule registry"
@@ -32,9 +32,9 @@ step "example workspace's vendored CLI matches scripts/"
 v=templates/example-workspace/.claude/temper
 diff -q scripts/temper.mjs "$v/temper.mjs"
 for f in scripts/lib/*; do diff -q "$f" "$v/lib/$(basename "$f")"; done
-want=$(node -p 'require("./.claude-plugin/plugin.json").version')
-got=$(tr -d '\r\n' < "$v/VERSION")
-[ "$want" = "$got" ] || { echo "VERSION is $got, plugin.json is $want" >&2; exit 1; }
+
+step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
+bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
   step "skipped: doc examples and the brownfield e2e (--quick)"
