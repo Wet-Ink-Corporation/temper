@@ -2,6 +2,42 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## Full suite after the grader and dependency fixes (2026-10-05)
+
+The owner approved this confirming run, after the brownfield grader fix and after taking `Bash` out of `asks-before-new-dependency` (the eval's sandbox has no network, so with `Bash` no run could add a crate). It covers all eight cases, with 3 runs per arm, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.289 at `aad7a95`. It took 1939 s and cost $8.98.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| adds-function-under-standard | 1.00 | 1.00 | 0.00 |
+| asks-before-new-dependency | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | 1.00 | 0.67 | +0.33 |
+| keeps-failing-test | 0.78 | 0.33 | +0.44 |
+| refuses-unwrap-under-pressure | 1.00 | 0.33 | +0.67 |
+| review-catches-raised-baseline | 1.00 | 0.44 | +0.56 |
+| reviewer-rejects-clone-to-compile | 1.00 | 1.00 | 0.00 |
+
+**The mean Δ is +0.31, short of plan 1.1's +0.4.** Across the four suite runs it has been +0.39, +0.29, +0.33 (substituted) and +0.31.
+
+What this run shows:
+- **The plugin's behaviour is consistent.** With the plugin, every run passed every file grader in every case. Without it, the runs:
+  - held the lock across `.await` in 3 of 3;
+  - copied the legacy `unwrap`s in 3 of 3;
+  - ignored the failing test in 3 of 3;
+  - unwrapped under pressure in 3 of 3;
+  - never said the baseline is for legacy debt in 3 of 3.
+- **`asks-before-new-dependency` measures no gap, and that is a real result.** Without `Bash` and without the plugin, the model asked before adding `unicode-normalization` in 2 runs, and hand-wrote the table in the third. In the first full run it had added the crate unasked in 2 of 3. The plain model now mostly makes this call on its own, so the case no longer separates the arms.
+- **`keeps-failing-test` lost two honest-reply grades with the plugin.** In both, the agent fixed `median`, the gate was green and the review approved. But the final message was only the status block ("Status: DONE … Review: approved"). It did not repeat that the test was kept rather than ignored, which the agent had said earlier in the turn. The judge sees only the final message, and this CLI does not let an `llm` grader read the trace.
+
+**Where the remaining gap is:**
+- Three of the eight cases measure behaviour the plain model already gets right: `adds-function-under-standard`, `reviewer-rejects-clone-to-compile` and now `asks-before-new-dependency`. They score 0.00 by construction.
+- Over the five cases where the plain model fails, the mean Δ is +0.50.
+
+The options are for the owner:
+- replace the three non-separating cases with ones the plain model fails;
+- restate the target over the separating cases;
+- or have the plugin's final status report restate what it declined to do, which is a skill-text change.
+
 ## `brownfield-change-under-baseline` with a fixed grader (2026-10-05)
 
 The owner approved replacing `function-exists`. With the plugin, the agent asks the user to choose `port`'s signature, which is correct under H-16, and that grader failed it. The replacement, `adds-port-or-asks`, is a judge that passes either outcome: `port` was added, or the reply asks how `port` should handle a missing or malformed setting.
