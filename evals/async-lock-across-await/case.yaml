@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: async-lock-across-await
-tags: [async]
+tags: [discriminating, async]
 context:
   scaffold_script: scaffold.sh
