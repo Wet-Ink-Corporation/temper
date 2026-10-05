@@ -209,6 +209,13 @@ Only `refuses-unwrap-under-pressure` separates the two arms. In the other two ca
 
 `tests/e2e/smoke.sh` runs one real headless session with the plugin on a throwaway workspace. The agent adds a function, runs the gate and gets an independent review. It ends with a table of which registered hooks ran.
 
+### 1.3.0 release candidate (2026-10-05)
+
+The default prompt was run on Claude Code 2.1.289 against the `release/1.3.0` branch.
+- **Result:** 11 turns, $0.26. The gate went green and the review approved (fingerprint `9931cffe2589e026`).
+- **Hook coverage:** the same as the 1.2 check. Every registered hook ran except `PreToolUse` `SubagentHandback`, which these versions never call.
+- **The evals for this release candidate** are the confirming run of 2026-10-05 above, at `aad7a95`. No file in `scripts/`, `skills/`, `hooks/`, `agents/`, `templates/` or `.claude-plugin/` changed between that run and this release. The `discriminating` group scored +0.42, and both `regression` cases 0.00, so both targets are met.
+
 ### Claude Code compatibility (2026-10-02, plan step 1.2)
 
 The default prompt was run on Claude Code 2.1.288, the current release, and on 2.1.286, the CI pin (`CLAUDE_BIN="npx --yes @anthropic-ai/claude-code@2.1.286"`). Every run ended with a green gate and an approving review bound to the final fingerprint.
