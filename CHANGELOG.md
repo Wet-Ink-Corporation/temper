@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0 (2026-10-05)
 
 Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).
 - **`rust.yml`'s `msrv` job** reads the MSRV from `rust-version` in the root `Cargo.toml`. Before, it was hard-coded to 1.96, so it failed in any repository whose `rust-version` is newer, because cargo refuses a toolchain older than `rust-version`. It also gains the `Baseline mode` step that the other jobs have, so with a baseline it no longer fails on legacy warnings once the MSRV is 1.97 or later.
@@ -37,7 +37,7 @@ Compatibility.
 - The README now states the minimum Claude Code version: 2.1.286. The smoke test passes on 2.1.286 and 2.1.288, and every hook in `hooks/hooks.json` was confirmed to run on both, with one exception. The `PreToolUse` `SubagentHandback` hook never runs on these versions. The reviewer's verdict is validated and recorded by `SubagentStop` instead, which also blocks an invalid verdict, so nothing is lost. The results are in `docs/history/evals.md`.
 - `tests/e2e/smoke.sh` ends with a table of which registered hooks ran. It takes `CLAUDE_BIN` to test a pinned release, and it no longer inherits `TEMPER_BASE` from the session that runs it.
 
-Upgrading from 1.2.x: `scripts/lib/project.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --force`, restore the template files you customised, and commit the result as its own pull request. The README's Upgrading section has the steps.
+Upgrading from 1.2.x: `scripts/temper.mjs` and `scripts/lib/project.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. The workspace template's `.github/workflows/rust.yml` (the `msrv` job) and `AGENTS.md` (the lint command) changed too. Refresh with `temper setup --force`, restore the template files you customised, and merge the `rust.yml` and `AGENTS.md` changes into your copies by hand. Commit the result as its own pull request. Or run `temper setup --vendor-only`, which refreshes just the vendored CLI, and merge the two template changes by hand. The README's Upgrading section has the steps.
 
 ## 1.2.3 (2026-10-01)
 
