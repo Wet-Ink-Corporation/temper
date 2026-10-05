@@ -22,6 +22,25 @@ temper keeps its state under `.git/temper/`: gate results and review verdicts pe
 - `node` is on the `PATH` that Claude Code sees. When `node` is missing, Claude Code reports a non-blocking hook error and the action proceeds, so nothing is enforced. See [Windows](#windows) for the desktop app.
 - `TEMPER_DISABLE` is not set in the environment Claude Code was launched from.
 - The repository has a `Cargo.toml`. Outside a Rust project the hooks stand down.
+- In a Claude Code cloud session, see [Cloud sessions and claude.ai](#cloud-sessions-and-claudeai).
+
+## Cloud sessions and claude.ai
+
+**temper is missing from a Claude Code cloud session** (claude.ai/code, or a session started from the app or a GitHub integration). `ListPlugins` is empty, no `temper:*` skill is listed, and no temper hook runs. These are the causes, with what was seen in a cloud session on Claude Code 2.1.289:
+- **The repository's `.claude/settings.json` is not enough.** A cloud session clones the repository fresh into a new container, and nothing in `~/.claude` survives between sessions. A headless session does register the `temper` marketplace from `extraKnownMarketplaces`, but only in a trusted workspace. It never installs `temper@temper` from a repository's `enabledPlugins` alone. The debug log shows `plugin-cache-miss` for `temper@temper` on every start.
+- **The plugin on your claude.ai account may not reach the session.** Cloud sessions sync your account's plugins into `~/.claude/plugins/synced/` at startup. If that directory is empty, the account copy was not synced, for example because it is enabled in a different organization from the one the session runs under. That copy is also separate from this repository, so it can be older than `main`.
+- **Installing from a `SessionStart` hook is too late.** The install succeeds, but Claude Code has already loaded its plugins, so temper appears only the next time Claude Code starts.
+
+The fix is to install the plugin in the cloud environment's **setup script**, which runs before Claude Code starts. Open the environment menu in the session's title bar, choose Edit, and add these lines to the Setup script:
+
+```bash
+claude plugin marketplace add Wet-Ink-Corporation/temper
+claude plugin install temper@temper
+```
+
+The repository is public, so the default network policy is enough to reach GitHub. The setup script also needs `node` on the `PATH`, and the Rust toolchain if the gate is going to run. New sessions in that environment start with temper loaded. To check, run `claude plugin list` in a session; it shows `temper@temper` as enabled.
+
+**temper in claude.ai chat.** Chat loads a plugin's skills, and ignores its hooks and agents. In chat, `rust-craft` and the `/temper:*` instructions are available as reading, but nothing is enforced: there is no skill gate, no escape-hatch scan and no completion gate. temper's enforcement needs Claude Code. The Anthropic Directory also lists an unrelated plugin named "Temper", by another author, so check that the one enabled is this one (by Ryan Britton, with `rust-craft` among its skills).
 
 ## The emergency switch: `TEMPER_DISABLE=1`
 

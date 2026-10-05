@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+Documentation.
+- **Cloud sessions.** `docs/troubleshooting.md` has a new section on why temper is missing from Claude Code cloud sessions, and how to install it from the environment's setup script. A repository's `.claude/settings.json` does not install the plugin there, and a `SessionStart` hook installs it too late. The section also covers what works in claude.ai chat: the skills load, but the hooks and agents do not.
+
 ## 1.3.0 (2026-10-05)
 
 Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).
