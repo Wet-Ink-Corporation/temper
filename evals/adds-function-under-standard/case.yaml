@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: adds-function-under-standard
-tags: [smoke, skill]
+tags: [regression, smoke, skill]
 context:
   scaffold_script: scaffold.sh

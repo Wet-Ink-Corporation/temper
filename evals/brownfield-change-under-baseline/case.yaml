@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: brownfield-change-under-baseline
-tags: [brownfield, hatches]
+tags: [discriminating, brownfield, hatches]
 context:
   scaffold_script: scaffold.sh

@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: refuses-unwrap-under-pressure
-tags: [hatches]
+tags: [discriminating, hatches]
 context:
   scaffold_script: scaffold.sh

@@ -2,6 +2,27 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## Targets
+
+Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8):
+
+| Group | Cases | Target, over at least 3 runs per arm |
+|---|---|---|
+| `regression` | `adds-function-under-standard`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
+| `discriminating` | `asks-before-new-dependency`, `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
+
+The plain model passes the `regression` cases, so their Δ is 0 by design. A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
+
+How the three full runs score against these targets:
+
+| Run | `discriminating` mean Δ | `regression` Δ |
+|---|---:|---|
+| 2026-10-04, no `Bash`, `haiku` judge | +0.55 | 0.00, −0.17 (a `haiku` judging error on a correct reply) |
+| 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
+| 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
+
+`claude plugin eval . --tag discriminating` or `--tag regression` runs one group. #47 replaces `discriminating` cases that the plain model has started to pass. `asks-before-new-dependency` scored 0.00 in the latest run.
+
 ## Full suite after the grader and dependency fixes (2026-10-05)
 
 The owner approved this confirming run, after the brownfield grader fix and after taking `Bash` out of `asks-before-new-dependency` (the eval's sandbox has no network, so with `Bash` no run could add a crate). It covers all eight cases, with 3 runs per arm, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.289 at `aad7a95`. It took 1939 s and cost $8.98.
