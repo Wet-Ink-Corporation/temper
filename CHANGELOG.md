@@ -4,6 +4,7 @@
 
 Documentation.
 - **Cloud sessions.** `docs/troubleshooting.md` has a new section on why temper is missing from Claude Code cloud sessions, and how to install it from the environment's setup script. A repository's `.claude/settings.json` does not install the plugin there, and a `SessionStart` hook installs it too late. The section also covers what works in claude.ai chat: the skills load, but the hooks and agents do not.
+- **The organization sync.** The same section says how claude.ai's organization sync keeps temper current: sync `Wet-Ink-Corporation/temper` with Sync automatically on, and remove any uploaded zip copy. It also corrects an earlier line that called the repository public; it is internal.
 
 ## 1.3.0 (2026-10-05)
 
