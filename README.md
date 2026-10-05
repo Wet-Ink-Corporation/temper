@@ -40,6 +40,8 @@ claude --plugin-dir /path/to/temper
 
 Then, in a Rust repository, run `/temper:setup`. It installs the workspace lints, clippy, rustfmt and deny config, the toolchain pin, the `CLAUDE.md`/`AGENTS.md` hierarchy, the path-scoped rules, CI, a pre-commit hook and `.claude/temper.json`, and it writes a charter for every crate. The committed `.claude/settings.json` enables the plugin for everyone who opens the repository.
 
+In Claude Code cloud sessions, install the plugin from the environment's setup script, because the repository's settings alone do not install it there. See [Cloud sessions and claude.ai](docs/troubleshooting.md#cloud-sessions-and-claudeai).
+
 ## Commands and agents
 
 | | Purpose |
@@ -153,6 +155,7 @@ A sample, built from a test fixture of a six-crate workspace with legacy debt, o
 
 [`docs/troubleshooting.md`](docs/troubleshooting.md) covers:
 - what each hook denial, question and Stop block means, and how to clear it;
+- installing temper in Claude Code cloud sessions, and what works in claude.ai chat;
 - gate timeouts on large workspaces;
 - Windows notes;
 - how to report a problem.
