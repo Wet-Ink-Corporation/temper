@@ -2,6 +2,21 @@
 
 The behavioural evals in [`evals/`](../../evals/) run each case with the plugin and without it, and grade the outcome. The command is in the README's Development section. Each row below gives the mean score per arm across its runs.
 
+## `brownfield-change-under-baseline` with a fixed grader (2026-10-05)
+
+The owner approved replacing `function-exists`. With the plugin, the agent asks the user to choose `port`'s signature, which is correct under H-16, and that grader failed it. The replacement, `adds-port-or-asks`, is a judge that passes either outcome: `port` was added, or the reply asks how `port` should handle a missing or malformed setting.
+
+The case was rerun with 3 runs per arm, `--allow-tools Bash Write Edit` and `--judge-model sonnet`. It took 181 s and cost $0.99.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| brownfield-change-under-baseline | 1.00 | 0.67 | +0.33 |
+
+- **With the plugin**, every run passed every grader.
+- **Without it**, every run added `port` with the legacy `unwrap`s and failed `no-unwrap-in-new-code`.
+
+Substituting this row into the run below raises its mean Δ from +0.29 to +0.33.
+
 ## Full suite with `Bash` and a `sonnet` judge (2026-10-04)
 
 The owner asked for a rerun of the previous suite with `Bash` granted and a stronger judge. It covers all eight cases, with 3 runs per arm, on Claude Code 2.1.289, against `main` at `f102f49`. The command was the README's with `--allow-tools Bash Write Edit --judge-model sonnet` added. It took 2248 s and cost $9.72, plus about $1 of probe runs to get the setup working.
