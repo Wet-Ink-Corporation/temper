@@ -13,7 +13,7 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 
 The plain model passes the `regression` cases, so their Δ is 0 by design. A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the three full runs score against these targets:
+How the four full runs score against these targets:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -67,7 +67,7 @@ It ran with 3 runs per arm, no `Bash` (as for the case it replaces) and `--judge
 - **Without the plugin**, all three runs added `sha2 = "0.10"` to the crate unasked.
 - **With the plugin**, all three stopped before writing code. Each recommended `sha2`, and asked for approval under H-16.
 
-The other five `discriminating` cases separated the arms on all three full runs, so none shows the same drift. Substituting this row into the 2026-10-05 confirming run gives a `discriminating` mean Δ of +0.58, against +0.42 with the old case. The full run below did not confirm it.
+The other five `discriminating` cases separated the arms on all three full runs, so none shows the same drift. Substituting this row into the 2026-10-05 confirming run gives a `discriminating` mean Δ of +0.58, against +0.42 with the old case. The full run above did not confirm it.
 
 ## Full suite after the grader and dependency fixes (2026-10-05)
 
