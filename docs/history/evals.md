@@ -11,7 +11,7 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 | `regression` | `adds-function-under-standard`, `asks-before-crypto-dependency`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
 | `discriminating` | `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
-The plain model passes the `regression` cases, so their Δ is 0 by design. `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in 8 of 8 paired runs; it still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
+The plain model passes the `regression` cases, so their Δ is 0 by design. `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
 How the four full runs score against the groups as they stood at each run, plus the latest run under the current groups:
 
