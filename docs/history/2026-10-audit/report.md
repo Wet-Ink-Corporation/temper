@@ -4,6 +4,7 @@
 - **Subject:** `Wet-Ink-Corporation/temper` at `d87d887` (= `origin/main`, plugin version 1.3.0), read-only clone
 - **Pilots:** `weigh-in` (main) and `redkiln-rs` (main, plus the adoption branch `build/phase-0-to-1`), both read-only clones
 - **Isolation:** the audit ran entirely in the session scratchpad. It did not modify `/home/user/temper` or the branch checked out there.
+- **Check run:** [`ci.log`](ci.log) is the full output of `bash tests/ci.sh` at `d87d887` on 2026-10-06. Where this report cites `ci.log`, it means that file.
 - **Method:** 14 audit dimensions, each producing evidence-cited findings. A second verifier pass re-checked every finding, re-running greps, probes and `gh api` calls. **199 findings survived verification. 2 were refuted and dropped** (see section 10). Status vocabulary: done | partial | not-started | regressed | stale-doc | risk | quality-issue.
 
 ---

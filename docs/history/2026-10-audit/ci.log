@@ -1,0 +1,1045 @@
+
+== unit tests (scanner, hooks, manifests, baseline, report, vendor, release check)
+TAP version 13
+# Subtest: parseDiff: added and changed lines count, deletions and pure renames add nothing
+ok 1 - parseDiff: added and changed lines count, deletions and pure renames add nothing
+  ---
+  duration_ms: 4.047758
+  type: 'test'
+  ...
+# Subtest: changedLines against git: edits, insertions, deletions, renames, untracked files, merge base
+ok 2 - changedLines against git: edits, insertions, deletions, renames, untracked files, merge base
+  ---
+  duration_ms: 361.595912
+  type: 'test'
+  ...
+# Subtest: changedLines ignores user diff config (mnemonicPrefix, noprefix, interHunkContext) and sees unstaged renames
+ok 3 - changedLines ignores user diff config (mnemonicPrefix, noprefix, interHunkContext) and sees unstaged renames
+  ---
+  duration_ms: 190.388624
+  type: 'test'
+  ...
+# Subtest: ratchet with a base compares the baseline at the merge base: a raise is flagged, not failed
+ok 4 - ratchet with a base compares the baseline at the merge base: a raise is flagged, not failed
+  ---
+  duration_ms: 369.5569
+  type: 'test'
+  ...
+# Subtest: a crate whose directory and name both changed keeps its counts (staged, unstaged or committed)
+ok 5 - a crate whose directory and name both changed keeps its counts (staged, unstaged or committed)
+  ---
+  duration_ms: 356.173248
+  type: 'test'
+  ...
+# Subtest: the temporary index writes no untracked file content into .git/objects
+ok 6 - the temporary index writes no untracked file content into .git/objects
+  ---
+  duration_ms: 190.425891
+  type: 'test'
+  ...
+# Subtest: relTo: one directory spelled with an 8.3 short name and a long name is the same root
+ok 7 - relTo: one directory spelled with an 8.3 short name and a long name is the same root # SKIP Windows only
+  ---
+  duration_ms: 0.360518
+  type: 'test'
+  ...
+# Subtest: relTo: one directory reached through a symlinked ancestor and through its real path is the same root
+ok 8 - relTo: one directory reached through a symlinked ancestor and through its real path is the same root
+  ---
+  duration_ms: 2.363276
+  type: 'test'
+  ...
+# Subtest: output paths: under target/ or .temper/ after resolving symlinks, never onto one
+ok 9 - output paths: under target/ or .temper/ after resolving symlinks, never onto one
+  ---
+  duration_ms: 3.337384
+  type: 'test'
+  ...
+# Subtest: ratchet: legacy debt passes; a finding on a new line fails
+ok 10 - ratchet: legacy debt passes; a finding on a new line fails
+  ---
+  duration_ms: 0.95976
+  type: 'test'
+  ...
+# Subtest: ratchet: a swap in the same crate (fix one, add one) fails although the count is unchanged
+ok 11 - ratchet: a swap in the same crate (fix one, add one) fails although the count is unchanged
+  ---
+  duration_ms: 0.391992
+  type: 'test'
+  ...
+# Subtest: ratchet: a legacy finding on a touched line fails (CRF-08); long spans count by their first line
+ok 12 - ratchet: a legacy finding on a touched line fails (CRF-08); long spans count by their first line
+  ---
+  duration_ms: 0.256339
+  type: 'test'
+  ...
+# Subtest: ratchet: a rename with an unchanged count passes
+ok 13 - ratchet: a rename with an unchanged count passes
+  ---
+  duration_ms: 0.265707
+  type: 'test'
+  ...
+# Subtest: ratchet: a count increase on an untouched line fails (non-local effect)
+ok 14 - ratchet: a count increase on an untouched line fails (non-local effect)
+  ---
+  duration_ms: 0.351276
+  type: 'test'
+  ...
+# Subtest: ratchet: fixes are reported, compile errors fail, exceptions and uncollected sources do not count
+ok 15 - ratchet: fixes are reported, compile errors fail, exceptions and uncollected sources do not count
+  ---
+  duration_ms: 0.391301
+  type: 'test'
+  ...
+# Subtest: ratchet: a renamed crate (same directory) keeps its baseline counts; --tighten is suggested only on a pass
+ok 16 - ratchet: a renamed crate (same directory) keeps its baseline counts; --tighten is suggested only on a pass
+  ---
+  duration_ms: 0.929918
+  type: 'test'
+  ...
+# Subtest: ratchet without a baseline is strict: every finding is new
+ok 17 - ratchet without a baseline is strict: every finding is new
+  ---
+  duration_ms: 0.274383
+  type: 'test'
+  ...
+# Subtest: ratchet: a forbid override (E0453 stand-in) always fails and is never baselined
+ok 18 - ratchet: a forbid override (E0453 stand-in) always fails and is never baselined
+  ---
+  duration_ms: 0.159827
+  type: 'test'
+  ...
+# Subtest: ratchet: sources scope findings by the tool that reported them
+ok 19 - ratchet: sources scope findings by the tool that reported them
+  ---
+  duration_ms: 0.200749
+  type: 'test'
+  ...
+# Subtest: ratchet: at most 30 new-code findings are listed
+ok 20 - ratchet: at most 30 new-code findings are listed
+  ---
+  duration_ms: 0.253515
+  type: 'test'
+  ...
+# Subtest: ratchet: a baseline from an older toolchain says why counts rose
+ok 21 - ratchet: a baseline from an older toolchain says why counts rose
+  ---
+  duration_ms: 0.114989
+  type: 'test'
+  ...
+# Subtest: tighten never raises a count or adds an entry, and drops zeros
+ok 22 - tighten never raises a count or adds an entry, and drops zeros
+  ---
+  duration_ms: 0.593298
+  type: 'test'
+  ...
+# Subtest: the baseline file: sorted keys, 2-space JSON, trailing newline, no zeros; read back
+ok 23 - the baseline file: sorted keys, 2-space JSON, trailing newline, no zeros; read back
+  ---
+  duration_ms: 4.693456
+  type: 'test'
+  ...
+# Subtest: the baseline is part of the fingerprint, tracked or untracked
+ok 24 - the baseline is part of the fingerprint, tracked or untracked
+  ---
+  duration_ms: 341.947849
+  type: 'test'
+  ...
+# Subtest: gate: ratchet mode with a baseline (legacy passes, new code fails, fixes are reported); none without one
+ok 25 - gate: ratchet mode with a baseline (legacy passes, new code fails, fixes are reported); none without one
+  ---
+  duration_ms: 13124.962206
+  type: 'test'
+  ...
+# Subtest: CLI: usage errors, a bad --base or --findings-out, and raises inside Claude Code exit 2 before any cargo run
+ok 26 - CLI: usage errors, a bad --base or --findings-out, and raises inside Claude Code exit 2 before any cargo run
+  ---
+  duration_ms: 1728.264498
+  type: 'test'
+  ...
+# Subtest: CLI: --init says plainly that the workspace is below the git root, before any fmt check
+ok 27 - CLI: --init says plainly that the workspace is below the git root, before any fmt check
+  ---
+  duration_ms: 97.783188
+  type: 'test'
+  ...
+# Subtest: CLI: --init refuses unformatted code
+ok 28 - CLI: --init refuses unformatted code
+  ---
+  duration_ms: 228.588275
+  type: 'test'
+  ...
+# Subtest: CLI: setup reports strict lint steps and the test exemptions an existing clippy.toml lacks
+ok 29 - CLI: setup reports strict lint steps and the test exemptions an existing clippy.toml lacks
+  ---
+  duration_ms: 176.648699
+  type: 'test'
+  ...
+# Subtest: CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else
+ok 30 - CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else
+  ---
+  duration_ms: 353.690333
+  type: 'test'
+  ...
+# Subtest: CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs
+ok 31 - CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs
+  ---
+  duration_ms: 315.967101
+  type: 'test'
+  ...
+# Subtest: clippy JSON with --cap-lints warn: deny-level lints arrive as findings, lib and lib-test repeats collapse
+ok 32 - clippy JSON with --cap-lints warn: deny-level lints arrive as findings, lib and lib-test repeats collapse
+  ---
+  duration_ms: 11.388995
+  type: 'test'
+  ...
+# Subtest: rustdoc JSON: rustdoc lints keep their prefix; a clippy-reported missing_docs is not counted twice
+ok 33 - rustdoc JSON: rustdoc lints keep their prefix; a clippy-reported missing_docs is not counted twice
+  ---
+  duration_ms: 38.224659
+  type: 'test'
+  ...
+# Subtest: a local macro_rules! expansion: each invocation is its own finding, at its call site
+ok 34 - a local macro_rules! expansion: each invocation is its own finding, at its call site
+  ---
+  duration_ms: 1.944804
+  type: 'test'
+  ...
+# Subtest: E-codes and code-less errors are errors, not findings; notes are dropped
+ok 35 - E-codes and code-less errors are errors, not findings; notes are dropped
+  ---
+  duration_ms: 0.524343
+  type: 'test'
+  ...
+# Subtest: file paths are relative to the project (git) root, with forward slashes, for CRLF and Windows-style input
+ok 36 - file paths are relative to the project (git) root, with forward slashes, for CRLF and Windows-style input
+  ---
+  duration_ms: 1.184028
+  type: 'test'
+  ...
+# Subtest: crate attribution: the longest matching crate dir wins
+ok 37 - crate attribution: the longest matching crate dir wins
+  ---
+  duration_ms: 0.429487
+  type: 'test'
+  ...
+# Subtest: crateTable reads lint inheritance from the member manifest and the charter from AGENTS.md
+ok 38 - crateTable reads lint inheritance from the member manifest and the charter from AGENTS.md
+  ---
+  duration_ms: 5.110046
+  type: 'test'
+  ...
+# Subtest: scan source: hard hits are findings, approved exceptions (ask) are flagged, soft hits and exempt paths are dropped
+ok 39 - scan source: hard hits are findings, approved exceptions (ask) are flagged, soft hits and exempt paths are dropped
+  ---
+  duration_ms: 35.691971
+  type: 'test'
+  ...
+# Subtest: forbidden lints come from [workspace.lints] for inheriting members and from a member's own [lints]
+ok 40 - forbidden lints come from [workspace.lints] for inheriting members and from a member's own [lints]
+  ---
+  duration_ms: 16.887305
+  type: 'test'
+  ...
+# Subtest: crate-level \#![forbid] reaches the crate root's module tree; a module's forbid only its own subtree
+ok 41 - crate-level \#![forbid] reaches the crate root's module tree; a module's forbid only its own subtree
+  ---
+  duration_ms: 12.789466
+  type: 'test'
+  ...
+# Subtest: scanner scope: member files only, not nested non-member packages or excluded paths
+ok 42 - scanner scope: member files only, not nested non-member packages or excluded paths
+  ---
+  duration_ms: 12.904525
+  type: 'test'
+  ...
+# Subtest: toolOf, severities and completeness
+ok 43 - toolOf, severities and completeness
+  ---
+  duration_ms: 0.678306
+  type: 'test'
+  ...
+# Subtest: the findings cache keeps the newest 20 collections
+ok 44 - the findings cache keeps the newest 20 collections
+  ---
+  duration_ms: 5.109607
+  type: 'test'
+  ...
+# Subtest: a Cargo workspace below the git root is reported plainly
+ok 45 - a Cargo workspace below the git root is reported plainly
+  ---
+  duration_ms: 37.605805
+  type: 'test'
+  ...
+# Subtest: rulemap.json: lint resolution as lint-claims resolves it, every scanner key, every cited rule defined
+ok 46 - rulemap.json: lint resolution as lint-claims resolves it, every scanner key, every cited rule defined
+  ---
+  duration_ms: 1.677322
+  type: 'test'
+  ...
+# Subtest: the throwaway workspace is discovered without git
+ok 47 - the throwaway workspace is discovered without git
+  ---
+  duration_ms: 5.26121
+  type: 'test'
+  ...
+# Subtest: new member crate without [lints] workspace = true is denied (MOD-09)
+ok 48 - new member crate without [lints] workspace = true is denied (MOD-09)
+  ---
+  duration_ms: 8.58937
+  type: 'test'
+  ...
+# Subtest: new member crate with lint inheritance asks as a crate boundary (H-16), not as a lint change
+ok 49 - new member crate with lint inheritance asks as a crate boundary (H-16), not as a lint change
+  ---
+  duration_ms: 5.271633
+  type: 'test'
+  ...
+# Subtest: an excluded crate is not a member
+ok 50 - an excluded crate is not a member
+  ---
+  duration_ms: 5.363503
+  type: 'test'
+  ...
+# Subtest: a member gaining [lints] workspace = true is allowed without a prompt
+ok 51 - a member gaining [lints] workspace = true is allowed without a prompt
+  ---
+  duration_ms: 23.379761
+  type: 'test'
+  ...
+# Subtest: ratchet: a legacy member without inheritance or with a profile only advises
+ok 52 - ratchet: a legacy member without inheritance or with a profile only advises
+  ---
+  duration_ms: 10.666584
+  type: 'test'
+  ...
+# Subtest: manifests.ownLints: a listed member may carry its own [lints] table, and changing it asks (H-05)
+ok 53 - manifests.ownLints: a listed member may carry its own [lints] table, and changing it asks (H-05)
+  ---
+  duration_ms: 21.327001
+  type: 'test'
+  ...
+# Subtest: a member that overrides lints is a lint-config change (H-05)
+ok 54 - a member that overrides lints is a lint-config change (H-05)
+  ---
+  duration_ms: 11.758257
+  type: 'test'
+  ...
+# Subtest: [profile] in a member manifest is denied (PERF-09); in the root it asks
+ok 55 - [profile] in a member manifest is denied (PERF-09); in the root it asks
+  ---
+  duration_ms: 9.213962
+  type: 'test'
+  ...
+# Subtest: test = false on a target asks (H-12)
+ok 56 - test = false on a target asks (H-12)
+  ---
+  duration_ms: 22.379248
+  type: 'test'
+  ...
+# Subtest: [patch.crates-io] asks (H-16)
+ok 57 - [patch.crates-io] asks (H-16)
+  ---
+  duration_ms: 4.875966
+  type: 'test'
+  ...
+# Subtest: a rust-version bump asks (H-16); unrelated root edits do not
+ok 58 - a rust-version bump asks (H-16); unrelated root edits do not
+  ---
+  duration_ms: 15.805707
+  type: 'test'
+  ...
+# Subtest: non-caret requirements get an ARC-12 advisory
+ok 59 - non-caret requirements get an ARC-12 advisory
+  ---
+  duration_ms: 34.466417
+  type: 'test'
+  ...
+# Subtest: Cargo.lock is never edited by hand (PROC-13)
+ok 60 - Cargo.lock is never edited by hand (PROC-13)
+  ---
+  duration_ms: 15.239633
+  type: 'test'
+  ...
+# Subtest: CRLF manifests are handled
+ok 61 - CRLF manifests are handled
+  ---
+  duration_ms: 8.773045
+  type: 'test'
+  ...
+# Subtest: lintConfigChanged ignores plain inheritance and comments
+ok 62 - lintConfigChanged ignores plain inheritance and comments
+  ---
+  duration_ms: 0.44906
+  type: 'test'
+  ...
+# Subtest: Bash: --ignore-rust-version is denied (MOD-01)
+ok 63 - Bash: --ignore-rust-version is denied (MOD-01)
+  ---
+  duration_ms: 18.255092
+  type: 'test'
+  ...
+# Subtest: Bash: shell writes to Cargo.lock are denied; cargo and git are not
+ok 64 - Bash: shell writes to Cargo.lock are denied; cargo and git are not
+  ---
+  duration_ms: 105.973438
+  type: 'test'
+  ...
+# Subtest: Bash: --ignore-rust-version only counts as a cargo flag
+ok 65 - Bash: --ignore-rust-version only counts as a cargo flag
+  ---
+  duration_ms: 13.397371
+  type: 'test'
+  ...
+# Subtest: Bash: shell writes to Cargo.toml are refused so the manifest checks run
+ok 66 - Bash: shell writes to Cargo.toml are refused so the manifest checks run
+  ---
+  duration_ms: 28.491889
+  type: 'test'
+  ...
+# Subtest: Bash: cargo add/remove asks (H-16) unless every crate is pre-approved
+ok 67 - Bash: cargo add/remove asks (H-16) unless every crate is pre-approved
+  ---
+  duration_ms: 26.867164
+  type: 'test'
+  ...
+# Subtest: an exclude entry is compared by path components (./tools/gen/)
+ok 68 - an exclude entry is compared by path components (./tools/gen/)
+  ---
+  duration_ms: 4.534377
+  type: 'test'
+  ...
+# Subtest: new dependencies: a [[bench]] after [dev-dependencies] is not a dependency; dotted keys are
+ok 69 - new dependencies: a [[bench]] after [dev-dependencies] is not a dependency; dotted keys are
+  ---
+  duration_ms: 9.007972
+  type: 'test'
+  ...
+# Subtest: a dependency major-version bump asks (H-16); a minor bump does not
+ok 70 - a dependency major-version bump asks (H-16); a minor bump does not
+  ---
+  duration_ms: 14.834781
+  type: 'test'
+  ...
+# Subtest: [lib] bench = false does not ask; package.build has its own reason
+ok 71 - [lib] bench = false does not ask; package.build has its own reason
+  ---
+  duration_ms: 17.016621
+  type: 'test'
+  ...
+# Subtest: \#[ignore] added to an existing test asks (H-12); a new ignored test and the Miri form do not
+ok 72 - \#[ignore] added to an existing test asks (H-12); a new ignored test and the Miri form do not
+  ---
+  duration_ms: 26.426172
+  type: 'test'
+  ...
+# Subtest: gate manifests step without git: every problem counts
+ok 73 - gate manifests step without git: every problem counts
+  ---
+  duration_ms: 429.740245
+  type: 'test'
+  ...
+# Subtest: gate without cargo still checks member manifests (TOML only)
+ok 74 - gate without cargo still checks member manifests (TOML only)
+  ---
+  duration_ms: 11.109236
+  type: 'test'
+  ...
+# Subtest: gate manifests step with git: only problems new since the base fail
+ok 75 - gate manifests step with git: only problems new since the base fail
+  ---
+  duration_ms: 840.43621
+  type: 'test'
+  ...
+# Subtest: Bash: temper baseline --init/--update are refused unless TEMPER_ALLOW_RAISE asks the human (H-12); --tighten, --check and status run freely
+ok 76 - Bash: temper baseline --init/--update are refused unless TEMPER_ALLOW_RAISE asks the human (H-12); --tighten, --check and status run freely
+  ---
+  duration_ms: 90.113975
+  type: 'test'
+  ...
+# Subtest: Bash: git checkout/restore/stash of a .claude path, and git show into .claude/, ask (H-12)
+ok 77 - Bash: git checkout/restore/stash of a .claude path, and git show into .claude/, ask (H-12)
+  ---
+  duration_ms: 56.508879
+  type: 'test'
+  ...
+# Subtest: Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)
+ok 78 - Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)
+  ---
+  duration_ms: 42.396219
+  type: 'test'
+  ...
+# Subtest: Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not
+ok 79 - Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not
+  ---
+  duration_ms: 35.422449
+  type: 'test'
+  ...
+# Subtest: release-check: agreeing versions, a matching tag and an Upgrading note pass
+ok 80 - release-check: agreeing versions, a matching tag and an Upgrading note pass
+  ---
+  duration_ms: 784.124479
+  type: 'test'
+  ...
+# Subtest: release-check: plugin.json disagreeing with the CHANGELOG heading fails
+ok 81 - release-check: plugin.json disagreeing with the CHANGELOG heading fails
+  ---
+  duration_ms: 159.559728
+  type: 'test'
+  ...
+# Subtest: release-check: a stale vendored VERSION fails
+ok 82 - release-check: a stale vendored VERSION fails
+  ---
+  duration_ms: 174.390559
+  type: 'test'
+  ...
+# Subtest: release-check: a tag that names another version fails
+ok 83 - release-check: a tag that names another version fails
+  ---
+  duration_ms: 144.601494
+  type: 'test'
+  ...
+# Subtest: release-check: an existing tag that is not HEAD fails
+ok 84 - release-check: an existing tag that is not HEAD fails
+  ---
+  duration_ms: 242.746284
+  type: 'test'
+  ...
+# Subtest: release-check: a release that changes scripts/ or templates/workspace/ needs a closing Upgrading note
+ok 85 - release-check: a release that changes scripts/ or templates/workspace/ needs a closing Upgrading note
+  ---
+  duration_ms: 580.220003
+  type: 'test'
+  ...
+# Subtest: release-check: a release that changes neither needs no Upgrading note
+ok 86 - release-check: a release that changes neither needs no Upgrading note
+  ---
+  duration_ms: 136.389725
+  type: 'test'
+  ...
+# Subtest: release-check: --base overrides the previous tag
+ok 87 - release-check: --base overrides the previous tag
+  ---
+  duration_ms: 212.541194
+  type: 'test'
+  ...
+# Subtest: release-check: an Unreleased section above the release fails only with --tag
+ok 88 - release-check: an Unreleased section above the release fails only with --tag
+  ---
+  duration_ms: 232.25607
+  type: 'test'
+  ...
+# Subtest: release-check: without --tag, an already tagged release is not re-checked
+ok 89 - release-check: without --tag, an already tagged release is not re-checked
+  ---
+  duration_ms: 469.476846
+  type: 'test'
+  ...
+# Subtest: release-check: without the previous tag the note check is skipped, except with --tag
+ok 90 - release-check: without the previous tag the note check is skipped, except with --tag
+  ---
+  duration_ms: 209.677568
+  type: 'test'
+  ...
+# Subtest: release-check: --notes writes the release section without its heading, and only when the checks pass
+ok 91 - release-check: --notes writes the release section without its heading, and only when the checks pass
+  ---
+  duration_ms: 1166.68592
+  type: 'test'
+  ...
+# Subtest: release-check: this repository passes
+ok 92 - release-check: this repository passes
+  ---
+  duration_ms: 71.776789
+  type: 'test'
+  ...
+# Subtest: report: the numbers come from the ratchet and match the input
+ok 93 - report: the numbers come from the ratchet and match the input
+  ---
+  duration_ms: 350.200277
+  type: 'test'
+  ...
+# Subtest: report: new = max(findings on changed lines, count rise) per crate and lint
+ok 94 - report: new = max(findings on changed lines, count rise) per crate and lint
+  ---
+  duration_ms: 3.318301
+  type: 'test'
+  ...
+# Subtest: report: counts like the ratchet (approved exceptions, sources not run, the (none) crate)
+ok 95 - report: counts like the ratchet (approved exceptions, sources not run, the (none) crate)
+  ---
+  duration_ms: 2.546328
+  type: 'test'
+  ...
+# Subtest: report: a crate renamed in place keeps its baseline under its new name
+ok 96 - report: a crate renamed in place keeps its baseline under its new name
+  ---
+  duration_ms: 0.620454
+  type: 'test'
+  ...
+# Subtest: report: ratchet notes and a totals-only ratchet are shown as such
+ok 97 - report: ratchet notes and a totals-only ratchet are shown as such
+  ---
+  duration_ms: 1.974706
+  type: 'test'
+  ...
+# Subtest: report: without a ratchet result the totals are compared
+ok 98 - report: without a ratchet result the totals are compared
+  ---
+  duration_ms: 1.083812
+  type: 'test'
+  ...
+# Subtest: report: without a baseline the ratchet is strict and every finding fails
+ok 99 - report: without a baseline the ratchet is strict and every finding fails
+  ---
+  duration_ms: 1.561627
+  type: 'test'
+  ...
+# Subtest: report: compile errors make the status "build errors"
+ok 100 - report: compile errors make the status "build errors"
+  ---
+  duration_ms: 1.06261
+  type: 'test'
+  ...
+# Subtest: report: the realistic sample adds up
+ok 101 - report: the realistic sample adds up
+  ---
+  duration_ms: 3.022133
+  type: 'test'
+  ...
+# Subtest: report: a raised baseline is called out in the Markdown and the HTML
+ok 102 - report: a raised baseline is called out in the Markdown and the HTML
+  ---
+  duration_ms: 3.381158
+  type: 'test'
+  ...
+# Subtest: report: HTML escapes every diagnostic string and makes no requests
+ok 103 - report: HTML escapes every diagnostic string and makes no requests
+  ---
+  duration_ms: 2.343253
+  type: 'test'
+  ...
+# Subtest: report: HTML shows the headline numbers and sections in order
+ok 104 - report: HTML shows the headline numbers and sections in order
+  ---
+  duration_ms: 2.304441
+  type: 'test'
+  ...
+# Subtest: report: Markdown stays within the line budget and escapes diagnostics
+ok 105 - report: Markdown stays within the line budget and escapes diagnostics
+  ---
+  duration_ms: 11.4611
+  type: 'test'
+  ...
+# Subtest: report: Markdown table cells escape pipes
+ok 106 - report: Markdown table cells escape pipes
+  ---
+  duration_ms: 0.625968
+  type: 'test'
+  ...
+# Subtest: report: --out stays under target/ or .temper/
+ok 107 - report: --out stays under target/ or .temper/
+  ---
+  duration_ms: 2.383328
+  type: 'test'
+  ...
+# Subtest: report CLI: without a baseline it is strict; json, md and html agree
+ok 108 - report CLI: without a baseline it is strict; json, md and html agree
+  ---
+  duration_ms: 128.806261
+  type: 'test'
+  ...
+# Subtest: report CLI: uses the ratchet result the findings file carries, as-is
+ok 109 - report CLI: uses the ratchet result the findings file carries, as-is
+  ---
+  duration_ms: 226.336534
+  type: 'test'
+  ...
+# Subtest: report CLI: without an embedded result it runs the ratchet against the committed baseline
+ok 110 - report CLI: without an embedded result it runs the ratchet against the committed baseline
+  ---
+  duration_ms: 140.303978
+  type: 'test'
+  ...
+# Subtest: report CLI: usage errors, refused paths and unusable input exit 2
+ok 111 - report CLI: usage errors, refused paths and unusable input exit 2
+  ---
+  duration_ms: 1160.068423
+  type: 'test'
+  ...
+# Subtest: masks strings, raw strings, chars and comments but keeps lifetimes
+ok 112 - masks strings, raw strings, chars and comments but keeps lifetimes
+  ---
+  duration_ms: 1.886734
+  type: 'test'
+  ...
+# Subtest: hard hits in production code
+ok 113 - hard hits in production code
+  ---
+  duration_ms: 6.897149
+  type: 'test'
+  ...
+# Subtest: test regions allow unwrap/panic but not dbg or unsafe
+ok 114 - test regions allow unwrap/panic but not dbg or unsafe
+  ---
+  duration_ms: 2.368601
+  type: 'test'
+  ...
+# Subtest: \#[expect] with a reason converts a hard hit into an exception request
+ok 115 - \#[expect] with a reason converts a hard hit into an exception request
+  ---
+  duration_ms: 0.592226
+  type: 'test'
+  ...
+# Subtest: allow attribute, erased errors in pub signatures, .ok(); discard
+ok 116 - allow attribute, erased errors in pub signatures, .ok(); discard
+  ---
+  duration_ms: 0.51228
+  type: 'test'
+  ...
+# Subtest: newHits reports only introduced violations
+ok 117 - newHits reports only introduced violations
+  ---
+  duration_ms: 0.346504
+  type: 'test'
+  ...
+# Subtest: path classification
+ok 118 - path classification
+  ---
+  duration_ms: 0.548676
+  type: 'test'
+  ...
+# Subtest: no false positives on idiomatic code
+ok 119 - no false positives on idiomatic code
+  ---
+  duration_ms: 2.218249
+  type: 'test'
+  ...
+# Subtest: rule table: unique keys, rule ids, four contexts, fix text
+ok 120 - rule table: unique keys, rule ids, four contexts, fix text
+  ---
+  duration_ms: 1.138972
+  type: 'test'
+  ...
+# Subtest: assert-in-prod: compile-time assertions are exempt
+ok 121 - assert-in-prod: compile-time assertions are exempt
+  ---
+  duration_ms: 0.996622
+  type: 'test'
+  ...
+# Subtest: ignore-no-reason: also catches cfg_attr(.., ignore)
+ok 122 - ignore-no-reason: also catches cfg_attr(.., ignore)
+  ---
+  duration_ms: 1.806943
+  type: 'test'
+  ...
+# Subtest: extern-crate: alloc and std in a no_std crate are exempt
+ok 123 - extern-crate: alloc and std in a no_std crate are exempt
+  ---
+  duration_ms: 0.491972
+  type: 'test'
+  ...
+# Subtest: print: build scripts get the writeln! fix text
+ok 124 - print: build scripts get the writeln! fix text
+  ---
+  duration_ms: 0.689679
+  type: 'test'
+  ...
+# Subtest: doc-unwrap: unwrap/expect/panic in doctest fences
+ok 125 - doc-unwrap: unwrap/expect/panic in doctest fences
+  ---
+  duration_ms: 2.256986
+  type: 'test'
+  ...
+# Subtest: doc-unwrap: idiomatic doctests and non-Rust fences are clean
+ok 126 - doc-unwrap: idiomatic doctests and non-Rust fences are clean
+  ---
+  duration_ms: 0.424053
+  type: 'test'
+  ...
+# Subtest: empty-if-let-err finds the body brace by depth; empty-err-arm allows keep-first-error
+ok 127 - empty-if-let-err finds the body brace by depth; empty-err-arm allows keep-first-error
+  ---
+  duration_ms: 1.349408
+  type: 'test'
+  ...
+# Subtest: lexer: escaped quote char literal; ignore counting
+ok 128 - lexer: escaped quote char literal; ignore counting
+  ---
+  duration_ms: 0.248242
+  type: 'test'
+  ...
+# Subtest: empty-err-arm and empty-if-let-err: silent discards
+ok 129 - empty-err-arm and empty-if-let-err: silent discards
+  ---
+  duration_ms: 1.167593
+  type: 'test'
+  ...
+# Subtest: thread-spawn: std::thread::spawn is refused outside tests
+ok 130 - thread-spawn: std::thread::spawn is refused outside tests
+  ---
+  duration_ms: 0.65672
+  type: 'test'
+  ...
+# Subtest: compiler-fence and global-allocator
+ok 131 - compiler-fence and global-allocator
+  ---
+  duration_ms: 7.279811
+  type: 'test'
+  ...
+# Subtest: map-index: map[&key] is advisory; slices of references are not indexing
+ok 132 - map-index: map[&key] is advisory; slices of references are not indexing
+  ---
+  duration_ms: 2.102438
+  type: 'test'
+  ...
+# Subtest: filter-map-ok and parse-unwrap-or: masked failures are advisory
+ok 133 - filter-map-ok and parse-unwrap-or: masked failures are advisory
+  ---
+  duration_ms: 5.510828
+  type: 'test'
+  ...
+# Subtest: seqcst and fetch-update: atomics advisories
+ok 134 - seqcst and fetch-update: atomics advisories
+  ---
+  duration_ms: 1.601215
+  type: 'test'
+  ...
+# Subtest: crate-lint-attr, pub-glob-reexport, prelude-mod
+ok 135 - crate-lint-attr, pub-glob-reexport, prelude-mod
+  ---
+  duration_ms: 0.720825
+  type: 'test'
+  ...
+# Subtest: pub-smart-ptr: shared mutable state and dyn in public signatures
+ok 136 - pub-smart-ptr: shared mutable state and dyn in public signatures
+  ---
+  duration_ms: 1.341887
+  type: 'test'
+  ...
+# Subtest: struct-bounds: bounds belong on impls
+ok 137 - struct-bounds: bounds belong on impls
+  ---
+  duration_ms: 5.400704
+  type: 'test'
+  ...
+# Subtest: ops-impl: operators must not overflow silently
+ok 138 - ops-impl: operators must not overflow silently
+  ---
+  duration_ms: 0.602915
+  type: 'test'
+  ...
+# Subtest: type-alias-primitive, get-prefix, mutex-unit
+ok 139 - type-alias-primitive, get-prefix, mutex-unit
+  ---
+  duration_ms: 0.833617
+  type: 'test'
+  ...
+# Subtest: doc-arg-sections: no \# Arguments / \# Returns
+ok 140 - doc-arg-sections: no \# Arguments / \# Returns
+  ---
+  duration_ms: 0.290995
+  type: 'test'
+  ...
+# Subtest: detached-spawn: std threads and statement-level spawns
+ok 141 - detached-spawn: std threads and statement-level spawns
+  ---
+  duration_ms: 1.581458
+  type: 'test'
+  ...
+# Subtest: no new-rule hits on an idiomatic ledger module
+ok 142 - no new-rule hits on an idiomatic ledger module
+  ---
+  duration_ms: 0.847401
+  type: 'test'
+  ...
+# Subtest: commented-out code heuristic ignores prose
+ok 143 - commented-out code heuristic ignores prose
+  ---
+  duration_ms: 0.639361
+  type: 'test'
+  ...
+# Subtest: parses the Cargo manifest shapes temper reads
+ok 144 - parses the Cargo manifest shapes temper reads
+  ---
+  duration_ms: 3.963929
+  type: 'test'
+  ...
+# Subtest: CRLF, escapes and invalid input
+ok 145 - CRLF, escapes and invalid input
+  ---
+  duration_ms: 153.227285
+  type: 'test'
+  ...
+# Subtest: the template and example manifests parse
+ok 146 - the template and example manifests parse
+  ---
+  duration_ms: 5.671204
+  type: 'test'
+  ...
+# Subtest: non-caret requirements (ARC-12)
+ok 147 - non-caret requirements (ARC-12)
+  ---
+  duration_ms: 0.87717
+  type: 'test'
+  ...
+# Subtest: workspace root discovery follows Cargo: self, package.workspace, nearest ancestor, exclude
+ok 148 - workspace root discovery follows Cargo: self, package.workspace, nearest ancestor, exclude
+  ---
+  duration_ms: 76.2309
+  type: 'test'
+  ...
+# Subtest: watched manifest switches carry their rule id
+ok 149 - watched manifest switches carry their rule id
+  ---
+  duration_ms: 0.750066
+  type: 'test'
+  ...
+# Subtest: major versions, path normalization, members without cargo, dependency names
+ok 150 - major versions, path normalization, members without cargo, dependency names
+  ---
+  duration_ms: 142.448718
+  type: 'test'
+  ...
+# Subtest: vendor: creates .claude/temper with the CLI, every lib file and VERSION
+ok 151 - vendor: creates .claude/temper with the CLI, every lib file and VERSION
+  ---
+  duration_ms: 129.224266
+  type: 'test'
+  ...
+# Subtest: vendor: dry run writes nothing
+ok 152 - vendor: dry run writes nothing
+  ---
+  duration_ms: 1.967337
+  type: 'test'
+  ...
+# Subtest: vendor: drift is reported, and replaced only with --force
+ok 153 - vendor: drift is reported, and replaced only with --force
+  ---
+  duration_ms: 81.154317
+  type: 'test'
+  ...
+# Subtest: vendor: CRLF line endings from a Windows checkout are not drift
+ok 154 - vendor: CRLF line endings from a Windows checkout are not drift
+  ---
+  duration_ms: 140.520974
+  type: 'test'
+  ...
+# Subtest: vendor: the copy runs standalone and reports its own VERSION
+ok 155 - vendor: the copy runs standalone and reports its own VERSION
+  ---
+  duration_ms: 189.33988
+  type: 'test'
+  ...
+# Subtest: vendor: the example workspace carries an up-to-date copy of scripts/
+ok 156 - vendor: the example workspace carries an up-to-date copy of scripts/
+  ---
+  duration_ms: 2.04001
+  type: 'test'
+  ...
+1..156
+# tests 156
+# suites 0
+# pass 155
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 19230.771432
+
+== rule registry
+
+182 rules; 182 with a section; 2757 citations checked; 1 stated count(s).
+0 failure(s)
+
+== lint and scanner claims
+254 lint and 4 scanner-key citations checked (135 Detect paragraphs + rules.md); 0 false claim(s)
+
+== rule map is current
+
+== example workspace's vendored CLI matches scripts/
+
+== release check (plugin.json, CHANGELOG heading and vendored VERSION agree)
+release-check: cannot resolve v1.2.3 (no tags fetched?); Upgrading note not checked
+release-check: versions agree: 1.3.0
+
+== doc examples (every code block in the skill)
+doc_examples: cargo 1.98.1 (797e8a9bc 2026-08-05), 165 Do and 42 Don't blocks to compile
+doc_examples: cargo fetch
+  doc-examples round 1: 165 blocks, 17s
+  dont-examples round 1: 42 blocks, 0s
+  dont-examples round 2: 34 blocks, 1s
+  doc-examples tests: 20 blocks, 13s
+
+Blocks: other 16, rust 165, rust,fragment 23, rust,ignore (expect=) 76, rust,ignore (no expect=) 31, toml 18
+Failing blocks per file:
+  SKILL.md: 0/1
+  references/api-design.md: 0/29
+  references/architecture.md: 0/31
+  references/async-concurrency.md: 0/34
+  references/errors.md: 0/29
+  references/escape-hatches.md: 0/14
+  references/modern-rust.md: 0/29
+  references/ownership.md: 0/34
+  references/patterns.md: 0/34
+  references/performance.md: 0/32
+  references/process.md: 0/11
+  references/review-rubric.md: 0/2
+  references/structured-output.md: 0/20
+  references/testing.md: 0/29
+Don't blocks without expect= (reported, not failing): 31
+  references/api-design.md: 317
+  references/architecture.md: 102, 386, 558, 712, 1082
+  references/async-concurrency.md: 478, 934, 1020
+  references/errors.md: 267, 770, 1194
+  references/modern-rust.md: 477, 506, 564
+  references/ownership.md: 179, 303, 698
+  references/performance.md: 269, 382, 843, 926
+  references/process.md: 376
+  references/structured-output.md: 13, 148, 227, 345, 398, 852
+  references/testing.md: 272, 386
+Do blocks with `#[expect]` exception requests (scanner "ask" hits; reported, not failing): 1
+  references/escape-hatches.md: 428 (line 443, 449)
+0 failing block(s) of 329 in 33s
+
+== brownfield e2e (lint baseline on a legacy fixture)
+ok   plain gate (no baseline) is red on legacy debt
+ok   baseline --check without a baseline requires zero findings
+ok   strict --findings-out carries the ratchet result (mode strict)
+ok   --findings-out outside target/ or .temper/ is refused
+ok   --findings-out through a symlinked directory is refused
+ok   baseline --init refuses unformatted code
+ok   baseline --init refuses inside Claude Code
+ok   baseline --init records the legacy findings
+ok   baseline has unwrap, indexing, missing doc, as cast (clippy and scan), the rustdoc link and the crate dir
+ok   baseline --init refuses to overwrite
+ok   gate is green on legacy debt
+     legacy: 16 finding(s) (baseline 16)
+ok   gate is red on a new unwrap and names it
+ok   baseline --check names the new clippy finding (mnemonicPrefix set)
+ok   gate ratchet is red on new indexing and names it
+ok   gate is red on a new macro invocation
+ok   gate is red on a swap within one crate
+ok   baseline --check is red on the swap
+ok   doc edits around a legacy finding stay green (interHunkContext set)
+ok   an unstaged crate move stays green
+ok   baseline --check passes the unstaged move
+ok   a crate rename stays green and says so
+ok   a crate renamed with its directory stays green
+ok   baseline --check follows the moved crate
+ok   gate is green after fixing a legacy finding and reports it
+ok   baseline status says it is not tight
+ok   baseline --tighten refuses on another host
+ok   baseline --tighten lowers the count
+ok   baseline --tighten is idempotent
+ok   baseline --check passes after tightening
+ok   gate is green on the tightened baseline
+ok   the gate flags a raised baseline
+ok   baseline --check flags a raised baseline
+ok   temper report writes json, md and html
+     15 findings, 13 MUST in all three files
+ok   report numbers match the collection
+brownfield e2e passed in 27s
+
+== all checks passed
+EXIT 0

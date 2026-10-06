@@ -37,6 +37,7 @@ An independent audit of `main` at `d87d887` (1.3.0) against the README, [`v1-rea
 | `findings.html` | The report and a filterable ledger of every finding (open it in a browser). |
 | `findings.json` | The verified and refuted findings as data. |
 | `issues.md` | Where each actionable finding is tracked: the per-area issues #57 to #70, or an existing issue. |
+| `ci.log` | The full `tests/ci.sh` output at `d87d887`, which the report cites. |
 | `evidence-github.md` | The snapshot of GitHub state (issues, PRs, CI runs, rulesets) that the audit worked from. |
 
 ## Decisions

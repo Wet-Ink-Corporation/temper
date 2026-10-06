@@ -43,12 +43,18 @@ Newest first (number, title, created -> merged):
 Range 2026-10-02 .. 2026-10-06; 31 PRs in 5 days. PR #51 and #52 are post-1.3.0 and doc-only, on main unreleased. (No open PRs.)
 
 ## 4. Workflow runs (workflows: CI, Release, Runner probe, Dependabot Updates)
-CI on main (latest first): run 73 success 10-06 (d87d887, PR#53 merge); 71 success 10-06 (#52); **69 FAILURE 10-05 (43d70d5, PR#51 merge): both jobs (Unit tests (Windows), Checks) were "cancelled" after ~15 min (20:09->20:24) = timeout/hang, not a test failure; https://github.com/Wet-Ink-Corporation/temper/actions/runs/37367980815**; 67 success 10-05 (#50 release merge); 65,63,61,59,57,51 success; 56,55,50 cancelled (back-to-back merges, concurrency cancel).
-CI on PRs: all success (runs 52-72); run 70 (PR#52) needed attempt 2 (completed success after ~53 min wall clock 20:43->21:36), suggesting a flaky/slow job.
+CI on main (latest first): run 73 success 10-06 (d87d887, PR#53 merge); 71 success 10-06 (#52); **69 FAILURE 10-05 (43d70d5, PR#51 merge): both jobs (Unit tests (Windows), Checks) were "cancelled" after ~15 min (20:09->20:24) (snapshot reading: timeout/hang, not a test failure); https://github.com/Wet-Ink-Corporation/temper/actions/runs/37367980815**. *Correction from verification: that reading was refuted (report §10). The jobs stopped about 15 minutes in, well before the 60 and 30 minute timeouts, and `ci.yml` cancels in-progress runs on the same ref, so the run was most likely cancelled by a later push to main, not hung.*; 67 success 10-05 (#50 release merge); 65,63,61,59,57,51 success; 56,55,50 cancelled (back-to-back merges, concurrency cancel).
+CI on PRs: all success (runs 52-72); run 70 (PR#52) needed attempt 2 (completed success; the ~53 min wall clock 20:43->21:36 spans both attempts). *Correction: no flaky or slow job was established; the diagnosis was refuted (report §10).*
 Main CI run 69's failing commit (PR#51) was followed by green run 71, so main is green at HEAD d87d887 (run 73 success).
 Release workflow: run 1, workflow_dispatch on release/1.3.0, success 2026-10-05T04:23-04:25 (https://github.com/Wet-Ink-Corporation/temper/actions/runs/37263274680). Only one Release run exists (v1.0.0-v1.2.3 tags/releases predate the workflow; created 2026-10-01/02).
 Runner probe: run 1 FAILED 2026-10-02 (main; found macOS path and Windows example-store bugs, fixed PR #26); run 2 success 2026-10-02 on branch claude/temper-repo-eval-v1-1o7fj0 (windows-latest and windows-11-arm fixed). Never run on main after the fixes. Runners tested incl. arm64 (windows-11-arm).
 Required checks (per AGENTS.md): `Checks` and `Unit tests (Windows)`; CI job names confirmed in run 69 jobs. Ruleset itself not readable via available tools.
+
+*Later verification (2026-10-06, same audit).* The GitHub MCP tools used for this snapshot could not read rulesets. During finding verification, the verifier and then the auditor read them over the REST API with `gh api`. Those reads are the source of the headline required-checks finding:
+- `gh api repos/Wet-Ink-Corporation/temper/rulesets/24368200` ("Protect main", created and updated 2026-10-02T14:03:55Z): rules `deletion`, `non_fast_forward`, `pull_request` (0 approvals), with the admin role able to bypass at any time. No `required_status_checks` rule.
+- `gh api repos/Wet-Ink-Corporation/temper/rules/branches/main`: `deletion`, `non_fast_forward`, `pull_request` only. `gh api repos/Wet-Ink-Corporation/temper/branches/main/protection`: 404 "Branch not protected".
+- `gh api repos/Wet-Ink-Corporation/weigh-in/rulesets/24377415` (updated 2026-10-02T17:06:31Z): `required_status_checks` are `check (macos-latest)`, `check (ubuntu-latest)`, `check (windows-latest)`, `plugin` and `deny`. `gate` is not among them.
+- `gh api repos/Wet-Ink-Corporation/redkiln-rs/rulesets/24430583`: targets `~DEFAULT_BRANCH` only, with no required checks. `gh api repos/Wet-Ink-Corporation/redkiln-rs/rules/branches/build/phase-0-to-1`: `[]`.
 
 ## 5. Pilot repos
 ### weigh-in (https://github.com/Wet-Ink-Corporation/weigh-in)
