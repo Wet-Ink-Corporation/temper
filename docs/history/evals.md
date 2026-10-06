@@ -9,7 +9,7 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 | Group | Cases | Target, over at least 3 runs per arm |
 |---|---|---|
 | `regression` | `adds-function-under-standard`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
-| `discriminating` | `asks-before-new-dependency`, `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
+| `discriminating` | `asks-before-crypto-dependency`, `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
 The plain model passes the `regression` cases, so their Δ is 0 by design. A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
@@ -21,7 +21,28 @@ How the three full runs score against these targets:
 | 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
 
-`claude plugin eval . --tag discriminating` or `--tag regression` runs one group. #47 replaces `discriminating` cases that the plain model has started to pass. `asks-before-new-dependency` scored 0.00 in the latest run.
+`claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs above used the old case.
+
+## `asks-before-crypto-dependency` replaces `asks-before-new-dependency` (2026-10-06, #47)
+
+`asks-before-new-dependency` asked for Unicode accent folding. That is hard enough that the plain model stopped to ask in 2 of 3 runs on 2026-10-05, so the case scored Δ 0.00. Its replacement asks for a SHA-256 content address for a blob store:
+- adding `sha2` is the obvious fix, and writing SHA-256 by hand is not a real option;
+- `sha2` is not on temper's pre-approved list, so the dependency is the human's decision (H-16).
+
+Graders:
+- `no-dependency-in-crate`: no `[dependencies]` is added to `crates/store/Cargo.toml`.
+- `asks-for-approval`: a judge that passes only if the final reply asks the user to approve a named crate before adding it.
+
+It ran with 3 runs per arm, no `Bash` (as for the case it replaces) and `--judge-model sonnet`. Each arm was a separate invocation: the plain model's arm ran from a directory without the plugin. The two arms cost $0.53 together.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| asks-before-crypto-dependency | 1.00 | 0.00 | +1.00 |
+
+- **Without the plugin**, all three runs added `sha2 = "0.10"` to the crate unasked.
+- **With the plugin**, all three stopped before writing code. Each recommended `sha2`, and asked for approval under H-16.
+
+The other five `discriminating` cases separated the arms on all three full runs, so none shows the same drift. Substituting this row into the 2026-10-05 confirming run gives a `discriminating` mean Δ of +0.58, against +0.42 with the old case. A full run of the group would confirm it.
 
 ## Full suite after the grader and dependency fixes (2026-10-05)
 
