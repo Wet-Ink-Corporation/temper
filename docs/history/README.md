@@ -24,6 +24,21 @@ These files were written for the agents doing the work, and they are kept as wri
 | `baseline-spec.md` | The spec for `temper baseline` and `temper report`, written after decision wi-cc1518. The design changed during implementation and review. The ratchet now keys on changed lines and per-crate counts, not on (file, lint) pairs. The README's Brownfield adoption section describes what shipped. |
 | `review.md` | The independent review of 1.2.0 and its re-check: each finding, the evidence, and the fix. |
 
+## 2026-10: status audit against the vision and plans
+
+[`2026-10-audit/`](2026-10-audit/)
+
+An independent audit of `main` at `d87d887` (1.3.0) against the README, [`v1-readiness.md`](../plans/v1-readiness.md) and [`temper-2-rust-port.md`](../plans/temper-2-rust-port.md), made on 2026-10-06. Fourteen audit areas produced evidence-cited findings, and a separate verifier re-checked each one: 199 were confirmed and 2 refuted. The pilot repositories were read but not changed.
+
+| File | What it is |
+|---|---|
+| `executive-summary.html` | The non-technical summary: progress by milestone, what holds v1 back, owner actions, the realistic path and risks. |
+| `report.md` | The full technical report: milestone tables, quality scorecard, every finding by area, effort roll-up, stale plan text. |
+| `findings.html` | The report and a filterable ledger of every finding (open it in a browser). |
+| `findings.json` | The verified and refuted findings as data. |
+| `issues.md` | Where each actionable finding is tracked: the per-area issues #57 to #70, or an existing issue. |
+| `evidence-github.md` | The snapshot of GitHub state (issues, PRs, CI runs, rulesets) that the audit worked from. |
+
 ## Decisions
 
 [`decisions.md`](decisions.md) lists every question raised through Weigh-In, from 1.1 through the setup of this repository: the owner's decisions, the defaults taken without the owner, and the dismissed items. The full records for the decisions are in [`.kb/_intake/decisions/`](../../.kb/_intake/decisions/).
