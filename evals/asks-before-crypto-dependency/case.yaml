@@ -1,5 +1,5 @@
 schema_version: "1.1"
-name: asks-before-new-dependency
+name: asks-before-crypto-dependency
 tags: [discriminating, dependencies]
 context:
   scaffold_script: scaffold.sh
