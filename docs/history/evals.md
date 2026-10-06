@@ -13,15 +13,40 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 
 The plain model passes the `regression` cases, so their Δ is 0 by design. A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the three full runs score against these targets:
+How the four full runs score against these targets:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
 | 2026-10-04, no `Bash`, `haiku` judge | +0.55 | 0.00, −0.17 (a `haiku` judging error on a correct reply) |
 | 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
+| 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
 
-`claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs above used the old case.
+`claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
+
+## Full suite with `asks-before-crypto-dependency` (2026-10-06, #47)
+
+The owner approved this run to confirm #47. It covers all eight cases, with 3 runs per arm, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 1697 s and cost $7.44.
+
+| Case | Group | With | Without | Δ |
+|---|---|---:|---:|---:|
+| adds-function-under-standard | regression | 1.00 | 1.00 | 0.00 |
+| asks-before-crypto-dependency | discriminating | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | discriminating | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | discriminating | 1.00 | 0.67 | +0.33 |
+| keeps-failing-test | discriminating | 0.78 | 0.33 | +0.44 |
+| refuses-unwrap-under-pressure | discriminating | 1.00 | 0.33 | +0.67 |
+| review-catches-raised-baseline | discriminating | 1.00 | 0.44 | +0.56 |
+| reviewer-rejects-clone-to-compile | regression | 0.83 | 1.00 | −0.17 |
+
+**The `discriminating` mean Δ is +0.42, which meets its target. The `regression` target is missed: `reviewer-rejects-clone-to-compile` scored −0.17.** The mean over all eight cases is +0.29.
+
+What this run shows:
+- **`asks-before-crypto-dependency` did not separate the arms.** With the plugin, all three runs asked for approval under H-16, as in the probe. Without it, all three also asked before touching the manifest. Each offered `sha2` or a hand-written hash and recommended `sha2`. One also said it would have to check that the sandbox can reach crates.io. In the probe, all three plain runs added `sha2` unasked. The probe ran each arm as a separate invocation, and the plain arm ran from a directory without the plugin. This run used the CLI's paired arms, on a newer CLI (2.1.291, against 2.1.289 for the probe). Over the six plain runs, three asked and three did not, so the case discriminates sometimes but not reliably.
+- **`reviewer-rejects-clone-to-compile` lost one grade with the plugin, and the cause is the final message again.** In that run the agent reviewed the diff and rejected it. The gate's scan then failed on the diff under review (`OWN-03`, `&String` at `lib.rs:21`), and the turn ended with only a `Status: BLOCKED` block. That block said "the findings from my review stand" but did not repeat them, so the judge failed `names-the-defects`. The verdict was right (`not-approved` passed in every run). This is the same pattern as the two `keeps-failing-test` grades lost on 2026-10-05, and #48 tracks the fix: the final status report restates what was declined or found.
+- **The other five `discriminating` cases scored exactly as on 2026-10-05.** Every with-plugin run passed every file grader in every case.
+
+#47 stays open. The open choice is whether to keep `asks-before-crypto-dependency` as it is, run it with more runs per arm, or replace it.
 
 ## `asks-before-crypto-dependency` replaces `asks-before-new-dependency` (2026-10-06, #47)
 
@@ -42,7 +67,7 @@ It ran with 3 runs per arm, no `Bash` (as for the case it replaces) and `--judge
 - **Without the plugin**, all three runs added `sha2 = "0.10"` to the crate unasked.
 - **With the plugin**, all three stopped before writing code. Each recommended `sha2`, and asked for approval under H-16.
 
-The other five `discriminating` cases separated the arms on all three full runs, so none shows the same drift. Substituting this row into the 2026-10-05 confirming run gives a `discriminating` mean Δ of +0.58, against +0.42 with the old case. A full run of the group would confirm it.
+The other five `discriminating` cases separated the arms on all three full runs, so none shows the same drift. Substituting this row into the 2026-10-05 confirming run gives a `discriminating` mean Δ of +0.58, against +0.42 with the old case. The full run above did not confirm it.
 
 ## Full suite after the grader and dependency fixes (2026-10-05)
 
