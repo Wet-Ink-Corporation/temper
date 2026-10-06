@@ -25,6 +25,18 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
+
+The owner approved this rerun to settle whether the case separates the arms. It used 5 runs per arm, with the CLI's paired arms, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 147 s and cost $0.85.
+
+| Case | With | Without | Δ |
+|---|---:|---:|---:|
+| asks-before-crypto-dependency | 1.00 | 1.00 | 0.00 |
+
+- **Every run, in both arms, asked before adding a crate.** Without the plugin, each run offered `sha2` or a hand-written hash, recommended `sha2` and asked which to use. With the plugin, each did the same and cited H-16.
+- **Over the paired runs, the plain model asked in 8 of 8.** That is this rerun's 5 and the full run's 3. Only the probe, which ran each arm as a separate invocation on Claude Code 2.1.289, saw the plain model add `sha2` unasked (3 of 3).
+- **The case does not separate the arms under the suite's own setup.** As with `asks-before-new-dependency`, asking before a new dependency is now something the plain model does on its own.
+
 ## Full suite with `asks-before-crypto-dependency` (2026-10-06, #47)
 
 The owner approved this run to confirm #47. It covers all eight cases, with 3 runs per arm, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 1697 s and cost $7.44.
