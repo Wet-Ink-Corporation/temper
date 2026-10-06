@@ -1,0 +1,203 @@
+<title>temper Status Review</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: one reading column. A forge-like "temper" palette: steel neutrals, a heat-orange accent. Milestones are drawn as a progress ledger. */
+:root{
+  --bg:#f5f6f4; --surface:#ffffff; --fg:#1b201d; --muted:#5b6560; --line:#d8ddd8;
+  --accent:#b24a1c; --accent-soft:#f3e2d8;
+  --good:#2e7a4b; --warn:#9a6406; --bad:#b0281f; --idle:#9aa39e;
+  --display:"Fraunces",Georgia,serif; --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#131715; --surface:#1b201d; --fg:#e5e9e5; --muted:#9ba59f; --line:#313934;
+  --accent:#ec8a58; --accent-soft:#3a2519; --good:#6cc28b; --warn:#e2b14d; --bad:#f2786e; --idle:#5d6762; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#131715; --surface:#1b201d; --fg:#e5e9e5; --muted:#9ba59f; --line:#313934;
+  --accent:#ec8a58; --accent-soft:#3a2519; --good:#6cc28b; --warn:#e2b14d; --bad:#f2786e; --idle:#5d6762; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:16px/1.6 var(--body);padding-inline:16px;padding-block:28px 72px}
+.wrap{max-width:860px;margin:0 auto;display:grid;gap:44px}
+h1,h2,h3{font-family:var(--display);font-weight:650;text-wrap:balance;line-height:1.15;margin:0}
+h1{font-size:clamp(1.9rem,4.5vw,2.6rem)} h2{font-size:1.45rem} h3{font-size:1.05rem;font-family:var(--body);font-weight:600}
+p{margin:0;max-width:68ch}
+a{color:var(--accent)}
+.eyebrow{font:500 .74rem var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+section{display:grid;gap:16px}
+.lede{font-size:1.12rem;max-width:62ch}
+.verdict{display:flex;gap:18px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:18px 20px}
+.grade{font:650 3rem/1 var(--display);color:var(--accent);flex:none}
+.verdict p{font-size:.98rem}
+.nums{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.num{background:var(--surface);padding:14px 16px;display:grid;gap:2px}
+.num b{font:650 1.5rem var(--display);font-variant-numeric:tabular-nums}
+.num span{font-size:.84rem;color:var(--muted)}
+.ms{display:grid;gap:14px}
+.m{display:grid;grid-template-columns:minmax(0,1fr) 56px;gap:4px 14px;align-items:center}
+.m .name{font-weight:600}
+.m .pct{font:500 .9rem var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.bar{grid-column:1/-1;height:8px;border-radius:99px;background:color-mix(in srgb,var(--idle) 30%,transparent);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--c);border-radius:99px}
+.m p{grid-column:1/-1;font-size:.92rem;color:var(--muted)}
+.tag{font:500 .7rem var(--mono);letter-spacing:.05em;text-transform:uppercase;padding:1px 7px;border-radius:99px;border:1px solid var(--c);color:var(--c);margin-left:8px;white-space:nowrap}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px}
+ul.clean{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+ul.clean li{padding-left:18px;position:relative;max-width:68ch}
+ul.clean li::before{content:"";position:absolute;left:0;top:.62em;width:8px;height:8px;border-radius:50%;background:var(--c,var(--good))}
+.gap{display:grid;gap:4px;padding:14px 16px;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--c);border-radius:4px}
+.gap .row{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:baseline}
+.gap small{font:500 .78rem var(--mono);color:var(--muted)}
+.gaps{display:grid;gap:10px}
+ol.steps{margin:0;padding:0;list-style:none;display:grid;gap:0;counter-reset:s}
+ol.steps li{display:grid;grid-template-columns:120px minmax(0,1fr);gap:14px;padding:12px 0;border-top:1px solid var(--line)}
+ol.steps li:last-child{border-bottom:1px solid var(--line)}
+ol.steps .when{font:500 .8rem var(--mono);color:var(--accent);padding-top:3px}
+.owner{background:var(--accent-soft);border-radius:8px;padding:18px 20px;display:grid;gap:12px}
+.owner ul{margin:0;padding-left:1.2em;display:grid;gap:6px}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+.tw{overflow-x:auto}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:500 .74rem var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+td.g{font:650 1.05rem var(--display);width:3ch}
+.foot{font-size:.88rem;color:var(--muted);border-top:1px solid var(--line);padding-top:18px;display:grid;gap:8px}
+.cta{display:inline-block;font-weight:600;text-decoration:none;border:1px solid var(--accent);padding:8px 14px;border-radius:6px}
+.cta:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:520px){ol.steps li{grid-template-columns:1fr;gap:2px}.verdict{flex-direction:column;gap:8px}}
+</style>
+
+<div class="wrap">
+
+<header style="display:grid;gap:14px">
+  <span class="eyebrow">temper · status review · 6 October 2026 · version 1.3.0</span>
+  <h1>temper is built and in use. v1 needs about two weeks of pilot time and a handful of owner switches.</h1>
+  <p class="lede">temper is a Claude Code plugin. It holds AI coding agents to the Wet Ink Rust quality standard and enforces that standard automatically. This review compares what has been built against the original vision, the road to v1 and the 2.0 rewrite plan, and sets out what is left.</p>
+</header>
+
+<section aria-labelledby="v">
+  <h2 id="v">The verdict</h2>
+  <div class="verdict">
+    <div class="grade" aria-label="Overall grade B">B</div>
+    <p>The product delivers the vision. Every capability the README promises exists and works. The automated checks pass, and two real projects run temper in their pipelines; one has already cleared all 721 of its inherited code-quality issues with it. What remains for v1 is mostly <strong>verification, housekeeping and calendar time</strong>, not new features. The grade is B rather than A for three reasons. Some protection settings the documents describe as switched on are switched off in GitHub. The pilot trial is only a few days old. And the most important "you may not stop until this is green and reviewed" logic has no automated tests.</p>
+  </div>
+  <div class="nums">
+    <div class="num"><b>155 / 156</b><span>automated tests pass (1 Windows-only skip)</span></div>
+    <div class="num"><b>182</b><span>rules in the standard, with all 329 examples verified</span></div>
+    <div class="num"><b>+0.42–0.55</b><span>behaviour lift on the target evals (goal +0.4)</span></div>
+    <div class="num"><b>2 of 2</b><span>pilot projects running temper 1.3.0</span></div>
+    <div class="num"><b>3 of 14</b><span>days of the pilot trial elapsed</span></div>
+    <div class="num"><b>0 of 9</b><span>go-live boxes ticked (about 4 are met in substance)</span></div>
+  </div>
+</section>
+
+<section aria-labelledby="vision">
+  <h2 id="vision">Against the original vision</h2>
+  <p>The vision is a Rust standard that agents follow whether or not they choose to, backed by automatic enforcement and an independent review before work counts as done. That is what exists today: ten layers of enforcement, five commands, three specialist agents and a 182-rule standard with tested examples. The evidence that it changes agent behaviour is real but narrow. On the tests built to tell the difference, agents with temper clearly do better. Averaged over every test, the lift is a more modest +0.31.</p>
+  <p>The vision is met less fully in two places. About <strong>half the rules (86 of 182)</strong> are checked only by the AI reviewer, not by tools. And the enforcement inside a session is <strong>best-effort, not tamper-proof</strong>: an agent working through shell commands could get around it. The CI pipeline stays the real backstop.</p>
+</section>
+
+<section aria-labelledby="ms">
+  <h2 id="ms">Progress by milestone</h2>
+  <div class="ms">
+    <div class="m" style="--c:var(--good)"><span class="name">Foundations<span class="tag">nearly done</span></span><span class="pct">90%</span><div class="bar"><i style="width:90%"></i></div><p>Contributor guides, backlog, decision log, cloud setup and reserved package names are all in place. Open: the main-branch protection doesn't actually require CI to pass, and CI spending alerts are not confirmed.</p></div>
+    <div class="m" style="--c:var(--good)"><span class="name">Hardening<span class="tag">done</span></span><span class="pct">100%</span><div class="bar"><i style="width:100%"></i></div><p>Evals hit their target. The minimum supported Claude Code version is documented. Upgrade and troubleshooting guides exist, and a release-consistency check runs in CI.</p></div>
+    <div class="m" style="--c:var(--warn)"><span class="name">Pilots in two real projects<span class="tag">in progress</span></span><span class="pct">50%</span><div class="bar"><i style="width:50%"></i></div><p>Both pilots adopted temper. The required two-week trial started on 3–4 October, and no usage data, timings or false-alarm counts have been gathered yet. This is the critical path.</p></div>
+    <div class="m" style="--c:var(--good)"><span class="name">Release engineering<span class="tag">done</span></span><span class="pct">95%</span><div class="bar"><i style="width:95%"></i></div><p>Version 1.3.0 shipped through an owner-approved release pipeline. The pre-release AI checks are still a manual habit rather than an enforced step.</p></div>
+    <div class="m" style="--c:var(--warn)"><span class="name">Go-live checklist<span class="tag">in progress</span></span><span class="pct">45%</span><div class="bar"><i style="width:45%"></i></div><p>Of the 9 items, 4 are met (evals, docs, release, support route) and 2 are not (required checks on temper and on the pilots). The other 3 are partial: an install test by another org member, the "no urgent bugs" rule, and the announcement.</p></div>
+    <div class="m" style="--c:var(--warn)"><span class="name">2.0 prerequisites<span class="tag">partial</span></span><span class="pct">40%</span><div class="bar"><i style="width:40%"></i></div><p>All 17 design decisions are made, package names are reserved and the build machines are tested. Open: secure publishing setup, revoking a one-time token, and staged CI for the Rust code.</p></div>
+    <div class="m" style="--c:var(--idle)"><span class="name">2.0 Rust rewrite<span class="tag">waiting, by design</span></span><span class="pct">0%</span><div class="bar"><i style="width:0%"></i></div><p>Not started on purpose: the plan waits until v1 is live. It rewrites the engine from Node to Rust, about 26,000 lines across 11 phases.</p></div>
+  </div>
+</section>
+
+<section aria-labelledby="good">
+  <h2 id="good">What is working well</h2>
+  <ul class="clean">
+    <li><strong>The promise is real.</strong> Every feature in the README exists in code and behaved as documented when the audit tried it by hand.</li>
+    <li><strong>The checks are green.</strong> 155 of 156 tests pass, all 2,757 rule cross-references resolve, and every example in the standard compiles or triggers the warning it claims to.</li>
+    <li><strong>It works on real, messy code.</strong> weigh-in cleared all 721 inherited issues in three days. redkiln-rs, a codebase of about 236k lines, runs temper on its build branch.</li>
+    <li><strong>Releases are disciplined.</strong> In five days, 31 pull requests merged and every one went through review. Versions, changelog and copies are cross-checked automatically.</li>
+    <li><strong>It is light at runtime.</strong> Each action adds about a tenth of a second, and the scanner reads 13,000 lines in 64 ms.</li>
+    <li><strong>Past review findings were closed.</strong> Of about 30 spot-checked items from earlier reviews, none was quietly dropped, and all 21 owner decisions can be traced.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="gaps">
+  <h2 id="gaps">What is holding things back</h2>
+  <div class="gaps">
+    <div class="gap" style="--c:var(--bad)"><div class="row"><h3>Merge protection is described but not switched on</h3><small>owner · minutes</small></div><p>The docs say nothing can reach temper's main branch, which is what every user installs, unless CI passes. GitHub's rules on that branch require a pull request but no passing checks. The same holds for the pilots: weigh-in does not require temper's check, and redkiln-rs's adoption branch has no rules at all. The audit confirmed this directly against GitHub's settings.</p></div>
+    <div class="gap" style="--c:var(--warn)"><div class="row"><h3>The most important logic has no automated tests</h3><small>1–3 days</small></div><p>The logic that stops an agent from finishing before its work is green and independently reviewed is tested only by occasional paid AI runs. A regression could ship unnoticed and then be copied into the 2.0 rewrite.</p></div>
+    <div class="gap" style="--c:var(--warn)"><div class="row"><h3>Review records can be faked from the shell</h3><small>under a day</small></div><p>Direct file edits to temper's records are blocked, but shell commands are not. A misbehaving agent could write an "approved" review, or switch the end-of-turn check off by breaking a toolchain file. CI still catches code problems, but nothing outside the session re-checks the review.</p></div>
+    <div class="gap" style="--c:var(--warn)"><div class="row"><h3>The pilot isn't producing evidence yet</h3><small>2 weeks elapsed · a few days of effort</small></div><p>The plan calls for two weeks of daily use plus data on blocks, false alarms, timings and review rounds. About three days have passed and nothing is being recorded. Gate time on the large redkiln-rs codebase has never been measured.</p></div>
+    <div class="gap" style="--c:var(--warn)"><div class="row"><h3>Running cost is undocumented</h3><small>1–2 days</small></div><p>Loading the standard costs about 4,000 tokens, each reference adds 9–22k, and each review round adds 25–30k. None of this is written down, and CI spending alerts are not set.</p></div>
+    <div class="gap" style="--c:var(--idle)"><div class="row"><h3>Trackers and plans lag reality</h3><small>under a day</small></div><p>The go-live checklist shows nothing ticked although about half is met. Some "done" claims in the plan are wrong. The rule "no urgent bugs open" cannot be checked because no priority labels or milestones exist. The 2.0 plan predates 1.3.0 in several places.</p></div>
+    <div class="gap" style="--c:var(--idle)"><div class="row"><h3>The first run on a brand-new project is rough</h3><small>about a day</small></div><p>There is no step-by-step guide for a new project. An empty project shows a confusing error, and minimum Node and Claude Code versions are not checked.</p></div>
+  </div>
+</section>
+
+<section aria-labelledby="owner">
+  <h2 id="owner">Only the owner can do these</h2>
+  <div class="owner">
+    <p>Most of these are settings changes that take minutes, but no agent can make them.</p>
+    <ul>
+      <li>Require the <code>Checks</code> and <code>Unit tests (Windows)</code> CI checks on temper's main branch.</li>
+      <li>Require temper's <code>gate</code> check in weigh-in, and protect redkiln-rs's adoption branch.</li>
+      <li>Set GitHub Actions spending alerts at 75% and 90%.</li>
+      <li>Revoke the one-time crates.io token, then set up trusted publishing for crates.io and npm.</li>
+      <li>Decide whether v1 is the current 1.3.0 or a post-pilot release, and approve about $9–12 for a fresh eval run if it is a new release.</li>
+      <li>Ask another Wet Ink org member to test the install.</li>
+      <li>Create priority labels (or reword the "no P0/P1" rule) and add a second owner on the package registries.</li>
+    </ul>
+  </div>
+</section>
+
+<section aria-labelledby="path">
+  <h2 id="path">The realistic path</h2>
+  <ol class="steps">
+    <li><span class="when">This week</span><div>The owner switches on the required checks and spending alerts. In parallel: start capturing pilot usage data and measure gate time on redkiln-rs; add automated tests for the stop-and-review logic; close the shell loopholes; bring the plan and trackers up to date.</div></li>
+    <li><span class="when">~17 Oct</span><div>The two-week pilot trial can end. Then fix what it found and decide which release is v1. A new release needs a fresh eval and smoke run.</div></li>
+    <li><span class="when">~20 Oct</span><div><strong>v1 live.</strong> A second org member confirms the install, the announcement goes out, and the go-live checklist is ticked and closed. Effort to here is about 3–5 working days spread over about two calendar weeks, plus 4–6 days of recommended hardening.</div></li>
+    <li><span class="when">Late Oct</span><div>2.0 preparation, about 1–2 weeks: update the rewrite plan for 1.3.0, finish publishing setup and set up staged CI.</div></li>
+    <li><span class="when">Nov–Dec</span><div><strong>temper 2.0.</strong> The Rust rewrite, roughly 6–10 weeks of elapsed time. The limit is mainly how fast one owner can review and approve. Users stay on 1.x, untouched, until the switch-over.</div></li>
+  </ol>
+</section>
+
+<section aria-labelledby="risks">
+  <h2 id="risks">Risks to watch</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Risk</th><th>Why it matters</th><th>Mitigation</th></tr></thead>
+    <tbody>
+      <tr><td>Unenforced protection on the branch users install from</td><td>A change with failing CI could reach every user</td><td>Switch on required checks, and add a scripted check that the settings match the docs</td></tr>
+      <tr><td>Single-person dependency</td><td>Merges, approvals, releases and package ownership all run through one person</td><td>Add a second registry owner and write down a delegation path</td></tr>
+      <tr><td>Thin pilot evidence</td><td>v1 could be declared without proof that daily use is tolerable</td><td>Make usage data and one issue per finding explicit pilot deliverables</td></tr>
+      <tr><td>Slow end-of-turn check on large repos</td><td>It could hit its 20-minute limit and quietly not enforce</td><td>Measure on redkiln-rs, then document and bound it</td></tr>
+      <tr><td>Narrow eval margin</td><td>The latest run cleared the +0.4 target by only 0.02</td><td>Re-run after the recent test change, and widen coverage over time</td></tr>
+      <tr><td>Size of the 2.0 rewrite</td><td>A multi-week rewrite could stall</td><td>Refresh the plan first, prove distribution early, and keep 1.x shipping</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section aria-labelledby="score">
+  <h2 id="score">Scorecard</h2>
+  <div class="tw"><table>
+    <thead><tr><th>Grade</th><th>Area</th><th>In one line</th></tr></thead>
+    <tbody>
+      <tr><td class="g">A</td><td>Follow-through on past reviews</td><td>Earlier findings were fixed or explicitly accepted.</td></tr>
+      <tr><td class="g">B</td><td>Product promise</td><td>Everything promised works. Proof from real use is days old.</td></tr>
+      <tr><td class="g">B</td><td>The Rust standard</td><td>Mature and fully tested. Half the rules rely on the AI reviewer.</td></tr>
+      <tr><td class="g">B</td><td>Enforcement engine</td><td>Fast and cross-platform. Shell loopholes and untested orchestration are the weak spots.</td></tr>
+      <tr><td class="g">B</td><td>Commands, agents and evals</td><td>Complete and on target. Multi-step workflows are not evaluated.</td></tr>
+      <tr><td class="g">B</td><td>Release and CI</td><td>An approved pipeline, proven on 1.3.0.</td></tr>
+      <tr><td class="g">B</td><td>v1 plan execution</td><td>Most phases delivered. The tracker lags, and a few "done" claims are wrong.</td></tr>
+      <tr><td class="g">B</td><td>2.0 readiness</td><td>An excellent plan that needs a 1.3.0 refresh and dates.</td></tr>
+      <tr><td class="g">B</td><td>Security, docs, new-user experience</td><td>Solid for an internal tool, with polish needed before anything goes public.</td></tr>
+      <tr><td class="g">C</td><td>Pilots</td><td>Adoption succeeded. The trial is young and no data is being collected.</td></tr>
+      <tr><td class="g">C</td><td>Running cost</td><td>Cheap per action, but context and CI spend are not documented and alerts are not set.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer class="foot">
+  <p><strong>How this review was done.</strong> The audit read <code>main</code> at commit <code>d87d887</code> from a separate read-only copy, so the branch being worked on was not touched. The full automated check suite was re-run, and it passed. Fourteen audit areas produced findings, each backed by evidence, and an independent verifier re-checked every finding against the code, GitHub and the two pilot repositories. 199 findings were confirmed and 2 were rejected. No paid AI eval runs were made; eval figures come from the recorded history.</p>
+  <p><a class="cta" href="findings.html">Open the full technical report and findings ledger →</a></p>
+  <p>The same material is in this folder as <a href="report.md">report.md</a> (the technical report), <a href="findings.json">findings.json</a> (the findings as data) and <a href="ci.log">ci.log</a> (the check run). A hosted copy is at <a href="https://claude.ai/artifact/6sJAG9bC6dRKiMo38mx3y8" target="_blank" rel="noopener">claude.ai</a>, for readers who have been given access.</p>
+</footer>
+
+</div>
