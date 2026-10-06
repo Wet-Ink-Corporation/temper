@@ -4,16 +4,16 @@ The behavioural evals in [`evals/`](../../evals/) run each case with the plugin 
 
 ## Targets
 
-Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8):
+Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8). On 2026-10-06 the owner moved `asks-before-crypto-dependency` to `regression` (#47):
 
 | Group | Cases | Target, over at least 3 runs per arm |
 |---|---|---|
-| `regression` | `adds-function-under-standard`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
-| `discriminating` | `asks-before-crypto-dependency`, `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
+| `regression` | `adds-function-under-standard`, `asks-before-crypto-dependency`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
+| `discriminating` | `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
-The plain model passes the `regression` cases, so their Δ is 0 by design. A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
+The plain model passes the `regression` cases, so their Δ is 0 by design. `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the four full runs score against these targets:
+How the four full runs score against the groups as they stood at each run, plus the latest run under the current groups:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -21,6 +21,7 @@ How the four full runs score against these targets:
 | 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
 | 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
+| 2026-10-06, the same run under the current groups | +0.50 | 0.00, 0.00, −0.17 (as above) |
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
