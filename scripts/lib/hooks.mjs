@@ -374,8 +374,14 @@ export function stateDirWrite(proj, cmd, cwd = proj.root) {
   const slash = (s) => String(s).replace(/\\/g, '/');
   const absState = fold(slash(path.resolve(proj.stateDir)));
   const start = path.resolve(cwd);
-  const isState = (text, value, base) => {
-    const v = /^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(slash(text));
+  // shell.mjs keeps a backslash before a word character as a separator when it takes the
+  // command for PowerShell, but a bash function can carry a cmdlet-shaped name and bash then
+  // drops it (`copy() { cat; }; ... | copy > .git/tem\per/...`). Deny if either reading is the state dir.
+  const bashReading = (s) => (s == null ? s : String(s).replace(/\\(?=[\w-])/g, ''));
+  const isState = (text, value, base) => isStateAs(text, value, base)
+    || (/\\[\w-]/.test(`${text}${value ?? ''}`) && isStateAs(bashReading(text), bashReading(value), base));
+  const isStateAs = (text, value, base) => {
+    const v =/^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(slash(text));
     if (v && !OUTSIDE_VARS.test(v[1])) return true;
     let p = slash(msysPath(value ?? text));
     if (!/^(?:\/|[a-z]:\/|\$|~)/i.test(p)) p = `${slash(base)}/${p}`;

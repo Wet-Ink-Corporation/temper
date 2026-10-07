@@ -727,3 +727,36 @@ test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; readi
     assert.equal(decision(bash(cmd)), 'none', cmd);
   }
 });
+
+// ---- Greptile findings on #82, through the real preBash
+
+test('Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed', () => {
+  for (const cmd of [
+    "echo '{}' > .git/tem\\per/verdicts/a.json",
+    'c\\p /tmp/v.json .git/temper/gate/a.json',
+    `python3 -c "m='w'; open('.git/temper/verdicts/a.json', m).write('{}')"`,
+    `python3 -c "mode = 'a'; open('.git/temper/telemetry.jsonl', mode=mode)"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  // A bash function named like a PowerShell command does not make bash keep the backslash.
+  for (const cmd of [
+    "copy() { cat; }; echo '{}' | copy > .git/tem\\per/verdicts/v.json",
+    "'[a]::b'() { echo '{}'; }; [a]::b > .git/tem\\per/verdicts/v.json",
+    "Set-Content() { cat; }; echo '{}' | Set-Content > .git/tem\\per/gate/v.json",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'cat .git/tem\\per/verdicts/a.json',
+    "Set-Content -Path target\\temper-report.txt -Value x",
+    `python3 -c "m='r'; print(open('.git/temper/verdicts/a.json', m).read())"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+  }
+});

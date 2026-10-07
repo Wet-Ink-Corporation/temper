@@ -177,3 +177,47 @@ test('shell: pathspecPattern spots wildcards and magic in git checkout/restore p
     assert.equal(pathspecPattern({ raw }), true, raw);
   }
 });
+
+test('shell: bash drops a backslash before any character outside quotes, in arguments and in the command name', () => {
+  assert.deepEqual(targets('echo {} > .git/tem\\per/verdicts/a.json'), [['redirect', at('.git', 'temper', 'verdicts', 'a.json')]]);
+  assert.deepEqual(targets('c\\p x k\\1'), [['cp', at('k1')]]);
+  assert.deepEqual(targets('\\cp x k1'), [['cp', at('k1')]]);
+  assert.equal(parseCommands('g\\it status', { cwd: root })[0].name, 'git');
+  // Inside double quotes a backslash before a letter stays, as bash keeps it.
+  assert.equal(writeTargets('echo x > "a\\b"', { cwd: root })[0].text, 'a\\b');
+  // `<<\EOF` is a quoted delimiter: the body ends at EOF and is not expanded.
+  assert.deepEqual(targets('cat <<\\EOF\necho x > k9\nEOF\ncp a k8'), [['cp', at('k8')]]);
+  assert.equal(parseCommands('cat <<\\EOF\n$x\nEOF', { cwd: root })[0].stdin.literal, '$x\n');
+});
+
+test('shell: a PowerShell command keeps its backslashes as path separators, at the top level and inside pwsh -Command', () => {
+  for (const cmd of [
+    'Copy-Item v.json -Destination .git\\temper\\a.json',
+    'pwsh -Command "Copy-Item v.json -Destination .git\\temper\\a.json"',
+    "powershell -Command 'Set-Content -Path .git\\temper\\a.json -Value x'",
+    "'{}' | Out-File .git\\temper\\a.json",
+  ]) {
+    assert.deepEqual(writeTargets(cmd, { cwd: root }).map((t) => t.text), ['.git\\temper\\a.json'], cmd);
+  }
+});
+
+test('shell: an interpreter write whose mode is a variable assigned a literal counts', () => {
+  assert.deepEqual(codeWriteTargets("m='w'; open('f1', m).write('{}')"), ['f1']);
+  assert.deepEqual(codeWriteTargets("mode = 'a'\nopen('f2', mode=mode)"), ['f2']);
+  assert.deepEqual(codeWriteTargets("m='r'; open('f3', m).read()"), []);
+  assert.deepEqual(codeWriteTargets('open(path, m)'), []);
+});
+
+test('shell: curl and wget output files attached to a short-option cluster are writes; other clustered values are not', () => {
+  assert.deepEqual(targets('curl -sSLoc2 u'), [['curl', at('c2')]]);
+  assert.deepEqual(targets('curl -sSLo.claude/settings.json u'), [['curl', at('.claude', 'settings.json')]]);
+  assert.deepEqual(targets('wget -qOw2 u'), [['wget', at('w2')]]);
+  assert.deepEqual(targets('curl -sSLo c3 u && curl -o c4 u && curl -oc5 u && curl --output=c6 u'), [['curl', at('c3')], ['curl', at('c4')], ['curl', at('c5')], ['curl', at('c6')]]);
+  assert.deepEqual(targets('curl -dfoobar u && curl -Hx-o: u && wget -Uo u'), []);
+});
+
+test('shell: -WhatIf:$false runs the PowerShell command; -WhatIf and -WhatIf:$true do not', () => {
+  assert.deepEqual(targets('Copy-Item a.rs b.rs -WhatIf:$false').map((t) => t[0]), ['copy-item']);
+  assert.deepEqual(targets('Set-Content -Path s.txt -Value x -WhatIf:$false').map((t) => t[0]), ['set-content']);
+  for (const cmd of ['Copy-Item a.rs b.rs -WhatIf', 'Copy-Item a.rs b.rs -WhatIf:$true', 'Set-Content -Path s.txt -Value x -WhatIf']) assert.deepEqual(targets(cmd), [], cmd);
+});
