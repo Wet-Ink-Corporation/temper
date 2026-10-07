@@ -103,7 +103,7 @@ A repository with no Rust code yet needs no baseline. The steps:
 
 1. `git init`, then run `/temper:setup` (or `node <temper>/scripts/temper.mjs setup`). The template `Cargo.toml` is a workspace with `members = ["crates/*"]` and no members, so the gate stays red (`fmt FAILED`) until a crate exists.
 2. Create the first crate with `cargo new --lib --vcs none crates/<name>`. Inside the workspace, `cargo new` already adds `[lints] workspace = true` to the crate's manifest; do not add it a second time, because a duplicate key breaks the manifest. Without `--vcs none`, `cargo new` can create a nested git repository in the crate directory, and temper then does not see the crate's files as changes.
-3. Add `/target` to `.gitignore` (setup adds only `.temper/`), and commit `Cargo.lock`, because CI builds with `--locked` (PROC-13).
+3. Make sure `.gitignore` ignores `/target`, and commit `Cargo.lock`, because CI builds with `--locked` (PROC-13).
 4. Expect the first gate to fail clippy on the stock crate: `missing documentation for the crate`, `missing documentation for a function` and ``this function could have a `#[must_use]` attribute``. Add a `//!` crate doc and a doc comment on each public item (H-15, API-15), and `#[must_use]` where clippy asks (API-11).
 5. Give the crate a charter (ARC-08): run `/temper:setup` again, which writes one for each crate without an `AGENTS.md`, or copy `templates/crate/AGENTS.md` and `CLAUDE.md` into the crate and fill them in.
 6. Turn on the pre-commit hook with `git config core.hooksPath .githooks`, and run `cargo machete` before the first push.
@@ -187,7 +187,7 @@ The only measured cost is the smoke test: one session that adds a function, runs
 
 ## Local data and telemetry
 
-temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree, and in `target/temper/` when the Cargo project is not inside a git repository): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Because it lives inside `.git`, none of it is committed or pushed. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
+temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree, and in `target/temper/` when the Cargo project is not inside a git repository): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Because it lives inside `.git` (or the `target/` directory, which `.gitignore` excludes), none of it is committed or pushed. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
 
 `telemetry.jsonl` is what `temper stats` summarizes. The hooks append one JSON line, about 100 to 200 bytes, for each session start, skill load, denial, question, reviewer verdict and Stop outcome. Each line holds a timestamp, the Claude Code session ID, the agent type and the event name, and for some events a repository-relative file path, rule IDs, a fingerprint or a count. The file is never pruned, and only `stats` reads it, so delete it whenever you like (`rm .git/temper/telemetry.jsonl`). There is no separate switch to turn it off; `TEMPER_DISABLE=1` turns off the hooks, and with them the telemetry.
 
