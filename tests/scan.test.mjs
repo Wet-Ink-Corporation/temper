@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { scanSource, newHits, classifyPath, isBuildScript, isRustFence, RULES } from '../scripts/lib/scan.mjs';
 import { maskRust, countTests, countIgnored } from '../scripts/lib/lexer.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const keys = (src, kind = 'prod', sev) => scanSource(src, { kind }).hits.filter((h) => !sev || h.severity === sev).map((h) => `${h.key}:${h.severity}`);
 
@@ -613,4 +615,240 @@ fn a() {}
   const hits = scanSource(src, { kind: 'prod' }).hits.filter((h) => h.key === 'commented-code');
   assert.equal(hits.length, 1);
   assert.equal(hits[0].line, 3);
+});
+
+// One rule's hits as `id:severity@line`, so a case pins the rule ID, the
+// severity and the line the scanner reports today.
+const hitsOf = (src, key, kind = 'prod', opts = {}) =>
+  scanSource(src, { kind, ...opts }).hits.filter((h) => h.key === key).map((h) => `${h.id}:${h.severity}@${h.line}`);
+
+// Per key: positive sources with the hits expected today, one or more contexts
+// each, and near-miss sources that must not fire. The severities are the `ctx`
+// entries of the RULES table in scripts/lib/scan.mjs, so a failure here is a
+// change in scanner output.
+const KEY_CASES = {
+  'leak': {
+    hit: [
+      ['prod', 'pub fn f(b: Box<u8>) -> &\'static u8 {\n    Box::leak(b)\n}', ['H-07:hard@2']],
+      ['test', 'fn f(v: Vec<u8>) { std::mem::forget(v); }', ['H-07:hard@1']],
+      ['bin', 'static mut N: u8 = 0;', ['H-07:hard@1']],
+    ],
+    miss: [
+      ['prod', 'fn f() -> &\'static str { "Box::leak and mem::forget" } // transmute'],
+      ['prod', 'fn f(x: u8) -> u8 { core::mem::transmute_copy(&x) }'],
+    ],
+  },
+  'catch-unwind': {
+    hit: [
+      ['prod', 'pub fn f() { let _r = std::panic::catch_unwind(|| 1); }', ['H-03:hard@1']],
+      ['test', 'fn f() { let _r = std::panic::catch_unwind(|| 1); }', ['H-03:soft@1']],
+    ],
+    miss: [
+      ['prod', 'fn f() -> &\'static str { "catch_unwind" } // catch_unwind'],
+      ['prod', 'fn catch_unwinding() {}'],
+    ],
+  },
+  'exit': {
+    hit: [
+      ['prod', 'pub fn f() {\n    std::process::exit(2);\n}', ['ARC-14:hard@2']],
+      ['test', 'fn f() { process::exit(0) }', ['ARC-14:soft@1']],
+      ['bin', '#[expect(clippy::exit, reason = "fatal startup error")]\nfn f() { process::exit(1) }', ['ARC-14:ask@2']],
+    ],
+    miss: [
+      ['bin', 'fn main() -> std::process::ExitCode { std::process::ExitCode::FAILURE }'],
+      ['prod', 'fn f() -> &\'static str { "process::exit(1)" } // process::exit(1)'],
+    ],
+  },
+  'let-underscore': {
+    hit: [
+      ['prod', 'fn f() {\n    let _ = std::fs::remove_file("x");\n}', ['H-10:soft@2']],
+    ],
+    miss: [
+      ['test', 'fn f() { let _ = std::fs::remove_file("x"); }'],
+      ['prod', 'fn f() { let _guard = lock(); let _x = 1; }'],
+    ],
+  },
+  'lazy-static': {
+    hit: [
+      ['prod', 'lazy_static! {\n    static ref N: u8 = 1;\n}', ['MOD-03:hard@1']],
+      ['test', 'use once_cell::sync::Lazy;', ['MOD-03:hard@1']],
+    ],
+    miss: [
+      ['prod', 'use std::sync::LazyLock;\nstatic N: LazyLock<u8> = LazyLock::new(|| 1);'],
+      ['prod', 'fn f() -> &\'static str { "lazy_static!" }'],
+    ],
+  },
+  'path-attr': {
+    hit: [
+      ['prod', '#[path = "other.rs"]\nmod other;', ['ARC-06:hard@1']],
+      ['test', '#[path = "helpers/mod.rs"] mod helpers;', ['ARC-06:hard@1']],
+    ],
+    miss: [
+      ['prod', 'mod other;\n#[doc = "path"]\npub fn f() {}'],
+      ['prod', '// #[path = "other.rs"]\nmod other;'],
+    ],
+  },
+  'async-trait': {
+    hit: [
+      ['prod', '#[async_trait]\npub trait Store { async fn get(&self) -> u8; }', ['MOD-04:soft@1']],
+      ['test', '#[async_trait::async_trait]\ntrait Store { async fn get(&self) -> u8; }', ['MOD-04:soft@1']],
+    ],
+    miss: [
+      ['prod', 'pub trait Store { async fn get(&self) -> u8; }'],
+      ['prod', '#[async_trait_ext]\npub trait Store {}'],
+    ],
+  },
+  'shared-mut': {
+    hit: [
+      ['prod', 'pub struct S {\n    inner: Rc<RefCell<u8>>,\n}', ['OWN-11:soft@2']],
+      ['bin', 'fn f(m: Arc<RwLock<Vec<u8>>>) {}', ['OWN-11:soft@1']],
+    ],
+    miss: [
+      ['test', 'fn f(m: Arc<Mutex<u8>>) {}'],
+      ['prod', 'pub struct S { inner: Arc<Vec<u8>>, cell: RefCell<u8> }'],
+    ],
+  },
+  'global-mut': {
+    hit: [
+      ['prod', 'static COUNTER: AtomicUsize = AtomicUsize::new(0);', ['ARC-09:soft@1']],
+      ['test', 'static CACHE: Mutex<Vec<u8>> = Mutex::new(Vec::new());', ['ARC-09:soft@1']],
+    ],
+    miss: [
+      ['prod', 'static NAME: &str = "Mutex";'],
+      ['prod', 'const LIMIT: AtomicUsize = AtomicUsize::new(0);'],
+    ],
+  },
+  'deref-inherit': {
+    hit: [
+      ['prod', 'pub struct Meters(f64);\nimpl std::ops::Deref for Meters {\n    type Target = f64;\n    fn deref(&self) -> &f64 { &self.0 }\n}', ['API-19:soft@2']],
+      ['prod', 'impl<T> DerefMut for W<T> {}', ['API-19:soft@1']],
+    ],
+    miss: [
+      ['test', 'impl Deref for Meters { type Target = f64; }'],
+      ['prod', 'impl AsRef<f64> for Meters { fn as_ref(&self) -> &f64 { &self.0 } }'],
+    ],
+  },
+  'sleep': {
+    hit: [
+      ['prod', 'pub fn f(d: Duration) { std::thread::sleep(d); }', ['TST-10:soft@1']],
+      ['test', 'fn f() { thread::sleep(Duration::from_millis(5)); }', ['TST-10:soft@1']],
+    ],
+    miss: [
+      ['example', 'fn main() { std::thread::sleep(Duration::from_millis(5)); }'],
+      ['prod', 'pub async fn f(d: Duration) { tokio::time::sleep(d).await; }'],
+    ],
+  },
+  'unbounded': {
+    hit: [
+      ['prod', 'pub fn f() { let (_tx, _rx) = mpsc::unbounded_channel::<u8>(); }', ['ASY-07:soft@1']],
+      ['bin', 'fn f() { let (_tx, _rx) = crossbeam_channel::unbounded(); }', ['ASY-07:soft@1']],
+    ],
+    miss: [
+      ['test', 'fn f() { let (_tx, _rx) = mpsc::unbounded_channel::<u8>(); }'],
+      ['prod', 'pub fn f() { let (_tx, _rx) = mpsc::channel::<u8>(8); }'],
+    ],
+  },
+  'downcast': {
+    hit: [
+      ['prod', 'pub fn f(e: &dyn Error) -> bool { e.downcast_ref::<io::Error>().is_some() }', ['MOD-11:soft@1']],
+      ['prod', 'pub fn f(x: &dyn Shape) -> &dyn Any { x.as_any() }', ['MOD-11:soft@1']],
+    ],
+    miss: [
+      ['test', 'fn f(e: &dyn Error) -> bool { e.downcast_ref::<io::Error>().is_some() }'],
+      ['prod', 'pub fn downcasting_count(as_any_count: u8) -> u8 { as_any_count }'],
+    ],
+  },
+  'env-var': {
+    hit: [
+      ['prod', 'pub fn f() -> Option<String> { std::env::var("HOME").ok() }', ['ARC-11:soft@1']],
+      ['test', 'fn f() { let _v = env::var_os("HOME"); }', ['ARC-11:soft@1']],
+    ],
+    miss: [
+      ['bin', 'fn main() { let _v = std::env::var("HOME"); }'],
+      ['prod', 'pub fn f() -> Option<String> { std::env::args().next() }'],
+    ],
+  },
+  'should-panic': {
+    hit: [
+      ['test', '#[test]\n#[should_panic]\nfn f() { g(); }', ['TST-05:soft@2']],
+      ['prod', 'pub fn g() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    #[should_panic(expected = "boom")]\n    fn f() { super::g(); }\n}', ['TST-05:soft@5']],
+    ],
+    miss: [
+      ['prod', '#[should_panic]\npub fn g() {}'],
+      ['test', '#[test]\nfn f() { assert_eq!(g(), Err(E::Boom)); } // #[should_panic]'],
+    ],
+  },
+  'weak-assert': {
+    hit: [
+      ['test', '#[test]\nfn f() {\n    assert!(parse("1").is_ok());\n}', ['TST-05:soft@3']],
+      ['test', 'fn f() { assert!(map.get(&k).is_none()); }', ['TST-05:soft@1']],
+    ],
+    miss: [
+      ['prod', 'pub fn f(r: Result<u8, E>) { assert!(r.is_ok()); }'],
+      ['test', 'fn f() { assert_eq!(parse("1"), Ok(1)); assert!(r.is_ok() && done); }'],
+    ],
+  },
+  'todo-comment': {
+    hit: [
+      ['prod', 'pub fn f() {}\n// TODO: handle overflow', ['CRF-04:soft@2']],
+      ['test', 'fn f() {} /* FIXME later */', ['CRF-04:soft@1']],
+    ],
+    miss: [
+      ['prod', '// TODO(#123): handle overflow\n// FIXME see https://example.com/i/4\n// HACK until PROJ-12 lands\npub fn f() {}'],
+      ['prod', '/// TODO in a doc comment\npub fn f() -> &\'static str { "TODO" }'],
+    ],
+  },
+};
+
+for (const [key, { hit, miss }] of Object.entries(KEY_CASES)) {
+  test(`${key}: positive cases pin the current id, severity and line`, () => {
+    for (const [kind, src, want] of hit) assert.deepEqual(hitsOf(src, key, kind), want, `${kind}: ${src}`);
+  });
+  test(`${key}: near-miss cases do not fire`, () => {
+    for (const [kind, src] of miss) assert.deepEqual(hitsOf(src, key, kind), [], `${kind}: ${src}`);
+  });
+}
+
+test('forbid-override: fires only for a lint the crate forbids', () => {
+  const src = '#[allow(unsafe_code)]\npub fn f() {}\n#[expect(clippy::unwrap_used, reason = "checked")]\npub fn g() {}\n';
+  const forbid = new Set(['unsafe_code']);
+  assert.deepEqual(hitsOf(src, 'forbid-override', 'prod', { forbid }), ['H-05:hard@1']);
+  assert.deepEqual(hitsOf(src, 'forbid-override', 'test', { forbid }), ['H-05:hard@1']);
+  // Near misses: no forbid set, or a forbid set that does not name the lint.
+  assert.deepEqual(hitsOf(src, 'forbid-override', 'prod'), []);
+  assert.deepEqual(hitsOf(src, 'forbid-override', 'prod', { forbid: new Set(['clippy::panic']) }), []);
+});
+
+test('every RULES key is named in this file', () => {
+  const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const named = (k) => new RegExp(`(?:^|[^a-z-])${k}(?:[^a-z-]|$)`, 'm').test(self);
+  assert.deepEqual(RULES.map((r) => r.key).filter((k) => !named(k)), []);
+});
+
+test('large file: a seeded hit near the end of ~5000 lines is reported in bounded time', () => {
+  const block = [
+    '/// Adds two values.',
+    '///',
+    '/// # Errors',
+    '///',
+    '/// Returns `None` on overflow.',
+    'pub fn add_N(a: u32, b: u32) -> Option<u32> {',
+    '    let sum = a.checked_add(b)?;',
+    '    if sum > 10 { return Some(sum - 1); }',
+    '    Some(sum)',
+    '}',
+    '',
+  ];
+  const lines = [];
+  for (let i = 0; lines.length < 4990; i += 1) lines.push(...block.map((l) => l.replace('add_N', `add_${i}`)));
+  const seed = lines.length + 2;
+  lines.push('pub fn seeded(v: Option<u8>) -> u8 {', '    v.unwrap()', '}', '');
+  const src = lines.join('\n');
+  const t0 = performance.now();
+  const { hits } = scanSource(src, { kind: 'prod' });
+  const ms = performance.now() - t0;
+  assert.deepEqual(hits.map((h) => `${h.key}:${h.id}:${h.severity}@${h.line}`), [`unwrap:H-02:hard@${seed}`]);
+  // Generous bound: far below the 30 s pre-edit hook timeout (hooks/hooks.json)
+  // and loose enough that a slow Windows CI runner does not flake.
+  assert.ok(ms < 10_000, `scan of ${lines.length} lines took ${ms.toFixed(0)} ms`);
 });
