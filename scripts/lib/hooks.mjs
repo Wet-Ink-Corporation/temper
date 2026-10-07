@@ -405,29 +405,102 @@ export function claudeRestore(cmd) {
 /** Command segments with quoted strings blanked, so flags inside messages do not count. */
 const segments = (cmd) => cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''").split(/&&|\|\||[;|\n]/);
 const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
-const SHELL_PROG = /^(?:\S*\/)?(?:ba|da|z|k)?sh$/;
+const SHELL_PROG = /^(?:\S*[\\/])?(?:ba|da|z|k)?sh(?:\.exe)?$/i;
+const SEARCH_PROG = /^(?:\S*[\\/])?(?:grep|egrep|fgrep|rg|ag|ack)(?:\.exe)?$/i;
 
-/** Index just past the `)` that closes a `$(` opened before `i`. */
+/**
+ * The here-document that `<<` at `i` opens: its delimiter with the quotes removed
+ * (`<<"E"OF` ends at `EOF`), whether `<<-` strips leading tabs, whether any of it
+ * is quoted (an unquoted body still expands `$(...)`), and the index past the
+ * delimiter word. Null when there is no word.
+ */
+function heredocAt(s, i) {
+  let k = i + 2;
+  const strip = s[k] === '-';
+  if (strip) k++;
+  while (s[k] === ' ' || s[k] === '\t') k++;
+  const from = k;
+  let delim = '';
+  while (k < s.length && !/[\s;&|<>()]/.test(s[k])) {
+    if (s[k] === "'" || s[k] === '"') {
+      const e = s.indexOf(s[k], k + 1);
+      if (e === -1) return null;
+      delim += s.slice(k + 1, e);
+      k = e + 1;
+    } else if (s[k] === '\\') {
+      delim += s[k + 1] ?? '';
+      k += 2;
+    } else delim += s[k++];
+  }
+  return k > from ? { delim, strip, quoted: /['"\\]/.test(s.slice(from, k)), end: k } : null;
+}
+
+/** Index just past the here-document bodies that start at `i`, or -1 when a delimiter line never comes. */
+function skipBodies(s, i, docs) {
+  for (const doc of docs) {
+    for (;;) {
+      if (i >= s.length) return -1;
+      const nl = s.indexOf('\n', i) === -1 ? s.length : s.indexOf('\n', i);
+      const line = s.slice(i, nl);
+      i = nl + 1;
+      if ((doc.strip ? line.replace(/^\t+/, '') : line) === doc.delim) break;
+    }
+  }
+  return Math.min(i, s.length);
+}
+
+/**
+ * Index just past the `)` that closes a `$(` opened before `i`, or -1 when none
+ * does. A `)` inside quotes, backticks or a here-document body does not count.
+ */
 function closeParen(s, i) {
+  let docs = [];
   for (let depth = 1; i < s.length; i++) {
     const c = s[i];
     if (c === '\\') i++;
-    else if (c === "'") i = s.indexOf("'", i + 1) === -1 ? s.length : s.indexOf("'", i + 1);
-    else if (c === '(') depth++;
+    else if (c === "'" || c === '`') {
+      i = s.indexOf(c, i + 1);
+      if (i === -1) return -1;
+    } else if (c === '"') {
+      for (i++; i < s.length && s[i] !== '"'; i++) if (s[i] === '\\') i++;
+      if (i >= s.length) return -1;
+    } else if (s.startsWith('<<<', i)) i += 2;
+    else if (s.startsWith('<<', i)) {
+      const doc = heredocAt(s, i);
+      if (doc) { docs.push(doc); i = doc.end - 1; } else i++;
+    } else if (c === '\n' && docs.length) {
+      const end = skipBodies(s, i + 1, docs);
+      if (end === -1) return -1;
+      docs = [];
+      i = end - 1;
+    } else if (c === '(') depth++;
     else if (c === ')' && --depth === 0) return i + 1;
   }
-  return s.length;
+  return -1;
+}
+
+/** A shell segment that reads its commands from stdin: `bash`, `sh -s`, `bash -`, not `bash -c ...` or `bash script.sh`. */
+function shellReadsStdin(values, sh) {
+  for (const a of values.slice(sh + 1)) {
+    if (a === '-') return true;
+    if (/^-[a-zA-Z]*c/.test(a)) return false;
+    if (/^-[a-zA-Z]*s/.test(a)) return true;
+    if (!/^[-+]/.test(a)) return false;
+  }
+  return true;
 }
 
 /**
  * The shell words of each command segment: `{ value, raw }`, where `value` has the
  * quotes removed and `raw` is the source text. The shell unquotes `"--no-verify"`
  * into the flag, so it reads as `--no-verify`, while a quoted message stays one
- * word. Command substitutions, `sh -c '...'`, `eval '...'` and here-documents
- * on a line that runs a shell are parsed as commands too; other here-documents
- * are data.
+ * word. Command substitutions, `sh -c '...'` and `eval '...'` are parsed as
+ * commands too; here-document bodies are data. `state.ok` turns false when the
+ * text has a construct this reader does not follow: an unterminated quote,
+ * substitution or here-document, or a shell that reads commands from stdin
+ * (`... | bash`, `bash <<EOF`). Callers then fall back to the raw-text check.
  */
-function shellWords(cmd, depth = 0) {
+function shellWords(cmd, depth, state) {
   const s = String(cmd);
   const segs = [];
   const nested = [];
@@ -435,10 +508,24 @@ function shellWords(cmd, depth = 0) {
   let value = null;
   let raw = '';
   let docs = [];
-  let lineStart = 0;
+  let here = false;
   const add = (v, r) => { value = (value ?? '') + v; raw += r; };
-  const endWord = () => { if (value !== null) words.push({ value, raw }); value = null; raw = ''; };
+  const endWord = () => {
+    if (value !== null) { words.push({ value, raw, here }); here = false; }
+    value = null;
+    raw = '';
+  };
   const endSeg = () => { endWord(); if (words.length) segs.push(words); words = []; };
+  const closeOf = (from) => {
+    const close = closeParen(s, from);
+    if (close === -1) state.ok = false;
+    return close === -1 ? s.length + 1 : close;
+  };
+  const tickOf = (from) => {
+    const close = s.indexOf('`', from);
+    if (close === -1) state.ok = false;
+    return close === -1 ? s.length : close;
+  };
   let i = 0;
   while (i < s.length) {
     const c = s[i];
@@ -450,6 +537,7 @@ function shellWords(cmd, depth = 0) {
       const from = i + (c === "'" ? 1 : 2);
       let end = from;
       while (end < s.length && s[end] !== "'") end += c === '$' && s[end] === '\\' ? 2 : 1;
+      if (end >= s.length) state.ok = false;
       add(c === '$' ? s.slice(from, end).replace(/\\(.)/g, '$1') : s.slice(from, end), s.slice(i, end + 1));
       i = end + 1;
     } else if (c === '"') {
@@ -458,14 +546,14 @@ function shellWords(cmd, depth = 0) {
       while (end < s.length && s[end] !== '"') {
         if (s[end] === '\\' && '"\\$`\n'.includes(s[end + 1] ?? '')) { v += s[end + 1] === '\n' ? '' : s[end + 1]; end += 2; continue; }
         if (s.startsWith('$(', end)) {
-          const close = closeParen(s, end + 2);
+          const close = closeOf(end + 2);
           nested.push(s.slice(end + 2, close - 1));
           v += s.slice(end, close);
           end = close;
           continue;
         }
         if (s[end] === '`') {
-          const close = s.indexOf('`', end + 1) === -1 ? s.length : s.indexOf('`', end + 1);
+          const close = tickOf(end + 1);
           nested.push(s.slice(end + 1, close));
           v += s.slice(end, close + 1);
           end = close + 1;
@@ -473,38 +561,30 @@ function shellWords(cmd, depth = 0) {
         }
         v += s[end++];
       }
+      if (end >= s.length) state.ok = false;
       add(v, s.slice(i, end + 1));
       i = end + 1;
     } else if (two === '$(' || c === '`') {
-      const close = c === '`' ? (s.indexOf('`', i + 1) === -1 ? s.length : s.indexOf('`', i + 1) + 1) : closeParen(s, i + 2);
+      const close = c === '`' ? tickOf(i + 1) + 1 : closeOf(i + 2);
       nested.push(s.slice(i + (c === '`' ? 1 : 2), close - 1));
       add(s.slice(i, close), s.slice(i, close));
       i = close;
     } else if (s.startsWith('<<<', i)) {
       endWord();
+      here = true;
       i += 3;
     } else if (two === '<<') {
       endWord();
-      const m = /^<<(-?)\s*(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/.exec(s.slice(i));
-      if (m) docs.push({ delim: m[2] ?? m[3] ?? m[4], strip: m[1] === '-' });
-      i += m ? m[0].length : 2;
+      const doc = heredocAt(s, i);
+      if (doc) docs.push(doc);
+      i = doc ? doc.end : i + 2;
     } else if (c === '\n') {
       endSeg();
-      i++;
-      const toShell = segs.slice(lineStart).some((seg) => seg.some((w) => SHELL_PROG.test(w.value)));
-      for (const doc of docs) {
-        const lines = [];
-        while (i < s.length) {
-          const nl = s.indexOf('\n', i) === -1 ? s.length : s.indexOf('\n', i);
-          const line = s.slice(i, nl);
-          i = nl + 1;
-          if ((doc.strip ? line.replace(/^\t+/, '') : line) === doc.delim) break;
-          lines.push(line);
-        }
-        if (toShell) nested.push(lines.join('\n'));
-      }
+      const body = i + 1;
+      i = docs.length ? skipBodies(s, body, docs) : body;
+      if (i === -1) { state.ok = false; i = s.length; }
+      if (docs.some((doc) => !doc.quoted) && /\$\(|`/.test(s.slice(body, i))) state.ok = false;
       docs = [];
-      lineStart = segs.length;
     } else if (two === '&&' || two === '||') {
       endSeg();
       i += 2;
@@ -522,16 +602,26 @@ function shellWords(cmd, depth = 0) {
     }
   }
   endSeg();
+  if (docs.length) state.ok = false;
   for (const seg of segs) {
-    const values = seg.map((w) => w.value);
+    const values = seg.filter((w) => !w.here).map((w) => w.value);
     const sh = values.findIndex((v) => SHELL_PROG.test(v));
+    if (sh !== -1 && shellReadsStdin(values, sh)) state.ok = false;
     const dashC = sh === -1 ? -1 : values.findIndex((v, k) => k > sh && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(v));
     if (dashC !== -1 && dashC + 1 < values.length) nested.push(values[dashC + 1]);
     const ev = values.indexOf('eval');
     if (ev !== -1) nested.push(values.slice(ev + 1).join(' '));
   }
-  if (depth < 4) for (const inner of nested) segs.push(...shellWords(inner, depth + 1));
+  if (depth >= 4 && nested.length) state.ok = false;
+  else for (const inner of nested) segs.push(...shellWords(inner, depth + 1, state));
   return segs;
+}
+
+/** The segments' word values, and whether the reader followed the whole command. */
+function parseShell(cmd) {
+  const state = { ok: true };
+  const segs = shellWords(cmd, 0, state).map((seg) => ({ words: seg, values: seg.map((w) => w.value) }));
+  return { segs, ok: state.ok };
 }
 
 // git global options that take a separate value, and `git commit` options that do.
@@ -563,27 +653,45 @@ function commitNoVerify(args) {
   return false;
 }
 
-/** The command skips git hooks: a `--no-verify` word, or `git commit -n`. Quoted messages do not count (H-12). */
+/** A search whose pattern is the flag text (`grep -- --no-verify`, `git grep`), not a git call that skips hooks. */
+const searches = (values) => SEARCH_PROG.test(values.find((v) => !/^\w+=/.test(v)) ?? '') || gitCall(values)?.sub === 'grep';
+
+/**
+ * The command skips git hooks: a `--no-verify` word, or `git commit -n`. Quoted
+ * messages do not count (H-12). Text the shell reader cannot follow falls back to
+ * the raw-text check, so an unparsed construct never hides a flag.
+ */
 function skipsGitHooks(cmd) {
-  return shellWords(cmd).some((seg) => {
-    const values = seg.map((w) => w.value);
-    if (values.includes('--no-verify')) return true;
+  const { segs, ok } = parseShell(cmd);
+  return segs.some(({ values }) => {
+    if (values.includes('--no-verify') && !searches(values)) return true;
     const git = gitCall(values);
     return git?.sub === 'commit' && commitNoVerify(git.args);
-  });
+  }) || (!ok && /--no-verify\b|\bgit\s+commit\b[^|;&]*\s-n\b/.test(cmd));
 }
 
-/** The command lowers lint levels: `cargo clippy` with `-A`/`--allow`/`--cap-lints`, or RUSTFLAGS that do (H-05). */
+// cargo options that come before the subcommand and take a separate value.
+const CARGO_GLOBAL_VALUE = new Set(['--config', '-Z', '-C', '--color', '--explain']);
+
+/**
+ * The command lowers lint levels: `cargo clippy` or `cargo rustc` with `-A`,
+ * `-Awarnings`, `--allow` or `--cap-lints`, or RUSTFLAGS/RUSTDOCFLAGS that carry
+ * `-A` or `--cap-lints` (H-05). `--allow-dirty` and its siblings are `--fix` flags.
+ */
 function lowersLints(cmd) {
-  return shellWords(cmd).some((seg) => {
-    const values = seg.map((w) => w.value);
+  const { segs, ok } = parseShell(cmd);
+  return segs.some(({ words, values }) => {
     const c = values.findIndex((v) => /^(?:\S*[\\/])?cargo(?:\.exe)?$/.test(v));
     if (c !== -1) {
-      const k = values[c + 1]?.startsWith('+') ? c + 2 : c + 1;
-      if (values[k] === 'clippy' && values.slice(k + 1).some((v) => v === '-A' || /^--allow\b/.test(v) || v.startsWith('--cap-lints'))) return true;
+      let k = c + 1;
+      while (k < values.length && /^[-+]/.test(values[k])) k += CARGO_GLOBAL_VALUE.has(values[k]) ? 2 : 1;
+      if ((values[k] === 'clippy' || values[k] === 'rustc')
+        && values.slice(k + 1).some((v) => v.startsWith('-A') || /^--allow(?:=|$)/.test(v) || v.startsWith('--cap-lints'))) return true;
     }
-    return seg.some((w) => /^[A-Z_]*RUSTFLAGS=/.test(w.raw) && /(?:^|[\s\x1f])(?:-A|--cap-lints)/.test(w.value.slice(w.value.indexOf('=') + 1)));
-  });
+    // The value as the shell gives it, and as written (`$'-D\x1f-A'` spells the separator out).
+    return words.some((w) => /^[A-Z_]*RUST(?:DOC)?FLAGS=/.test(w.raw)
+      && [w.value, w.raw].some((v) => /(?:^|[\s\x1f]|\\x1f)(?:-A|--cap-lints)/.test(v.slice(v.indexOf('=') + 1))));
+  }) || (!ok && (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)));
 }
 
 // cargo add/remove options that take a separate value.
