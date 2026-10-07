@@ -90,7 +90,7 @@ export function summarizeFmt(out, { check = false } = {}) {
   const member = out.match(/failed to load manifest for workspace member `([^`]+)`/)?.[1];
   if (member && /[*?]/.test(member)) {
     const glob = rel(member);
-    lines.push(`no crate matches the workspace member \`${glob}\`: create one with \`cargo new --lib ${glob.replace(/[^/]*[*?].*$/, '<name>')}\`, or change \`members\` in Cargo.toml`);
+    lines.push(`no crate matches the workspace member \`${glob}\`: create one with \`cargo new --lib ${glob.replace(/[^/]*[*?][^/]*/g, '<name>')}\`, or change \`members\` in Cargo.toml`);
   }
   return lines.join('\n');
 }

@@ -113,6 +113,9 @@ test('fmt failing because the workspace does not load is summarised as that, not
     ].join('\n'));
     assert.doesNotMatch(s, /Usage|Print help/);
   }
+  // A wildcard in the middle of the pattern: the suggestion keeps the segments around it.
+  const NESTED = NO_MEMBER.replaceAll('crates/*', 'crates/*/sub');
+  assert.match(summarizeFmt(NESTED), /no crate matches the workspace member `crates\/\*\/sub`: create one with `cargo new --lib crates\/<name>\/sub`/);
   assert.equal(summarizeFmt(BAD_TOML), [
     'cargo cannot load the workspace, so nothing was formatted:',
     'error: duplicate key',
@@ -143,7 +146,7 @@ test('vendor drift points to --vendor-only first, --force as the broader option'
     fs.writeFileSync(path.join(dir, '.claude', 'temper', 'VERSION'), '0.0.1\n');
     const report = vendorTool(dir, {});
     assert.equal(report.drift, true);
-    assert.match(report.actions[0], /; rerun with --vendor-only to replace only the vendored CLI \(or --force to also overwrite every template file\)$/);
+    assert.match(report.actions[0], /; rerun with --vendor-only to replace only the vendored CLI \(or --force to also overwrite the other template files; an existing Cargo\.toml is never overwritten\)$/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

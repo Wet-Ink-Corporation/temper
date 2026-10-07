@@ -101,7 +101,7 @@ export function vendorTool(root, { dry = false, force = false } = {}) {
   if (!force) {
     const was = read(path.join(dest, 'VERSION'))?.trim();
     return {
-      actions: [`drift  ${VENDOR_DIR}/ differs from temper ${version}${was ? ` (the copy says ${was})` : ''}: ${what}; rerun with --vendor-only to replace only the vendored CLI (or --force to also overwrite every template file)`],
+      actions: [`drift  ${VENDOR_DIR}/ differs from temper ${version}${was ? ` (the copy says ${was})` : ''}: ${what}; rerun with --vendor-only to replace only the vendored CLI (or --force to also overwrite the other template files; an existing Cargo.toml is never overwritten)`],
       drift: true,
     };
   }
