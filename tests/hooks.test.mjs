@@ -481,6 +481,275 @@ test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks 
   assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
 });
 
+const STATE_DENY = /verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command/;
+
+test('Bash: shell writes into the temper state dir (.git/temper/) are denied; reading, copying out and deleting are not', () => {
+  const telemetryFile = path.join(discover(ws).stateDir, 'telemetry.jsonl');
+  const denied = [
+    `echo '{"verdict":"approved"}' > .git/temper/verdicts/0123456789abcdef.json`,
+    'printf %s "{}" >> ./.git/temper/telemetry.jsonl',
+    'cat v.json &> .git/temper/gate/0123456789abcdef.json',
+    'node fake.js 2> .git/temper/logs/0123-clippy.log',
+    'echo {} >".git/temper/verdicts/a.json"',
+    'printf {} > /home/me/repo/.git/temper/gate/a.json',
+    'cp /tmp/v.json .git/temper/gate/0123456789abcdef.json',
+    'cp -f /tmp/v.json "./.git/temper/verdicts/a.json"',
+    'mv v.json .git/temper/verdicts/',
+    'cp -t .git/temper/verdicts v.json',
+    'rsync -avt v.json .git/temper/gate/a.json',
+    'install -m 644 v.json .git/temper/verdicts/a.json',
+    'ln -s /tmp/v.json .git/temper/verdicts/a.json',
+    'Copy-Item v.json -Destination .git\\temper\\verdicts\\a.json',
+    'Move-Item v.json .git/temper/gate/a.json',
+    'jq ".verdict=\\"approved\\"" old.json | tee .git/temper/verdicts/a.json',
+    'tee -a .git/temper/telemetry.jsonl < x',
+    "sed -i 's/changes_requested/approved/' .git/temper/verdicts/a.json",
+    "perl -pi -e 's/false/true/' .git/temper/gate/a.json",
+    `python3 -c "open('.git/temper/verdicts/a.json','w').write('{}')"`,
+    `python3 -c "import pathlib; pathlib.Path('.git/temper/verdicts/a.json').write_text('{}')"`,
+    `node -e "require('fs').writeFileSync('.git/temper/gate/a.json', '{}')"`,
+    "Set-Content -Path .git/temper/verdicts/a.json -Value '{}'",
+    "'{}' | Out-File .git\\temper\\gate\\a.json",
+    'Add-Content .git/temper/telemetry.jsonl x',
+    'dd if=v.json of=.git/temper/verdicts/a.json',
+    'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'cp v.json "$(git rev-parse --git-dir)/temper/gate/a.json"',
+    'echo {} > `git rev-parse --git-common-dir`/temper/verdicts/a.json',
+    'cp v.json $(git rev-parse --git-path temper/verdicts)/a.json',
+    'echo {} > target/temper/verdicts/a.json',
+    `echo {} > "${path.join(ws, 'target', 'temper', 'gate', 'a.json')}"`,
+    `echo {} > ${path.join(ws, 'target', 'temper', 'gate', 'a.json').split(path.sep).join('/')}`,
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const events = fs.readFileSync(telemetryFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.event === 'deny-shell-write' && e.file === 'state-dir'));
+  const allowed = [
+    'cat .git/temper/logs/0123-clippy.log',
+    'less .git/temper/logs/0123-test.log',
+    'grep -n error .git/temper/logs/*.log',
+    'ls -la .git/temper/verdicts',
+    'jq .verdict .git/temper/verdicts/a.json',
+    'tail -n 50 .git/temper/telemetry.jsonl',
+    'cat .git/temper/telemetry.jsonl | wc -l',
+    'sed -n 1,20p .git/temper/logs/a.log',
+    'cat "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'node "$TEMPER_CLI" status',
+    'node "$TEMPER_CLI" gate',
+    'node "$TEMPER_CLI" stats',
+    'grep x .git/temper/logs/a.log > /tmp/out',
+    'jq . .git/temper/gate/a.json > gate.json 2> /tmp/err',
+    'cp .git/temper/logs/a.log /tmp/',
+    'cp -t /tmp .git/temper/logs/a.log',
+    'cp -r .git/temper /tmp/temper-backup',
+    `python3 -c "print(open('.git/temper/verdicts/a.json').read())"`,
+    'cargo build > /tmp/b.log 2>&1',
+    'mv .git/temper/telemetry.jsonl /tmp/t.jsonl',
+    'rm "$(git rev-parse --git-common-dir)/temper/telemetry.jsonl"',
+    'rm -f .git/temper/telemetry.jsonl',
+    'git status',
+    'git gc --prune=now',
+    'git rev-parse --git-common-dir',
+    'ls target/temper',
+    'cargo build 2> /tmp/err.log',
+    'cargo test > target/debug/test-output.txt',
+    'echo hi > temper.txt',
+    'echo hi > notes/temper/todo.md',
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: shell writes into the absolute state dir of a git worktree are denied', { skip: !git && 'git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-statedir-'));
+  const g = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  try {
+    fs.writeFileSync(path.join(repo, 'Cargo.toml'), ROOT);
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const wt = path.join(repo, 'wt');
+    assert.equal(g('worktree', 'add', '-q', wt).status, 0);
+    const proj = discover(wt);
+    const state = path.resolve(proj.stateDir);
+    const slashed = state.split(path.sep).join('/');
+    assert.ok(!slashed.startsWith(`${path.resolve(proj.root).split(path.sep).join('/')}/`), 'the worktree state dir lives in the main repository');
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: wt, session_id: 'hooks-test', tool_input: { command } });
+    for (const cmd of [
+      `echo {} > "${path.join(state, 'verdicts', 'a.json')}"`,
+      `cp /tmp/v.json ${slashed}/gate/a.json`,
+      `python3 -c "open('${slashed}/verdicts/a.json','w')"`,
+      'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    ]) {
+      const res = run(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), STATE_DENY, cmd);
+    }
+    for (const cmd of [`cat "${path.join(state, 'telemetry.jsonl')}"`, `cp ${slashed}/logs/a.log /tmp/`, `rm ${slashed}/telemetry.jsonl`, 'git worktree list']) {
+      assert.equal(decision(run(cmd)), 'none', cmd);
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('Bash: state-dir writes hidden by trailing redirects, variables, quoting, cd or other writers are denied; reads stay allowed', () => {
+  const denied = [
+    'cp v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'cp v.json .git/temper/verdicts/a.json >/dev/null 2>&1',
+    'cp v.json .git/temper/verdicts/a.json # forge',
+    'ln -sf /tmp/v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'rsync v.json .git/temper/gate/a.json 2>&1',
+    'mv v.json .git/temper/gate/a.json -f',
+    'STATE=$(git rev-parse --git-common-dir)/temper; echo {} > $STATE/verdicts/a.json',
+    'STATE="$(git rev-parse --git-common-dir)/temper"; echo {} > "$STATE/gate/a.json"',
+    'STATE=.git/temper/gate; cp v.json $STATE/a.json',
+    'D=.git/temper && echo {} > ${D}/verdicts/x.json',
+    'echo {} > "$(git rev-parse --git-common-dir)"/temper/verdicts/a.json',
+    'echo {} > ".git/"temper/verdicts/a.json',
+    "echo {} > .git/'temper'/verdicts/a.json",
+    'cd .git/temper/verdicts && echo {} > x.json',
+    '(cd .git/temper/gate && echo {} > a.json)',
+    'pushd .git/temper/gate; echo {} > a.json',
+    'cd .git && echo {} > temper/verdicts/x.json',
+    'cd target/temper && echo {} > gate/a.json',
+    `python3 -c "open('.git/temper/verdicts/a.json', mode='w').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'x').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'r+').write('{}')"`,
+    `python3 -c "import shutil;shutil.copy('v.json','.git/temper/verdicts/a.json')"`,
+    "python3 <<'EOF'\np = '.git/temper/verdicts/a.json'\nwith open(p, 'w') as f:\n    f.write('{}')\nEOF",
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('.git/temper/verdicts/a.json')\np.write_text('{}')\nEOF",
+    `node -e "require('fs').copyFileSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "require('fs').renameSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "const fs=require('fs'); const p='.git/temper/gate/a.json'; fs.writeFileSync(p,'{}')"`,
+    `ruby -e 'File.write(".git/temper/verdicts/a.json","{}")'`,
+    `bash -c "echo {} > .git/temper/verdicts/a.json"`,
+    'curl -o .git/temper/verdicts/a.json file:///tmp/v.json',
+    'curl -sSLo .git/temper/verdicts/a.json file:///tmp/v.json',
+    'wget -O .git/temper/verdicts/a.json http://example.com/v.json',
+    `jq '.verdict="approved"' v.json | sponge .git/temper/verdicts/a.json`,
+    'tee --append .git/temper/verdicts/a.json < v.json',
+    'echo {} | tee /dev/null .git/temper/verdicts/a.json',
+    'tar -xf forged.tar -C .git/temper',
+    'unzip -o forged.zip -d .git/temper',
+    'find /tmp -name v.json -exec cp {} .git/temper/verdicts/a.json \\;',
+    'ls /tmp/v.json | xargs -I{} cp {} .git/temper/verdicts/a.json',
+    'Copy-Item -Destination .git\\temper\\verdicts\\a.json -Path v.json',
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const allowed = [
+    'cp a.log /tmp/\ncat .git/temper/verdicts/a.json',
+    'npm install\nls .git/temper/gate',
+    "sed -i 's/a/b/' README.md\ncat .git/temper/telemetry.jsonl",
+    "python3 <<'EOF'\nfrom pathlib import Path\nPath('/tmp/r.md').write_text('x')\nprint(open('.git/temper/telemetry.jsonl').read())\nEOF",
+    'git commit -m "deny shell writes like echo > .git/temper/verdicts/x"',
+    'git commit -m "docs: cp logs out of .git/temper/logs"',
+    'grep -rn "> .git/temper" scripts/',
+    "cat <<'EOF'\nTo forge: echo {} > .git/temper/verdicts/a.json\nEOF",
+    'echo x > .git/temper-notes.txt',
+    'echo x > target/temper-report.html',
+    'cargo test 2> target/temper-stderr.txt',
+    'echo hi > docs/.git/temper-notes.md',
+    'cp -r src .git/temper-backup',
+    'echo x > "$TMPDIR/temper/gate-summary.txt"',
+    'echo x > "$HOME/temper/logs/today.txt"',
+    'cp .git/temper/logs/a.log "$HOME/temper/logs/"',
+    `node -e "require('fs').writeFileSync('/tmp/g.json', require('fs').readFileSync('.git/temper/gate/a.json'))"`,
+    'Copy-Item -Destination C:\\tmp -Path .git\\temper\\logs\\a.log',
+    '(cd .git/temper/logs && cat a.log) ; echo hi > out.txt',
+    'cd .git/temper/logs && grep error *.log > /tmp/errors.txt',
+    'tar -cf /tmp/state.tar -C .git/temper .',
+    'cargo install cargo-nextest',
+    'D=.git/temper; cat $D/verdicts/a.json > /tmp/a.json',
+    'cd .git/temper && ls',
+    'cd crates/foo && cargo test > ../../out.txt 2>&1',
+    'cargo build --release 2>&1 | tail -20',
+    `python3 -c "import json; print(json.load(open('.git/temper/gate/a.json')))"`,
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: state-dir writes inside compound commands, command substitutions and moves into .git/ are denied', () => {
+  for (const cmd of [
+    'if true; then cp v.json .git/temper/verdicts/a.json; fi',
+    'for f in a; do echo {} > .git/temper/gate/$f.json; done',
+    '{ tee .git/temper/telemetry.jsonl < v; }',
+    '! cp v.json .git/temper/verdicts/a.json',
+    'while true; do cd .git/temper; echo {} > gate/a.json; break; done',
+    'echo "$(cp v.json .git/temper/verdicts/a.json)"',
+    'x=`cp v.json .git/temper/verdicts/a.json`',
+    'truncate -s 0 .git/temper/telemetry.jsonl',
+    'mv forged/temper .git/',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'if true; then cat .git/temper/verdicts/a.json; fi',
+    'for f in .git/temper/logs/*; do cat "$f"; done > /tmp/all.log',
+    'echo "$(cat .git/temper/telemetry.jsonl)" > /tmp/t',
+    'mv notes/temper.txt .git/',
+  ]) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: git rev-parse --path-format=absolute does not hide the state dir', () => {
+  for (const cmd of [
+    'echo x > "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a"',
+    'cp v.json "$(git rev-parse --path-format=absolute --git-common-dir)/temper/verdicts/a.json"',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  assert.equal(decision(bash('cat "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a" > /tmp/a')), 'none');
+});
+
+// ---- Greptile findings on #82, through the real preBash
+
+test('Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed', () => {
+  for (const cmd of [
+    "echo '{}' > .git/tem\\per/verdicts/a.json",
+    'c\\p /tmp/v.json .git/temper/gate/a.json',
+    `python3 -c "m='w'; open('.git/temper/verdicts/a.json', m).write('{}')"`,
+    `python3 -c "mode = 'a'; open('.git/temper/telemetry.jsonl', mode=mode)"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  // A bash function named like a PowerShell command does not make bash keep the backslash.
+  for (const cmd of [
+    "copy() { cat; }; echo '{}' | copy > .git/tem\\per/verdicts/v.json",
+    "'[a]::b'() { echo '{}'; }; [a]::b > .git/tem\\per/verdicts/v.json",
+    "Set-Content() { cat; }; echo '{}' | Set-Content > .git/tem\\per/gate/v.json",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'cat .git/tem\\per/verdicts/a.json',
+    "Set-Content -Path target\\temper-report.txt -Value x",
+    `python3 -c "m='r'; print(open('.git/temper/verdicts/a.json', m).read())"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+  }
+});
+
 test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
   for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
     const res = bash(cmd);

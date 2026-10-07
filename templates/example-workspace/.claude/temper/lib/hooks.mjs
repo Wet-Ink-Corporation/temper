@@ -15,6 +15,7 @@ import {
   ownLintsMember, splitProblems, dependencyNames, majorOf,
 } from './manifest.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
+import { writeTargets, msysPath } from './shell.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 
 const REVIEWER = /(^|:)rust-reviewer$/;
@@ -352,6 +353,56 @@ const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
 const SHELL_WRITE_BASELINE = shellWrites('temper-baseline\\.json', { copies: true });
 const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/[\\w./-]*', { copies: true });
 const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.';
+const STATE_SHELL_DENY = 'temper: temper\'s state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it: verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command (`node "$TEMPER_CLI" gate`). Reading the files, copying them elsewhere and deleting telemetry.jsonl stay allowed.';
+// `$VAR/temper/<entry>` counts as the state dir unless VAR is a home or temp directory.
+const OUTSIDE_VARS = /^(?:HOME|TMPDIR|TMP|TEMP|USERPROFILE|APPDATA|LOCALAPPDATA|PWD|OLDPWD|XDG_\w+)$/;
+
+/**
+ * Shell writes into the project's temper state dir: `.git/temper/` under any prefix, the
+ * absolute `proj.stateDir` (in a worktree it is in the main repository's git dir) with
+ * either separator, `target/temper/` when there is no git, and `$VAR/temper/<state entry>`.
+ * Only destinations count, as scripts/lib/shell.mjs reads them: redirection targets, the
+ * destination of a copy (and where each source lands in it), tee, sed -i, dd, curl, wget,
+ * tar -x -C, unzip -d, the PowerShell writers and interpreter code, inside `bash -c` and
+ * compound commands too. Variables, `$(git rev-parse --git-common-dir)` and `cd`/`pushd`
+ * are followed. Reading a state file, or redirecting what a read prints elsewhere, does
+ * not match, and neither does quoted text.
+ */
+export function stateDirWrite(proj, cmd, cwd = proj.root) {
+  const win = process.platform === 'win32';
+  const fold = (s) => (win ? s.toLowerCase() : s);
+  const slash = (s) => String(s).replace(/\\/g, '/');
+  const absState = fold(slash(path.resolve(proj.stateDir)));
+  const start = path.resolve(cwd);
+  // shell.mjs keeps a backslash before a word character as a separator when it takes the
+  // command for PowerShell, but a bash function can carry a cmdlet-shaped name and bash then
+  // drops it (`copy() { cat; }; ... | copy > .git/tem\per/...`). Deny if either reading is the state dir.
+  const bashReading = (s) => (s == null ? s : String(s).replace(/\\(?=[\w-])/g, ''));
+  const isState = (text, value, base) => isStateAs(text, value, base)
+    || (/\\[\w-]/.test(`${text}${value ?? ''}`) && isStateAs(bashReading(text), bashReading(value), base));
+  const isStateAs = (text, value, base) => {
+    const v =/^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(slash(text));
+    if (v && !OUTSIDE_VARS.test(v[1])) return true;
+    let p = slash(msysPath(value ?? text));
+    if (!/^(?:\/|[a-z]:\/|\$|~)/i.test(p)) p = `${slash(base)}/${p}`;
+    const f = fold(path.posix.normalize(p));
+    if (/(?:^|\/)\.git\/temper(?:\/|$)/.test(f)) return true;
+    if (!proj.gitRoot && /(?:^|\/)target\/temper(?:\/|$)/.test(f)) return true;
+    return value !== null && (f === absState || f.startsWith(`${absState}/`));
+  };
+  const gitDir = proj.gitRoot ? path.dirname(path.resolve(proj.stateDir)) : '.git';
+  for (const t of writeTargets(cmd, { cwd: start, top: proj.gitRoot ?? proj.root, gitDir })) {
+    const base = t.cwd ?? start;
+    const value = t.glob ? null : t.value;
+    if (isState(t.text, value, base)) return true;
+    // A copy into a directory lands as <dest>/<source name> (`mv temper .git/`).
+    for (const s of t.sources ?? []) {
+      const name = s.value === null ? null : path.posix.basename(slash(s.value).replace(/\/+$/, ''));
+      if (name && isState(`${t.text}/${name}`, value === null ? null : `${value}/${name}`, base)) return true;
+    }
+  }
+  return false;
+}
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
@@ -426,6 +477,9 @@ export function cargoDependencyCommands(cmd) {
   return out;
 }
 
+/** A rule built on scripts/lib/shell.mjs; if reading the command throws, the rule is skipped and the other checks still run. */
+const readerRule = (rule, fallback) => { try { return rule(); } catch { return fallback; } };
+
 export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
@@ -445,6 +499,10 @@ export function preBash(input) {
   if (SHELL_WRITE_BASELINE.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
     return deny(BASELINE_SHELL_DENY);
+  }
+  if (readerRule(() => stateDirWrite(proj, cmd, input.cwd ?? proj.root), false)) {
+    telemetry(proj, input, 'deny-shell-write', { file: 'state-dir' });
+    return deny(STATE_SHELL_DENY);
   }
   if (/TEMPER_ALLOW_RAISE/.test(cmd)) {
     telemetry(proj, input, 'ask', { via: 'TEMPER_ALLOW_RAISE' });
