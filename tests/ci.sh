@@ -2,10 +2,12 @@
 # Every check that runs without a model call, in the order CI runs them.
 #
 #   tests/ci.sh            # all checks
-#   tests/ci.sh --quick    # skip the two that compile Rust (doc examples, brownfield e2e)
+#   tests/ci.sh --quick    # skip the steps that compile Rust (doc examples, brownfield e2e,
+#                          # example workspace gate)
 #
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
-# templates/workspace/rust-toolchain.toml with clippy and rustfmt. The plugin
+# templates/workspace/rust-toolchain.toml with clippy and rustfmt (the example
+# workspace pins the same one in its own rust-toolchain.toml). The plugin
 # manifest check (`claude plugin validate`) needs the Claude Code CLI and runs
 # as its own CI step.
 set -euo pipefail
@@ -37,7 +39,7 @@ step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: doc examples and the brownfield e2e (--quick)"
+  step "skipped: doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
 
@@ -46,5 +48,8 @@ python3 tests/doc_examples.py --fetch
 
 step "brownfield e2e (lint baseline on a legacy fixture)"
 bash tests/e2e/brownfield.sh
+
+step "example workspace passes its own gate (vendored CLI, on a scratch copy)"
+bash tests/e2e/example-gate.sh
 
 step "all checks passed"
