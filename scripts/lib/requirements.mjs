@@ -1,9 +1,12 @@
-// The documented minimum versions (README.md, Install) and the warnings for an older runtime.
-// Message only: an old Node or Claude Code never changes a hook decision or an exit code.
+// The documented minimum versions (README.md, Install) and the warning for an older Node.
+// Message only: an old Node never changes a hook decision or an exit code.
 //
 // temper.mjs calls earlyNodeCheck before any other code runs, so this file must still load on a
 // Node older than the minimum: plain syntax, no Node 17+ APIs, only node: built-ins.
-import { spawnSync } from 'node:child_process';
+//
+// Claude Code's version is not checked. Hook input carries none, and Claude Code passes hooks no
+// variable that names it or its executable (CLAUDE_CODE_EXECPATH is set for the Bash tool only).
+import fs from 'node:fs';
 import path from 'node:path';
 
 /** The minimums the README's Install section documents. Keep the two in step (tests/messages.test.mjs checks). */
@@ -23,54 +26,42 @@ export function isOlder(version, minimum) {
   return false;
 }
 
-/** The version in `claude --version` output ("2.1.292 (Claude Code)"), else null. */
-export function parseClaudeCodeVersion(stdout) {
-  const m = /^\s*v?(\d+\.\d+\.\d+)\S*\s+\(Claude Code\)/m.exec(typeof stdout === 'string' ? stdout : '');
-  return m ? m[1] : null;
-}
-
-/**
- * The running Claude Code's version, or null when it cannot be learnt. Hook input carries no
- * version, and CLAUDE_CODE_VERSION is not set by Claude Code (other tools set it, to other
- * values), so this asks the binary Claude Code names in CLAUDE_CODE_EXECPATH. That is one
- * bounded process spawn (about 15 ms); anything that is not a `claude` binary is not run.
- */
-export function claudeCodeVersion(env = process.env, spawn = spawnSync) {
-  const exe = env.CLAUDE_CODE_EXECPATH;
-  if (!exe || !/^claude(\.exe)?$/i.test(path.basename(exe))) return null;
-  let r;
-  try {
-    r = spawn(exe, ['--version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true });
-  } catch {
-    return null;
-  }
-  if (!r || r.status !== 0) return null;
-  return parseClaudeCodeVersion(r.stdout);
-}
-
 const nodeWarning = (v) => `temper: Node ${v} is older than the documented minimum, Node ${MINIMUM_VERSIONS.node} (README, Install). temper's hooks and CLI may fail on it and check nothing. Put Node ${MINIMUM_VERSIONS.node.split('.')[0]} or later on the PATH that Claude Code sees.`;
-const claudeWarning = (v) => `temper: Claude Code ${v} is older than the documented minimum, Claude Code ${MINIMUM_VERSIONS.claudeCode} (README, Install). temper is untested on it, and a hook it does not run checks nothing. Update Claude Code.`;
 
-/** One warning line per runtime below its documented minimum. Unknown versions say nothing. */
-export function runtimeWarnings({ node, claudeCode } = {}) {
-  const out = [];
-  if (isOlder(node, MINIMUM_VERSIONS.node)) out.push(nodeWarning(node));
-  if (isOlder(claudeCode, MINIMUM_VERSIONS.claudeCode)) out.push(claudeWarning(claudeCode));
-  return out;
+/** One warning line when Node is below its documented minimum. An unknown version says nothing. */
+export function runtimeWarnings({ node } = {}) {
+  return isOlder(node, MINIMUM_VERSIONS.node) ? [nodeWarning(node)] : [];
+}
+
+/** A cheap stand-in for discover(): is there a Cargo.toml in `dir` or above it? */
+function inRustWorkspace(dir) {
+  let d = path.resolve(dir);
+  for (;;) {
+    if (fs.existsSync(path.join(d, 'Cargo.toml'))) return true;
+    const up = path.dirname(d);
+    if (up === d) return false;
+    d = up;
+  }
 }
 
 /**
  * What temper.mjs does before anything else on a Node below the minimum, or null to carry on.
- * `hook session-start` prints the warning for the human (systemMessage) and the model
- * (additionalContext) and exits 0, since the rest of temper may not load. Other hooks carry on
- * unchanged, so the warning comes once per session. Commands warn on stderr and carry on, keeping
- * their own output and exit code. TEMPER_DISABLE=1 stays silent.
+ * `hook session-start` stops early only where temper cannot run (no structuredClone, Node 16 and
+ * older) and only in a Rust workspace: it prints the warning for the human (systemMessage) and the
+ * model (additionalContext) and exits 0. Where temper can run (Node 17), SessionStart runs as usual
+ * and adds the warning itself. Other hooks carry on unchanged, so the warning comes once per
+ * session. Commands warn on stderr and carry on, keeping their own output and exit code.
+ * TEMPER_DISABLE=1 stays silent. `runtime` is injectable for tests.
  */
-export function earlyNodeCheck(node, argv, env) {
+export function earlyNodeCheck(node, argv, env, runtime = {}) {
   if (!isOlder(node, MINIMUM_VERSIONS.node) || (env && env.TEMPER_DISABLE === '1')) return null;
   const msg = nodeWarning(node);
   if (argv[0] === 'hook') {
     if (argv[1] !== 'session-start') return null;
+    const canRun = runtime.canRun !== undefined ? runtime.canRun : typeof globalThis.structuredClone === 'function';
+    if (canRun) return null;
+    const dirs = [runtime.cwd || process.cwd(), env && env.CLAUDE_PROJECT_DIR].filter(Boolean);
+    if (!dirs.some(inRustWorkspace)) return null;
     return { stdout: JSON.stringify({ systemMessage: msg, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg } }), exit: 0 };
   }
   return { stderr: `${msg}\n` };

@@ -14,7 +14,7 @@ import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
   ownLintsMember, splitProblems, dependencyNames, majorOf,
 } from './manifest.mjs';
-import { runtimeWarnings, claudeCodeVersion } from './requirements.mjs';
+import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 
@@ -65,10 +65,10 @@ function discoverFor(input, file) {
 }
 
 /**
- * SessionStart output plus one line per runtime older than the documented minimum (README,
+ * SessionStart output plus a line when Node is older than the documented minimum (README,
  * Install), for the human (systemMessage) and the model (additionalContext). Message only.
  */
-export function withRuntimeWarnings(out, warnings = runtimeWarnings({ node: process.versions.node, claudeCode: claudeCodeVersion() })) {
+export function withRuntimeWarnings(out, warnings = runtimeWarnings({ node: process.versions.node })) {
   if (!warnings.length) return out;
   const hso = out.json.hookSpecificOutput;
   const extra = warnings.map((w) => `- ${w}`).join('\n');

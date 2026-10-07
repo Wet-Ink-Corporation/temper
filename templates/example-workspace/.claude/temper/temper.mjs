@@ -28,9 +28,10 @@ import {
 } from './lib/baseline.mjs';
 import { earlyNodeCheck } from './lib/requirements.mjs';
 
-// First, before any other code: on a Node below the documented minimum, say so plainly instead of
-// failing on a missing API later. SessionStart reports it and stops; other hooks and commands carry
-// on as before.
+// First, before any other code: on a Node below the documented minimum, say so plainly. Where
+// temper cannot run (Node 16, no structuredClone), SessionStart in a Rust workspace reports it and
+// stops; on Node 17 it runs as usual and adds the warning. Other hooks and commands carry on as before.
+// (Node 14 and older stop earlier still: this file's syntax needs Node 15.)
 const early = earlyNodeCheck(process.versions.node, process.argv.slice(2), process.env);
 if (early && early.stderr) process.stderr.write(early.stderr);
 if (early && early.stdout !== undefined) {

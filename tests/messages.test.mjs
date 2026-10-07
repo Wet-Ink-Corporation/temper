@@ -186,14 +186,15 @@ test('setup appends /target/ to .gitignore once, unless a target line is there; 
 });
 
 // ------------------------------------------- documented minimum versions (README Install)
-// Message only: an old Node or Claude Code adds a warning and changes no hook decision.
+// Message only: an old Node adds a warning and changes no hook decision.
 
 const README = () => fs.readFileSync(path.join(here, '..', 'README.md'), 'utf8');
-// Run the real CLI as if Node were `version`: the preload rewrites process.versions.node before temper.mjs loads.
-const cliAsNode = (version, cwd, args, input) => {
-  const env = { ...process.env };
-  for (const k of ['TEMPER_BASE', 'CLAUDECODE', 'TEMPER_DISABLE', 'CLAUDE_ENV_FILE']) delete env[k];
-  const fake = `data:text/javascript,Object.defineProperty(process.versions,"node",{value:${JSON.stringify(version)}})`;
+// Run the real CLI as if Node were `version`: the preload rewrites process.versions.node before
+// temper.mjs loads. `noClone` also removes structuredClone, as on Node 16, where temper cannot run.
+const cliAsNode = (version, cwd, args, input, { noClone = false, env: extra = {} } = {}) => {
+  const env = { ...process.env, ...extra };
+  for (const k of ['TEMPER_BASE', 'CLAUDECODE', 'TEMPER_DISABLE', 'CLAUDE_ENV_FILE', 'CLAUDE_PROJECT_DIR']) if (!(k in extra)) delete env[k];
+  const fake = `data:text/javascript,Object.defineProperty(process.versions,"node",{value:${JSON.stringify(version)}});${noClone ? 'delete globalThis.structuredClone;' : ''}`;
   const r = spawnSync(process.execPath, ['--import', fake, CLI, ...args], { cwd, encoding: 'utf8', env, input });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 };
@@ -217,79 +218,84 @@ test('isOlder compares numerically and treats an unparsable version as not older
   }
 });
 
-test('the Claude Code version comes from CLAUDE_CODE_EXECPATH --version, and unknown stays unknown', async () => {
-  const { claudeCodeVersion, parseClaudeCodeVersion } = await import('../scripts/lib/requirements.mjs');
-  assert.equal(parseClaudeCodeVersion('2.1.292 (Claude Code)\n'), '2.1.292');
-  assert.equal(parseClaudeCodeVersion('v22.22.0\n'), null);
-  assert.equal(parseClaudeCodeVersion(''), null);
-  const exe = path.join(os.tmpdir(), 'no-such-dir-temper', process.platform === 'win32' ? 'claude.exe' : 'claude');
-  const calls = [];
-  const fake = (out) => (cmd, args, opts) => { calls.push({ cmd, args, opts }); return out; };
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: exe }, fake({ status: 0, stdout: '2.1.200 (Claude Code)\n' })), '2.1.200');
-  assert.deepEqual(calls[0].args, ['--version']);
-  assert.equal(calls[0].cmd, exe);
-  assert.ok(calls[0].opts.timeout > 0 && calls[0].opts.timeout <= 3000, 'bounded spawn');
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: exe }, fake({ status: 1, stdout: '2.1.200 (Claude Code)\n' })), null);
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: exe }, fake({ status: null, stdout: null, error: new Error('ENOENT') })), null);
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: exe }, () => { throw new Error('boom'); }), null);
-  // Never spawned: no path, or a path that is not a claude binary (an npm install runs under node).
-  calls.length = 0;
-  assert.equal(claudeCodeVersion({}, fake({ status: 0, stdout: '2.1.200 (Claude Code)\n' })), null);
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: process.execPath }, fake({ status: 0, stdout: '2.1.200 (Claude Code)\n' })), null);
-  // CLAUDE_CODE_VERSION is not trusted: other tools set it to something else.
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_VERSION: '2.1.42' }, fake({ status: 0, stdout: '2.1.200 (Claude Code)\n' })), null);
-  assert.equal(calls.length, 0);
-  // A real spawn of a missing binary is unknown, not an error.
-  assert.equal(claudeCodeVersion({ CLAUDE_CODE_EXECPATH: exe }), null);
-});
-
-test('runtimeWarnings: one line per runtime below its minimum; current or unknown versions say nothing', async () => {
+test('runtimeWarnings: a line for a Node below the minimum; a current or unknown Node says nothing', async () => {
   const { runtimeWarnings } = await import('../scripts/lib/requirements.mjs');
-  const [node] = runtimeWarnings({ node: '16.20.2', claudeCode: '2.1.292' });
+  const [node] = runtimeWarnings({ node: '16.20.2' });
   assert.match(node, /^temper: Node 16\.20\.2 is older than the documented minimum, Node 18\.0\.0\b/);
   assert.match(node, /PATH that Claude Code sees/);
-  const [cc] = runtimeWarnings({ node: process.versions.node, claudeCode: '2.1.200' });
-  assert.match(cc, /^temper: Claude Code 2\.1\.200 is older than the documented minimum, Claude Code 2\.1\.286\b/);
-  assert.equal(runtimeWarnings({ node: '16.20.2', claudeCode: '2.1.200' }).length, 2);
-  assert.deepEqual(runtimeWarnings({ node: '18.0.0', claudeCode: '2.1.286' }), []);
-  assert.deepEqual(runtimeWarnings({ node: process.versions.node, claudeCode: null }), []);
+  assert.deepEqual(runtimeWarnings({ node: '18.0.0' }), []);
+  assert.deepEqual(runtimeWarnings({ node: process.versions.node }), []);
   assert.deepEqual(runtimeWarnings({}), []);
 });
 
-test('earlyNodeCheck: on an old Node, SessionStart reports it; other hooks run as before; commands warn on stderr', async () => {
+test('earlyNodeCheck: SessionStart stops early only where temper cannot run, and only in a Rust workspace', async () => {
   const { earlyNodeCheck } = await import('../scripts/lib/requirements.mjs');
-  const start = earlyNodeCheck('16.20.2', ['hook', 'session-start'], {});
-  assert.equal(start.exit, 0);
-  const json = JSON.parse(start.stdout);
-  assert.match(json.systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum/);
-  assert.equal(json.hookSpecificOutput.hookEventName, 'SessionStart');
-  assert.equal(json.hookSpecificOutput.additionalContext, json.systemMessage);
-  assert.ok(!('decision' in json) && !('permissionDecision' in json.hookSpecificOutput));
-  for (const event of ['pre-bash', 'pre-edit', 'stop', 'user-prompt']) assert.equal(earlyNodeCheck('16.20.2', ['hook', event], {}), null, event);
-  const gate = earlyNodeCheck('17.9.1', ['gate'], {});
-  assert.match(gate.stderr, /^temper: Node 17\.9\.1 is older than the documented minimum.*\n$/);
-  assert.ok(!('stdout' in gate) && !('exit' in gate), 'the command still runs, with its own exit code');
-  // Near misses: a supported Node, or the human emergency switch.
-  for (const v of ['18.0.0', '18.20.4', '20.11.1', process.versions.node]) assert.equal(earlyNodeCheck(v, ['hook', 'session-start'], {}), null, v);
-  assert.equal(earlyNodeCheck('16.20.2', ['hook', 'session-start'], { TEMPER_DISABLE: '1' }), null);
+  const norust = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-early-'));
+  try {
+    const nested = path.join(ws, 'crates', 'core');
+    // Node 16: no structuredClone, so the handler would throw. Report the old Node instead.
+    for (const cwd of [ws, nested]) {
+      const start = earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd });
+      assert.equal(start.exit, 0);
+      const json = JSON.parse(start.stdout);
+      assert.match(json.systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum/);
+      assert.equal(json.hookSpecificOutput.hookEventName, 'SessionStart');
+      assert.equal(json.hookSpecificOutput.additionalContext, json.systemMessage);
+      assert.ok(!('decision' in json) && !('permissionDecision' in json.hookSpecificOutput));
+    }
+    // CLAUDE_PROJECT_DIR names the project when the hook runs elsewhere.
+    assert.notEqual(earlyNodeCheck('16.20.2', ['hook', 'session-start'], { CLAUDE_PROJECT_DIR: ws }, { canRun: false, cwd: norust }), null);
+    // Near misses that carry on unchanged: outside a Rust workspace (SessionStart does nothing there),
+    // a Node 17 where temper runs (the handler adds the warning itself), and every other hook.
+    assert.equal(earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd: norust }), null);
+    assert.equal(earlyNodeCheck('17.9.1', ['hook', 'session-start'], {}, { canRun: true, cwd: ws }), null);
+    for (const event of ['pre-bash', 'pre-edit', 'stop', 'user-prompt']) assert.equal(earlyNodeCheck('16.20.2', ['hook', event], {}, { canRun: false, cwd: ws }), null, event);
+    const gate = earlyNodeCheck('17.9.1', ['gate'], {}, { canRun: true, cwd: ws });
+    assert.match(gate.stderr, /^temper: Node 17\.9\.1 is older than the documented minimum.*\n$/);
+    assert.ok(!('stdout' in gate) && !('exit' in gate), 'the command still runs, with its own exit code');
+    for (const v of ['18.0.0', '18.20.4', '20.11.1', process.versions.node]) assert.equal(earlyNodeCheck(v, ['hook', 'session-start'], {}, { canRun: false, cwd: ws }), null, v);
+    assert.equal(earlyNodeCheck('16.20.2', ['hook', 'session-start'], { TEMPER_DISABLE: '1' }, { canRun: false, cwd: ws }), null);
+  } finally { fs.rmSync(norust, { recursive: true, force: true }); }
 });
 
-test('the CLI on a simulated old Node: SessionStart warns, a PreToolUse hook and the gate are unchanged', () => {
+test('the CLI on a simulated Node 17: SessionStart runs in full and adds the warning', () => {
+  const envDir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-envfile-'));
+  try {
+    const envFile = path.join(envDir, 'env.sh');
+    fs.writeFileSync(envFile, '');
+    const input = JSON.stringify({ cwd: ws, session_id: 's-node17', source: 'startup', hook_event_name: 'SessionStart' });
+    const res = cliAsNode('17.9.1', ws, ['hook', 'session-start'], input, { env: { CLAUDE_ENV_FILE: envFile } });
+    assert.equal(res.code, 0, res.stderr);
+    const json = JSON.parse(res.stdout);
+    assert.match(json.systemMessage, /^temper: Node 17\.9\.1 is older than the documented minimum, Node 18\.0\.0/);
+    const context = json.hookSpecificOutput.additionalContext;
+    assert.match(context, /governed by the temper plugin/);
+    assert.match(context, /- Gate command: /);
+    assert.ok(context.endsWith(`\n- ${json.systemMessage}`), context);
+    assert.match(fs.readFileSync(envFile, 'utf8'), /^export TEMPER_CLI="/);
+  } finally { fs.rmSync(envDir, { recursive: true, force: true }); }
+});
+
+test('the CLI on a simulated Node 16: SessionStart warns in a Rust workspace; elsewhere, hooks and the gate are unchanged', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-oldnode-'));
   try {
-    const input = JSON.stringify({ cwd: dir, session_id: 's-old', source: 'startup', hook_event_name: 'SessionStart' });
-    const start = cliAsNode('16.20.2', dir, ['hook', 'session-start'], input);
+    const rustInput = JSON.stringify({ cwd: ws, session_id: 's-old', source: 'startup', hook_event_name: 'SessionStart' });
+    const start = cliAsNode('16.20.2', ws, ['hook', 'session-start'], rustInput, { noClone: true });
     assert.equal(start.code, 0, start.stderr);
     const json = JSON.parse(start.stdout);
     assert.match(json.systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum, Node 18\.0\.0/);
     assert.equal(json.hookSpecificOutput.additionalContext, json.systemMessage);
+    // Outside a Rust workspace SessionStart prints nothing, as on a current Node.
+    const input = JSON.stringify({ cwd: dir, session_id: 's-old', source: 'startup', hook_event_name: 'SessionStart' });
+    const away = cliAsNode('16.20.2', dir, ['hook', 'session-start'], input, { noClone: true });
+    assert.deepEqual({ code: away.code, stdout: away.stdout }, { code: 0, stdout: '' });
     // A PreToolUse hook outside a Rust project: same empty answer as on a current Node.
     const bash = JSON.stringify({ cwd: dir, session_id: 's-old', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'cargo test' } });
-    const old = cliAsNode('16.20.2', dir, ['hook', 'pre-bash'], bash);
+    const old = cliAsNode('16.20.2', dir, ['hook', 'pre-bash'], bash, { noClone: true });
     const cur = cliAsNode(process.versions.node, dir, ['hook', 'pre-bash'], bash);
     assert.deepEqual({ code: old.code, stdout: old.stdout }, { code: cur.code, stdout: cur.stdout });
     // A command keeps its exit code and output; stderr gains the warning line first.
-    const gate = cliAsNode('16.20.2', dir, ['gate'], '');
+    const gate = cliAsNode('16.20.2', dir, ['gate'], '', { noClone: true });
     const gateNow = cliAsNode(process.versions.node, dir, ['gate'], '');
     assert.equal(gate.code, gateNow.code);
     assert.equal(gate.stdout, gateNow.stdout);
