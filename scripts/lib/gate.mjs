@@ -69,6 +69,32 @@ function summarize(name, out) {
   return capped.join('\n');
 }
 
+/**
+ * fmt's failure summary. When cargo cannot load the workspace (a `members` glob that matches no
+ * crate, a manifest that does not parse), `cargo fmt` fails before formatting anything and its
+ * output ends in rustfmt's help text, so the generic tail says nothing useful. Text only: the
+ * step fails either way.
+ */
+export function summarizeFmt(out, { check = false } = {}) {
+  if (!/`cargo metadata` exited with an error|failed to load manifest for workspace member/.test(out)) {
+    return check ? 'needs formatting: the implementer runs `cargo fmt --all` (or the gate without --check)' : summarize('fmt', out);
+  }
+  const ws = out.match(/workspace at `(.+?)[\\/]Cargo\.toml`/)?.[1];
+  // Only workspace paths are shortened and given forward slashes; other backticked tokens stay as cargo wrote them.
+  const rel = (p) => (ws && p.startsWith(ws) && p.length > ws.length ? p.slice(ws.length + 1).replaceAll('\\', '/') : p);
+  const keep = out.split(/\r?\n/)
+    .map((l) => l.replace(/^`cargo metadata` exited with an error: /, ''))
+    .filter((l) => /^error: |^\s*--> /.test(l))
+    .map((l) => l.trim().replace(/`([^`]+)`/g, (_, p) => `\`${rel(p)}\``));
+  const lines = ['cargo cannot load the workspace, so nothing was formatted:', ...keep.slice(0, 10)];
+  const member = out.match(/failed to load manifest for workspace member `([^`]+)`/)?.[1];
+  if (member && /[*?]/.test(member)) {
+    const glob = rel(member);
+    lines.push(`no crate matches the workspace member \`${glob}\`: create one with \`cargo new --lib ${glob.replace(/[^/]*[*?][^/]*/g, '<name>')}\`, or change \`members\` in Cargo.toml`);
+  }
+  return lines.join('\n');
+}
+
 /** Scan changed .rs files against their base-revision content: new hard hits fail the gate. */
 export function scanChanged(proj, base) {
   const out = { hard: [], ask: [], soft: [] };
@@ -193,7 +219,7 @@ export function runGate(proj, opts = {}) {
   const t0 = Date.now();
   const fmtArgs = opts.check ? ['fmt', '--all', '--', '--check'] : ['fmt', '--all'];
   const fmt = run('cargo', fmtArgs, { cwd, env, timeoutMs: 120000 });
-  const fmtSummary = opts.check ? 'needs formatting: the implementer runs `cargo fmt --all` (or the gate without --check)' : summarize('fmt', fmt.stderr + fmt.stdout);
+  const fmtSummary = summarizeFmt(fmt.stderr + fmt.stdout, { check: opts.check });
   steps.push({ name: 'fmt', ok: fmt.code === 0, ms: Date.now() - t0, summary: fmt.code === 0 ? (opts.check ? 'clean' : 'applied') : fmtSummary });
   if (fmt.code !== 0) return finish(proj, null, steps, false);
 

@@ -53,7 +53,14 @@ async function hook(event) {
   const handler = HOOKS[event];
   if (!handler) { process.stderr.write(`temper: unknown hook event ${event}\n`); return 0; }
   let input = {};
-  try { input = JSON.parse((await readStdin()) || '{}'); } catch { return 0; }
+  try {
+    input = JSON.parse((await readStdin()) || '{}');
+  } catch {
+    // Same decision as before (none, exit 0), but say so: a silent pass reads as "checked and clean".
+    if (process.env.TEMPER_DISABLE === '1') return 0;
+    process.stdout.write(JSON.stringify({ systemMessage: `temper hook ${event}: could not parse the hook input as JSON; nothing was checked` }));
+    return 0;
+  }
   if (process.env.TEMPER_DISABLE === '1') return 0;
   let res;
   try {
@@ -413,11 +420,15 @@ async function setup(args) {
   } else {
     actions.push('skip   .claude/temper/ (this temper copy cannot vendor itself: scripts/lib/vendor.mjs is missing)');
   }
+  // Scratch state and cargo's build output stay out of git. Cargo.lock is not added: it is committed.
   const gi = path.join(root, '.gitignore');
-  const giText = readText(gi) ?? '';
-  if (!/^\/?\.temper\/?$/m.test(giText)) {
-    actions.push('append .gitignore: .temper/');
-    if (!dry) fs.appendFileSync(gi, `${giText.endsWith('\n') || giText === '' ? '' : '\n'}.temper/\n`);
+  let giText = readText(gi) ?? '';
+  for (const [line, present] of [['.temper/', /^\/?\.temper\/?$/m], ['/target/', /^\/?target\/?$/m]]) {
+    if (present.test(giText)) continue;
+    actions.push(`append .gitignore: ${line}`);
+    const add = `${giText.endsWith('\n') || giText === '' ? '' : '\n'}${line}\n`;
+    if (!dry) fs.appendFileSync(gi, add);
+    giText += add;
   }
   process.stdout.write(`${dry ? '[dry run] ' : ''}temper setup in ${root}\n${actions.map((a) => `  ${a}`).join('\n')}\n`);
   process.stdout.write('\nNext: give every crate a charter (copy templates/crate/AGENTS.md and CLAUDE.md into each crate root and fill it in).\n');
