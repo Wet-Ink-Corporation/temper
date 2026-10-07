@@ -312,6 +312,20 @@ test('Bash: --no-verify and lint lowering in a message, here-document or search 
     'RUSTFLAGS="-D warnings" cargo build',
     'RUSTFLAGS=-Dwarnings cargo test',
     'RUSTDOCFLAGS="-D warnings" cargo doc --no-deps',
+    // -A inside a path in a flags value is not a flag.
+    'RUSTFLAGS="--remap-path-prefix /Users/me/src/Foo-API=." cargo build --release',
+    'RUSTFLAGS="-L native=/opt/Intel-AMX/lib" cargo build',
+    'RUSTFLAGS="-C link-arg=-Wl,-rpath,/opt/My-App/lib" cargo build',
+    "RUSTFLAGS='-L /home/u/Project-Alpha/target' cargo test",
+    'RUSTDOCFLAGS="--html-in-header /home/u/Docs-Assets/katex.html" cargo doc',
+    // commit in a -c or -C value is not the subcommand.
+    'git -c commit.gpgsign=false log -n 5 --oneline',
+    'git -c commit.gpgsign=false cherry-pick -n abc123',
+    'git -C commit-tools log -n 1',
+    // Continued lines, and a search tool's name as a cargo argument.
+    'git commit -m x \\\n  --author "A <a@b>"',
+    'cargo clippy --workspace \\\n  --all-targets -- -D warnings',
+    'cargo clippy -p grep -- -D warnings',
   ]) assert.equal(decision(bash(cmd)), 'none', cmd);
 });
 
@@ -362,6 +376,14 @@ test('Bash: skipping git hooks stays denied however it is quoted or handed on (H
     'cat <<"E"OF\nhi\nEOF\ngit commit --no-verify -m x',
     'cat <<EOF\nnever closed\ngit commit --no-verify -m x',
     'git commit -m "unterminated --no-verify',
+    // Continued lines are one command.
+    'git commit -m "wip" \\\n  -n',
+    'git commit -a \\\n  -n -m wip',
+    'git -c commit.gpgsign=false commit -n -m x',
+    // A value starting with -- is not a message, and an interpreter's here-document is code.
+    'git rebase -m --no-verify main',
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'commit', '--no-verify', '-m', 'x'])\nEOF",
+    "node <<'EOF'\nrequire('child_process').execSync('git commit --no-verify -m x')\nEOF",
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'deny', cmd);
@@ -397,11 +419,27 @@ test('Bash: lowering lint levels stays denied however it is quoted or handed on 
     'env "RUSTFLAGS=-A warnings" cargo build',
     "export 'RUSTFLAGS=-Awarnings'",
     'export RUSTFLAGS="-A warnings" && cargo build',
+    'RUSTFLAGS="-L /opt/My-App/lib -A warnings" cargo build',
+    'cargo clippy --workspace --all-targets \\\n  -- -A clippy::pedantic',
+    'cargo clippy --all-targets -- \\\n  -D warnings \\\n  -A dead_code',
+    // A search tool's name as an argument does not make the command a search.
+    'cargo clippy -p grep -- -A clippy::all',
+    'cargo clippy -p rg -- -A dead_code',
+    'cargo clippy --bin ack -- -A dead_code',
+    'git commit -m x && cargo clippy --features ag -- -A x',
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'deny', cmd);
     assert.match(reason(res), /H-05/, cmd);
   }
+});
+
+test('Bash: the flag checks stay fast on long commands', () => {
+  const start = Date.now();
+  for (const cmd of ['cargo clippy '.repeat(800), 'cargo '.repeat(400) + 'clippy '.repeat(430), 'git commit '.repeat(800)]) {
+    assert.equal(decision(bash(cmd)), 'none');
+  }
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
 });
 
 test('Bash: --ignore-rust-version only counts as a cargo flag', () => {

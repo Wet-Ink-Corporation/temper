@@ -411,13 +411,15 @@ const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
 // is still read; only text that is clearly prose is blanked to '' first.
 const QUOTED = `'[^']*'|"(?:[^"\\\\]|\\\\.)*"`;
 const HEREDOC = /(?<!<)<<-?[ \t]*(['"]?)([\w.-]+)\1([^\n]*)\n[\s\S]*?\n\t*\2(?=\n|$)/g;
-const FEEDS_SHELL = /\||(?:^|[\s(])(?:\S*[\\/])?(?:(?:ba|da|z|k|pw)?sh|powershell|cmd|eval|source|xargs)(?:\.exe)?(?=\s|$)/i;
-const MESSAGE_VALUE = new RegExp(`((?:^|\\s)(?:--(?:message|body|title|notes|description)=?|-[a-zA-Z]*m|-[bt])\\s*)(?:${QUOTED}|[^\\s'"]+)`, 'g');
-const SEARCH = new RegExp(`(?:^|[\\s;&|(])(?:\\S*[\\\\/])?(?:git\\s+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
+const FEEDS_SHELL = /\||(?:^|[\s(])(?:\S*[\\/])?(?:(?:ba|da|z|k|pw)?sh|powershell|cmd|eval|source|xargs|python[\d.]*|py|node|perl|ruby)(?:\.exe)?(?=\s|$)/i;
+const MESSAGE_VALUE = new RegExp(`((?:^|\\s)(?:--(?:message|body|title|notes|description)=?|-[a-zA-Z]*m|-[bt])\\s*)(?:${QUOTED}|(?!--)[^\\s'"]+)`, 'g');
+const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])\\s*(?:\\w+=\\S*\\s+|(?:sudo|env|time|xargs)\\s+)*(?:\\S*[\\\\/])?(?:git\\s+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
 
 /** `cmd` with here-document bodies, message option values and search patterns blanked. */
 function blankProse(cmd) {
   return cmd
+    // A backslash-newline continues the line.
+    .replace(/\\\r?\n/g, ' ')
     // A here-document body is text, unless a shell reads it or an unquoted body runs `$(...)`.
     .replace(HEREDOC, (m, q, tag, rest, off, s) => {
       const head = s.slice(s.lastIndexOf('\n', off) + 1, off).split(/&&|\|\||;|\(/).pop() + rest;
@@ -429,11 +431,14 @@ function blankProse(cmd) {
 
 /** `--no-verify` anywhere, or `-n` in a `git commit` short-flag cluster before any valued flag. */
 const skipsGitHooks = (text) => /--no-verify\b/.test(text)
-  || /\bgit\s+(?:-\S+\s+(?:[^-\s]\S*\s+)?)*?commit\b(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n/.test(text);
+  || /\bgit\s+(?:-[cC]\s+\S+\s+|--?[\w-]+(?:=\S*)?\s+)*commit(?=\s|$)(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n/.test(text);
 
 /** `cargo clippy`/`rustc` with -A, --allow or --cap-lints, or a *RUSTFLAGS assignment holding one. */
-const lowersLints = (text) => /\bcargo\b[^|;&\n]*?\b(?:clippy|rustc)\b[^|;&\n]*(?:\s["']?-A|\s["']?--allow(?![\w-])|--cap-lints)/.test(text)
-  || /RUST(?:DOC)?FLAGS=(?:"[^"]*?|'[^']*?|\S*?)(?:-A|--cap-lints)/.test(text);
+const lowersLints = (text) => text.split(/[|;&\n]/).some((seg) => {
+  const cargo = seg.search(/\bcargo\b/);
+  const tool = cargo < 0 ? null : /\b(?:clippy|rustc)\b/.exec(seg.slice(cargo));
+  return tool !== null && /\s["']?-A|\s["']?--allow(?![\w-])|--cap-lints/.test(seg.slice(cargo + tool.index));
+}) || /RUST(?:DOC)?FLAGS=(?:"[^"]*?|'[^']*?|\S*?)(?<=[=\s"'\x1f]|\\x1f)(?:-A|--cap-lints)/.test(text);
 
 // cargo add/remove options that take a separate value.
 const CARGO_VALUE_FLAGS = new Set(['-p', '--package', '-F', '--features', '--rename', '--registry', '--path', '--git', '--branch', '--tag', '--rev', '--manifest-path', '--target', '--lockfile-path', '--config', '-Z', '--color']);
