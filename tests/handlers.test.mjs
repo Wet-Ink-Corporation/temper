@@ -151,6 +151,24 @@ test('SessionStart: CLAUDE_ENV_FILE gains TEMPER_CLI and TEMPER_BASE', { skip: n
   assert.equal(lines[1], `export TEMPER_BASE="${r.git('rev-parse', 'HEAD')}"`);
 });
 
+test('SessionStart: an old runtime adds the warning for the human and for the model, and nothing else', async () => {
+  const { withRuntimeWarnings } = await import('../scripts/lib/hooks.mjs');
+  const out = { json: { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'line one' } } };
+  const warned = withRuntimeWarnings(out, ['temper: Node 17.9.1 is older than the documented minimum, Node 18.0.0.']);
+  assert.deepEqual(warned, { json: {
+    systemMessage: 'temper: Node 17.9.1 is older than the documented minimum, Node 18.0.0.',
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'line one\n- temper: Node 17.9.1 is older than the documented minimum, Node 18.0.0.' },
+  } });
+  assert.equal(withRuntimeWarnings(out, []), out);
+});
+
+test('SessionStart on a current Node adds no warning', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const res = sessionStart({ cwd: r.dir, session_id: 's-ver', source: 'startup' });
+  assert.equal(message(res), null);
+  assert.doesNotMatch(context(res), /older than the documented minimum/);
+});
+
 test('SessionStart outside a Rust project does nothing', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-norust-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

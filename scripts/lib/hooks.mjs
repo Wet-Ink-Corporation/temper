@@ -15,6 +15,7 @@ import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
   ownLintsMember, splitProblems, dependencyNames, majorOf,
 } from './manifest.mjs';
+import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
@@ -69,6 +70,17 @@ function discoverFor(input, file) {
   return discover(input.cwd);
 }
 
+/**
+ * SessionStart output plus a line when Node is older than the documented minimum (README,
+ * Install), for the human (systemMessage) and the model (additionalContext). Message only.
+ */
+export function withRuntimeWarnings(out, warnings = runtimeWarnings({ node: process.versions.node })) {
+  if (!warnings.length) return out;
+  const hso = out.json.hookSpecificOutput;
+  const extra = warnings.map((w) => `- ${w}`).join('\n');
+  return { json: { ...out.json, systemMessage: warnings.join('\n'), hookSpecificOutput: { ...hso, additionalContext: `${hso.additionalContext}\n${extra}` } } };
+}
+
 // ---------------------------------------------------------------- SessionStart
 
 export function sessionStart(input) {
@@ -103,7 +115,7 @@ export function sessionStart(input) {
     '- Edits to lint, format, toolchain, CI, hook and agent configuration, new dependencies, lint exceptions and removed tests are routed to the human for approval.',
     `- Session base revision: ${base ?? 'none (no git)'}. Current state: ${state}.`,
   ].join('\n');
-  return ctx('SessionStart', text);
+  return withRuntimeWarnings(ctx('SessionStart', text));
 }
 
 // ------------------------------------------------------------ UserPromptSubmit
