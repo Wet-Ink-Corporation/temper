@@ -80,7 +80,8 @@ export function summarizeFmt(out, { check = false } = {}) {
     return check ? 'needs formatting: the implementer runs `cargo fmt --all` (or the gate without --check)' : summarize('fmt', out);
   }
   const ws = out.match(/workspace at `(.+?)[\\/]Cargo\.toml`/)?.[1];
-  const rel = (p) => (ws && p.startsWith(ws) && p.length > ws.length ? p.slice(ws.length + 1) : p).replaceAll('\\', '/');
+  // Only workspace paths are shortened and given forward slashes; other backticked tokens stay as cargo wrote them.
+  const rel = (p) => (ws && p.startsWith(ws) && p.length > ws.length ? p.slice(ws.length + 1).replaceAll('\\', '/') : p);
   const keep = out.split(/\r?\n/)
     .map((l) => l.replace(/^`cargo metadata` exited with an error: /, ''))
     .filter((l) => /^error: |^\s*--> /.test(l))

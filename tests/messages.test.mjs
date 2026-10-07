@@ -119,6 +119,18 @@ test('fmt failing because the workspace does not load is summarised as that, not
     '--> crates/a/Cargo.toml:3:1',
     'error: failed to load manifest for workspace member `crates/a`',
   ].join('\n'));
+  // Windows paths under the workspace are shortened and get forward slashes; other backticked
+  // tokens are left as cargo wrote them.
+  const WIN = [
+    '`cargo metadata` exited with an error: error: unexpected `a\\b` here',
+    'error: failed to load manifest for workspace member `C:\\ws\\crates\\a`',
+    'referenced via `crates/*` by workspace at `C:\\ws\\Cargo.toml`',
+  ].join('\n');
+  assert.equal(summarizeFmt(WIN), [
+    'cargo cannot load the workspace, so nothing was formatted:',
+    'error: unexpected `a\\b` here',
+    'error: failed to load manifest for workspace member `crates/a`',
+  ].join('\n'));
   // Other fmt failures keep their summaries.
   assert.equal(summarizeFmt('error: expected item, found `}`\n --> src/lib.rs:1:1\n'), 'error: expected item, found `}`');
   assert.equal(summarizeFmt('Diff in src/lib.rs', { check: true }), 'needs formatting: the implementer runs `cargo fmt --all` (or the gate without --check)');
