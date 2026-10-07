@@ -261,6 +261,169 @@ test('Bash: --ignore-rust-version only counts as a cargo flag', () => {
   assert.equal(decision(bash('cargo fmt && RUSTFLAGS=-Dwarnings cargo test --ignore-rust-version')), 'deny');
 });
 
+// cp/mv/install/Copy-Item/Move-Item onto .rs and git apply/patch (audit engine-1-8).
+// Sources outside the workspace are written with forward slashes and quoted, so the
+// commands read the same on Windows.
+const EVIL_RS = '//! Evil.\n\n/// F.\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n';
+const EXPECT_RS = '//! Excused.\n\n/// F.\n#[expect(clippy::unwrap_used, reason = "checked by the caller")]\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n';
+const CLEAN_RS = '//! Clean.\n\n/// F.\n#[must_use]\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap_or(0)\n}\n';
+const RS_PATCH = 'diff --git a/crates/ledger-domain/src/lib.rs b/crates/ledger-domain/src/lib.rs\n--- a/crates/ledger-domain/src/lib.rs\n+++ b/crates/ledger-domain/src/lib.rs\n@@ -5,3 +5,3 @@\n pub fn one() -> u8 {\n-    1\n+    Some(1).unwrap()\n }\n';
+const DOC_PATCH = '--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n';
+const withOutside = (fn) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-outside-'));
+  const out = (name) => path.join(dir, name).replace(/\\/g, '/');
+  try {
+    fs.writeFileSync(out('evil.rs'), EVIL_RS);
+    fs.writeFileSync(out('excused.rs'), EXPECT_RS);
+    fs.writeFileSync(out('clean.rs'), CLEAN_RS);
+    fs.writeFileSync(out('lib.rs.orig'), LIB_RS);
+    fs.writeFileSync(out('untested.rs'), LIB_RS.replace(/\n#\[cfg\(test\)\][^]*$/, '\n'));
+    fs.mkdirSync(path.join(dir, 'pkg', 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'pkg', 'inner', 'deep.rs'), EVIL_RS);
+    fs.writeFileSync(out('rs.diff'), RS_PATCH);
+    fs.writeFileSync(out('doc.diff'), DOC_PATCH);
+    fn(out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+test('Bash: cp/mv/install/Copy-Item onto a .rs file is scanned like a Write: new escape hatches deny, #[expect] and test removal ask', () => {
+  withOutside((out) => {
+    const src = 'crates/ledger-domain/src';
+    for (const cmd of [
+      `cp "${out('evil.rs')}" ${src}/evil.rs`,
+      `mv "${out('evil.rs')}" ${src}/evil.rs`,
+      `install -m 644 "${out('evil.rs')}" ${src}/evil.rs`,
+      `cp "${out('evil.rs')}" ${src}/`,
+      `cp -t ${src} "${out('evil.rs')}"`,
+      `cp -f "${out('evil.rs')}" ${src}/lib.rs`,
+      `Copy-Item -Path "${out('evil.rs')}" -Destination ${src}/evil.rs`,
+      `Move-Item "${out('evil.rs')}" ${src}/evil.rs`,
+      `cd crates/ledger-domain && cp "${out('evil.rs')}" src/evil.rs`,
+      `cargo fmt && cp "${out('evil.rs')}" ${src}/evil.rs && cargo test`,
+      `cp -r "${out('pkg')}" ${src}/pkg`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/(?:evil|lib|pkg\/inner\/deep)\.rs:5/, cmd);
+      assert.match(reason(res), /#\[expect\(<lint>, reason = "\.\.\."\)\]/, cmd);
+    }
+    const excused = bash(`cp "${out('excused.rs')}" ${src}/excused.rs`);
+    assert.equal(decision(excused), 'ask', reason(excused));
+    assert.match(reason(excused), /Lint exception requested at crates\/ledger-domain\/src\/excused\.rs:4 \(clippy::unwrap_used\)/);
+    const untested = bash(`cp "${out('untested.rs')}" ${src}/lib.rs`);
+    assert.equal(decision(untested), 'ask', reason(untested));
+    assert.match(reason(untested), /removes 1 test\(s\) \(H-12\)/);
+    // A deny later in the command still wins over the copy's ask.
+    assert.equal(decision(bash(`cp "${out('excused.rs')}" ${src}/excused.rs && git commit --no-verify -m x`)), 'deny');
+    const both = bash(`cp "${out('excused.rs')}" ${src}/excused.rs && cargo add serde_yaml`);
+    assert.equal(decision(both), 'ask');
+    assert.match(reason(both), /Lint exception requested[^]*cargo add serde_yaml/);
+  });
+});
+
+test('Bash: a copy onto .rs whose content temper cannot read is refused with the Edit/Write guidance', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      'cp $SRC crates/ledger-domain/src/lib.rs',
+      'cp "$(mktemp)" crates/ledger-domain/src/lib.rs',
+      'cp /tmp/*.rs crates/ledger-domain/src/',
+      `cp "${out('evil.rs')}" "$DEST"`,
+      'cat body | install /dev/stdin crates/ledger-domain/src/new.rs',
+      `cp "${out('missing.rs')}" crates/ledger-domain/src/missing.rs`,
+      `cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+  });
+});
+
+test('Bash: git apply and patch that touch .rs files are refused; read-only forms and non-Rust patches are not', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      `git apply "${out('rs.diff')}"`,
+      `git apply --index -p1 "${out('rs.diff')}"`,
+      `git -C crates apply --stat --apply "${out('rs.diff')}"`,
+      `patch -p1 < "${out('rs.diff')}"`,
+      `patch -p1 -i "${out('rs.diff')}"`,
+      `patch --input="${out('rs.diff')}" -p1`,
+      `patch crates/ledger-domain/src/lib.rs "${out('doc.diff')}"`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /with the Edit tool/, cmd);
+      assert.match(reason(res), /crates\/ledger-domain\/src\/lib\.rs/, cmd);
+    }
+    for (const cmd of [`cat "${out('rs.diff')}" | git apply`, 'curl -sL https://example.com/fix.diff | patch -p1', `git apply "${out('missing.diff')}"`, 'git apply $PATCH']) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /cannot read/, cmd);
+    }
+    for (const cmd of [
+      `git apply --check "${out('rs.diff')}"`,
+      `git apply --stat "${out('rs.diff')}"`,
+      `git apply --numstat --summary "${out('rs.diff')}"`,
+      `patch --dry-run -p1 < "${out('rs.diff')}"`,
+      `git apply "${out('doc.diff')}"`,
+      `patch -p1 < "${out('doc.diff')}"`,
+      `git diff > "${out('mine.diff')}"`,
+      "git log --grep 'git apply'",
+      'echo "patch -p1 < fix.diff"',
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+test('Bash: renames, copies that pass the scan, copies out of the workspace and non-Rust copies stay allowed', () => {
+  withOutside((out) => {
+    write('crates/legacy/src/old.rs', EVIL_RS); // legacy debt: an unwrap already in the repository
+    write('crates/legacy/src/tested.rs', LIB_RS);
+    try {
+      for (const cmd of [
+        'mv crates/ledger-domain/src/lib.rs crates/ledger-domain/src/core.rs',
+        'git mv crates/ledger-domain/src/lib.rs crates/ledger-domain/src/core.rs',
+        'git mv -f crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'mv crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'Move-Item crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'mv crates/legacy/src crates/legacy/lib',
+        'mv crates/legacy crates/legacy-v1',
+        'cp crates/ledger-domain/src/lib.rs crates/ledger-domain/src/copy.rs',
+        `cp "${out('clean.rs')}" crates/ledger-domain/src/clean.rs`,
+        `cp "${out('lib.rs.orig')}" crates/ledger-domain/src/lib.rs`,
+        'cp crates/legacy/src/old.rs /tmp/old.rs.bak',
+        `cp crates/legacy/src/old.rs "${out('')}"`,
+        `cp -r crates/legacy "${out('legacy-copy')}"`,
+        'cp crates/ledger-domain/src/lib.rs crates/ledger-domain/src/lib.rs.bak',
+        'cp README.md docs/ && mv notes.txt docs/notes.md',
+        'cp $HOME/.cargo/config.toml .cargo/',
+        'cp -r $FIXTURES tests/data',
+        "git commit -m 'mv /tmp/evil.rs src/lib.rs'",
+        'echo "cp /tmp/evil.rs crates/ledger-domain/src/lib.rs"',
+        'cargo test --workspace',
+        `mv "${out('evil.rs')}" "${out('evil2.rs')}"`,
+        // A backup restored, and a file moved twice, in one command.
+        `cp crates/ledger-domain/src/lib.rs "${out('lib.rs.bak')}" && cargo test; mv "${out('lib.rs.bak')}" crates/ledger-domain/src/lib.rs`,
+        'mv crates/legacy/src/old.rs crates/legacy/src/mid.rs && mv crates/legacy/src/mid.rs crates/legacy/src/new.rs',
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+      // Moving onto an existing file deletes its tests (H-12); a move to a new mod.rs is ARC-06.
+      const over = bash('mv crates/legacy/src/old.rs crates/legacy/src/tested.rs');
+      assert.equal(decision(over), 'ask', reason(over));
+      assert.match(reason(over), /removes 1 test\(s\) \(H-12\)/);
+      const modRs = bash('git mv crates/legacy/src/old.rs crates/legacy/src/old/mod.rs');
+      assert.equal(decision(modRs), 'deny', reason(modRs));
+      assert.match(reason(modRs), /ARC-06/);
+    } finally {
+      fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+      fs.rmSync(file('crates/legacy/src/tested.rs'), { force: true });
+    }
+  });
+});
+
 test('Bash: shell writes to Cargo.toml are refused so the manifest checks run', () => {
   for (const cmd of ["printf '[profile.release]\\nlto = true\\n' >> crates/a/Cargo.toml", "sed -i 's/1.96/1.97/' Cargo.toml", 'cp template/Cargo.toml crates/new/Cargo.toml', 'cat > crates/x/Cargo.toml <<EOF\n[package]\nEOF']) {
     const res = bash(cmd);
