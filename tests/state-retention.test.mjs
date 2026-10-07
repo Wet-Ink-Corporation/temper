@@ -52,11 +52,10 @@ const has = (proj, rel) => fs.existsSync(path.join(proj.stateDir, ...rel.split('
 const list = (proj, dir) => { try { return fs.readdirSync(path.join(proj.stateDir, dir)).sort(); } catch { return []; } };
 const fp = (n) => n.toString(16).padStart(16, '0');
 
-test('retention limits are stated and ordered: verdicts outlive gate results, which outlive logs', () => {
+test('retention limits are stated and ordered: verdicts outlive gate results, whose logs go with them', () => {
   assert.deepEqual(RETENTION, {
     verdicts: { maxAgeDays: 60, keep: 300 },
-    gate: { maxAgeDays: 30, keep: 300 },
-    logs: { maxAgeDays: 14, keep: 150, maxBytes: 64 * 1024 * 1024 },
+    gate: { maxAgeDays: 30, keep: 300, maxBytes: 64 * 1024 * 1024 },
     telemetryBytes: 1024 * 1024,
   });
 });
@@ -68,42 +67,71 @@ test('prune: gate results, verdicts and logs past their age go; fresher ones sta
   put(proj, `verdicts/${fp(1)}.json`, 61);
   put(proj, `verdicts/${fp(2)}.json`, 59);
   put(proj, `verdicts/${fp(3)}.json`, 31); // older than the gate limit, younger than the verdict limit
-  put(proj, `logs/${fp(1)}-clippy.log`, 15);
-  put(proj, `logs/${fp(2)}-test.log`, 13);
+  put(proj, `logs/${fp(1)}-clippy.log`, 31);
+  put(proj, `logs/${fp(2)}-test.log`, 29);
+  put(proj, `logs/${fp(4)}-test.log`, 31); // a log whose gate result is gone
+  put(proj, `logs/${fp(5)}-test.log`, 15); // ... and one younger than the gate limit
   pruneFingerprintState(proj, null);
   assert.deepEqual(list(proj, 'gate'), [`${fp(2)}.json`]);
   assert.deepEqual(list(proj, 'verdicts'), [`${fp(2)}.json`, `${fp(3)}.json`]);
-  assert.deepEqual(list(proj, 'logs'), [`${fp(2)}-test.log`]);
+  assert.deepEqual(list(proj, 'logs'), [`${fp(2)}-test.log`, `${fp(5)}-test.log`]);
 });
 
-test('prune: a busy repository keeps only the newest records per directory', (t) => {
+test('prune: a busy repository keeps only the newest gate runs, each with all its logs', (t) => {
   const proj = state(t);
   const keep = RETENTION.gate.keep;
-  for (let i = 0; i < keep + 5; i += 1) put(proj, `gate/${fp(i)}.json`, 0, '{}', i * 1000);
-  for (let i = 0; i < RETENTION.logs.keep + 3; i += 1) put(proj, `logs/${fp(i)}-clippy.log`, 0, 'x', i * 1000);
+  for (let i = 0; i < keep + 5; i += 1) {
+    put(proj, `gate/${fp(i)}.json`, 0, '{}', i * 1000);
+    for (const step of ['clippy', 'test', 'doctest', 'doc']) put(proj, `logs/${fp(i)}-${step}.log`, 0, 'x', i * 1000);
+  }
+  for (let i = 0; i < keep + 3; i += 1) put(proj, `verdicts/${fp(i)}.json`, 0, '{}', i * 1000);
   pruneFingerprintState(proj, null);
   const gates = list(proj, 'gate');
   assert.equal(gates.length, keep);
-  // i = 0 is the newest (smallest offset); the five oldest went.
+  // i = 0 is the newest (smallest offset); the five oldest went, logs and all.
   for (let i = keep; i < keep + 5; i += 1) assert.ok(!gates.includes(`${fp(i)}.json`), `gate ${i}`);
   assert.ok(gates.includes(`${fp(0)}.json`));
-  assert.equal(list(proj, 'logs').length, RETENTION.logs.keep);
+  assert.equal(list(proj, 'logs').length, keep * 4);
+  assert.equal(list(proj, 'verdicts').length, RETENTION.verdicts.keep);
 });
 
-test('prune: logs past the byte budget go, oldest first', (t) => {
+test('prune: a kept gate result keeps the logs it cites (a red result from hours ago, 40 gate runs since)', (t) => {
+  const proj = state(t);
+  const red = fp(0xbad);
+  put(proj, `gate/${red}.json`, 0.2, JSON.stringify({ ok: false, steps: [{ name: 'test', ok: false, log: 'x' }] }));
+  put(proj, `logs/${red}-clippy.log`, 0.2, 'x');
+  put(proj, `logs/${red}-test.log`, 0.2, 'x');
+  for (let i = 0; i < 40; i += 1) {
+    put(proj, `gate/${fp(i)}.json`, 0, '{}', i * 1000);
+    for (const step of ['clippy', 'test', 'doctest', 'doc', 'rustdoc']) put(proj, `logs/${fp(i)}-${step}.log`, 0, 'x', i * 1000);
+  }
+  pruneFingerprintState(proj, null);
+  assert.equal(list(proj, 'gate').length, 41);
+  assert.ok(has(proj, `logs/${red}-clippy.log`) && has(proj, `logs/${red}-test.log`), 'the red result still points at its logs');
+  for (const g of list(proj, 'gate')) {
+    const f = g.slice(0, -'.json'.length);
+    assert.ok(list(proj, 'logs').some((l) => l.startsWith(`${f}-`)), `logs of ${f}`);
+  }
+});
+
+test('prune: past the byte budget the oldest gate runs go whole, result and logs together', (t) => {
   const proj = state(t);
   const big = 'x'.repeat(30 * 1024 * 1024);
-  put(proj, `logs/${fp(1)}-test.log`, 3, big);
-  put(proj, `logs/${fp(2)}-test.log`, 2, big);
-  put(proj, `logs/${fp(3)}-test.log`, 1, big);
+  for (const i of [1, 2, 3]) {
+    put(proj, `gate/${fp(i)}.json`, 4 - i);
+    put(proj, `logs/${fp(i)}-test.log`, 4 - i, big);
+  }
   pruneFingerprintState(proj, null);
+  assert.deepEqual(list(proj, 'gate'), [`${fp(2)}.json`, `${fp(3)}.json`]);
   assert.deepEqual(list(proj, 'logs'), [`${fp(2)}-test.log`, `${fp(3)}-test.log`]);
 });
 
-test('prune: the newest log stays even when it alone is over the byte budget (a gate may still be writing it)', (t) => {
+test('prune: the newest gate run stays even when it alone is over the byte budget', (t) => {
   const proj = state(t);
-  put(proj, `logs/${fp(1)}-test.log`, 0, 'x'.repeat(RETENTION.logs.maxBytes + 1));
+  put(proj, `gate/${fp(1)}.json`, 0);
+  put(proj, `logs/${fp(1)}-test.log`, 0, 'x'.repeat(RETENTION.gate.maxBytes + 1));
   pruneFingerprintState(proj, null);
+  assert.deepEqual(list(proj, 'gate'), [`${fp(1)}.json`]);
   assert.deepEqual(list(proj, 'logs'), [`${fp(1)}-test.log`]);
 });
 

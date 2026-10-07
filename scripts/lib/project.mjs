@@ -302,52 +302,73 @@ export function pruneSessions(proj, maxAgeDays = 14) {
 
 /**
  * How long the per-fingerprint records under the state dir are kept: by age
- * (mtime) and by count, newest first, and for logs also by total size.
+ * (newest mtime) and by count, newest first, and for gate runs also by total
+ * size. A gate run is gate/<fp>.json together with its logs/<fp>-* files, and
+ * they are pruned as one, so a kept result never cites a deleted log.
  * SessionStart prunes them on startup (pruneFingerprintState). A verdict is
- * the costliest to lose (a fresh reviewer run), a gate result costs a gate
- * re-run, and a log only explains a past red step. telemetry.jsonl rotates to
- * telemetry.1.jsonl at telemetryBytes, and one old file is kept.
+ * the costliest to lose (a fresh reviewer run); a gate run costs a gate re-run.
+ * telemetry.jsonl rotates to telemetry.1.jsonl at telemetryBytes, and one old
+ * file is kept.
  */
 export const RETENTION = {
   verdicts: { maxAgeDays: 60, keep: 300 },
-  gate: { maxAgeDays: 30, keep: 300 },
-  logs: { maxAgeDays: 14, keep: 150, maxBytes: 64 * 1024 * 1024 },
+  gate: { maxAgeDays: 30, keep: 300, maxBytes: 64 * 1024 * 1024 },
   telemetryBytes: 1024 * 1024,
 };
 
 /**
- * Remove the files in `dir` older than `maxAgeDays`, then all but the newest
- * `keep`, then the oldest until the rest fit in `maxBytes` (the newest file
- * always stays: it may be a log a running gate is still writing). Files for which
- * `protect(name)` is true are never removed and count toward no limit.
- * Errors (a file in use on Windows, a race with another session) are ignored.
+ * Group the files of `dirs` by fingerprint: the name up to its first `-` or `.`.
+ * Each group has its files, its newest mtime and its total size.
  */
-function pruneFiles(dir, { maxAgeDays, keep, maxBytes = Infinity }, protect) {
-  let names = [];
-  try { names = fs.readdirSync(dir); } catch { return; }
+function fingerprintGroups(dirs) {
+  const groups = new Map();
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      let s;
+      try { s = fs.statSync(p); } catch { continue; }
+      if (!s.isFile()) continue;
+      const key = n.split(/[-.]/)[0];
+      const g = groups.get(key) ?? { key, files: [], t: 0, size: 0 };
+      g.files.push(p);
+      g.t = Math.max(g.t, s.mtimeMs);
+      g.size += s.size;
+      groups.set(key, g);
+    }
+  }
+  return [...groups.values()];
+}
+
+/**
+ * Remove the groups of `dirs` older than `maxAgeDays`, then all but the newest
+ * `keep`, then the oldest until the rest fit in `maxBytes` (the newest group
+ * always stays). The group `protect` names is never removed and counts toward
+ * no limit. Errors (a file in use on Windows, a race with another session)
+ * are ignored.
+ */
+function pruneGroups(dirs, { maxAgeDays, keep, maxBytes = Infinity }, protect) {
   const cutoff = Date.now() - maxAgeDays * 86400000;
-  const files = names.filter((n) => !protect(n)).map((n) => {
-    const p = path.join(dir, n);
-    try { const s = fs.statSync(p); return s.isFile() ? { p, t: s.mtimeMs, size: s.size } : null; } catch { return null; }
-  }).filter(Boolean).sort((a, b) => b.t - a.t);
+  const groups = fingerprintGroups(dirs).filter((g) => !protect || g.key !== protect).sort((a, b) => b.t - a.t);
   let bytes = 0;
-  files.forEach((f, i) => {
-    bytes += f.size;
-    if (f.t < cutoff || i >= keep || (i > 0 && bytes > maxBytes)) {
-      try { fs.rmSync(f.p, { force: true }); } catch { /* ignore */ }
+  groups.forEach((g, i) => {
+    bytes += g.size;
+    if (g.t < cutoff || i >= keep || (i > 0 && bytes > maxBytes)) {
+      for (const p of g.files) { try { fs.rmSync(p, { force: true }); } catch { /* ignore */ } }
     }
   });
 }
 
 /**
- * Prune gate/<fp>.json, verdicts/<fp>.json and logs/<fp>-<step>.log to the
- * RETENTION limits. The records of `currentFp`, the tree the session starts
- * on, are kept whatever their age. A pruned verdict means a later Stop on that
- * tree asks for a fresh review; a pruned gate result, a fresh gate run.
+ * Prune verdicts/<fp>.json, and gate/<fp>.json with its logs/<fp>-* files, to
+ * the RETENTION limits. The records of `currentFp`, the tree the session
+ * starts on, are kept whatever their age. A pruned verdict means a later Stop
+ * on that tree asks for a fresh review; a pruned gate result, a fresh gate run.
  */
 export function pruneFingerprintState(proj, currentFp) {
-  const mine = (n) => Boolean(currentFp) && (n === `${currentFp}.json` || n.startsWith(`${currentFp}-`));
-  for (const d of ['verdicts', 'gate', 'logs']) pruneFiles(path.join(proj.stateDir, d), RETENTION[d], mine);
+  pruneGroups([path.join(proj.stateDir, 'verdicts')], RETENTION.verdicts, currentFp);
+  pruneGroups([path.join(proj.stateDir, 'gate'), path.join(proj.stateDir, 'logs')], RETENTION.gate, currentFp);
 }
 
 const TELEMETRY = 'telemetry.jsonl';
@@ -358,6 +379,7 @@ export function telemetry(proj, input, event, detail = {}) {
     fs.mkdirSync(proj.stateDir, { recursive: true });
     const file = path.join(proj.stateDir, TELEMETRY);
     // Rotate at the cap and keep one old file, so the pair stays under about twice the cap.
+    // Two hooks rotating at once can drop the older file's history; telemetry is best effort.
     try { if (fs.statSync(file).size >= RETENTION.telemetryBytes) fs.renameSync(file, path.join(proj.stateDir, TELEMETRY_OLD)); } catch { /* absent, or rotated by another hook */ }
     fs.appendFileSync(file, JSON.stringify({
       t: new Date().toISOString(), sid: input?.session_id, agent: input?.agent_type ?? 'main', event, ...detail,
