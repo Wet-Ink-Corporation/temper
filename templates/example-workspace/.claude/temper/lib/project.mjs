@@ -312,13 +312,22 @@ export function telemetry(proj, input, event, detail = {}) {
 // ---------- change detection and fingerprint ----------
 
 // What counts as "the Rust change": sources, manifests, toolchain and lint config,
-// test expectations (snapshots, trybuild .stderr) and anything under a tests/ dir.
-// Other files (notes, logs, transcripts) never invalidate a gate result or a review.
-const RUST_RELEVANT = /(\.rs$)|(\.snap$)|(\.stderr$)|((^|\/)tests\/)|((^|\/)Cargo\.(toml|lock)$)|((^|\/)(rust-toolchain(\.toml)?|\.?clippy\.toml|\.?rustfmt\.toml|deny\.toml)$)/;
+// cargo config (rustflags), temper's own config (gate steps and features, scan,
+// review mode), test expectations (snapshots, trybuild .stderr) and anything
+// under a tests/ dir. Other files (notes, logs, transcripts) never invalidate a
+// gate result or a review. Paths are relative to the git top-level, which is
+// also the project root that temper reads .claude/temper.json from, so that
+// file counts at the root only. Cargo reads .cargo/config(.toml) from its cwd
+// and every parent, so one in any directory counts: the gate runs cargo at the
+// root, but a workspace in a subdirectory, or cargo run in a member, reads a
+// nested one too.
+const TEMPER_CONFIG_FILE = '.claude/temper.json';
+const RUST_RELEVANT = /(\.rs$)|(\.snap$)|(\.stderr$)|((^|\/)tests\/)|((^|\/)Cargo\.(toml|lock)$)|((^|\/)(rust-toolchain(\.toml)?|\.?clippy\.toml|\.?rustfmt\.toml|deny\.toml)$)|((^|\/)\.cargo\/config(\.toml)?$)|(^\.claude\/temper\.json$)/;
 const RELEVANT_PATHSPECS = [
   ':(glob)**/*.rs', ':(glob)**/*.snap', ':(glob)**/*.stderr', ':(glob)**/tests/**',
   ':(glob)**/Cargo.toml', ':(glob)**/Cargo.lock', ':(glob)**/rust-toolchain', ':(glob)**/rust-toolchain.toml',
   ':(glob)**/clippy.toml', ':(glob)**/.clippy.toml', ':(glob)**/rustfmt.toml', ':(glob)**/.rustfmt.toml', ':(glob)**/deny.toml',
+  ':(glob)**/.cargo/config', ':(glob)**/.cargo/config.toml', `:(literal)${TEMPER_CONFIG_FILE}`,
 ];
 const EXCLUDE = ['.temper', 'target'];
 
@@ -387,8 +396,8 @@ export function fingerprint(proj, base) {
       try { h.update(fs.readFileSync(path.join(proj.gitRoot, f))); } catch { /* vanished */ }
     }
   } else {
-    const baseline = path.join(proj.root, ...BASELINE_FILE.split('/'));
-    const files = walkRust(proj.root).concat(fs.existsSync(baseline) ? [baseline] : []);
+    const extra = [BASELINE_FILE, TEMPER_CONFIG_FILE].map((rel) => path.join(proj.root, ...rel.split('/')));
+    const files = walkRust(proj.root).concat(extra.filter((f) => fs.existsSync(f)));
     for (const f of files.sort()) {
       h.update(`\n${relTo(proj.root, f)}\n`);
       try { h.update(fs.readFileSync(f)); } catch { /* vanished */ }

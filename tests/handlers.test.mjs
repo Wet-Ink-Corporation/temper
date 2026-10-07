@@ -222,6 +222,66 @@ test('skill gate: "skillGate": false in .claude/temper.json turns it off', { ski
 
 // ------------------------------------------------- Stop: before the gate runs
 
+/** The "Changed Rust files" line SubagentStart gives an implementer: the session's Rust changes. */
+const changedFor = (r, sid) => {
+  const line = context(subagentStart({ cwd: r.dir, session_id: sid, agent_type: 'rust-implementer', agent_id: 'im-cfg' }))
+    .split('\n').find((l) => l.startsWith('- Changed Rust files'));
+  return line.replace(/^- Changed Rust files \(\d+\): /, '');
+};
+
+test('change detection: .claude/temper.json and .cargo/config(.toml) count as Rust changes and change the fingerprint', { skip: noGit }, (t) => {
+  // tracked files edited after the base commit (the git diff pathspecs)
+  const r = repo(t);
+  r.config({ review: 'required' });
+  r.put('.cargo/config.toml', '[build]\nrustflags = []\n');
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const clean = r.fp();
+  assert.equal(changedFor(r, 's-cfg-clean'), 'none');
+  r.config({ review: 'required', gate: { allFeatures: false } });
+  assert.equal(changedFor(r, 's-cfg-json'), '.claude/temper.json');
+  const afterJson = r.fp();
+  assert.notEqual(afterJson, clean, 'an edited .claude/temper.json changes the fingerprint');
+  r.put('.cargo/config.toml', '[build]\nrustflags = ["-Dwarnings"]\n');
+  assert.deepEqual(changedFor(r, 's-cfg-cargo').split(', ').sort(), ['.cargo/config.toml', '.claude/temper.json']);
+  assert.notEqual(r.fp(), afterJson, 'an edited .cargo/config.toml changes the fingerprint');
+  // untracked files: the legacy .cargo/config and a nested one, which cargo reads when run in that directory
+  const u = repo(t);
+  let fp = u.fp();
+  for (const rel of ['.claude/temper.json', '.cargo/config', 'crates/core/.cargo/config.toml']) {
+    u.put(rel, rel.endsWith('.json') ? '{"review":"advisory"}' : '[build]\nrustflags = []\n');
+    assert.ok(changedFor(u, 's-cfg-untracked').split(', ').includes(rel), `${rel} is a Rust change`);
+    const next = u.fp();
+    assert.notEqual(next, fp, `untracked ${rel} changes the fingerprint`);
+    fp = next;
+  }
+});
+
+test('change detection: other files under .claude/ and .cargo/ are not Rust changes and leave the fingerprint alone', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const fp = r.fp();
+  const nearMisses = [
+    '.claude/settings.json', '.claude/settings.local.json', '.claude/temper.json.bak', '.claude/temper-notes.json',
+    'docs/.claude/temper.json', '.cargo/credentials.toml', '.cargo/config.toml.orig', 'notes/cargo-config.toml', 'NOTES.md',
+  ];
+  for (const rel of nearMisses) r.put(rel, '{}\n');
+  assert.equal(changedFor(r, 's-near'), 'none');
+  assert.equal(r.fp(), fp);
+  assert.deepEqual(stop({ cwd: r.dir, session_id: 's-near' }), {});
+});
+
+test('Stop: a session that edits only .claude/temper.json runs the gate and needs a review for the new tree', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const before = r.gate(true);
+  recordVerdict(r.proj(), verdict(before));
+  r.config({ gate: { allFeatures: false } });
+  const fp = r.gate(true);
+  assert.notEqual(fp, before, 'the cached gate and verdict for the old tree do not apply');
+  const res = blocked(stop({ cwd: r.dir, session_id: 's-cfg-stop' }));
+  assert.ok(res, 'blocked');
+  assert.match(res, new RegExp(`^The gate is green, but the current tree \\(fingerprint ${fp}\\) has no approving independent review \\(PROC-08\\)`));
+});
+
 test('Stop: no Rust change, plan mode, or a tree the session started with ends the turn silently', { skip: noGit }, (t) => {
   const r = repo(t);
   assert.deepEqual(stop({ cwd: r.dir, session_id: 's-clean' }), {});
@@ -311,10 +371,12 @@ test('Stop: green with an approved verdict for the fingerprint ends the turn', {
 test('Stop: review "advisory" and "off" in .claude/temper.json', { skip: noCargo }, (t) => {
   const r = repo(t);
   r.put(LIB, LIB_RS_2);
-  const fp = r.gate(true);
+  // .claude/temper.json is part of the tree fingerprint, so the gate is seeded after each config change
   r.config({ review: 'advisory' });
+  let fp = r.gate(true);
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-adv' })), `temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
   r.config({ review: 'off' });
+  fp = r.gate(true);
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-off' })), `temper: gate green (fingerprint ${fp}).`);
   // a red gate still blocks when review is off
   r.gate(false);
