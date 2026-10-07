@@ -17,13 +17,22 @@ export const MIN_APPLICABLE_SCORES = 3;
 /** A path with "/" separators and no leading "./". */
 const normPath = (f) => String(f).trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
 
+/** An absolute path once normalised: "/x", "//?/C:/x", "//server/x" or "C:/x". */
+const isAbs = (f) => f.startsWith('/') || /^[A-Za-z]:\//.test(f);
+
 /**
- * Whether a files_read entry names the changed file (both normalised): the same
- * path, or a longer one (absolute, or under the project root) whose trailing
- * components are the whole changed path. A bare suffix such as "lib.rs" or
- * "src/lib.rs" for crates/core/src/lib.rs does not cover it.
+ * The changed files (normalised) that a files_read entry (normalised) covers: the
+ * same repo-relative path, or for an absolute entry the longest changed path its
+ * trailing components equal. A bare suffix such as "lib.rs" or "src/lib.rs" for
+ * crates/core/src/lib.rs covers nothing, and the absolute path of
+ * crates/core/src/lib.rs does not cover a root package's src/lib.rs as well.
  */
-const covers = (read, changed) => changed !== '' && (read === changed || read.endsWith(`/${changed}`));
+function coveredBy(read, changed) {
+  if (changed.includes(read)) return [read];
+  if (!isAbs(read)) return [];
+  const tails = changed.filter((f) => f !== '' && read.endsWith(`/${f}`)).sort((a, b) => b.length - a.length);
+  return tails.slice(0, 1);
+}
 
 /** Extract the last fenced json block containing "temper_verdict". */
 export function extractVerdict(text) {
@@ -66,14 +75,15 @@ export function validateVerdict(v, ctx = {}) {
       else if (s !== 'n/a' && !(Number.isInteger(s) && s >= 0 && s <= 4)) p.push(`scores.${d} must be 0-4 or "n/a"`);
     }
     const rated = DIMENSIONS.filter((d) => Number.isInteger(scores[d]) && scores[d] >= 0 && scores[d] <= 4).length;
-    if (rated < MIN_APPLICABLE_SCORES) p.push(`scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 ("n/a" only where a dimension does not apply); ${rated} rated`);
+    if (rated < MIN_APPLICABLE_SCORES) p.push(`scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 (correctness, escape_hatches and craft apply to any change; "n/a" only where a dimension does not apply); ${rated} rated`);
   }
   const ev = v.evidence ?? {};
   if (!Array.isArray(ev.files_read) || ev.files_read.length === 0) p.push('evidence.files_read must list the files you actually read');
   if (!Array.isArray(ev.commands_run) || ev.commands_run.length === 0) p.push('evidence.commands_run must list the commands you ran (at least the gate)');
   if (ctx.changedRust?.length && Array.isArray(ev.files_read)) {
-    const read = ev.files_read.map(normPath);
-    const missed = ctx.changedRust.filter((f) => f.endsWith('.rs') && !read.some((r) => covers(r, normPath(f))));
+    const changed = ctx.changedRust.map(normPath);
+    const seen = new Set(ev.files_read.flatMap((r) => coveredBy(normPath(r), changed)));
+    const missed = ctx.changedRust.filter((f) => f.endsWith('.rs') && !seen.has(normPath(f)));
     if (missed.length) p.push(`changed files not reviewed: ${missed.slice(0, 10).join(', ')}`);
   }
   if (v.verdict === 'approved') {

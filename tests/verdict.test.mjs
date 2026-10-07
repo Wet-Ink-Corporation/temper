@@ -2,9 +2,10 @@
 // final message, validation, and storage keyed by tree fingerprint.
 //
 // Audit finding engine-1-12 (docs/history/2026-10-audit/findings.json): a
-// files_read entry covers a changed file only by whole path components (a bare
-// suffix such as "lib.rs" does not), and every verdict rates at least
-// MIN_APPLICABLE_SCORES dimensions with an integer score.
+// files_read entry covers a changed file only when it is that repo-relative path,
+// or an absolute path ending in it (a bare suffix such as "lib.rs" does not, nor
+// does another file's path that ends the same way), and every verdict rates at
+// least MIN_APPLICABLE_SCORES dimensions with an integer score.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -129,15 +130,16 @@ test('validateVerdict: a changed .rs file missing from files_read is reported', 
 test('validateVerdict: files_read covers a changed file by whole path components, not by a bare suffix', () => {
   const ctx = { changedRust: ['crates/core/src/lib.rs'] };
   const read = (...files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), ctx);
-  // refused: a suffix of the changed path, or a longer path that does not split at a "/"
-  for (const entry of ['s', 'lib.rs', 'src/lib.rs', 'core/src/lib.rs', 'ore/src/lib.rs', 'xcrates/core/src/lib.rs', 'crates/core/src/lib', 'crates/core/src/lib.rs/', '']) {
+  // refused: a suffix of the changed path, a longer path that does not split at a "/",
+  // or a longer relative path (it names some other file)
+  for (const entry of ['s', 'lib.rs', 'src/lib.rs', 'core/src/lib.rs', 'ore/src/lib.rs', 'xcrates/core/src/lib.rs', 'crates/core/src/lib', 'crates/core/src/lib.rs/', '', 'proj/crates/core/src/lib.rs', '../crates/core/src/lib.rs']) {
     assert.deepEqual(read(entry), ['changed files not reviewed: crates/core/src/lib.rs'], `files_read ${JSON.stringify(entry)}`);
   }
-  // accepted: the path itself (either separator, with or without ./), or a longer path ending in /<the path>
+  // accepted: the path itself (either separator, with or without ./), or an absolute path ending in /<the path>
   for (const entry of [
     'crates/core/src/lib.rs', './crates/core/src/lib.rs', '.\\crates\\core\\src\\lib.rs', ' crates/core/src/lib.rs ',
     '/home/dev/proj/crates/core/src/lib.rs', 'C:\\Users\\dev\\proj\\crates\\core\\src\\lib.rs', 'C:/Users/dev/proj/crates/core/src/lib.rs',
-    '\\\\?\\C:\\proj\\crates\\core\\src\\lib.rs', 'proj/crates/core/src/lib.rs',
+    '\\\\?\\C:\\proj\\crates\\core\\src\\lib.rs', '\\\\server\\share\\proj\\crates\\core\\src\\lib.rs',
   ]) {
     assert.deepEqual(read(entry), [], `files_read ${JSON.stringify(entry)}`);
   }
@@ -148,6 +150,15 @@ test('validateVerdict: files_read covers a changed file by whole path components
   // one entry covers only its own file: "lib.rs" no longer covers every lib.rs in the workspace
   const two = { changedRust: ['crates/a/src/lib.rs', 'crates/b/src/lib.rs'] };
   assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['crates/a/src/lib.rs', 'lib.rs'], commands_run: ['gate'] } }), two), ['changed files not reviewed: crates/b/src/lib.rs']);
+  // a root package next to a member crate: a member's path does not cover the root file it ends with
+  const nested = { changedRust: ['src/lib.rs', 'crates/core/src/lib.rs', 'build.rs'] };
+  const nest = (...files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), nested);
+  assert.deepEqual(nest('crates/core/src/lib.rs', 'build.rs'), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(nest('/repo/crates/core/src/lib.rs', 'C:\\repo\\crates\\core\\build.rs', 'build.rs'), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(nest('src/lib.rs', 'crates/core/src/lib.rs', 'crates/core/build.rs'), ['changed files not reviewed: build.rs']);
+  // ...and each file named by its own path, relative or absolute, still covers it
+  assert.deepEqual(nest('src/lib.rs', 'crates/core/src/lib.rs', 'build.rs'), []);
+  assert.deepEqual(nest('/repo/src/lib.rs', '/repo/crates/core/src/lib.rs', 'C:\\repo\\build.rs'), []);
 });
 
 test('validateVerdict: the paths SubagentStart lists, as given or absolute, cover the changed files', { skip: noGit }, (t) => {
@@ -155,7 +166,8 @@ test('validateVerdict: the paths SubagentStart lists, as given or absolute, cove
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const put = (rel, text) => { const f = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
   const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  put('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n');
+  put('Cargo.toml', '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n');
+  put('src/lib.rs', '//! App.\n');
   put('crates/core/Cargo.toml', '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2024"\n');
   put('crates/core/src/lib.rs', '//! Core.\n');
   git('init', '-q');
@@ -163,21 +175,26 @@ test('validateVerdict: the paths SubagentStart lists, as given or absolute, cove
   git('commit', '-qm', 'base');
   put('crates/core/src/lib.rs', '//! Core, changed.\n');
   put('crates/core/src/new.rs', '//! New.\n');
+  put('src/lib.rs', '//! App, changed.\n');
   const proj = discover(dir);
   const changedRust = rustChanges(proj, git('rev-parse', 'HEAD')).filter((f) => f.endsWith('.rs'));
-  assert.deepEqual([...changedRust].sort(), ['crates/core/src/lib.rs', 'crates/core/src/new.rs']);
+  assert.deepEqual([...changedRust].sort(), ['crates/core/src/lib.rs', 'crates/core/src/new.rs', 'src/lib.rs']);
   const check = (files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), { changedRust });
   // the repo-relative paths SubagentStart prints, and the same files as native absolute paths
   assert.deepEqual(check(changedRust), []);
   assert.deepEqual(check(changedRust.map((f) => path.join(proj.root, ...f.split('/')))), []);
   assert.deepEqual(check(changedRust.map((f) => path.join(dir, ...f.split('/')))), []);
-  has(check(['lib.rs', 'new.rs']), /^changed files not reviewed: crates\/core\/src\/(lib|new)\.rs, crates\/core\/src\/(lib|new)\.rs$/);
+  has(check(['lib.rs', 'new.rs']), /^changed files not reviewed: /);
+  // the member crate's lib.rs, relative or absolute, does not cover the root package's src/lib.rs
+  const member = changedRust.filter((f) => f.startsWith('crates/'));
+  assert.deepEqual(check(member), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(check(member.map((f) => path.join(dir, ...f.split('/')))), ['changed files not reviewed: src/lib.rs']);
 });
 
 test(`validateVerdict: every verdict rates at least ${MIN_APPLICABLE_SCORES} dimensions with an integer score`, () => {
   assert.equal(MIN_APPLICABLE_SCORES, 3);
   const scored = (n, over = {}) => verdict({ scores: Object.fromEntries(DIMENSIONS.map((d, i) => [d, i < n ? 3 : 'n/a'])), ...over });
-  const msg = (n) => `scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 ("n/a" only where a dimension does not apply); ${n} rated`;
+  const msg = (n) => `scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 (correctness, escape_hatches and craft apply to any change; "n/a" only where a dimension does not apply); ${n} rated`;
   // refused: an approval with every score "n/a", or with fewer than the minimum rated
   assert.deepEqual(validateVerdict(scored(0)), [msg(0)]);
   assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES - 1)), [msg(MIN_APPLICABLE_SCORES - 1)]);
