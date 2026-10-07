@@ -25,7 +25,9 @@ cleanup() { if [ "${KEEP:-0}" = 1 ]; then echo "kept $WORK"; else rm -rf "$WORK"
 trap cleanup EXIT
 
 mkdir "$WS"
-cp -R "$PLUGIN/templates/example-workspace/." "$WS"
+# Copies the working tree, minus the gitignored target/ and .temper/ a local
+# cargo or gate run may have left in templates/example-workspace.
+tar -C "$PLUGIN/templates/example-workspace" --exclude=./target --exclude=./.temper -cf - . | tar -C "$WS" -xf -
 git -C "$WS" init -q
 git -C "$WS" add -A
 git -C "$WS" commit -qm "example workspace"

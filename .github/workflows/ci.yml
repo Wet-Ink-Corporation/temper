@@ -26,8 +26,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      # The toolchain templates/workspace/rust-toolchain.toml pins; the doc examples
-      # and the brownfield e2e build under it.
+      # The toolchain templates/workspace/rust-toolchain.toml and
+      # templates/example-workspace/rust-toolchain.toml pin; the doc examples, the
+      # brownfield e2e and the example workspace gate build under it.
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
         with:
           toolchain: 1.98.1
