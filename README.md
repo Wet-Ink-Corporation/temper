@@ -2,7 +2,7 @@
 
 The **rust-craft** engineering standard for Rust, plus the machinery that makes coding agents follow it, whether or not they "decide" to.
 
-- **The standard** (`skills/rust-craft`) is a portable Agent Skill. It covers ownership and lifetimes, public API design, crate and module architecture, typed errors, TDD, performance and resources, async and concurrency, serde and structured output, modern edition-2024 idioms, and a catalogue of escape hatches with the correct shape for each. Every rule has an ID (`OWN-08`, `ERR-03`, `H-02`), which implementers cite in plans and reviewers cite in findings. There are 182 rules; `references/rules.md` is the registry, and `references/sources.md` records which outside guidance (the API Guidelines, Effective Rust, the Performance Book, Rust Atomics and Locks, the Cargo Book, Microsoft's guidelines and others) informed which rules, and what was deliberately left out. `templates/example-workspace/` is a complete event-sourced, hexagonal reference workspace that passes the gate, including under Miri. `tests/doc_examples.py` checks every code example in the standard: "Do" examples are compiled and linted under the template lints, and "Don't" examples that name a diagnostic must fire it.
+- **The standard** (`skills/rust-craft`) is a portable Agent Skill. It covers ownership and lifetimes, public API design, crate and module architecture, typed errors, TDD, performance and resources, async and concurrency, serde and structured output, modern edition-2024 idioms, and a catalogue of escape hatches with the correct shape for each. Every rule has an ID (`OWN-08`, `ERR-03`, `H-02`), which implementers cite in plans and reviewers cite in findings. There are 182 rules; `references/rules.md` is the registry, and `references/sources.md` records which outside guidance (the API Guidelines, Effective Rust, the Performance Book, Rust Atomics and Locks, the Cargo Book, Microsoft's guidelines and others) informed which rules, and what was deliberately left out. `templates/example-workspace/` is a complete event-sourced, hexagonal reference workspace that passes the gate, including under Miri. `tests/doc_examples.py` checks the Rust examples in the standard: "Do" examples are compiled and linted under the template lints (illustrative fragments are only scanned), and "Don't" examples that name a diagnostic must fire it.
 - **The enforcement** (hooks, subagents, workflow commands, repository templates) runs in Claude Code.
 
 ## Why a plugin and not only a skill
@@ -187,9 +187,9 @@ The only measured cost is the smoke test: one session that adds a function, runs
 
 ## Local data and telemetry
 
-temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree, and in `target/temper/` when the Cargo project is not inside a git repository): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Because it lives inside `.git` (or the `target/` directory, which `.gitignore` excludes), none of it is committed or pushed. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
+temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree, and in `target/temper/` when the Cargo project is not inside a git repository): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Inside `.git` it is never committed or pushed. The `target/temper/` fallback stays out of git only while `.gitignore` ignores `/target`, so check that before you `git init` such a project. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
 
-`telemetry.jsonl` is what `temper stats` summarizes. The hooks append one JSON line, about 100 to 200 bytes, for each session start, skill load, denial, question, reviewer verdict and Stop outcome. Each line holds a timestamp, the Claude Code session ID, the agent type and the event name, and for some events a repository-relative file path, rule IDs, a fingerprint or a count. The file is never pruned, and only `stats` reads it, so delete it whenever you like (`rm .git/temper/telemetry.jsonl`). There is no separate switch to turn it off; `TEMPER_DISABLE=1` turns off the hooks, and with them the telemetry.
+`telemetry.jsonl` is what `temper stats` summarizes. The hooks append one JSON line, about 100 to 200 bytes, for each session start, skill load, denial, question, reviewer verdict and Stop outcome. Each line holds a timestamp, the Claude Code session ID, the agent type and the event name, and for some events a repository-relative file path, rule IDs, a fingerprint or a count. The file is never pruned, and only `stats` reads it, so delete it whenever you like: `rm "$(git rev-parse --git-common-dir)/temper/telemetry.jsonl"`, which also works in a worktree, where `.git` is a file. There is no separate switch to turn it off; `TEMPER_DISABLE=1` turns off the hooks, and with them the telemetry.
 
 ## Troubleshooting
 
@@ -215,7 +215,7 @@ The short version:
 ```bash
 tests/ci.sh                         # everything below that needs no model call, as CI runs it (--quick skips Rust builds)
 node --test tests/*.test.mjs        # scanner, hook, manifest, baseline, report and vendor unit tests
-python3 tests/doc_examples.py       # every code block in the skill: Do blocks compile, pass clippy and tests
+python3 tests/doc_examples.py       # the skill's Rust and TOML blocks: Do blocks compile, pass clippy and tests
                                     # under the template lints; Don't blocks that carry expect= fire the
                                     # diagnostic they claim; Don't blocks without expect= are not compiled
                                     # and are reported without failing
