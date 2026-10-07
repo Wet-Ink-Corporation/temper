@@ -14,6 +14,12 @@ Clearer messages for new adopters. Only the text changes: every hook decision, e
 
 `temper setup` adds `/target/` to `.gitignore` when no line ignores `target` already (`target`, `target/`, `/target` and `/target/` all count), next to the `.temper/` line it already added. `--dry-run` reports it without writing, `--vendor-only` leaves `.gitignore` alone, and a second run adds nothing. `Cargo.lock` is not added: it is committed.
 
+**`SessionStart` reports a runtime older than the documented minimum.** Before, nothing checked the README's minimums, Claude Code 2.1.286 and Node 18. Now `SessionStart` adds a warning line, shown to the human (`systemMessage`) and to the model (`additionalContext`), when either is older. Every hook decision and exit code is the same: it is a message only.
+- **Node.** On a Node older than 18, `hook session-start` prints only the warning, before the rest of temper loads. In a Rust workspace it used to print `temper hook session-start failed: structuredClone is not defined`; elsewhere it printed nothing. Other hooks run as before, and CLI commands print the warning on stderr and keep their own output and exit code. `TEMPER_DISABLE=1` stays silent.
+- **Claude Code.** Hook input carries no version, so temper runs `"$CLAUDE_CODE_EXECPATH" --version` once per `SessionStart` in a Rust workspace (about 15 ms). When that variable is unset or does not name a `claude` binary, the version is unknown and nothing is said. `CLAUDE_CODE_VERSION` is not used: other tools set it to other values.
+
+The minimums live in `MINIMUM_VERSIONS` in the new `scripts/lib/requirements.mjs`; `temper setup --vendor-only` copies it with the rest of the vendored CLI.
+
 Upgrading from 1.3.x: `scripts/temper.mjs`, `scripts/lib/gate.mjs`, `scripts/lib/hooks.mjs` and `scripts/lib/vendor.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. A full `temper setup` also appends `/target/` to `.gitignore` if no `target` line is there.
 
 ## 1.3.0 (2026-10-05)

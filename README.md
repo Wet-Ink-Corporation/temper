@@ -26,7 +26,7 @@ A skill is advice that the model chooses to load. Rules the model can't skip hav
 
 Requirements:
 - **Claude Code 2.1.286 or later.** The end-to-end smoke test passes on 2.1.286, 2.1.288 and 2.1.289. Every hook in `hooks/hooks.json` ran on these versions except the `PreToolUse` `SubagentHandback` hook, which they never call; `SubagentStop` validates and records the reviewer's verdict instead ([results](docs/history/evals.md#smoke-runs)). Older releases are untested.
-- **Node 18 or later** on the `PATH` that Claude Code sees. On Windows it must be a real `node.exe`; see [troubleshooting](docs/troubleshooting.md#windows).
+- **Node 18 or later** on the `PATH` that Claude Code sees. On Windows it must be a real `node.exe`; see [troubleshooting](docs/troubleshooting.md#windows). `SessionStart` warns when Node, or the Claude Code it runs under, is older than these minimums; it blocks nothing.
 - **git**, and the Rust toolchain that `rust-toolchain.toml` pins (1.98.1 in the template), with clippy and rustfmt.
 - **Access to `Wet-Ink-Corporation/temper`.** The repository is internal to the organization, so `marketplace add` works only where git has credentials for it ([troubleshooting](docs/troubleshooting.md#cloud-sessions-and-claudeai)).
 - **The Cargo workspace at the git root.** A workspace in a subdirectory of the repository (`rust/Cargo.toml` in a monorepo) is not supported yet: `temper baseline --init` refuses it, and `baseline --check` fails, with `temper needs the Cargo workspace at the git root … Nested workspaces are not supported yet.`

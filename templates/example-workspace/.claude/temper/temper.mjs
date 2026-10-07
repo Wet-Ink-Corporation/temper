@@ -26,6 +26,17 @@ import { collectFindings, cachedFindings, isComplete } from './lib/findings.mjs'
 import {
   BASELINE_PATH, readBaseline, writeBaseline, baselineFrom, tighten, ratchet, renderRatchet, diffTotals, crateAliases,
 } from './lib/baseline.mjs';
+import { earlyNodeCheck } from './lib/requirements.mjs';
+
+// First, before any other code: on a Node below the documented minimum, say so plainly instead of
+// failing on a missing API later. SessionStart reports it and stops; other hooks and commands carry
+// on as before.
+const early = earlyNodeCheck(process.versions.node, process.argv.slice(2), process.env);
+if (early && early.stderr) process.stderr.write(early.stderr);
+if (early && early.stdout !== undefined) {
+  await new Promise((done) => { process.stdout.write(early.stdout, done); });
+  process.exit(early.exit);
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(here, '..');

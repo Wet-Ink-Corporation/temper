@@ -151,6 +151,55 @@ test('SessionStart: CLAUDE_ENV_FILE gains TEMPER_CLI and TEMPER_BASE', { skip: n
   assert.equal(lines[1], `export TEMPER_BASE="${r.git('rev-parse', 'HEAD')}"`);
 });
 
+/** Run fn with CLAUDE_CODE_EXECPATH set to `value` (undefined: unset), restored afterwards. */
+const withExecPath = (t, value) => {
+  const prev = process.env.CLAUDE_CODE_EXECPATH;
+  if (value === undefined) delete process.env.CLAUDE_CODE_EXECPATH; else process.env.CLAUDE_CODE_EXECPATH = value;
+  t.after(() => { if (prev === undefined) delete process.env.CLAUDE_CODE_EXECPATH; else process.env.CLAUDE_CODE_EXECPATH = prev; });
+};
+
+test('SessionStart: an old runtime adds the warning for the human and for the model, and nothing else', async () => {
+  const { withRuntimeWarnings } = await import('../scripts/lib/hooks.mjs');
+  const out = { json: { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'line one' } } };
+  const warned = withRuntimeWarnings(out, ['temper: Claude Code 2.1.200 is older than the documented minimum, Claude Code 2.1.286.']);
+  assert.deepEqual(warned, { json: {
+    systemMessage: 'temper: Claude Code 2.1.200 is older than the documented minimum, Claude Code 2.1.286.',
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'line one\n- temper: Claude Code 2.1.200 is older than the documented minimum, Claude Code 2.1.286.' },
+  } });
+  assert.equal(withRuntimeWarnings(out, []), out);
+});
+
+test('SessionStart: a current or unknown Claude Code version adds no warning', { skip: noGit }, (t) => {
+  const r = repo(t);
+  for (const exec of [undefined, process.execPath, path.join(r.dir, 'missing', 'claude')]) {
+    withExecPath(t, exec);
+    const res = sessionStart({ cwd: r.dir, session_id: 's-ver', source: 'startup' });
+    assert.equal(message(res), null, String(exec));
+    assert.doesNotMatch(context(res), /older than the documented minimum/);
+  }
+});
+
+test('SessionStart: a Claude Code older than the minimum is reported', { skip: (noGit || (process.platform === 'win32' && 'fake claude binary is a POSIX script')) }, (t) => {
+  const r = repo(t);
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-fakeclaude-'));
+  t.after(() => fs.rmSync(bin, { recursive: true, force: true }));
+  const fake = path.join(bin, 'claude');
+  for (const [version, warns] of [['2.1.200', true], ['2.1.286', false], ['2.1.292', false]]) {
+    fs.writeFileSync(fake, `#!/bin/sh\necho "${version} (Claude Code)"\n`, { mode: 0o755 });
+    withExecPath(t, fake);
+    const res = sessionStart({ cwd: r.dir, session_id: 's-oldcc', source: 'startup' });
+    if (warns) {
+      assert.match(message(res), new RegExp(`^temper: Claude Code ${version.replaceAll('.', '\\.')} is older than the documented minimum, Claude Code 2\\.1\\.286`));
+      assert.ok(context(res).endsWith(`\n- ${message(res)}`), context(res));
+      assert.match(context(res), /- Iron rules \(production code\): H-01/);
+    } else {
+      assert.equal(message(res), null, version);
+    }
+    assert.equal(res.json.hookSpecificOutput.hookEventName, 'SessionStart');
+    assert.ok(!('decision' in res.json));
+  }
+});
+
 test('SessionStart outside a Rust project does nothing', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-norust-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
