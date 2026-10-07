@@ -9,7 +9,7 @@ import {
   fingerprint, diffStat, run, startFingerprint,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
-import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing } from './shell.mjs';
+import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
@@ -348,6 +348,7 @@ const shellWrites = (target, { copies = false } = {}) => {
   return res;
 };
 const SHELL_WRITE_RS = shellWrites('\\.rs');
+const RS_SHELL_DENY = 'temper: write Rust sources with the Edit or Write tools, not the shell, so the standard\'s checks run on them (H-12). Use the Edit tool for this change.';
 
 // ---- cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs, and git apply/am/patch (audit engine-1-8)
 
@@ -355,10 +356,10 @@ const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
 const isDirPath = (p) => statOf(p)?.isDirectory() ?? false;
 const SPECIAL_FILE = /^\/(?:dev|proc)\//;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
-const RS_COPIES = new Set(['cp', 'mv', 'install', 'rsync', 'scp', 'git mv', 'copy-item', 'move-item', 'cpi', 'mi', 'copy', 'move']);
+const RS_COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp', 'git mv', 'copy-item', 'move-item', 'cpi', 'mi', 'copy', 'move']);
 const RS_MOVES = new Set(['mv', 'git mv', 'move-item', 'mi', 'move']);
 
-/** Every .rs file under dir, or null past `limit` entries. */
+/** Every .rs file (or symlink named .rs, which the compiler follows) under dir, or null past `limit` entries. */
 function rustFilesUnder(dir, limit = 10000) {
   const out = [];
   const stack = [dir];
@@ -370,7 +371,7 @@ function rustFilesUnder(dir, limit = 10000) {
     for (const e of entries) {
       if (++seen > limit) return null;
       const p = path.join(d, e.name);
-      if (e.isDirectory()) { if (e.name !== '.git') stack.push(p); } else if (e.isFile() && e.name.endsWith('.rs')) out.push(p);
+      if (e.isDirectory()) { if (e.name !== '.git') stack.push(p); } else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith('.rs')) out.push(p);
     }
   }
   return out;
@@ -418,8 +419,9 @@ function shellRustWrites(cmd, proj, input) {
   const denies = [];
   const asks = [];
   const advice = [];
-  const unknown = []; // { t, why: 'dyn' | 'cwd' | 'patch' | 'later' }
+  const unknown = []; // { t, why: 'dyn' | 'cwd' | 'patch' | 'later' | 'stale' }
   const patched = [];
+  const direct = []; // content written straight into a .rs file (`> x.r\s`, `curl -o x.rs`)
   const inProject = (abs) => {
     const r = relTo(proj.root, abs);
     return !(r.startsWith('..') || path.isAbsolute(r) || /^[A-Za-z]:/.test(r) || /(^|\/)\.git(\/|$)/.test(r));
@@ -482,21 +484,46 @@ function shellRustWrites(cmd, proj, input) {
     if (a.clones > was.clones) advice.push(`H-08 ${rel}: ${a.clones - was.clones} new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).`);
   };
 
-  // Paths an earlier cp/mv in this command creates: { real, copy }, where `real` is what they
-  // hold and `copy` says the content was duplicated (so moving it on is still a copy).
+  // Paths an earlier cp/mv in this command creates: { real, copy, step, stale }, where `real` is
+  // what they hold, `copy` says the content was duplicated (so moving it on is still a copy),
+  // `step` is the command that made them and `stale` says `real` was rewritten before that.
   const earlierCopies = new Map();
   const earlier = (abs) => {
     for (let p = abs, rest = ''; ; rest = path.join(path.basename(p), rest), p = path.dirname(p)) {
       const hit = earlierCopies.get(p);
-      if (hit) return { real: rest ? path.join(hit.real, rest) : hit.real, copy: hit.copy };
+      if (hit) return { real: rest ? path.join(hit.real, rest) : hit.real, copy: hit.copy, step: hit.step, stale: hit.stale };
       if (path.dirname(p) === p) return null;
     }
+  };
+  // Every path a command in this line writes, with the last command that wrote it. A file that a
+  // write other than a copy (a redirect, tee, sed -i, curl -o, interpreter code) changed after
+  // the copy that made it, or that no copy made, holds content the disk does not show yet.
+  let step = 0;
+  const lastWrite = new Map();
+  const rewritten = (abs, hit) => {
+    if (hit?.stale) return true;
+    const since = hit?.step ?? 0;
+    abs = path.resolve(abs);
+    const inside = `${abs}${path.sep}`;
+    for (const [w, n] of lastWrite) {
+      if (n <= since) continue;
+      if (w === abs || w.startsWith(inside) || abs.startsWith(`${w}${path.sep}`)) return true;
+    }
+    return false;
+  };
+  // What `abs` holds when this command reaches it: what an earlier copy put there (over a file
+  // that already exists too), else what is on disk now (a file a copied tree did not bring).
+  const prior = (abs) => {
+    const hit = earlier(abs);
+    return hit && (!statOf(abs) || statOf(hit.real)) ? hit : null;
   };
   // A readable source copied to a destination held in a variable (`"$BACKUP"`, `${OUT_DIR}/`)
   // lands clean wherever it goes when it scans clean as production code and does not land as a
   // mod.rs. A literal destination after a `cd` temper cannot follow is still refused.
   const cleanAnywhere = (srcAbs, s, t) => {
-    const real = (statOf(srcAbs) ? null : earlier(srcAbs))?.real ?? srcAbs;
+    const made = prior(srcAbs);
+    if (rewritten(srcAbs, made)) return false;
+    const real = made?.real ?? srcAbs;
     const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
     const text = st?.isFile() && st.size <= MAX_SOURCE_BYTES ? readText(real) : null;
     if (text === null) return false;
@@ -504,10 +531,19 @@ function shellRustWrites(cmd, proj, input) {
     if (name === 'mod.rs' || (path.basename(real) === 'mod.rs' && !name.endsWith('.rs'))) return false;
     return !scanSource(text, { kind: 'prod', build: false }).hits.some((h) => h.severity === 'hard' || h.severity === 'ask');
   };
-  const copy = (t, move) => {
+  // `ln -s` reads a relative source from the link's directory (`ln -sr` from the current one).
+  const linkSource = (t, s, relative) => {
+    if (relative) return wordPath(s, t.cwd);
+    if (s.value === null || s.glob) return null;
+    const abs = rsResolvePath(s.value, null);
+    if (abs) return abs;
+    const at = landing(t, s, isDirPath(t.path));
+    return at ? path.resolve(path.dirname(at), s.value) : null;
+  };
+  const copy = (t, move, symbolic = false, relative = false) => {
     const destAbs = t.path;
     for (const s of t.sources) {
-      const srcAbs = wordPath(s, t.cwd);
+      const srcAbs = symbolic ? linkSource(t, s, relative) : wordPath(s, t.cwd);
       if (srcAbs !== null && t.value === null && cleanAnywhere(srcAbs, s, t)) continue;
       if (srcAbs === null || destAbs === null) {
         const why = t.cwd === null && s.value !== null && !s.glob && t.value !== null && !t.glob ? 'cwd' : 'dyn';
@@ -520,17 +556,21 @@ function shellRustWrites(cmd, proj, input) {
         continue;
       }
       // A path an earlier command in this line creates reads as what it was made from.
-      const prior = statOf(srcAbs) ? null : earlier(srcAbs);
-      const real = prior?.real ?? srcAbs;
-      const copied = !move || Boolean(prior?.copy);
+      const made = prior(srcAbs);
+      const real = made?.real ?? srcAbs;
+      const copied = !move || Boolean(made?.copy);
+      const stale = rewritten(srcAbs, made);
       const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
+      const staleUnread = () => unknown.push({ t: s.raw, why: 'stale' });
       if (st?.isDirectory()) {
-        if (!t.recursive) continue;
+        // A symbolic link to a directory brings its whole tree, as a recursive copy does.
+        if (!t.recursive && !symbolic) continue;
         // rsync copies `src/`'s contents, and puts `src` itself inside the destination.
         const contents = t.verb === 'rsync' && /[\\/]$/.test(s.raw);
         const root = contents ? destAbs : (t.verb === 'rsync' || (t.intoDir ?? isDirPath(destAbs))) ? path.join(destAbs, path.basename(srcAbs)) : destAbs;
-        earlierCopies.set(root, { real, copy: copied });
+        earlierCopies.set(root, { real, copy: copied, step, stale });
         if (!inProject(root) || scratch(root)) continue;
+        if (stale) { staleUnread(); continue; }
         const files = rustFilesUnder(real);
         if (files === null) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
         for (const f of files) {
@@ -540,8 +580,9 @@ function shellRustWrites(cmd, proj, input) {
         continue;
       }
       const target = landing(t, s, isDirPath(destAbs));
-      if (st?.isFile()) earlierCopies.set(target, { real, copy: copied });
+      if (st?.isFile()) earlierCopies.set(target, { real, copy: copied, step, stale });
       if (!target.endsWith('.rs') || !inProject(target) || scratch(target)) continue;
+      if (stale) { staleUnread(); continue; }
       if (!st?.isFile()) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
       checkFile(target, real, !copied);
     }
@@ -557,10 +598,24 @@ function shellRustWrites(cmd, proj, input) {
       if (!r.read) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
       else patched.push(...r.touched);
     }
-    for (const t of writes) if (RS_COPIES.has(t.verb)) copy(t, RS_MOVES.has(t.verb));
-    for (const w of writes) if (w.path) written.add(w.path);
+    const lnFlag = (letter, long) => c.name === 'ln' && c.args.some((a) => new RegExp(`^-[a-zA-Z]*${letter}`).test(a.raw) || a.raw === long);
+    const symbolic = lnFlag('s', '--symbolic');
+    const relative = symbolic && lnFlag('r', '--relative');
+    step += 1;
+    for (const t of writes) if (RS_COPIES.has(t.verb)) copy(t, RS_MOVES.has(t.verb), t.verb === 'ln' && symbolic, t.verb === 'ln' && relative);
+    for (const w of writes) if (w.path) { written.add(w.path); lastWrite.set(path.resolve(w.path), step); }
+    // What SHELL_WRITE_RS reads from the raw text, read the way the shell does: a name spelled
+    // `x.r\s` or `x.r''s`, or a writer the regex does not know (curl -o, dd of=, sponge).
+    for (const w of writes) {
+      if (RS_COPIES.has(w.verb) || w.verb.startsWith('git ') || w.dir || w.glob || !w.path) continue;
+      if (w.path.endsWith('.rs') && inProject(w.path) && !scratch(w.path)) direct.push(w.path);
+    }
   }
 
+  if (direct.length) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'shell-reader' });
+    return deny(RS_SHELL_DENY);
+  }
   const unreadPatch = unknown.find((u) => u.why === 'patch' || u.why === 'later');
   if (unreadPatch) {
     telemetry(proj, input, 'deny-shell-write', { via: 'patch-unread' });
@@ -574,7 +629,9 @@ function shellRustWrites(cmd, proj, input) {
     const u = unknown[0];
     const why = u.why === 'cwd'
       ? `temper cannot tell which directory \`${u.t.slice(0, 120)}\` is relative to (an earlier \`cd\` it cannot follow)`
-      : `temper cannot read what this command would write to a .rs file (\`${u.t.slice(0, 120)}\` is a variable, glob, stdin or a missing path)`;
+      : u.why === 'stale'
+        ? `temper cannot read what this command would write to a .rs file (\`${u.t.slice(0, 120)}\` is rewritten earlier in this command, so the file on disk is not what gets copied)`
+        : `temper cannot read what this command would write to a .rs file (\`${u.t.slice(0, 120)}\` is a variable, glob, stdin or a missing path)`;
     return deny(`temper: write Rust sources with the Edit or Write tools, not the shell, so the standard's checks run on them (H-12). ${why}, so it was not run. Copy from a literal path that exists, or use the Edit tool.`);
   }
   if (patched.length) {
@@ -686,7 +743,7 @@ export function preBash(input) {
   if (!proj) return none();
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', {});
-    return deny('temper: write Rust sources with the Edit or Write tools, not the shell, so the standard\'s checks run on them (H-12). Use the Edit tool for this change.');
+    return deny(RS_SHELL_DENY);
   }
   // cp/mv/install onto .rs and git apply/patch: scanned like an Edit/Write (engine-1-8).
   // Only a deny returns at once; an ask or advisory waits for the checks below, and a deny from them wins.
@@ -696,7 +753,9 @@ export function preBash(input) {
     if (own === 'deny') return rsWrite;
     const rest = preBash({ ...input, [RS_COPY_SCANNED]: true });
     const other = rest.json?.hookSpecificOutput?.permissionDecision;
-    if (other === 'deny' || (other === 'ask' && own !== 'ask')) return rest;
+    if (other === 'deny') return rest;
+    // The copy's advisories ride along with another check's ask.
+    if (other === 'ask' && own !== 'ask') return ask(rest.json.hookSpecificOutput.permissionDecisionReason, [rest.json.hookSpecificOutput.additionalContext, rsWrite.json.hookSpecificOutput.additionalContext].filter(Boolean).join('\n'));
     if (other === 'ask') return ask(`${rsWrite.json.hookSpecificOutput.permissionDecisionReason}\n${rest.json.hookSpecificOutput.permissionDecisionReason}`, rsWrite.json.hookSpecificOutput.additionalContext);
     return rsWrite;
   }

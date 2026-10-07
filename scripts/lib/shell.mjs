@@ -9,9 +9,10 @@ import path from 'node:path';
 
 // ---------- lexer ----------
 
-// Outside quotes a backslash escapes the next character, except before a letter, digit,
-// `_` or `-`: there it is kept, so a Windows path (`.git\temper\verdicts`, as PowerShell
-// reads it) keeps its separators.
+// Outside quotes a backslash escapes the next character. Before a letter, digit, `_` or `-`
+// the lexer keeps it as its own part (`bs`): bash drops it (`c\p` runs cp, `tem\per` is
+// `temper`), and a PowerShell command reads it as a path separator (`.git\temper\verdicts`),
+// so makeWord decides once the command is known.
 const KEEP_BACKSLASH = /[\w-]/;
 const REDIRECT = /^(?:&>>|&>|>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)/;
 const OPERATOR = /^(?:;;&|;;|;&|&&|\|\||\|&|[;&|()])/;
@@ -93,7 +94,7 @@ function lex(src) {
   const lit = (text, q) => {
     const w = startWord();
     const last = w.parts.at(-1);
-    if (last?.t === 'lit' && last.q === q) last.s += text;
+    if (last?.t === 'lit' && last.q === q && !last.bs) last.s += text;
     else w.parts.push({ t: 'lit', s: text, q });
   };
   const endWord = () => {
@@ -105,8 +106,8 @@ function lex(src) {
       const r = { ...redir, word: w };
       redir = null;
       if (r.op === '<<' || r.op === '<<-') {
-        r.delim = w.parts.map((p) => p.s).join('');
-        r.quoted = w.parts.some((p) => p.q);
+        r.delim = w.parts.filter((p) => !p.bs).map((p) => p.s).join(''); // `<<\EOF` is a quoted EOF
+        r.quoted = w.parts.some((p) => p.q || p.bs);
         r.body = null;
         heredocs.push(r);
       }
@@ -130,6 +131,7 @@ function lex(src) {
       if (s[i + 1] === '\n') { i += 2; continue; }
       if (s[i + 1] === '\r' && s[i + 2] === '\n') { i += 3; continue; }
       if (i + 1 < n && !KEEP_BACKSLASH.test(s[i + 1])) { lit(s[i + 1], true); i += 2; continue; }
+      if (i + 1 < n) { startWord().parts.push({ t: 'lit', s: '\\', q: false, bs: true }); i++; continue; }
       lit('\\', false);
       i++;
       continue;
@@ -262,6 +264,7 @@ function makeWord(parts, env = {}) {
   let known = true;
   let glob = false;
   parts.forEach((p, k) => {
+    if (p.bs && !env.ps) return; // bash removes the escaping backslash
     raw += p.s;
     if (p.t === 'lit') {
       let s = p.s;
@@ -408,9 +411,12 @@ function run(src, env, out, depth, via) {
     for (const w of it.words.concat(it.redirects.map((r) => r.word).filter(Boolean))) {
       for (const p of w.parts) if ((p.t === 'sub' || p.t === 'proc') && p.src.trim() && !(p.t === 'sub' && gitRevParse(p.src, env) !== null)) sub(p.src, env, out, depth + 1, 'subst');
     }
+    // A PowerShell command reads a kept backslash as a path separator; bash drops it (see lex).
+    const ps = Boolean(env.ps) || psCommand(it.words, env);
+    const wenv = ps === Boolean(env.ps) ? env : { ...env, ps };
     const piped = it.sep === '|' || it.sep === '|&';
     const isolated = piped || it.after === '|' || it.after === '|&' || it.after === '&';
-    const redirects = it.redirects.map((r) => ({ op: r.op, fd: r.fd, word: r.word ? makeWord(r.word.parts, env) : null, body: r.body, quoted: r.quoted }));
+    const redirects = it.redirects.map((r) => ({ op: r.op, fd: r.fd, word: r.word ? makeWord(r.word.parts, wenv) : null, body: r.body, quoted: r.quoted }));
     let stdin = piped ? { kind: 'pipe', body: prevBody } : null;
     for (const r of redirects) {
       if (r.op === '<' && r.word) stdin = { kind: 'file', word: r.word };
@@ -418,9 +424,22 @@ function run(src, env, out, depth, via) {
       else if (r.op === '<<<' && r.word) stdin = { kind: 'string', word: r.word, body: r.word.text };
     }
     prevBody = stdin && stdin.kind !== 'pipe' && stdin.kind !== 'file' ? stdin.body : null;
-    const words = it.words.map((w) => makeWord(w.parts, env));
+    const words = it.words.map((w) => makeWord(w.parts, wenv));
     simple(words, { redirects, stdin, piped, isolated, raw: it.raw, line, via }, env, out, depth);
   }
+}
+
+// PowerShell cmdlets (Verb-Noun with a common verb) and the aliases the write rules read.
+const PS_NAME = /^(?:(?:get|set|new|remove|copy|move|add|clear|out|write|read|invoke|start|stop|test|import|export|select|where|foreach|rename|join|split|resolve|convert|convertto|convertfrom|format|measure|tee|push|pop|expand|compress|update|enter|sort|group|compare)-[a-z]+|cpi|mi|sc|ac|ni|sl|copy|move)$/;
+
+/** Whether a simple command is PowerShell: a cmdlet name, `$x = ...` or a `[Type]::Method(...)` expression. */
+function psCommand(words, env) {
+  const ws = words.map((w) => makeWord(w.parts, { ...env, ps: false }));
+  const k = ws.findIndex((w) => !w.assign);
+  if (k === -1) return false;
+  const first = ws[k];
+  if (/^\[[\w.]+\]::/.test(first.raw) || (/^\$\w+$/.test(first.raw) && ws[k + 1]?.raw === '=')) return true;
+  return first.value !== null && PS_NAME.test(commandName(first.value));
 }
 
 function sub(src, env, out, depth, via) {
@@ -530,12 +549,12 @@ function simple(words, meta, env, out, depth) {
   if (SHELLS.has(name)) {
     const flag = args.findIndex((a) => a.value !== null && /^-[A-Za-z]*c[A-Za-z]*$/.test(a.value));
     const script = flag !== -1 ? args[flag + 1]?.text : !args.some((a) => !a.raw.startsWith('-')) ? meta.stdin?.body : null;
-    if (script) sub(script, { ...env, cwd }, out, depth + 1, `${name} -c`);
+    if (script) sub(script, { ...env, cwd, ps: false }, out, depth + 1, `${name} -c`);
   } else if (name === 'eval') {
     run(args.map((a) => a.text).join(' '), env, out, depth + 1, 'eval');
   } else if (name === 'pwsh' || name === 'powershell') {
     const flag = args.findIndex((a) => /^-(?:c|command)$/i.test(a.raw));
-    if (flag !== -1 && args[flag + 1]) sub(args.slice(flag + 1).map((a) => a.text).join(' '), { ...env, cwd }, out, depth + 1, `${name} -Command`);
+    if (flag !== -1 && args[flag + 1]) sub(args.slice(flag + 1).map((a) => a.text).join(' '), { ...env, cwd, ps: true }, out, depth + 1, `${name} -Command`);
   } else if (name === 'find' && depth < MAX_DEPTH) {
     for (let k2 = 0; k2 < args.length; k2++) {
       if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[k2].raw)) continue;
@@ -654,10 +673,13 @@ function psParams(args, switches = /^(?:force|append|noclobber|nonewline|recurse
   return { named, pos, get };
 }
 
+/** `-WhatIf` (or `-WhatIf:$true`) makes a PowerShell command a dry run; `-WhatIf:$false` runs it. */
+const psDryRun = (named) => named.has('whatif') && !/^\$false$/i.test(named.get('whatif')?.raw ?? '');
+
 /** Copy-Item / Move-Item (and copy, move, cpi, mi): `{ sources, dest, intoDir, recursive }`, or null. */
 function psCopyArgs(move, args) {
   const { pos, get, named } = psParams(args);
-  if (named.has('whatif')) return null;
+  if (psDryRun(named)) return null;
   const paths = [get('path'), get('literalpath'), get('pspath'), named.get('lp')].filter((x) => x && x !== true);
   if (!paths.length && pos.length) paths.push(pos.shift());
   let dest = get('destination');
@@ -668,19 +690,36 @@ function psCopyArgs(move, args) {
   return { sources, dest, intoDir: sources.length > 1 ? true : undefined, recursive: move || named.has('recurse') };
 }
 
-/** The value of `-o`/`--output`-style options: `-o f`, `-sSLo f`, `-of`, `--output f`, `--output=f`. */
-function optionValues(args, short, long) {
+/**
+ * The value of `-o`/`--output`-style options: `-o f`, `-sSLo f`, `-of`, `-sSLof`, `--output f`,
+ * `--output=f`. A short-option cluster is read letter by letter and stops at a letter in
+ * `valueLetters`, whose value is the rest of the word (`-dfoo`) or the next word.
+ */
+function optionValues(args, short, long, valueLetters = '') {
   const out = [];
   for (let k = 0; k < args.length; k++) {
     const a = args[k].raw;
     const eq = long.find((l) => a.startsWith(`${l}=`));
     const word = (t) => ({ ...args[k], raw: t, text: t, value: args[k].value === null ? null : t });
     if (eq) out.push(word(a.slice(eq.length + 1)));
-    else if (long.includes(a) || (short && new RegExp(`^-[a-zA-Z]*${short}$`).test(a))) { if (args[k + 1]) out.push(args[++k]); }
-    else if (short && a.startsWith(`-${short}`) && a.length > 2) out.push(word(a.slice(2)));
+    else if (long.includes(a)) { if (args[k + 1]) out.push(args[++k]); }
+    else if (short && /^-[a-zA-Z]/.test(a)) {
+      for (let j = 1; j < a.length; j++) {
+        const rest = a.slice(j + 1);
+        if (a[j] === short) {
+          if (rest) out.push(word(rest)); else if (args[k + 1]) out.push(args[++k]);
+          break;
+        }
+        if (valueLetters.includes(a[j])) { if (!rest) k++; break; }
+        if (!/[a-zA-Z]/.test(a[j])) break;
+      }
+    }
   }
   return out;
 }
+// Short options that take a value, so a cluster stops at them (`curl -dfoo`, `wget -Uo`).
+const CURL_VALUES = 'AbcCdDeEFHKmoPQrtTuUwxXyYz';
+const WGET_VALUES = 'aeiBtOoTwQPUlARDIX';
 
 /** sed -i / perl -i: a short-option cluster that reaches `i` before an option taking a value (`-Mstrict` is not -i). */
 const inPlace = (sed, args) => args.some((a) => (sed ? /^-[nErsuz]*[iI]/ : /^-[nplawsTtUWXc]*i/).test(a.raw) || /^--in-place(?:=|$)/.test(a.raw));
@@ -735,12 +774,14 @@ export const pathspecPattern = (w) => /[*?[]/.test(w.raw) || /^:(?:\(|[/!^])/.te
 const LIT_PREFIX = '[rbfuRBFU]{0,2}';
 const PATH_WRAP = String.raw`(?:(?:pathlib\s*\.\s*)?Path\s*\(\s*)?`;
 const ARG = String.raw`${PATH_WRAP}(?:${LIT_PREFIX}__L(?<a>\d+)__|(?<![\w.])\$?(?<v>[A-Za-z_]\w*))\s*\)?`;
+// A mode: a literal, or a variable the code assigned one (`m = 'w'; open(p, m)`).
+const MODE = String.raw`(?:${LIT_PREFIX}__L(?<m>\d+)__|(?<mv>[A-Za-z_]\w*)\b(?!\s*[(.\[]))`;
 const CODE_WRITES = [
-  [String.raw`\bopen\s*\(\s*${ARG}\s*,\s*(?:mode\s*=\s*)?${LIT_PREFIX}__L(?<m>\d+)__`, (m) => /[wax+]/.test(m)],
+  [String.raw`\bopen\s*\(\s*${ARG}\s*,\s*(?:mode\s*=\s*)?${MODE}`, (m) => /[wax+]/.test(m)],
   [String.raw`\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*__L(?<m>\d+)__\s*,\s*${ARG}`, (m) => /^\s*(?:\+?>>?|\+<)/.test(m)],
   [String.raw`\bos\s*\.\s*open\s*\(\s*${ARG}\s*,[^)]*O_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)`],
   [String.raw`${ARG}\s*\.\s*(?:write_text|write_bytes|touch)\b`],
-  [String.raw`${ARG}\s*\.\s*open\s*\(\s*(?:mode\s*=\s*)?__L(?<m>\d+)__`, (m) => /[wax+]/.test(m)],
+  [String.raw`${ARG}\s*\.\s*open\s*\(\s*(?:mode\s*=\s*)?${MODE}`, (m) => /[wax+]/.test(m)],
   [String.raw`\b(?:(?:write|append|output)File(?:Sync)?|writeJson(?:Sync)?|createWriteStream|truncate(?:Sync)?|(?:File|IO)\s*\.\s*(?:bin)?write|(?:Write|Append)All(?:Text|Bytes|Lines))\s*\(\s*${ARG}`],
   [String.raw`\b(?:copy(?:file|2|tree|File(?:Sync)?)?|copy_file|move|mv|rename(?:Sync)?|replace|cp(?:Sync)?|(?:sym)?link(?:Sync)?)\s*\([^,()]*(?:\([^()]*\)[^,()]*)?,\s*${ARG}`],
 ].map(([re, mode]) => [new RegExp(re, 'g'), mode]);
@@ -779,7 +820,7 @@ export function codeWriteTargets(code) {
   const out = [];
   for (const [re, mode] of CODE_WRITES) {
     for (const m of text.matchAll(re)) {
-      if (mode && !mode(lits[Number(m.groups.m)] ?? '')) continue;
+      if (mode && !mode((m.groups.mv !== undefined ? vars.get(m.groups.mv) : lits[Number(m.groups.m)]) ?? '')) continue;
       const lit = m.groups.a !== undefined ? lits[Number(m.groups.a)] : vars.get(m.groups.v);
       if (lit) out.push(lit);
     }
@@ -845,11 +886,11 @@ export function commandWrites(c) {
   } else if ((name === 'sed' || name === 'perl') && inPlace(name === 'sed', args)) {
     for (const a of inPlaceTargets(args, name === 'sed')) add(`${name} -i`, a);
   } else if (name === 'curl') {
-    for (const a of optionValues(args, 'o', ['--output'])) if (a.raw !== '-') add(name, a);
+    for (const a of optionValues(args, 'o', ['--output'], CURL_VALUES)) if (a.raw !== '-') add(name, a);
     for (const a of optionValues(args, '', ['--output-dir'])) add(name, a, { dir: true });
   } else if (name === 'wget') {
-    for (const a of optionValues(args, 'O', ['--output-document'])) if (a.raw !== '-') add(name, a);
-    for (const a of optionValues(args, 'P', ['--directory-prefix'])) add(name, a, { dir: true });
+    for (const a of optionValues(args, 'O', ['--output-document'], WGET_VALUES)) if (a.raw !== '-') add(name, a);
+    for (const a of optionValues(args, 'P', ['--directory-prefix'], WGET_VALUES)) add(name, a, { dir: true });
   } else if (name === 'dd') {
     for (const a of args) if (a.raw.startsWith('of=')) add(name, { ...a, raw: a.raw.slice(3), text: a.text.slice(3), value: a.value === null ? null : a.value.slice(3) });
   } else if (name === 'tar') {
@@ -865,7 +906,7 @@ export function commandWrites(c) {
     if (op) add(name, op.dest, { sources: op.sources, intoDir: op.intoDir, recursive: op.recursive });
   } else if (PS_CONTENT.test(name)) {
     const { pos, get, named } = psParams(args);
-    if (!named.has('whatif')) {
+    if (!psDryRun(named)) {
       const p = get('path', 'literalpath', 'filepath');
       add(name, p && p !== true ? p : pos[0]);
     }
