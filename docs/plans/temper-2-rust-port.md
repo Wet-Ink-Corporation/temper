@@ -237,6 +237,7 @@ No collisions:
 | `report.mjs` | `temper-domain::report` (build, markdown, html); `temper-app::report` (argument handling, input selection, output dir, writes) |
 | `vendor.mjs` | retired; replaced by `temper-app::setup::{pin, migrate}` |
 | `hooks.mjs` | `temper-domain::hooks` (outcomes, all message texts, IRON_RULES, bash policy, edit policy, manifest checks, status parsing); `temper-app::hooks` (the nine handlers) |
+| `shell.mjs` | `temper-domain::hooks::shell` (the one shell reader behind the Bash write rules: lexer, command walk with `cd` and variables, write targets, patch commands; pure, no I/O) |
 | `temper.mjs` | `temper-cli::{args, main, io}`; `temper-app::commands::{scan, status, stats, setup}` |
 | `rulemap.json` | moved to `crates/temper-domain/data/rulemap.json`, embedded with `include_str!`. `gen_rulemap.py` `OUT_REL` updated. |
 
