@@ -14,9 +14,10 @@ Clearer messages for new adopters. Only the text changes: every hook decision, e
 
 `temper setup` adds `/target/` to `.gitignore` when no line ignores `target` already (`target`, `target/`, `/target` and `/target/` all count), next to the `.temper/` line it already added. `--dry-run` reports it without writing, `--vendor-only` leaves `.gitignore` alone, and a second run adds nothing. `Cargo.lock` is not added: it is committed.
 
-**`SessionStart` reports a Node older than the documented minimum.** Before, nothing checked the README's Node 18 minimum. Now `SessionStart` in a Rust workspace adds a warning line, shown to the human (`systemMessage`) and to the model (`additionalContext`), when Node is older. Every hook decision and exit code is the same: it is a message only.
+**`SessionStart` reports a Node older than the documented minimum.** Before, nothing checked the README's Node 18 minimum. Now `SessionStart` in a Rust workspace adds a warning line, shown to the human (`systemMessage`) and to the model (`additionalContext`), on Node 15 to 17. Every hook decision and exit code is the same: it is a message only.
 - **Node 17.** `SessionStart` runs as before and appends the warning.
-- **Node 16 and older.** `hook session-start` in a Rust workspace prints only the warning, before the rest of temper loads; it used to print `temper hook session-start failed: structuredClone is not defined`. Outside a Rust workspace it still prints nothing. Other hooks run as before, and CLI commands print the warning on stderr and keep their own output and exit code. `TEMPER_DISABLE=1` stays silent.
+- **Node 15 and 16.** `hook session-start` in a Rust workspace prints only the warning, before the rest of temper loads; it used to print `temper hook session-start failed: structuredClone is not defined`. Outside a Rust workspace it still prints nothing. Other hooks run as before, and CLI commands print the warning on stderr and keep their own output and exit code. `TEMPER_DISABLE=1` stays silent.
+- **Node 14 and older.** Nothing changes: temper's syntax needs Node 15, so these fail with a syntax error before any check runs, and print no warning.
 - **Claude Code is not checked.** Hook input carries no version, and Claude Code passes hooks no variable that names its version or executable, so the 2.1.286 minimum stays documented only.
 
 The minimums live in `MINIMUM_VERSIONS` in the new `scripts/lib/requirements.mjs`; `temper setup --vendor-only` copies it with the rest of the vendored CLI.
