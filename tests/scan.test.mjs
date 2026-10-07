@@ -819,9 +819,14 @@ test('forbid-override: fires only for a lint the crate forbids', () => {
   assert.deepEqual(hitsOf(src, 'forbid-override', 'prod', { forbid: new Set(['clippy::panic']) }), []);
 });
 
-test('every RULES key is named in this file', () => {
+// A key counts only as a whole quoted JS string: a KEY_CASES or hitsOf key
+// ('leak') or a `key:severity` pin ('dbg:hard'). Rust identifiers such as
+// unsafe_code or process::exit inside test sources do not count. This is still
+// a text check: it shows each key is cited in a JS string here, not that the
+// citing test is a good one.
+test('every RULES key is quoted in this file', () => {
   const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
-  const named = (k) => new RegExp(`(?:^|[^a-z-])${k}(?:[^a-z-]|$)`, 'm').test(self);
+  const named = (k) => new RegExp(`['"\`]${k}(?::(?:hard|soft|ask))?['"\`]`).test(self);
   assert.deepEqual(RULES.map((r) => r.key).filter((k) => !named(k)), []);
 });
 
