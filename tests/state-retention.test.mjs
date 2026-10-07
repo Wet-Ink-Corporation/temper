@@ -57,6 +57,7 @@ test('retention limits are stated and ordered: verdicts outlive gate results, wh
     verdicts: { maxAgeDays: 60, keep: 300 },
     gate: { maxAgeDays: 30, keep: 300, maxBytes: 64 * 1024 * 1024 },
     telemetryBytes: 1024 * 1024,
+    graceMinutes: 60,
   });
 });
 
@@ -77,14 +78,16 @@ test('prune: gate results, verdicts and logs past their age go; fresher ones sta
   assert.deepEqual(list(proj, 'logs'), [`${fp(2)}-test.log`, `${fp(5)}-test.log`]);
 });
 
+const HOURS2 = 2 / 24; // past the grace period, well inside the age limits
+
 test('prune: a busy repository keeps only the newest gate runs, each with all its logs', (t) => {
   const proj = state(t);
   const keep = RETENTION.gate.keep;
   for (let i = 0; i < keep + 5; i += 1) {
-    put(proj, `gate/${fp(i)}.json`, 0, '{}', i * 1000);
-    for (const step of ['clippy', 'test', 'doctest', 'doc']) put(proj, `logs/${fp(i)}-${step}.log`, 0, 'x', i * 1000);
+    put(proj, `gate/${fp(i)}.json`, HOURS2, '{}', i * 1000);
+    for (const step of ['clippy', 'test', 'doctest', 'doc']) put(proj, `logs/${fp(i)}-${step}.log`, HOURS2, 'x', i * 1000);
   }
-  for (let i = 0; i < keep + 3; i += 1) put(proj, `verdicts/${fp(i)}.json`, 0, '{}', i * 1000);
+  for (let i = 0; i < keep + 3; i += 1) put(proj, `verdicts/${fp(i)}.json`, HOURS2, '{}', i * 1000);
   pruneFingerprintState(proj, null);
   const gates = list(proj, 'gate');
   assert.equal(gates.length, keep);
@@ -112,6 +115,33 @@ test('prune: a kept gate result keeps the logs it cites (a red result from hours
     const f = g.slice(0, -'.json'.length);
     assert.ok(list(proj, 'logs').some((l) => l.startsWith(`${f}-`)), `logs of ${f}`);
   }
+});
+
+test('prune: a gate run another worktree has in progress, its logs written within the grace period, is not touched', (t) => {
+  const proj = state(t);
+  const keep = RETENTION.gate.keep;
+  const minute = 1 / 1440;
+  // Another session's gate, for a fingerprint that is not this session's, has
+  // written two step logs 30 minutes ago and is still running its next step: no
+  // gate/<fp>.json yet. Since then, `keep` gate runs finished in other trees.
+  const running = fp(0xfeed);
+  put(proj, `logs/${running}-clippy.log`, 30 * minute, 'x');
+  put(proj, `logs/${running}-test.log`, 30 * minute, 'x');
+  for (let i = 0; i < keep; i += 1) {
+    put(proj, `gate/${fp(i)}.json`, 10 * minute, '{}', i);
+    put(proj, `logs/${fp(i)}-test.log`, 10 * minute, 'x', i);
+  }
+  // Older than the grace period and over the count: these go.
+  put(proj, `gate/${fp(0x01d000)}.json`, HOURS2);
+  put(proj, `logs/${fp(0x01d000)}-test.log`, HOURS2);
+  // A verdict written just now, over the count, also stays.
+  for (let i = 0; i < RETENTION.verdicts.keep; i += 1) put(proj, `verdicts/${fp(i)}.json`, 10 * minute, '{}', i);
+  put(proj, `verdicts/${running}.json`, 30 * minute);
+  pruneFingerprintState(proj, null);
+  assert.ok(has(proj, `logs/${running}-clippy.log`) && has(proj, `logs/${running}-test.log`), 'the running gate keeps its logs');
+  assert.ok(has(proj, `verdicts/${running}.json`));
+  assert.ok(!has(proj, `gate/${fp(0x01d000)}.json`) && !has(proj, `logs/${fp(0x01d000)}-test.log`), 'a run past the grace period still goes');
+  assert.equal(list(proj, 'gate').length, keep);
 });
 
 test('prune: past the byte budget the oldest gate runs go whole, result and logs together', (t) => {

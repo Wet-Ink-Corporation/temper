@@ -308,12 +308,15 @@ export function pruneSessions(proj, maxAgeDays = 14) {
  * SessionStart prunes them on startup (pruneFingerprintState). A verdict is
  * the costliest to lose (a fresh reviewer run); a gate run costs a gate re-run.
  * telemetry.jsonl rotates to telemetry.1.jsonl at telemetryBytes, and one old
- * file is kept.
+ * file is kept. A record touched within graceMinutes is never pruned: the state
+ * dir is shared by every worktree, and another session's gate may be writing
+ * the logs of a fingerprint that is not this session's.
  */
 export const RETENTION = {
   verdicts: { maxAgeDays: 60, keep: 300 },
   gate: { maxAgeDays: 30, keep: 300, maxBytes: 64 * 1024 * 1024 },
   telemetryBytes: 1024 * 1024,
+  graceMinutes: 60,
 };
 
 /**
@@ -345,16 +348,19 @@ function fingerprintGroups(dirs) {
  * Remove the groups of `dirs` older than `maxAgeDays`, then all but the newest
  * `keep`, then the oldest until the rest fit in `maxBytes` (the newest group
  * always stays). The group `protect` names is never removed and counts toward
- * no limit. Errors (a file in use on Windows, a race with another session)
- * are ignored.
+ * no limit. A group whose newest file is younger than RETENTION.graceMinutes is
+ * never removed either, though it counts toward the limits. Errors (a file in
+ * use on Windows, a race with another session) are ignored.
  */
 function pruneGroups(dirs, { maxAgeDays, keep, maxBytes = Infinity }, protect) {
-  const cutoff = Date.now() - maxAgeDays * 86400000;
+  const now = Date.now();
+  const cutoff = now - maxAgeDays * 86400000;
+  const recent = now - RETENTION.graceMinutes * 60000;
   const groups = fingerprintGroups(dirs).filter((g) => !protect || g.key !== protect).sort((a, b) => b.t - a.t);
   let bytes = 0;
   groups.forEach((g, i) => {
     bytes += g.size;
-    if (g.t < cutoff || i >= keep || (i > 0 && bytes > maxBytes)) {
+    if (g.t < recent && (g.t < cutoff || i >= keep || (i > 0 && bytes > maxBytes))) {
       for (const p of g.files) { try { fs.rmSync(p, { force: true }); } catch { /* ignore */ } }
     }
   });

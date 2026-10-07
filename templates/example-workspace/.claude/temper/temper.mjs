@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
-import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm } from './lib/project.mjs';
+import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry } from './lib/project.mjs';
 import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
@@ -474,9 +474,7 @@ function strictLints(root, tpl) {
 
 function stats() {
   const proj = project();
-  // telemetry.jsonl and, once it has rotated, telemetry.1.jsonl (lib/project.mjs telemetry()).
-  const rows = ['telemetry.1.jsonl', 'telemetry.jsonl'].flatMap((f) => (readText(path.join(proj.stateDir, f)) ?? '').split('\n'))
-    .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  const rows = readTelemetry(proj);
   const count = {};
   for (const r of rows) count[r.event] = (count[r.event] ?? 0) + 1;
   const rules = {};
