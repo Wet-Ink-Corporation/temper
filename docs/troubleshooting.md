@@ -13,9 +13,11 @@ Most refusals are aimed at the agent, which reads the message and changes its ap
 | `node .claude/temper/temper.mjs stats` | How often each denial, block and verdict fired, and which rules blocked the most escape hatches |
 | `.git/temper/logs/<fingerprint>-<step>.log` | The full output of each gate step. The gate shows only a summary. |
 
-temper keeps its state under `.git/temper/`: gate results and review verdicts per fingerprint, the logs, and telemetry. Never edit these files by hand; the hooks refuse to.
+temper keeps its state under `.git/temper/`: gate results and review verdicts per fingerprint, the logs, and telemetry. Never edit these files by hand. The hooks refuse `Write`, `Edit` and `MultiEdit` into `.git/`, but shell commands that write there are not checked, so the state is not a security boundary. `telemetry.jsonl` is never pruned and only `temper stats` reads it, so it is safe to delete; the README's [Local data and telemetry](../README.md#local-data-and-telemetry) says what it records.
 
 **`temper hook <event> failed: …`.** A hook threw an error, and temper let the action through rather than block your work. This is a temper bug. [Report it](#reporting-a-problem) with the message.
+
+**`temper needs the Cargo workspace at the git root`**, from `temper baseline`. The workspace's `Cargo.toml` is in a subdirectory of the repository. Nested workspaces are not supported yet.
 
 **temper does nothing at all.** There is no session-start context, and `.rs` edits go through without the skill loaded. Check these, in order:
 - The plugin is installed and enabled: `claude plugin list` shows `temper@temper`, and the repository's `.claude/settings.json` enables it. Repositories set up before 1.2.2 still name the old `wet-ink` marketplace there (see the CHANGELOG).
@@ -23,6 +25,17 @@ temper keeps its state under `.git/temper/`: gate results and review verdicts pe
 - `TEMPER_DISABLE` is not set in the environment Claude Code was launched from.
 - The repository has a `Cargo.toml`. Outside a Rust project the hooks stand down.
 - In a Claude Code cloud session, see [Cloud sessions and claude.ai](#cloud-sessions-and-claudeai).
+
+## What fails open
+
+The in-session layers are built not to wedge a session, so in these cases the action goes ahead:
+- A hook throws an error (the `temper hook <event> failed` message above).
+- A hook cannot parse its input, or `node` cannot be started.
+- A hook runs past its timeout in `hooks/hooks.json`, and Claude Code stops it.
+- The Stop hook's loop breaker: after one block on an unchanged tree, the turn may end (see [Finishing a turn](#finishing-a-turn-the-stop-hook)).
+- A reviewer's verdict is still invalid on its second try. The reviewer's turn ends and no verdict is recorded, so the Stop hook still finds no approving review.
+
+By design, every hook stands down with `TEMPER_DISABLE=1`, and the Stop hook does not enforce in plan mode or when the agent ends with `Status: WIP` or `Status: BLOCKED`. CI runs the same gate and fails closed, so it is the layer to rely on. The pre-commit hook adds a faster check (fmt, then clippy, rustdoc and the scanner through `baseline --check`) on commits made where it is enabled.
 
 ## Cloud sessions and claude.ai
 

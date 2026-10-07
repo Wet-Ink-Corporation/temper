@@ -19,9 +19,11 @@ Show the user this plan in plain words: what will be created, what will be skipp
 Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" setup`, adding `--force` only if the user chose to overwrite.
 
 ## 3. Merge the workspace manifest
-If the root `Cargo.toml` lacks `[workspace.lints]`, merge the `[workspace.package]`, `[workspace.lints.rust]` and `[workspace.lints.clippy]` tables from `${CLAUDE_PLUGIN_ROOT}/templates/workspace/Cargo.toml` into it, keeping the repository's existing values where they are stricter. Then add `[lints]\nworkspace = true` to every member crate's manifest. These are protected edits, so the user will be asked to approve each one. That approval is the point.
+If the root `Cargo.toml` lacks `[workspace.lints]`, merge the `[workspace.package]`, `[workspace.lints.rust]` and `[workspace.lints.clippy]` tables from `${CLAUDE_PLUGIN_ROOT}/templates/workspace/Cargo.toml` into it, keeping the repository's existing values where they are stricter. Then add `[lints]\nworkspace = true` to every member crate's manifest that lacks it. `cargo new` inside the workspace already adds it, and a second copy is a duplicate-key error. These are protected edits, so the user will be asked to approve each one. That approval is the point.
 
 For a single-crate repository without a `[workspace]` table, put the same tables under `[lints.rust]` and `[lints.clippy]` in the package manifest instead.
+
+If the repository has no crates yet, tell the user that the gate stays red until a member exists, and that `cargo new --lib --vcs none crates/<name>` creates one that already inherits the workspace lints. Point them to the "New project" section of temper's README (`${CLAUDE_PLUGIN_ROOT}/README.md`) for what the first gate asks of a stock crate.
 
 ## 4. Crate charters (ARC-08)
 List the crates with `cargo metadata --no-deps --format-version 1`. For each crate that has no `AGENTS.md` in its root:
