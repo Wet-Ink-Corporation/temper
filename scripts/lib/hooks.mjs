@@ -905,6 +905,45 @@ export function claudeRestore(cmd) {
 const segments = (cmd) => cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''").split(/&&|\|\||[;|\n]/);
 const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
 
+// Prose blanking for the --no-verify and lint-lowering checks (engine-1-17). Those checks
+// match the raw text, so a command handed to `sh -c`, `rebase -x` or `powershell -Command`
+// is still read; only text that is clearly prose is blanked to '' first.
+const QUOTED = `'[^']*'|"(?:[^"\\\\]|\\\\.)*"`;
+const HEREDOC = /(?<!<)<<-?[ \t]*(['"]?)([\w.-]+)\1([^\n]*)\n[\s\S]*?\n\t*\2(?=\n|$)/g;
+const FEEDS_SHELL = /\||(?:^|[\s(])["']?(?:\S*[\\/])?(?:(?:ba|da|z|k|pw)?sh|powershell|cmd|eval|source|xargs|python[\d.]*|py|node|perl|ruby)(?:\.exe)?["']?(?=\s|$)/i;
+const MESSAGE_VALUE = new RegExp(`((?:^|\\s)(?:--(?:message|body|title|notes|description)=?|-[a-zA-Z]*m|-[bt])\\s*)(?:${QUOTED}|(?!--)[^\\s'"]+)`, 'g');
+// Command substitution runs, except a bare `$(cat <<'EOF' ... EOF)` whose body is already blanked.
+const CAT_HEREDOC = /\$\(\s*cat\s+<<-?(['"]?)([\w.-]+)\1[ \t]*\n\2\s*\)/g;
+const runsCode = (text) => /\$\(|\x60/.test(text.replace(CAT_HEREDOC, ''));
+const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])\\s*(?:\\w+=\\S*\\s+|(?:sudo|env|time|xargs)\\s+)*(?:\\S*[\\\\/])?(?:git\\s+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
+
+/** `cmd` with here-document bodies, message option values and search patterns blanked. */
+function blankProse(cmd) {
+  return cmd
+    // A backslash-newline continues the line.
+    .replace(/\\\r?\n/g, ' ')
+    // A here-document body is text, unless a shell reads it or an unquoted body runs `$(...)`.
+    .replace(HEREDOC, (m, q, tag, rest, off, s) => {
+      const head = s.slice(s.lastIndexOf('\n', off) + 1, off).split(/&&|\|\||;|\(/).pop() + rest;
+      return FEEDS_SHELL.test(head) || (!q && /\$\(|`/.test(m)) ? m : `<<${q}${tag}${q}${rest}\n${tag}`;
+    })
+    // Command substitution runs, so a value or pattern that holds one is never blanked.
+    .replace(MESSAGE_VALUE, (m, pre) => (runsCode(m) ? m : `${pre}''`))
+    .replace(SEARCH, (m) => (runsCode(m) ? m : m.replace(new RegExp(QUOTED, 'g'), "''").replace(/\s--\s.*/, ' -- ')));
+}
+
+/** `--no-verify` anywhere, or `-n` in a `git commit` short-flag cluster before any valued flag. */
+// Each option word matches one way only, so a long option list cannot backtrack exponentially.
+const GIT_COMMIT_N = new RegExp(`\\bgit\\s+(?:-[cC]\\s+(?:${QUOTED}|\\S+)\\s+|--?(?![cC]\\s)\\w[\\w-]*(?:=(?:${QUOTED}|\\S*))?\\s+)*commit(?=\\s|$)(?:(?!\\s--\\s)[^|;&\\n])*\\s["']?-[aehiopqsvz]*n`);
+const skipsGitHooks = (text) => /--no-verify\b/.test(text) || GIT_COMMIT_N.test(text);
+
+/** `cargo clippy`/`rustc` with -A, --allow or --cap-lints, or a *RUSTFLAGS assignment holding one. */
+const lowersLints = (text) => text.split(/[|;&\n]/).some((seg) => {
+  const cargo = seg.search(/\bcargo\b/);
+  const tool = cargo < 0 ? null : /\b(?:clippy|rustc)\b/.exec(seg.slice(cargo));
+  return tool !== null && /\s["']?-A|\s["']?--allow(?![\w-])|--cap-lints/.test(seg.slice(cargo + tool.index));
+}) || /RUST(?:DOC)?FLAGS=(?:"[^"]*?|'[^']*?|\S*?)(?<=[=\s"'\x1f]|\\x1f)(?:-A|--cap-lints)/.test(text);
+
 // cargo add/remove options that take a separate value.
 const CARGO_VALUE_FLAGS = new Set(['-p', '--package', '-F', '--features', '--rename', '--registry', '--path', '--git', '--branch', '--tag', '--rev', '--manifest-path', '--target', '--lockfile-path', '--config', '-Z', '--color']);
 
@@ -988,10 +1027,11 @@ export function preBash(input) {
     telemetry(proj, input, 'deny-ignore-rust-version', {});
     return deny('temper: --ignore-rust-version bypasses the MSRV check, so green would not mean the declared rust-version builds (MOD-01, H-12). If a dependency needs a newer Rust, raising rust-version is a human decision (H-16): say so and ask.');
   }
-  if (/--no-verify\b|\bgit\s+commit\b[^|;&]*\s-n\b/.test(cmd)) {
+  const text = blankProse(cmd);
+  if (skipsGitHooks(text)) {
     return deny('temper: skipping git hooks (--no-verify) is not allowed (H-12). Fix what the hook reports.');
   }
-  if (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)) {
+  if (lowersLints(text)) {
     return deny('temper: lowering lint levels on the command line is not allowed (H-05). Fix the code the lint points at.');
   }
   // Protected configuration written from the shell asks, as an Edit/Write to it does.

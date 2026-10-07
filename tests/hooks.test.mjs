@@ -255,6 +255,214 @@ test('Bash: shell writes to Cargo.lock are denied; cargo and git are not', () =>
   }
 });
 
+// engine-1-17: message option values, here-document bodies and search patterns are prose;
+// everything else, including a command string handed to another runner, is still read.
+const commitHeredoc = (body, tail = '') => `git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"${tail}`;
+
+test('Bash: --no-verify and lint lowering in a message, here-document or search pattern are allowed (H-12, H-05)', () => {
+  for (const cmd of [
+    'git commit -m "docs: mention --no-verify flag"',
+    "git commit -m 'hooks: deny git commit -n'",
+    'git commit -m "docs: explain why cargo clippy -- -A clippy::x is refused"',
+    'git commit -m "ci: RUSTFLAGS=-A warnings is gone; no --cap-lints either"',
+    'git commit --message="docs: --no-verify" -a',
+    'git commit --message "docs: --no-verify"',
+    'git commit -m"docs: --no-verify"',
+    'git commit -m -n',
+    'git commit -am "fix: -n flag"',
+    'git commit -m x -- -n.txt',
+    "git commit -F- <<'EOF'\nhooks: refuse --no-verify and cargo clippy -- -A x\nEOF",
+    'git commit -F - <<EOF\nmention --no-verify\nEOF',
+    'git commit -F- <<"EOF"\nmention --no-verify\nEOF',
+    'git commit -F- <<-EOF\n\tmention --no-verify\n\tEOF',
+    'git commit -F- <<EOF\nmention --no-verify and cargo clippy -- -A x\nEOF\ngit push',
+    "cargo fmt && bash tests/ci.sh --quick && git commit -F- <<'EOF'\nhooks: allow quoted --no-verify\nEOF",
+    commitHeredoc('docs: --no-verify and git commit -n are refused'),
+    commitHeredoc('hooks: allow quoted flags\n\n1) quote the flag\n2) `--no-verify` in a message is text'),
+    commitHeredoc("fix: don't crash on --no-verify"),
+    commitHeredoc('fix: handle a) and b) cases; mention `cargo clippy -- -A x`'),
+    'gh pr create --title "fix: -A flag" --body "cargo clippy -- -A x and --no-verify are refused"',
+    'gh pr create --body="RUSTFLAGS=-A warnings stays denied" -t x',
+    "gh pr create --title x --body \"$(cat <<'EOF'\n- Point 1) done\n- `RUSTFLAGS=-A warnings` stays denied\nEOF\n)\"",
+    "gh release create v1 --notes 'no --no-verify'",
+    'glab mr create --description "cargo clippy -- -A x" --title y',
+    'grep -- "--no-verify" file',
+    'grep -- --no-verify file',
+    "grep -rn -e '--no-verify' scripts/",
+    'grep -rn "cargo clippy -- -A" docs',
+    "egrep '-A warnings|--no-verify' ci.log",
+    "rg -n 'git commit --no-verify' docs",
+    "rg -n -- '--no-verify' docs",
+    'rg "--cap-lints"',
+    'git grep -n -- --no-verify',
+    'git push -n',
+    'git push -n origin main',
+    'git checkout -b fix-no-verify',
+    'git add -A',
+    'ls -A',
+    'cargo clippy -- -D warnings',
+    'cargo clippy --all-targets -- -W clippy::pedantic',
+    'cargo clippy --workspace --all-targets --locked -- -D warnings',
+    'cargo clippy --fix --allow-dirty',
+    'cargo clippy --fix --allow-staged',
+    'cargo clippy --fix --allow-no-vcs',
+    'cargo clippy --fix --lib -p ledger-domain --allow-dirty',
+    'cargo clippy --fix --allow-dirty -- -D warnings',
+    'cargo -q clippy --all-targets -- -D warnings',
+    'RUSTFLAGS="-D warnings" cargo build',
+    'RUSTFLAGS=-Dwarnings cargo test',
+    'RUSTDOCFLAGS="-D warnings" cargo doc --no-deps',
+    // -A inside a path in a flags value is not a flag.
+    'RUSTFLAGS="--remap-path-prefix /Users/me/src/Foo-API=." cargo build --release',
+    'RUSTFLAGS="-L native=/opt/Intel-AMX/lib" cargo build',
+    'RUSTFLAGS="-C link-arg=-Wl,-rpath,/opt/My-App/lib" cargo build',
+    "RUSTFLAGS='-L /home/u/Project-Alpha/target' cargo test",
+    'RUSTDOCFLAGS="--html-in-header /home/u/Docs-Assets/katex.html" cargo doc',
+    // commit in a -c or -C value is not the subcommand.
+    'git -c commit.gpgsign=false log -n 5 --oneline',
+    'git -c commit.gpgsign=false cherry-pick -n abc123',
+    'git -C commit-tools log -n 1',
+    // Continued lines, and a search tool's name as a cargo argument.
+    'git commit -m x \\\n  --author "A <a@b>"',
+    'cargo clippy --workspace \\\n  --all-targets -- -D warnings',
+    'cargo clippy -p grep -- -D warnings',
+    // Near misses: plain prose, single-quoted text and a quoted -C value without -n.
+    'git commit -m "docs: the -n and --no-verify flags are refused"',
+    'gh pr create --title "fix: -A flag" --body "run cargo clippy -- -A x? no"',
+    'git -C "dir with space" commit -m "mention -n"',
+    'git -C "dir with space" log -n 3',
+    '"bash" tests/ci.sh --quick',
+  ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+});
+
+test('Bash: skipping git hooks stays denied however it is quoted or handed on (H-12)', () => {
+  for (const cmd of [
+    'git commit --no-verify -m x',
+    'git commit "--no-verify" -m x',
+    "git commit '--no-verify' -m x",
+    'git commit -m "x" --no-verify',
+    'git push --no-verify',
+    'git merge --no-verify feature',
+    'git commit -n',
+    'git commit -n -m x',
+    'git commit -m x -n',
+    'git commit -nm msg',
+    'git commit -anm msg',
+    'git commit "-n" -m x',
+    'git -C crates/a commit -n -m x',
+    'cargo fmt && git commit -n -m x',
+    'grep x f && git commit --no-verify -m x',
+    // A command string handed to another runner is read, quoted or not.
+    'git rebase -x "git commit --amend --no-edit --no-verify" HEAD~3',
+    'git rebase --exec "git commit --amend --no-edit -n" HEAD~3',
+    'bash -c "git commit --no-verify -m x"',
+    'bash -c -- "git commit --no-verify"',
+    "sh -c 'git commit -nm x'",
+    '"C:\\Git\\bin\\bash.exe" -c "git commit --no-verify -m x"',
+    'powershell -Command "git commit --no-verify"',
+    'cmd /c "git commit --no-verify -m x"',
+    'echo "$(git commit --no-verify -m x)"',
+    'eval "git commit --no-verify -m x"',
+    'echo "git commit -n" | bash',
+    "printf 'git commit -n\\n' | sh",
+    'bash <<<"git commit -n -m x"',
+    // echo is not a message command: its quoted text is still read.
+    'echo "--no-verify"',
+    // A here-document a shell reads, or an unquoted one that runs $(...), is not prose.
+    'cat <<EOF | bash\ngit commit --no-verify -m x\nEOF',
+    'bash <<EOF\ngit commit --no-verify -m x\nEOF',
+    'cat <<EOF\n$(git commit --no-verify -m x)\nEOF',
+    'git commit -F- <<< "msg"\ngit commit --no-verify -m x',
+    commitHeredoc("fix: don't crash", ' --no-verify'),
+    commitHeredoc("fix: don't crash", ' -n'),
+    commitHeredoc("fix: don't crash") + ' && git push --no-verify',
+    commitHeredoc('handle (a case') + ' --no-verify',
+    commitHeredoc("it's 1) fine", ' --no-verify'),
+    // Input the blanking does not recognise keeps the raw match.
+    'cat <<"E"OF\nhi\nEOF\ngit commit --no-verify -m x',
+    'cat <<EOF\nnever closed\ngit commit --no-verify -m x',
+    'git commit -m "unterminated --no-verify',
+    // Continued lines are one command.
+    'git commit -m "wip" \\\n  -n',
+    'git commit -a \\\n  -n -m wip',
+    'git -c commit.gpgsign=false commit -n -m x',
+    // A value starting with -- is not a message, and an interpreter's here-document is code.
+    'git rebase -m --no-verify main',
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'commit', '--no-verify', '-m', 'x'])\nEOF",
+    "node <<'EOF'\nrequire('child_process').execSync('git commit --no-verify -m x')\nEOF",
+    // Command substitution in a message value or search pattern runs, so it is read.
+    'git commit -m "$(git commit --no-verify -m x)"',
+    'git commit -m "wip `git commit --no-verify -m x`"',
+    'gh pr create --body "$(git commit -n -m x)" --title t',
+    'grep -- $(git commit --no-verify -m x) file',
+    'rg "$(git commit --no-verify -m x)"',
+    'grep -e "`git commit -n -m x`" f',
+    // A quoted interpreter name still reads its here-document.
+    '"bash" <<\'EOF\'\ngit commit --no-verify -m x\nEOF',
+    "'/bin/sh' <<EOF\ngit commit --no-verify -m x\nEOF",
+    // A quoted -C or -c value does not hide the subcommand.
+    'git -C "dir with space" commit -n -m x',
+    "git -c 'user.name=A B' commit -nm x",
+    'git --git-dir="a b/.git" commit -n -m x',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /H-12/, cmd);
+  }
+});
+
+test('Bash: lowering lint levels stays denied however it is quoted or handed on (H-05)', () => {
+  for (const cmd of [
+    'cargo clippy -- -A clippy::unwrap_used',
+    'cargo clippy -- -A warnings',
+    'cargo clippy -- -Awarnings',
+    'cargo clippy -- -Aclippy::all',
+    'cargo clippy -- "-A" clippy::unwrap_used',
+    'cargo clippy -- --allow clippy::unwrap_used',
+    'cargo clippy -- --allow=warnings',
+    'cargo clippy -- --cap-lints warn',
+    'cargo +1.96 clippy --workspace -- -A warnings',
+    'cargo -q clippy -- -A x',
+    'cargo +nightly --locked clippy -- -A x',
+    'cargo --config net.offline=true clippy -- -A x',
+    'cargo rustc -- -A warnings',
+    "bash -c 'cargo clippy -- -A warnings'",
+    'watchexec -- "cargo clippy -- -A warnings"',
+    commitHeredoc("fix: don't crash") + '\ncargo clippy -- -A warnings',
+    'RUSTFLAGS="-A warnings" cargo build',
+    "RUSTFLAGS='--cap-lints warn' cargo build",
+    'RUSTFLAGS=-Awarnings cargo build',
+    'RUSTFLAGS="-D warnings -A x" cargo build',
+    'RUSTDOCFLAGS="-A warnings" cargo doc',
+    "CARGO_ENCODED_RUSTFLAGS=$'-Dwarnings\\x1f-Awarnings' cargo build",
+    'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-A warnings" cargo build',
+    'env "RUSTFLAGS=-A warnings" cargo build',
+    "export 'RUSTFLAGS=-Awarnings'",
+    'export RUSTFLAGS="-A warnings" && cargo build',
+    'RUSTFLAGS="-L /opt/My-App/lib -A warnings" cargo build',
+    'cargo clippy --workspace --all-targets \\\n  -- -A clippy::pedantic',
+    'cargo clippy --all-targets -- \\\n  -D warnings \\\n  -A dead_code',
+    // A search tool's name as an argument does not make the command a search.
+    'cargo clippy -p grep -- -A clippy::all',
+    'cargo clippy -p rg -- -A dead_code',
+    'cargo clippy --bin ack -- -A dead_code',
+    'git commit -m x && cargo clippy --features ag -- -A x',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /H-05/, cmd);
+  }
+});
+
+test('Bash: the flag checks stay fast on long commands', () => {
+  const start = Date.now();
+  for (const cmd of ['cargo clippy '.repeat(800), 'cargo '.repeat(400) + 'clippy '.repeat(430), 'git commit '.repeat(800),
+    'git ' + '--a=b '.repeat(400), 'git ' + '--a="b c" '.repeat(400), 'git ' + '-c '.repeat(400)]) {
+    assert.equal(decision(bash(cmd)), 'none');
+  }
+  assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
+});
+
 test('Bash: --ignore-rust-version only counts as a cargo flag', () => {
   assert.equal(decision(bash("git commit -m 'ci: stop passing --ignore-rust-version'")), 'none');
   assert.equal(decision(bash("rg -n -- '--ignore-rust-version' .github")), 'none');
