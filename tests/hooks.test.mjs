@@ -717,17 +717,6 @@ test('Bash: git rev-parse --path-format=absolute does not hide the state dir', (
   assert.equal(decision(bash('cat "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a" > /tmp/a')), 'none');
 });
 
-test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
-  for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
-    const res = bash(cmd);
-    assert.equal(decision(res), 'deny', cmd);
-    assert.match(reason(res), /vendored temper CLI/, cmd);
-  }
-  for (const cmd of ['cp .claude/temper/temper.mjs /tmp/x', 'node .claude/temper/temper.mjs baseline --check', 'cat .claude/temper/VERSION', 'diff -r .claude/temper scripts']) {
-    assert.equal(decision(bash(cmd)), 'none', cmd);
-  }
-});
-
 // ---- Greptile findings on #82, through the real preBash
 
 test('Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed', () => {
@@ -758,5 +747,16 @@ test('Bash: state-dir writes spelled with bash backslash escapes or a Python mod
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+  }
+});
+
+test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
+  for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /vendored temper CLI/, cmd);
+  }
+  for (const cmd of ['cp .claude/temper/temper.mjs /tmp/x', 'node .claude/temper/temper.mjs baseline --check', 'cat .claude/temper/VERSION', 'diff -r .claude/temper scripts']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
   }
 });
