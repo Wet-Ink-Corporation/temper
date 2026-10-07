@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Shell writes to protected configuration ask. One hook decision changes: a Bash command that writes a file matching the `protected` globs in `.claude/temper.json` used to pass with no decision, and now asks the human, as an Edit or Write to the same file already did.
+- **What counts as a write.** Redirects (`>`, `>>`, `&>`, `tee`), `sed -i` and `perl -i`, the destination of `cp`, `mv`, `install`, `ln`, `git mv`, `Copy-Item` and `Move-Item`, `Set-Content`, `Add-Content` and `Out-File`, and python or node one-liners that open a file for writing. The target resolves against the command's working directory and any `cd` in the command, so `./clippy.toml`, an absolute path inside the project and a write from a crate directory all count.
+- **Which files.** The default list covers `.claude/temper.json` (where `review` and `skillGate` live), `.claude/settings.json`, `clippy.toml`, `rustfmt.toml`, `deny.toml`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `.githooks/`, `CLAUDE.md` and `AGENTS.md`. A project's own `protected` list replaces it, as for edits.
+- **Denies still win.** The shell-write denies for `.claude/temper/` and the baseline file, and every other Bash deny, come first, so a command that also does something denied is still denied. Reading, diffing and copying these files elsewhere runs as before.
+
 Documentation.
 - **Cloud sessions.** `docs/troubleshooting.md` has a new section on why temper is missing from Claude Code cloud sessions, and how to install it from the environment's setup script. A repository's `.claude/settings.json` does not install the plugin there, and a `SessionStart` hook installs it too late. The section also covers what works in claude.ai chat: the skills load, but the hooks and agents do not.
 - **The organization sync.** The same section says how claude.ai's organization sync keeps temper current: sync `Wet-Ink-Corporation/temper` with Sync automatically on, and remove any uploaded zip copy. It also corrects an earlier line that called the repository public; it is internal.

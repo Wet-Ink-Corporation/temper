@@ -355,6 +355,225 @@ const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI 
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
+// Shell operators: redirects (with an optional fd), here-docs, separators. Order matters.
+const SHELL_OP = /(?:\d*(?:>>|>\||>&|>)|&>>|&>|<<<|<<-|<<|<&|<>|<|&&|\|\||\|&|;;|[|;&()\n])/y;
+
+/**
+ * The words and operators of a shell command, quote-aware (`'a;b'` is one word, `2>&1` is
+ * an operator and a word). Here-doc bodies are skipped. No expansion: `$X` stays as written.
+ */
+function shellTokens(cmd) {
+  const s = String(cmd);
+  const toks = [];
+  const heredocs = [];
+  let i = 0;
+  const readWord = () => {
+    let w = '';
+    while (i < s.length && !/[\s|;&()<>]/.test(s[i])) {
+      const c = s[i];
+      if (c === "'") {
+        const end = s.indexOf("'", i + 1);
+        w += s.slice(i + 1, end === -1 ? s.length : end);
+        i = end === -1 ? s.length : end + 1;
+      } else if (c === '"') {
+        i++;
+        while (i < s.length && s[i] !== '"') {
+          if (s[i] === '\\' && /["\\$`]/.test(s[i + 1] ?? '')) i++;
+          w += s[i++];
+        }
+        i++;
+      } else if (c === '\\' && i + 1 < s.length) {
+        w += s[i + 1];
+        i += 2;
+      } else {
+        w += c;
+        i++;
+      }
+    }
+    return w;
+  };
+  while (i < s.length) {
+    if (s[i] !== '\n' && /\s/.test(s[i])) { i++; continue; }
+    if (s[i] === '\\' && s[i + 1] === '\n') { i += 2; continue; }
+    if (/[<>]/.test(s[i]) && s[i + 1] === '(') { // process substitution: an unknown file name
+      for (let depth = 0; i < s.length; i++) {
+        if (s[i] === '(') depth++;
+        else if (s[i] === ')' && --depth === 0) { i++; break; }
+      }
+      toks.push({ word: '$(...)' });
+      continue;
+    }
+    SHELL_OP.lastIndex = i;
+    const op = SHELL_OP.exec(s);
+    if (op) {
+      i += op[0].length;
+      toks.push({ op: op[0] });
+      if (op[0] === '<<' || op[0] === '<<-') {
+        while (/[ \t]/.test(s[i] ?? '')) i++;
+        const delim = readWord();
+        heredocs.push({ delim, strip: op[0] === '<<-' });
+        toks.push({ word: delim });
+      } else if (op[0] === '\n' && heredocs.length) {
+        for (const { delim, strip } of heredocs.splice(0)) {
+          for (;;) {
+            const nl = s.indexOf('\n', i);
+            const line = s.slice(i, nl === -1 ? s.length : nl);
+            i = nl === -1 ? s.length : nl + 1;
+            if ((strip ? line.replace(/^\t+/, '') : line) === delim || nl === -1) break;
+          }
+        }
+      }
+      continue;
+    }
+    toks.push({ word: readWord() });
+  }
+  return toks;
+}
+
+const SHELL_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'time', 'command', 'exec', 'nice', 'xargs']);
+const PS_VALUE_PARAMS = new Set(['-value', '-encoding', '-inputobject', '-width', '-stream', '-delimiter']);
+const INSTALL_VALUE_FLAGS = new Set(['-m', '--mode', '-o', '--owner', '-g', '--group', '-S', '--suffix']);
+
+/** Targets of sed -i / perl -i: the file operands, after the script unless -e/-f gave it. */
+function inPlaceTargets(args) {
+  const files = [];
+  let script = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    // `-e script`, `-pe script` (a cluster ending in e or f takes the next word), `-escript`.
+    if (/^-[a-zA-Z]*[ef]$/.test(a) || a === '--expression' || a === '--file') { script = true; k++; continue; }
+    if (/^--(?:expression|file)=/.test(a) || /^-e./.test(a)) { script = true; continue; }
+    if (a.startsWith('-')) continue;
+    files.push(a);
+  }
+  return script ? files : files.slice(1);
+}
+
+/** Destinations of cp/mv/install/Copy-Item/Move-Item, as [path, sources] pairs. */
+function copyTargets(args, powershell) {
+  const pos = [];
+  let dir = null;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (powershell && /^-dest(?:ination)?$/i.test(a)) { dir = { dest: args[k + 1] ?? '' }; k++; continue; }
+    if (powershell && /^-(?:path|literalpath)$/i.test(a)) { pos.push(args[++k] ?? ''); continue; }
+    if (a === '-t' || a === '--target-directory') { dir = { dest: args[k + 1] ?? '', isDir: true }; k++; continue; }
+    if (/^--target-directory=/.test(a)) { dir = { dest: a.slice(a.indexOf('=') + 1), isDir: true }; continue; }
+    if (/^-t./.test(a)) { dir = { dest: a.slice(2), isDir: true }; continue; }
+    if (INSTALL_VALUE_FLAGS.has(a)) { k++; continue; }
+    if (a === '-d' || a === '--directory') return [];
+    if (a.startsWith('-')) continue;
+    pos.push(a);
+  }
+  if (dir) return [{ dest: dir.dest, sources: pos, isDir: dir.isDir }];
+  if (pos.length < 2) return [];
+  return [{ dest: pos[pos.length - 1], sources: pos.slice(0, -1) }];
+}
+
+/** Target of Set-Content/Add-Content/Out-File: -Path/-FilePath/-LiteralPath, else the first positional. */
+function psContentTargets(args) {
+  for (let k = 0; k < args.length; k++) {
+    if (/^-(?:path|filepath|literalpath)$/i.test(args[k])) return [args[k + 1] ?? ''];
+  }
+  for (let k = 0; k < args.length; k++) {
+    if (PS_VALUE_PARAMS.has(args[k].toLowerCase())) { k++; continue; }
+    if (!args[k].startsWith('-')) return [args[k]];
+  }
+  return [];
+}
+
+// Interpreter one-liners that write a file named by a string literal (`\"` inside a
+// double-quoted -c/-e argument included).
+const Q = String.raw`\\?(['"])([^'"\\]+)\\?\1`;
+const INTERPRETER_WRITES = [
+  new RegExp(String.raw`\bopen\(\s*${Q}\s*,\s*(?:mode\s*=\s*)?\\?['"][rbt]*[wax+]`, 'g'),
+  new RegExp(String.raw`\b(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|File\.write)\(\s*${Q}`, 'g'),
+  new RegExp(String.raw`\b(?:copyFileSync|renameSync|shutil\.(?:copy2?|copyfile|move)|os\.(?:replace|rename))\([^,()]*,\s*${Q}`, 'g'),
+  new RegExp(String.raw`\bPath\(\s*${Q}\s*\)\s*\.(?:write_text|write_bytes)\b`, 'g'),
+];
+
+/**
+ * Files a shell command writes, as absolute paths: redirect targets, tee, sed -i and
+ * perl -i operands, cp/mv/install/Copy-Item/Move-Item destinations, Set-Content/
+ * Add-Content/Out-File paths, and files that python/node one-liners open for writing.
+ * Relative paths resolve against `cwd`, following `cd` within the command.
+ */
+export function shellWriteTargets(cmd, cwd) {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? cwd;
+  const out = [];
+  let dir = cwd;
+  // An absolute path, or null when the name is unknown (`$X`, `$(...)`, stdout).
+  const at = (t, base = dir) => {
+    if (!t || t === '-' || /[$`]/.test(t) || /^\/dev\//.test(t)) return null;
+    return path.resolve(base, t.replace(/^~(?=[\\/]|$)/, home));
+  };
+  const add = (t, base = dir) => { const p = at(t, base); if (p) out.push(p); };
+  const toks = shellTokens(cmd);
+  const commands = [];
+  let cur = { words: [], redirects: [] };
+  for (let k = 0; k < toks.length; k++) {
+    const t = toks[k];
+    if ('word' in t) { cur.words.push(t.word); continue; }
+    if (/[<>]/.test(t.op)) {
+      const target = toks[k + 1] && 'word' in toks[k + 1] ? toks[++k].word : '';
+      const dup = /&$/.test(t.op) && /^(?:\d+-?|-)$/.test(target);
+      if (/>/.test(t.op) && !dup) cur.redirects.push(target);
+      continue;
+    }
+    commands.push(cur);
+    cur = { words: [], redirects: [] };
+  }
+  commands.push(cur);
+  for (const { words, redirects } of commands) {
+    for (const r of redirects) add(r);
+    let w = 0;
+    while (w < words.length && /^\w+=/.test(words[w])) w++;
+    while (w < words.length && SHELL_WRAPPERS.has(path.basename(words[w]))) {
+      w++;
+      while (w < words.length && (words[w].startsWith('-') || /^\w+=/.test(words[w]))) w++;
+    }
+    if (w >= words.length) continue;
+    const name = path.basename(words[w]).replace(/\.exe$/i, '');
+    const lower = name.toLowerCase();
+    const args = words.slice(w + 1);
+    if (name === 'cd') {
+      // `cd -`, `cd "$(git rev-parse --show-toplevel)"`: unknown, so keep the starting directory
+      // (usually the root): an unneeded ask is cheaper than a missed write.
+      dir = at(args[0] ?? '~') ?? cwd;
+    } else if (name === 'tee') {
+      for (const a of args) if (!a.startsWith('-')) add(a);
+    } else if ((name === 'sed' || name === 'perl') && args.some((a) => /^-[a-zA-Z]*i/.test(a) || /^--in-place(?:=|$)/.test(a))) {
+      for (const a of inPlaceTargets(args)) add(a);
+    } else if (['cp', 'mv', 'install', 'ln', 'copy', 'move', 'copy-item', 'move-item'].includes(lower) || (name === 'git' && args[0] === 'mv')) {
+      for (const { dest, sources, isDir } of copyTargets(name === 'git' ? args.slice(1) : args, lower.includes('-item'))) {
+        const abs = at(dest);
+        if (!abs) continue;
+        let intoDir = isDir || /[\\/]$/.test(dest);
+        if (!intoDir) { try { intoDir = fs.statSync(abs).isDirectory(); } catch { intoDir = false; } }
+        if (intoDir && sources.length) for (const src of sources) add(path.basename(src.replace(/[\\/]+$/, '')), abs);
+        else add(dest);
+      }
+    } else if (['set-content', 'add-content', 'out-file'].includes(lower)) {
+      for (const a of psContentTargets(args)) add(a);
+    }
+  }
+  for (const re of INTERPRETER_WRITES) {
+    for (const m of String(cmd).matchAll(re)) add(m[2], cwd);
+  }
+  return out;
+}
+
+/** Project-relative paths of protected configuration (config.protected) that `cmd` writes. */
+function protectedShellWrites(proj, cmd, cwd) {
+  const rels = [];
+  for (const abs of shellWriteTargets(cmd, cwd && fs.existsSync(cwd) ? cwd : proj.root)) {
+    const rel = relTo(proj.root, abs);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    if (proj.config.protected.some((p) => globMatch(p, rel)) && !rels.includes(rel)) rels.push(rel);
+  }
+  return rels;
+}
+
 /** Shell segments of a command with quotes removed (`"--update"` and `'x'` read as `--update` and `x`). */
 const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
   .map((seg) => seg.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_m, a, b) => a ?? b ?? ''));
@@ -473,6 +692,14 @@ export function preBash(input) {
   }
   if (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)) {
     return deny('temper: lowering lint levels on the command line is not allowed (H-05). Fix the code the lint points at.');
+  }
+  // Protected configuration written from the shell asks, as an Edit/Write to it does.
+  // After every deny above, so a command that also does something denied stays denied.
+  const configWrites = protectedShellWrites(proj, cmd, input.cwd);
+  if (configWrites.length) {
+    telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+    const what = configWrites.join(', ');
+    return ask(`temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`);
   }
   if (proj.config.askOnNewDependency) {
     const approved = new Set(proj.config.preapprovedDependencies ?? []);
