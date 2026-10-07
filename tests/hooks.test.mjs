@@ -73,7 +73,7 @@ before(() => {
 
 after(() => { fs.rmSync(ws, { recursive: true, force: true }); });
 
-// A preloaded agent type skips the skill gate, which is not under test here.
+// A preloaded agent type skips the skill gate; tests/handlers.test.mjs covers the gate itself.
 const input = (tool, rel, toolInput) => ({
   tool_name: tool, cwd: ws, session_id: 'hooks-test', agent_type: 'temper:rust-implementer',
   tool_input: { file_path: file(rel), ...toolInput },
