@@ -18,6 +18,10 @@ import {
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
+import {
+  parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
+  landing as protectedLanding, patchFiles as protectedPatchFiles,
+} from './shell.mjs';
 
 const REVIEWER = /(^|:)rust-reviewer$/;
 const IMPLEMENTER = /(^|:)rust-implementer$/;
@@ -714,6 +718,142 @@ export function stateDirWrite(proj, cmd, cwd = proj.root) {
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
+/** The project that owns `abs` (a nested git checkout, such as a worktree under .claude/worktrees/, owns its files), as preEdit finds it. */
+function ownerOf(proj, rel, cache) {
+  const parts = rel.split('/');
+  for (let k = parts.length - 1; k > 0; k--) {
+    const dir = path.join(proj.root, ...parts.slice(0, k));
+    if (!cache.has(dir)) cache.set(dir, fs.existsSync(path.join(dir, '.git')) ? discover(dir) ?? proj : null);
+    const owner = cache.get(dir);
+    if (owner) return owner;
+  }
+  return proj;
+}
+
+/** Files under `dir`, relative to it with `/`, or null past `limit` entries (a copied tree's protected files land under its destination). */
+function configFilesUnder(dir, limit = 10000) {
+  const out = [];
+  const stack = [''];
+  let seen = 0;
+  while (stack.length) {
+    const rel = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(path.join(dir, rel), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (++seen > limit) return null;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (e.name !== '.git') stack.push(r); } else out.push(r);
+    }
+  }
+  return out;
+}
+
+/** Protected globs a whole directory `rel` replaces: `<dir>/**` at or below it, and every glob for the project root. */
+const protectedUnder = (globs, rel) => (rel === '' ? globs : globs.filter((g) => g.endsWith('/**') && (globMatch(g.slice(0, -3), rel) || g.startsWith(`${rel}/`))));
+
+/**
+ * The files a patch command changes (its -o output, its target and the files the patch names):
+ * `{ read: true, touched }`, or `{ read: false }` when temper cannot read the patch.
+ */
+function configPatchTouches(p, c) {
+  if (p.stored) return { read: false };
+  const real = (f) => f !== '/dev/null';
+  const touched = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.raw).filter(real);
+  const wordAbs = (w, cwd) => (w && !w.glob ? resolvePath(w.value, cwd) : null);
+  const inputs = p.inputs.map((w) => ({ abs: wordAbs(w, p.cwd) }));
+  if (!inputs.length) {
+    if (c.stdin?.kind === 'heredoc' && c.stdin.literal !== null && !c.piped) inputs.push({ body: c.stdin.literal });
+    else if (c.stdin?.kind === 'file' && !c.piped) inputs.push({ abs: wordAbs(c.stdin.word, c.cwd) });
+    else return { read: false };
+  }
+  for (const i of inputs) {
+    let st = null;
+    if (i.abs && !/^\/(?:dev|proc)\//.test(norm(i.abs))) { try { st = fs.statSync(i.abs); } catch { st = null; } }
+    const text = i.body ?? (st?.isFile() && st.size <= 32 * 1024 * 1024 ? readText(i.abs) : null);
+    if (text === null) return { read: false };
+    touched.push(...protectedPatchFiles(text).filter(real));
+  }
+  return { read: true, touched: [...new Set(touched.map((f) => f.replace(/^[ab]\//, '')))] };
+}
+
+/**
+ * Project-relative paths of protected configuration (config.protected) that `cmd` writes,
+ * read with scripts/lib/shell.mjs. Relative names resolve against the directory each command
+ * runs in; after a `cd` temper cannot follow, against both the starting directory and the
+ * project root. A whole directory written in one go (`cp -r d .cargo`, `mv d .github`,
+ * `git checkout <rev> -- .github`, `git restore --source=<rev> .`) reports the protected
+ * globs it replaces. `git checkout`/`git restore` from HEAD or the index pass; for a
+ * wildcard pathspec from another revision, git lists the files it would change. A patch
+ * (git apply, git am, patch) writes the files it names. Returns `{ files, unreadPatch }`:
+ * `unreadPatch` is the first patch command whose patch temper cannot read (a pipe, a variable,
+ * a missing file, `git am --continue`), or null.
+ */
+function protectedShellWrites(proj, cmd, cwd) {
+  const start = cwd && fs.existsSync(cwd) ? path.resolve(cwd) : proj.root;
+  const rels = [];
+  let unreadPatch = null;
+  const owners = new Map();
+  const stat = (p) => { try { return fs.statSync(p); } catch { return null; } };
+  const check = (abs, tree) => {
+    const rel = relTo(proj.root, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel) || (!rel && !tree)) return;
+    const owner = rel ? ownerOf(proj, rel, owners) : proj;
+    const own = owner === proj ? rel : relTo(owner.root, abs);
+    const hits = own && owner.config.protected.some((p) => globMatch(p, own)) ? [rel] : [];
+    if (tree) hits.push(...protectedUnder(owner.config.protected, own).map((g) => (owner === proj ? g : `${relTo(proj.root, owner.root)}/${g}`)));
+    for (const h of hits) if (!rels.includes(h)) rels.push(h);
+  };
+  // A wildcard or magic pathspec (`git checkout main -- '*.toml'`), or a directory: the files it would change, as git lists them.
+  const pathspec = (t, base, fallback = true) => {
+    const top = run('git', ['rev-parse', '--show-toplevel'], { cwd: base, timeoutMs: 5000 });
+    const diff = run('git', ['diff', '--name-only', '--no-renames', '-z', t.source, '--', t.raw], { cwd: base, timeoutMs: 5000 });
+    if (top.error || diff.error) { if (fallback) check(proj.root, true); return; } // git could not say: every protected glob
+    if (top.code !== 0 || diff.code !== 0) return; // not a repository, or no such revision: the restore fails too
+    for (const f of diff.stdout.split('\0').filter(Boolean)) check(path.resolve(top.stdout.trim(), f), false);
+  };
+  for (const c of protectedCommands(cmd, { cwd: start, top: proj.gitRoot ?? proj.root })) {
+    // A patch writes the files it names, its target and its -o output. One temper cannot read asks.
+    const p = protectedPatch(c);
+    if (p?.apply) {
+      const r = configPatchTouches(p, c);
+      if (!r.read && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
+      const named = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.value);
+      const listed = r.read ? r.touched.filter((f) => !named.includes(f)) : [];
+      for (const base of p.cwd ? [p.cwd] : [start, proj.root]) {
+        for (const v of named) { const abs = resolvePath(v, base); if (abs) check(abs, false); }
+        for (const f of listed) for (const b of p.tool === 'patch' ? [base] : [base, proj.root]) check(path.resolve(b, f), false);
+      }
+    }
+    for (const t of protectedWrites(c)) {
+      const restore = t.verb === 'git checkout' || t.verb === 'git restore';
+      if (restore && (t.source === null || t.source === 'HEAD' || t.source === '@')) continue; // undoing one's own edit
+      for (const base of t.cwd ? [t.cwd] : [start, proj.root]) {
+        if (restore && pathspecPattern(t)) { pathspec(t, base); continue; }
+        const dest = t.glob ? null : resolvePath(t.value, base);
+        if (!dest) continue;
+        if (!t.sources) {
+          check(dest, restore);
+          // A directory from another revision brings back the protected files git lists in it (`docs/clippy.toml`).
+          if (restore && !(stat(dest)?.isFile() ?? false)) pathspec(t, base, false);
+          continue;
+        }
+        const destIsDir = stat(dest)?.isDirectory() ?? false;
+        for (const s of t.sources) {
+          const land = protectedLanding({ ...t, path: dest }, s, destIsDir);
+          if (!land) continue;
+          // A recursive copy or a move of anything but a known file may bring a whole tree,
+          // and with it the protected files inside it (`cfg/sub/clippy.toml`).
+          const srcAbs = resolvePath(s.value, base);
+          const srcStat = srcAbs ? stat(srcAbs) : null;
+          check(land, t.recursive && !(srcStat?.isFile() ?? false));
+          if (t.recursive && srcStat?.isDirectory()) for (const f of configFilesUnder(srcAbs) ?? []) check(path.join(land, f), false);
+        }
+      }
+    }
+  }
+  return { files: rels, unreadPatch };
+}
+
 /** Shell segments of a command with quotes removed (`"--update"` and `'x'` read as `--update` and `x`). */
 const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
   .map((seg) => seg.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_m, a, b) => a ?? b ?? ''));
@@ -854,18 +994,33 @@ export function preBash(input) {
   if (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)) {
     return deny('temper: lowering lint levels on the command line is not allowed (H-05). Fix the code the lint points at.');
   }
+  // Protected configuration written from the shell asks, as an Edit/Write to it does.
+  // After every deny above, so a command that also does something denied stays denied.
+  // Its ask is shown together with the dependency and snapshot asks below, as preEdit collects asks.
+  const { files: configWrites, unreadPatch } = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), { files: [], unreadPatch: null });
+  const what = configWrites.join(', ');
+  const configAsks = [
+    ...(configWrites.length ? [`temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`] : []),
+    // A patch from a pipe, a variable or a missing file may change protected configuration too.
+    ...(unreadPatch !== null ? [`temper: \`${unreadPatch.slice(0, 120)}\`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes.`] : []),
+  ];
+  const configAsk = configAsks.length ? configAsks.join('\n') : null;
+  if (configWrites.length) telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+  else if (configAsk) telemetry(proj, input, 'ask', { via: 'shell-patch-unread' });
+  const withConfig = (reason) => ask(configAsk ? `${configAsk}\n${reason}` : reason);
   if (proj.config.askOnNewDependency) {
     const approved = new Set(proj.config.preapprovedDependencies ?? []);
     const changes = cargoDependencyCommands(cmd).filter((c) => !c.crates.length || c.crates.some((n) => !approved.has(n)));
     if (changes.length) {
       telemetry(proj, input, 'ask', { via: 'cargo-deps' });
       const what = changes.map((c) => `cargo ${c.op} ${c.crates.join(' ') || '(no crate named)'}`).join('; ');
-      return ask(`temper: \`${what}\` changes the dependency graph without the manifest checks. Adding or removing a dependency is a human decision (H-16, ARC-12). Approve only if you asked for it.`);
+      return withConfig(`temper: \`${what}\` changes the dependency graph without the manifest checks. Adding or removing a dependency is a human decision (H-16, ARC-12). Approve only if you asked for it.`);
     }
   }
   if (/\bcargo\s+insta\s+(?:accept|test\b[^|;&]*--accept)/.test(cmd)) {
-    return ask('temper: accepting all snapshot changes at once can hide regressions (H-12). Approve only after reviewing the snapshot diffs (cargo insta review).');
+    return withConfig('temper: accepting all snapshot changes at once can hide regressions (H-12). Approve only after reviewing the snapshot diffs (cargo insta review).');
   }
+  if (configAsk) return ask(configAsk);
   return none();
 }
 
