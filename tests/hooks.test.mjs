@@ -886,39 +886,6 @@ test('Bash: a command the shell reader cannot finish still gets the other Bash d
   assert.equal(decision(bash(`${'find . -exec '.repeat(3000)}echo \\;`)), 'none');
 });
 
-test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)', () => {
-  for (const cmd of [
-    'echo {} > .claude/temper-baseline.json',
-    "sed -i 's/: 3/: 4/' .claude/temper-baseline.json",
-    'jq . x.json | tee .claude/temper-baseline.json',
-    'cp /tmp/old.json .claude/temper-baseline.json',
-    'mv new.json ./.claude/temper-baseline.json',
-    "python3 -c \"open('.claude/temper-baseline.json','w').write('{}')\"",
-  ]) {
-    const res = bash(cmd);
-    assert.equal(decision(res), 'deny', cmd);
-    assert.match(reason(res), /baseline --tighten/, cmd);
-    assert.match(reason(res), /human/, cmd);
-  }
-  for (const cmd of ['cat .claude/temper-baseline.json', 'git diff .claude/temper-baseline.json', 'cp .claude/temper-baseline.json /tmp/bl.json', 'jq .totals .claude/temper-baseline.json > /tmp/t.json']) {
-    assert.equal(decision(bash(cmd)), 'none', cmd);
-  }
-  const write = writeTo('.claude/temper-baseline.json', '{"temper_baseline":1,"totals":{}}\n');
-  assert.equal(decision(write), 'ask');
-  assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
-});
-
-test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
-  for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
-    const res = bash(cmd);
-    assert.equal(decision(res), 'deny', cmd);
-    assert.match(reason(res), /vendored temper CLI/, cmd);
-  }
-  for (const cmd of ['cp .claude/temper/temper.mjs /tmp/x', 'node .claude/temper/temper.mjs baseline --check', 'cat .claude/temper/VERSION', 'diff -r .claude/temper scripts']) {
-    assert.equal(decision(bash(cmd)), 'none', cmd);
-  }
-});
-
 // ---- Greptile findings on #83, through the real preBash
 
 test('Bash: protected config written by a clustered curl/wget output option or by a recursive copy of protected files asks', () => {
@@ -997,3 +964,35 @@ test('Bash: git checkout/restore of a directory from another revision asks when 
   }
 });
 
+test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)', () => {
+  for (const cmd of [
+    'echo {} > .claude/temper-baseline.json',
+    "sed -i 's/: 3/: 4/' .claude/temper-baseline.json",
+    'jq . x.json | tee .claude/temper-baseline.json',
+    'cp /tmp/old.json .claude/temper-baseline.json',
+    'mv new.json ./.claude/temper-baseline.json',
+    "python3 -c \"open('.claude/temper-baseline.json','w').write('{}')\"",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /baseline --tighten/, cmd);
+    assert.match(reason(res), /human/, cmd);
+  }
+  for (const cmd of ['cat .claude/temper-baseline.json', 'git diff .claude/temper-baseline.json', 'cp .claude/temper-baseline.json /tmp/bl.json', 'jq .totals .claude/temper-baseline.json > /tmp/t.json']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+  const write = writeTo('.claude/temper-baseline.json', '{"temper_baseline":1,"totals":{}}\n');
+  assert.equal(decision(write), 'ask');
+  assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
+});
+
+test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
+  for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /vendored temper CLI/, cmd);
+  }
+  for (const cmd of ['cp .claude/temper/temper.mjs /tmp/x', 'node .claude/temper/temper.mjs baseline --check', 'cat .claude/temper/VERSION', 'diff -r .claude/temper scripts']) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
