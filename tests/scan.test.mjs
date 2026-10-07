@@ -1,10 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { scanSource, newHits, classifyPath, isBuildScript, isRustFence, RULES } from '../scripts/lib/scan.mjs';
+import { scanSource as scanSourceRaw, newHits, classifyPath, isBuildScript, isRustFence, RULES } from '../scripts/lib/scan.mjs';
 import { maskRust, countTests, countIgnored } from '../scripts/lib/lexer.mjs';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
+// Every key the scanner reported to a test in this file. The last test checks
+// that each RULES key is among them, so a key whose cases are all removed fails
+// CI, whatever comments or strings still name it.
+const fired = new Set();
+const scanSource = (src, opts) => {
+  const res = scanSourceRaw(src, opts);
+  for (const h of res.hits) fired.add(h.key);
+  return res;
+};
 const keys = (src, kind = 'prod', sev) => scanSource(src, { kind }).hits.filter((h) => !sev || h.severity === sev).map((h) => `${h.key}:${h.severity}`);
 
 test('masks strings, raw strings, chars and comments but keeps lifetimes', () => {
@@ -819,17 +826,6 @@ test('forbid-override: fires only for a lint the crate forbids', () => {
   assert.deepEqual(hitsOf(src, 'forbid-override', 'prod', { forbid: new Set(['clippy::panic']) }), []);
 });
 
-// A key counts only as a whole quoted JS string: a KEY_CASES or hitsOf key
-// ('leak') or a `key:severity` pin ('dbg:hard'). Rust identifiers such as
-// unsafe_code or process::exit inside test sources do not count. This is still
-// a text check: it shows each key is cited in a JS string here, not that the
-// citing test is a good one.
-test('every RULES key is quoted in this file', () => {
-  const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
-  const named = (k) => new RegExp(`['"\`]${k}(?::(?:hard|soft|ask))?['"\`]`).test(self);
-  assert.deepEqual(RULES.map((r) => r.key).filter((k) => !named(k)), []);
-});
-
 test('large file: a seeded hit near the end of ~5000 lines is reported in bounded time', () => {
   const block = [
     '/// Adds two values.',
@@ -856,4 +852,10 @@ test('large file: a seeded hit near the end of ~5000 lines is reported in bounde
   // Generous bound: far below the 30 s pre-edit hook timeout (hooks/hooks.json)
   // and loose enough that a slow Windows CI runner does not flake.
   assert.ok(ms < 10_000, `scan of ${lines.length} lines took ${ms.toFixed(0)} ms`);
+});
+
+// Runs last: node:test runs a file's top-level tests in order, so every scan
+// above has been recorded in `fired`.
+test('every RULES key is reported by at least one scan in this file', () => {
+  assert.deepEqual(RULES.map((r) => r.key).filter((k) => !fired.has(k)), []);
 });
