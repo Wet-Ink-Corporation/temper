@@ -114,7 +114,7 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 | 2.1 | ~~**Pick two pilot repositories**: one greenfield or small, and one brownfield Wet Ink Rust repository with real lint debt.~~ Done 2026-10-02: **weigh-in** (small: two crates, about 8k lines) and **redkiln-rs** (brownfield: twelve crates and three fixture crates on `build/phase-0-to-1`, about 236k lines including tests). redkiln-rs adopts on that branch, which its runbook is still building, and keeps its ADR-0102 lint groups (#13). | S | Owner |
 | 2.2 | ~~**Adopt temper in each**: `cargo fmt` commit, then `/temper:setup` on a branch, baseline `--init` on the CI platform, and confirm the charters, following the README rollout. Make the `temper` CI job a required check in that repository's branch protection.~~ Done 2026-10-04. weigh-in adopted temper in [weigh-in#37](https://github.com/Wet-Ink-Corporation/weigh-in/pull/37) and redkiln-rs in [redkiln-rs#2](https://github.com/Wet-Ink-Corporation/redkiln-rs/pull/2), with the charters confirmed in [weigh-in#63](https://github.com/Wet-Ink-Corporation/weigh-in/pull/63) and [redkiln-rs#3](https://github.com/Wet-Ink-Corporation/redkiln-rs/pull/3). The required checks are meant to be `gate` in weigh-in and `temper` in redkiln-rs; the 2026-10 audit found neither in its repository's rulesets (`v1-plan-1-2`, #62). The adoption findings went to #32 and were fixed in #33. | M | Agent + owner approvals |
 | 2.3 | **Collect findings**: `temper stats` telemetry (denials, blocks, verdicts), false positives and negatives, gate latency on the Stop hook (timeout 1200 s), friction in `/temper:implement`, and the review-loop round counts. One issue per finding, labelled `pilot`. | M (ongoing) | Agent + owner |
-| 2.4 | **Fix the pilot findings** and re-cut as 1.3.x. Settle the open two-way defaults the pilot was meant to test, such as wi-a9eb36 (Dependabot `lockfile-only`). | M–L | Agent |
+| 2.4 | **Fix the pilot findings** and release them as 1.4.0, the v1 release (wi-891617). Settle the open two-way defaults the pilot was meant to test, such as wi-a9eb36 (Dependabot `lockfile-only`). | M–L | Agent |
 
 ### Phase 3: release engineering for v1
 
@@ -135,7 +135,7 @@ Sizes: **S** is under half a day, **M** is 1 to 2 days, **L** is 3 days or more.
 - [ ] No P0 or P1 issue is open among the `v1-live` issues (tracked in #6).
 - [ ] The evals meet the phase 1 targets on the release candidate (`discriminating` mean Δ ≥ +0.4, `regression` Δ ≥ 0 per case), and the smoke test is green.
 - [ ] The README covers install, setup, upgrade, troubleshooting and the emergency switch, plus the minimum Claude Code version.
-- [ ] The release workflow published the release (1.3.0, or 1.4.0 if the pilot fixes warrant it).
+- [ ] The release workflow published 1.4.0, cut after the pilot fixes (#16), with the smoke test and evals run on its release candidate (wi-891617, decided 2026-10-07).
 - [ ] There is a support channel: GitHub issues with templates, or an internal channel, named in the README.
 - [ ] An announcement or onboarding note for the other Wet Ink repositories.
 
@@ -154,5 +154,5 @@ The plan's own order is phases 0a to 8: workspace skeleton, distribution spike, 
 
 1. **Phase 0** is done apart from two owner items: add the required `Checks` and `Unit tests (Windows)` checks to the `main` ruleset, which the 2026-10 audit found missing (0.1, #62), and set the Actions budget alerts (0.9, #7). The runner probe ran on 2026-10-02, and its results are in 0.9. From here on, work is tracked in #6 and #21. After this, everything goes through PRs.
 2. ~~**Next:** phase 1 and 3.1 to 3.2 in parallel. Start phase 2 adoption (2.1 to 2.2) as soon as 1.2 and 1.3 land, since the pilot needs elapsed time more than effort.~~ Done: phase 1, 2.1, 2.2, 3.1 and 3.2 are done, and 1.3.0 was released on 2026-10-05. The pilot (2.3, 2.4) is running.
-3. **Then:** fix the pilot findings, run the go-live checklist, and release v1.
+3. **Then:** fix the pilot findings (#16), run the go-live checklist, and release v1 as 1.4.0 (wi-891617).
 4. **Then:** temper 2.0, from its committed plan, starting with the pre-port steps in phase 5.
