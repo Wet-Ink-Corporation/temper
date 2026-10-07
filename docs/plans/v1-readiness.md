@@ -152,7 +152,7 @@ The plan's own order is phases 0a to 8: workspace skeleton, distribution spike, 
 
 ## Suggested order of work
 
-1. **Phase 0** is done apart from one 0.9 owner item: set the Actions budget alerts (#7). The runner probe ran on 2026-10-02, and its results are in 0.9. From here on, work is tracked in #6 and #21. After this, everything goes through PRs.
+1. **Phase 0** is done apart from two owner items: add the required `Checks` and `Unit tests (Windows)` checks to the `main` ruleset, which the 2026-10 audit found missing (0.1, #62), and set the Actions budget alerts (0.9, #7). The runner probe ran on 2026-10-02, and its results are in 0.9. From here on, work is tracked in #6 and #21. After this, everything goes through PRs.
 2. ~~**Next:** phase 1 and 3.1 to 3.2 in parallel. Start phase 2 adoption (2.1 to 2.2) as soon as 1.2 and 1.3 land, since the pilot needs elapsed time more than effort.~~ Done: phase 1, 2.1, 2.2, 3.1 and 3.2 are done, and 1.3.0 was released on 2026-10-05. The pilot (2.3, 2.4) is running.
 3. **Then:** fix the pilot findings, run the go-live checklist, and release v1.
 4. **Then:** temper 2.0, from its committed plan, starting with the pre-port steps in phase 5.
