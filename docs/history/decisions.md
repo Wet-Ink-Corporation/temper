@@ -29,6 +29,10 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-348e0b](../../.kb/_intake/decisions/wi-348e0b-d16-approve-as-one-decision-the-intentional-1-x.md) | D16: approve, as one decision, the intentional 1.x behaviour changes and the retired tests? | Approved: the ten divergences in the port plan's §2.4, and seven retired tests. |
 | [wi-1d4cd6](../../.kb/_intake/decisions/wi-1d4cd6-d17-have-sessionstart-export-temper-bin-and.md) | D17: should SessionStart put the temper binary on `PATH`? | Yes: export `TEMPER_BIN` and prepend its directory through `CLAUDE_ENV_FILE`. |
 | [wi-4679b3](../../.kb/_intake/decisions/wi-4679b3-license-the-new-crates-mit-matching-plugin-json.md) | What licence do the new crates use: MIT, or the template's MIT OR Apache-2.0? | `MIT OR Apache-2.0`, overriding the MIT recommendation. The plugin itself stays MIT. |
+| [wi-891617](../../.kb/_intake/decisions/wi-891617-which-release-is-v1-live-1-4-0-after-the.md) | Which release is "v1 live": 1.3.0 as is, 1.3.1 now, or 1.4.0 after the pilot fixes (#16)? | 1.4.0, cut after the #16 pilot fixes, with smoke and evals on the release candidate. Decided 2026-10-07. |
+| [wi-fd3ac9](../../.kb/_intake/decisions/wi-fd3ac9-stay-internal-and-align-security-md-and-the.md) | Stay internal and align SECURITY.md and the README with that, or plan a public flip? | Stay internal (as 0.7), and align SECURITY.md and the README. Decided 2026-10-07. |
+| [wi-48fb44](../../.kb/_intake/decisions/wi-48fb44-how-do-cloud-and-claude-ai-synced-installs-get.md) | How do cloud and claude.ai-synced installs get the 2.0 engine, and does install verification on both paths gate 2.0.0? | Verify-install on both paths is a Phase 0b exit criterion; a path that skips `npm ci` installs the npm package from the environment's setup script. Decided 2026-10-07. |
+| [wi-2d6d35](../../.kb/_intake/decisions/wi-2d6d35-add-the-required-checks-checks-and-unit-tests.md) | Add `Checks` and `Unit tests (Windows)` as required checks to the `Protect main` ruleset, as AGENTS.md says they are? | Add both (an owner settings change). Decided 2026-10-07. |
 
 ## Defaults taken without the owner
 
