@@ -358,9 +358,30 @@ const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the ac
 // Shell operators: redirects (with an optional fd), here-docs, separators. Order matters.
 const SHELL_OP = /(?:\d*(?:>>|>\||>&|>)|&>>|&>|<<<|<<-|<<|<&|<>|<|&&|\|\||\|&|;;|[|;&()\n])/y;
 
+/** Index just past the `)`/`}`/backtick that closes the expansion opening at `s[i]` (`$(`, `${`, `` ` ``). */
+function expansionEnd(s, i) {
+  if (s[i] === '`') {
+    let j = i + 1;
+    while (j < s.length && s[j] !== '`') j += s[j] === '\\' ? 2 : 1;
+    return Math.min(j + 1, s.length);
+  }
+  const [open, close] = s[i + 1] === '{' ? ['{', '}'] : ['(', ')'];
+  let depth = 0;
+  for (let j = i + 1; j < s.length; j++) {
+    const c = s[j];
+    if (c === '\\') { j++; continue; }
+    if (c === "'" && open === '(') { const e = s.indexOf("'", j + 1); j = e === -1 ? s.length : e; continue; }
+    if (c === open) depth++;
+    else if (c === close && --depth === 0) return j + 1;
+  }
+  return s.length;
+}
+
 /**
  * The words and operators of a shell command, quote-aware (`'a;b'` is one word, `2>&1` is
- * an operator and a word). Here-doc bodies are skipped. No expansion: `$X` stays as written.
+ * an operator and a word). `$(...)`, `$((...))`, `${...}` and backticks stay inside their word,
+ * as written; there is no other expansion. `#` comments are dropped. A here-doc's body is
+ * kept on the delimiter's token (`body`), not tokenized.
  */
 function shellTokens(cmd) {
   const s = String(cmd);
@@ -378,10 +399,20 @@ function shellTokens(cmd) {
       } else if (c === '"') {
         i++;
         while (i < s.length && s[i] !== '"') {
+          if ((s[i] === '$' && /[({]/.test(s[i + 1] ?? '')) || s[i] === '`') {
+            const end = expansionEnd(s, i);
+            w += s.slice(i, end);
+            i = end;
+            continue;
+          }
           if (s[i] === '\\' && /["\\$`]/.test(s[i + 1] ?? '')) i++;
           w += s[i++];
         }
         i++;
+      } else if ((c === '$' && /[({]/.test(s[i + 1] ?? '')) || c === '`') {
+        const end = expansionEnd(s, i);
+        w += s.slice(i, end);
+        i = end;
       } else if (c === '\\' && i + 1 < s.length) {
         w += s[i + 1];
         i += 2;
@@ -395,6 +426,7 @@ function shellTokens(cmd) {
   while (i < s.length) {
     if (s[i] !== '\n' && /\s/.test(s[i])) { i++; continue; }
     if (s[i] === '\\' && s[i + 1] === '\n') { i += 2; continue; }
+    if (s[i] === '#') { while (i < s.length && s[i] !== '\n') i++; continue; }
     if (/[<>]/.test(s[i]) && s[i + 1] === '(') { // process substitution: an unknown file name
       for (let depth = 0; i < s.length; i++) {
         if (s[i] === '(') depth++;
@@ -410,17 +442,21 @@ function shellTokens(cmd) {
       toks.push({ op: op[0] });
       if (op[0] === '<<' || op[0] === '<<-') {
         while (/[ \t]/.test(s[i] ?? '')) i++;
-        const delim = readWord();
-        heredocs.push({ delim, strip: op[0] === '<<-' });
-        toks.push({ word: delim });
+        const tok = { word: readWord(), body: '' };
+        heredocs.push({ tok, strip: op[0] === '<<-' });
+        toks.push(tok);
       } else if (op[0] === '\n' && heredocs.length) {
-        for (const { delim, strip } of heredocs.splice(0)) {
+        for (const { tok, strip } of heredocs.splice(0)) {
+          const lines = [];
           for (;;) {
             const nl = s.indexOf('\n', i);
             const line = s.slice(i, nl === -1 ? s.length : nl);
             i = nl === -1 ? s.length : nl + 1;
-            if ((strip ? line.replace(/^\t+/, '') : line) === delim || nl === -1) break;
+            if ((strip ? line.replace(/^\t+/, '') : line) === tok.word) break;
+            lines.push(line);
+            if (nl === -1) break;
           }
+          tok.body = lines.join('\n');
         }
       }
       continue;
@@ -430,16 +466,31 @@ function shellTokens(cmd) {
   return toks;
 }
 
-const SHELL_WRAPPERS = new Set(['sudo', 'doas', 'env', 'nohup', 'time', 'command', 'exec', 'nice', 'xargs']);
+// Command wrappers, and their options that take a separate value. `timeout` also takes a duration.
+const SHELL_WRAPPERS = new Map([
+  ['sudo', ['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U', '-T', '--user', '--group']],
+  ['doas', ['-u', '-C']], ['env', ['-u', '-C', '--unset', '--chdir']], ['nohup', []], ['time', ['-f', '-o']],
+  ['command', []], ['exec', ['-a']], ['nice', ['-n', '--adjustment']], ['ionice', ['-c', '-n', '-p']],
+  ['xargs', ['-I', '-n', '-P', '-L', '-d', '-a', '-E', '-s']], ['stdbuf', ['-i', '-o', '-e']],
+  ['timeout', ['-s', '-k', '--signal', '--kill-after']], ['chronic', []], ['unbuffer', []],
+]);
 const PS_VALUE_PARAMS = new Set(['-value', '-encoding', '-inputobject', '-width', '-stream', '-delimiter']);
 const INSTALL_VALUE_FLAGS = new Set(['-m', '--mode', '-o', '--owner', '-g', '--group', '-S', '--suffix']);
+const RSYNC_VALUE_FLAGS = new Set(['-e', '--rsh', '-f', '--filter', '--exclude', '--include', '--exclude-from', '--include-from', '--files-from',
+  '--chmod', '--chown', '--log-file', '--backup-dir', '--suffix', '--partial-dir', '-T', '--temp-dir', '--compare-dest', '--copy-dest',
+  '--link-dest', '--max-size', '--min-size', '--bwlimit', '--timeout', '--port', '-M', '--remote-option']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
+const INTERPRETER = /^(?:python[\d.]*|py|node|nodejs|ruby|perl|bun|deno)$/;
 
 /** Targets of sed -i / perl -i: the file operands, after the script unless -e/-f gave it. */
-function inPlaceTargets(args) {
+function inPlaceTargets(args, sed) {
   const files = [];
   let script = false;
   for (let k = 0; k < args.length; k++) {
     const a = args[k];
+    // BSD sed: `-i ''` (an empty backup suffix as its own word).
+    if (sed && (a === '-i' || a === '-I') && args[k + 1] === '') { k++; continue; }
+    if (a === '') continue;
     // `-e script`, `-pe script` (a cluster ending in e or f takes the next word), `-escript`.
     if (/^-[a-zA-Z]*[ef]$/.test(a) || a === '--expression' || a === '--file') { script = true; k++; continue; }
     if (/^--(?:expression|file)=/.test(a) || /^-e./.test(a)) { script = true; continue; }
@@ -449,8 +500,11 @@ function inPlaceTargets(args) {
   return script ? files : files.slice(1);
 }
 
-/** Destinations of cp/mv/install/Copy-Item/Move-Item, as [path, sources] pairs. */
-function copyTargets(args, powershell) {
+/** sed -i / perl -i: a short-option cluster that reaches `i` before an option taking a value (`-Mstrict` is not -i). */
+const inPlace = (sed, args) => args.some((a) => (sed ? /^-[nErsuz]*[iI]/ : /^-[nplawsTtUWXc]*i/).test(a) || /^--in-place(?:=|$)/.test(a));
+
+/** Destinations of cp/mv/install/rsync/Copy-Item/Move-Item, as [path, sources] pairs. */
+function copyTargets(args, powershell, valueFlags = INSTALL_VALUE_FLAGS) {
   const pos = [];
   let dir = null;
   for (let k = 0; k < args.length; k++) {
@@ -460,7 +514,7 @@ function copyTargets(args, powershell) {
     if (a === '-t' || a === '--target-directory') { dir = { dest: args[k + 1] ?? '', isDir: true }; k++; continue; }
     if (/^--target-directory=/.test(a)) { dir = { dest: a.slice(a.indexOf('=') + 1), isDir: true }; continue; }
     if (/^-t./.test(a)) { dir = { dest: a.slice(2), isDir: true }; continue; }
-    if (INSTALL_VALUE_FLAGS.has(a)) { k++; continue; }
+    if (valueFlags.has(a)) { k++; continue; }
     if (a === '-d' || a === '--directory') return [];
     if (a.startsWith('-')) continue;
     pos.push(a);
@@ -482,94 +536,226 @@ function psContentTargets(args) {
   return [];
 }
 
-// Interpreter one-liners that write a file named by a string literal (`\"` inside a
-// double-quoted -c/-e argument included).
-const Q = String.raw`\\?(['"])([^'"\\]+)\\?\1`;
-const INTERPRETER_WRITES = [
-  new RegExp(String.raw`\bopen\(\s*${Q}\s*,\s*(?:mode\s*=\s*)?\\?['"][rbt]*[wax+]`, 'g'),
-  new RegExp(String.raw`\b(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|File\.write)\(\s*${Q}`, 'g'),
-  new RegExp(String.raw`\b(?:copyFileSync|renameSync|shutil\.(?:copy2?|copyfile|move)|os\.(?:replace|rename))\([^,()]*,\s*${Q}`, 'g'),
-  new RegExp(String.raw`\bPath\(\s*${Q}\s*\)\s*\.(?:write_text|write_bytes)\b`, 'g'),
-];
-
-/**
- * Files a shell command writes, as absolute paths: redirect targets, tee, sed -i and
- * perl -i operands, cp/mv/install/Copy-Item/Move-Item destinations, Set-Content/
- * Add-Content/Out-File paths, and files that python/node one-liners open for writing.
- * Relative paths resolve against `cwd`, following `cd` within the command.
- */
-export function shellWriteTargets(cmd, cwd) {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? cwd;
+/** The value of `-o`/`--output` style options (`short` letter, `long` names), including `-sSLo f` and `-of`. */
+function optionValues(args, short, long) {
   const out = [];
-  let dir = cwd;
-  // An absolute path, or null when the name is unknown (`$X`, `$(...)`, stdout).
-  const at = (t, base = dir) => {
-    if (!t || t === '-' || /[$`]/.test(t) || /^\/dev\//.test(t)) return null;
-    return path.resolve(base, t.replace(/^~(?=[\\/]|$)/, home));
-  };
-  const add = (t, base = dir) => { const p = at(t, base); if (p) out.push(p); };
-  const toks = shellTokens(cmd);
-  const commands = [];
-  let cur = { words: [], redirects: [] };
-  for (let k = 0; k < toks.length; k++) {
-    const t = toks[k];
-    if ('word' in t) { cur.words.push(t.word); continue; }
-    if (/[<>]/.test(t.op)) {
-      const target = toks[k + 1] && 'word' in toks[k + 1] ? toks[++k].word : '';
-      const dup = /&$/.test(t.op) && /^(?:\d+-?|-)$/.test(target);
-      if (/>/.test(t.op) && !dup) cur.redirects.push(target);
-      continue;
-    }
-    commands.push(cur);
-    cur = { words: [], redirects: [] };
-  }
-  commands.push(cur);
-  for (const { words, redirects } of commands) {
-    for (const r of redirects) add(r);
-    let w = 0;
-    while (w < words.length && /^\w+=/.test(words[w])) w++;
-    while (w < words.length && SHELL_WRAPPERS.has(path.basename(words[w]))) {
-      w++;
-      while (w < words.length && (words[w].startsWith('-') || /^\w+=/.test(words[w]))) w++;
-    }
-    if (w >= words.length) continue;
-    const name = path.basename(words[w]).replace(/\.exe$/i, '');
-    const lower = name.toLowerCase();
-    const args = words.slice(w + 1);
-    if (name === 'cd') {
-      // `cd -`, `cd "$(git rev-parse --show-toplevel)"`: unknown, so keep the starting directory
-      // (usually the root): an unneeded ask is cheaper than a missed write.
-      dir = at(args[0] ?? '~') ?? cwd;
-    } else if (name === 'tee') {
-      for (const a of args) if (!a.startsWith('-')) add(a);
-    } else if ((name === 'sed' || name === 'perl') && args.some((a) => /^-[a-zA-Z]*i/.test(a) || /^--in-place(?:=|$)/.test(a))) {
-      for (const a of inPlaceTargets(args)) add(a);
-    } else if (['cp', 'mv', 'install', 'ln', 'copy', 'move', 'copy-item', 'move-item'].includes(lower) || (name === 'git' && args[0] === 'mv')) {
-      for (const { dest, sources, isDir } of copyTargets(name === 'git' ? args.slice(1) : args, lower.includes('-item'))) {
-        const abs = at(dest);
-        if (!abs) continue;
-        let intoDir = isDir || /[\\/]$/.test(dest);
-        if (!intoDir) { try { intoDir = fs.statSync(abs).isDirectory(); } catch { intoDir = false; } }
-        if (intoDir && sources.length) for (const src of sources) add(path.basename(src.replace(/[\\/]+$/, '')), abs);
-        else add(dest);
-      }
-    } else if (['set-content', 'add-content', 'out-file'].includes(lower)) {
-      for (const a of psContentTargets(args)) add(a);
-    }
-  }
-  for (const re of INTERPRETER_WRITES) {
-    for (const m of String(cmd).matchAll(re)) add(m[2], cwd);
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    const eq = long.find((l) => a.startsWith(`${l}=`));
+    if (eq) out.push(a.slice(eq.length + 1));
+    else if (long.includes(a) || new RegExp(`^-[a-zA-Z]*${short}$`).test(a)) out.push(args[++k] ?? '');
+    else if (a.startsWith(`-${short}`) && a.length > 2) out.push(a.slice(2));
   }
   return out;
+}
+
+/** Files `git checkout <tree-ish> [--] paths` and `git restore --source=<tree-ish> paths` write. HEAD and the index are the developer's own state and pass. */
+function gitRestoreTargets(sub, args) {
+  let source = null;
+  let paths = [];
+  if (sub === 'checkout') {
+    const dd = args.indexOf('--');
+    const before = (dd === -1 ? args : args.slice(0, dd)).filter((a) => !a.startsWith('-'));
+    source = before[0] ?? null;
+    paths = dd === -1 ? before.slice(1) : args.slice(dd + 1);
+  } else {
+    if (args.some((a) => a === '--staged' || a === '-S') && !args.some((a) => a === '--worktree' || a === '-W')) return [];
+    for (let k = 0; k < args.length; k++) {
+      const a = args[k];
+      if (a === '-s' || a === '--source') source = args[++k] ?? null;
+      else if (a.startsWith('--source=')) source = a.slice(9);
+      else if (/^-s./.test(a)) source = a.slice(2);
+      else if (!a.startsWith('-')) paths.push(a);
+    }
+  }
+  return source === null || source === 'HEAD' || source === '@' ? [] : paths;
+}
+
+// Interpreter scripts (-c/-e or a here-doc on stdin) that write a file named by a string
+// literal, or by a variable the script set to one (`p = '.claude/temper.json'`, `p = Path('x')`).
+const ARG = String.raw`(?:(['"])([^'"\n]+)\1|([A-Za-z_$][\w$]*))`;
+const INTERPRETER_WRITES = [
+  new RegExp(String.raw`\bopen\(\s*${ARG}\s*,\s*(?:mode\s*=\s*)?['"][rbt]*[wax+]`, 'g'),
+  new RegExp(String.raw`\b(?:writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|File\.write)\(\s*${ARG}`, 'g'),
+  new RegExp(String.raw`\b(?:copyFileSync|cpSync|renameSync|shutil\.(?:copy2?|copyfile|move)|os\.(?:replace|rename))\([^,()]*,\s*${ARG}`, 'g'),
+  new RegExp(String.raw`\bPath\(\s*${ARG}\s*\)\s*\.(?:write_text|write_bytes)\b`, 'g'),
+  new RegExp(String.raw`(?<![\w.])${ARG}\.(?:write_text|write_bytes)\(`, 'g'),
+];
+const SCRIPT_ASSIGN = /(?:^|[^\w.$])([A-Za-z_$][\w$]*)\s*=\s*(?:Path\(\s*)?(['"])([^'"\n]+)\2/g;
+
+function interpreterTargets(script) {
+  const vars = new Map();
+  for (const m of script.matchAll(SCRIPT_ASSIGN)) vars.set(m[1], m[3]);
+  const out = [];
+  for (const re of INTERPRETER_WRITES) {
+    for (const m of script.matchAll(re)) {
+      const lit = m[2] ?? vars.get(m[3]);
+      if (lit) out.push(lit);
+    }
+  }
+  return out;
+}
+
+/**
+ * Files a shell command writes, as absolute paths: redirect targets, tee, sponge, truncate,
+ * sed -i and perl -i operands, cp/mv/install/ln/rsync/Copy-Item/Move-Item destinations,
+ * curl -o, wget -O, dd of=, git checkout/restore from another revision, Set-Content/
+ * Add-Content/Out-File paths, files that python/node/ruby/perl scripts open for writing,
+ * and the same inside `bash -c`. Relative paths resolve against `cwd`, following `cd`,
+ * `pushd` and `popd` (a subshell's `cd` ends with it). After a `cd` to an unknown place,
+ * they resolve against both `cwd` and `root`.
+ */
+export function shellWriteTargets(cmd, cwd, root = cwd) {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? cwd;
+  const out = [];
+  const vars = new Map();
+  const uniq = (xs) => [...new Set(xs)];
+  // An absolute path, or null when the name is unknown (`$X`, `$(...)`, stdout).
+  const subst = (t, base) => t.replace(/\$\{(\w+)\}|\$(\w+)/g, (m, a, b) => {
+    const n = a ?? b;
+    return n === 'PWD' ? base : n === 'HOME' ? home : vars.get(n) ?? m;
+  });
+  const at = (t, base) => {
+    if (!t || t === '-') return null;
+    const x = subst(t, base);
+    if (/[$`]/.test(x) || /^\/dev\//.test(x)) return null;
+    return path.resolve(base, x.replace(/^~(?=[\\/]|$)/, home));
+  };
+  const walk = (text, start, depth) => {
+    let dirs = start;
+    const parens = [];
+    const pushed = [];
+    const toks = shellTokens(text);
+    const items = [];
+    let cur = { words: [], redirects: [], stdin: null };
+    const end = (sep) => { if (cur.words.length || cur.redirects.length) items.push({ ...cur, sep }); cur = { words: [], redirects: [], stdin: null }; };
+    for (let k = 0; k < toks.length; k++) {
+      const t = toks[k];
+      if ('word' in t) { cur.words.push(t.word); continue; }
+      if (/[<>]/.test(t.op)) {
+        const next = toks[k + 1] && 'word' in toks[k + 1] ? toks[++k] : null;
+        const target = next?.word ?? '';
+        const dup = /&$/.test(t.op) && /^(?:\d+-?|-)$/.test(target);
+        if (/>/.test(t.op) && !dup) cur.redirects.push(target);
+        if (t.op === '<<<') cur.stdin = target;
+        else if (next && 'body' in next) cur.stdin = next.body;
+        continue;
+      }
+      end(t.op);
+      if (t.op === '(') items.push({ open: true });
+      if (t.op === ')') items.push({ close: true });
+    }
+    end('');
+    for (const item of items) {
+      if (item.open) { parens.push(dirs); continue; }
+      if (item.close) { dirs = parens.pop() ?? dirs; continue; }
+      const add = (t, bases = dirs) => { for (const b of bases) { const p = at(t, b); if (p) out.push(p); } };
+      const { words, redirects } = item;
+      for (const r of redirects) add(r);
+      let w = 0;
+      if (words.every((x) => /^\w+=/.test(x))) {
+        for (const x of words) {
+          const name = x.slice(0, x.indexOf('='));
+          const value = subst(x.slice(x.indexOf('=') + 1), dirs[0]);
+          if (/[$`]/.test(value)) vars.delete(name);
+          else vars.set(name, value);
+        }
+        continue;
+      }
+      while (w < words.length && /^\w+=/.test(words[w])) w++;
+      while (w < words.length && SHELL_WRAPPERS.has(path.basename(words[w]))) {
+        const wrapper = path.basename(words[w]);
+        const valued = SHELL_WRAPPERS.get(wrapper);
+        w++;
+        while (w < words.length && (words[w].startsWith('-') || /^\w+=/.test(words[w]))) w += valued.includes(words[w]) ? 2 : 1;
+        if (wrapper === 'timeout') w++;
+      }
+      if (w >= words.length) continue;
+      const name = path.basename(words[w]).replace(/\.exe$/i, '');
+      const lower = name.toLowerCase();
+      const args = words.slice(w + 1);
+      const inSubshell = item.sep === '|' || item.sep === '|&';
+      if (name === 'cd' || name === 'pushd') {
+        if (inSubshell) continue;
+        if (name === 'pushd') pushed.push(dirs);
+        const arg = args.find((a) => !/^-[LPe@]+$/.test(a)) ?? (name === 'cd' ? '~' : null);
+        const next = arg === null ? [] : dirs.map((b) => at(arg, b));
+        // `cd -`, `cd "$(git rev-parse --show-toplevel)"`: unknown, so the starting directory
+        // and the project root both count: an unneeded ask is cheaper than a missed write.
+        dirs = next.length && next.every(Boolean) ? uniq(next) : uniq([cwd, root]);
+      } else if (name === 'popd') {
+        if (!inSubshell) dirs = pushed.pop() ?? uniq([cwd, root]);
+      } else if (name === 'tee' || name === 'sponge') {
+        for (const a of args) if (!a.startsWith('-')) add(a);
+      } else if (name === 'truncate') {
+        for (let k = 0; k < args.length; k++) {
+          if (['-s', '--size', '-r', '--reference'].includes(args[k])) k++;
+          else if (!args[k].startsWith('-')) add(args[k]);
+        }
+      } else if ((name === 'sed' || name === 'perl') && inPlace(name === 'sed', args)) {
+        for (const a of inPlaceTargets(args, name === 'sed')) add(a);
+      } else if (name === 'curl') {
+        for (const a of optionValues(args, 'o', ['--output'])) add(a);
+      } else if (name === 'wget') {
+        for (const a of optionValues(args, 'O', ['--output-document'])) add(a);
+      } else if (name === 'dd') {
+        for (const a of args) if (a.startsWith('of=')) add(a.slice(3));
+      } else if (['cp', 'mv', 'install', 'ln', 'rsync', 'copy', 'move', 'copy-item', 'move-item'].includes(lower) || (name === 'git' && args[0] === 'mv')) {
+        const rest = name === 'git' ? args.slice(1) : args;
+        for (const { dest, sources, isDir } of copyTargets(rest, lower.includes('-item'), name === 'rsync' ? RSYNC_VALUE_FLAGS : INSTALL_VALUE_FLAGS)) {
+          for (const base of dirs) {
+            const abs = at(dest, base);
+            if (!abs) continue;
+            let intoDir = isDir || /[\\/]$/.test(dest);
+            if (!intoDir) { try { intoDir = fs.statSync(abs).isDirectory(); } catch { intoDir = false; } }
+            if (intoDir && sources.length) for (const src of sources) add(path.basename(src.replace(/[\\/]+$/, '')), [abs]);
+            else add(dest, [base]);
+          }
+        }
+      } else if (name === 'git' && (args[0] === 'checkout' || args[0] === 'restore')) {
+        for (const a of gitRestoreTargets(args[0], args.slice(1))) add(a);
+      } else if (['set-content', 'add-content', 'out-file'].includes(lower)) {
+        for (const a of psContentTargets(args)) add(a);
+      } else if (SHELLS.has(name) || name === 'eval') {
+        if (depth > 2) continue;
+        const c = args.findIndex((a) => /^-[a-z]*c$/.test(a));
+        const script = name === 'eval' ? args.join(' ') : c !== -1 ? args[c + 1] : item.stdin;
+        if (script) walk(script, dirs, depth + 1);
+      } else if (INTERPRETER.test(name)) {
+        const scripts = [item.stdin];
+        for (let k = 0; k < args.length; k++) {
+          if (/^-[a-zA-Z]*[ceEp]$/.test(args[k]) || args[k] === '--eval' || args[k] === '--print') scripts.push(args[++k]);
+        }
+        for (const s of scripts) if (s) for (const lit of interpreterTargets(s)) add(lit);
+      }
+    }
+  };
+  walk(cmd, [cwd], 0);
+  return out;
+}
+
+/** The project that owns `abs` (a nested git checkout, such as a worktree under .claude/worktrees/, owns its files), as preEdit finds it. */
+function ownerOf(proj, rel, cache) {
+  const parts = rel.split('/');
+  for (let k = parts.length - 1; k > 0; k--) {
+    const dir = path.join(proj.root, ...parts.slice(0, k));
+    if (!cache.has(dir)) cache.set(dir, fs.existsSync(path.join(dir, '.git')) ? discover(dir) ?? proj : null);
+    const owner = cache.get(dir);
+    if (owner) return owner;
+  }
+  return proj;
 }
 
 /** Project-relative paths of protected configuration (config.protected) that `cmd` writes. */
 function protectedShellWrites(proj, cmd, cwd) {
   const rels = [];
-  for (const abs of shellWriteTargets(cmd, cwd && fs.existsSync(cwd) ? cwd : proj.root)) {
+  const owners = new Map();
+  for (const abs of shellWriteTargets(cmd, cwd && fs.existsSync(cwd) ? cwd : proj.root, proj.root)) {
     const rel = relTo(proj.root, abs);
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-    if (proj.config.protected.some((p) => globMatch(p, rel)) && !rels.includes(rel)) rels.push(rel);
+    const owner = ownerOf(proj, rel, owners);
+    const own = owner === proj ? rel : relTo(owner.root, abs);
+    if (owner.config.protected.some((p) => globMatch(p, own)) && !rels.includes(rel)) rels.push(rel);
   }
   return rels;
 }

@@ -585,6 +585,120 @@ test('Bash: the shell check uses the project\'s own protected list', () => {
   }
 });
 
+test('Bash: text that only mentions a write, read-only one-liners and writes outside the project stay allowed', () => {
+  for (const cmd of [
+    'git commit -m "fix: open(\'clippy.toml\', \'w\') no longer used"',
+    'grep -rn "open(\'rust-toolchain.toml\', \'w\')" tools/',
+    "cat > tools/gen.py <<'EOF'\nwith open('rust-toolchain.toml', 'w') as f:\n    f.write('x')\nEOF",
+    'echo \'open("clippy.toml", "w")\' > docs/notes.md',
+    "cd /tmp && python3 -c \"open('clippy.toml','w').write('x')\"",
+    "python3 -c \"import json; p='.claude/temper.json'; print(json.load(open(p)))\"",
+    "perl -Mstrict -ne 'print if /msrv/' clippy.toml",
+    "perl -MList::Util=sum -lne 'print' clippy.toml",
+    "perl -Ilib -ne 'print' clippy.toml",
+    "sed -i '' 's/\\.clippy\\.toml/clippy.toml/' docs/x.md",
+    "sed -n 's/x/y/p' rust-toolchain.toml",
+    'echo hi; # > clippy.toml',
+    '(cd /tmp && echo x > clippy.toml)',
+    'echo $((1<<2)) > /tmp/n.txt',
+    'git checkout -- clippy.toml',
+    'git checkout HEAD -- rust-toolchain.toml',
+    'git restore clippy.toml',
+    'git checkout -b feat origin/main',
+    'git checkout main -- docs/a.md',
+    'curl -sSL https://example.com/x.tar.gz -o target/x.tar.gz',
+    'wget -O - https://example.com/install.sh',
+    'dd if=clippy.toml of=/tmp/c bs=1',
+    "bash -c 'cargo test 2>&1 | tee /tmp/log.txt'",
+    'timeout 600 cargo test',
+    'sudo -u root cat clippy.toml',
+    'F=/tmp/clippy.toml; echo x > "$F"',
+    'echo x > "$TMPDIR/clippy.toml"',
+  ]) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: protected-config writes behind cd, subshells, wrappers, interpreters and other write verbs ask', () => {
+  const cases = [
+    ["cd .claude && python3 -c \"open('temper.json','w').write('{}')\"", '.claude/temper.json'],
+    ["(cd /tmp && ls) && echo '{}' > .claude/temper.json", '.claude/temper.json'],
+    ['pushd .claude && echo {} > temper.json', '.claude/temper.json'],
+    ['pushd /tmp; popd; echo x > clippy.toml', 'clippy.toml'],
+    ["python3 - <<'PY'\nimport json\np='.claude/temper.json'\nd=json.load(open(p))\nd['review']='off'\njson.dump(d,open(p,'w'))\nPY", '.claude/temper.json'],
+    ["python3 -c \"p='clippy.toml'; open(p,'w')\"", 'clippy.toml'],
+    ["node -e \"const f='.claude/settings.json'; require('fs').writeFileSync(f,'{}')\"", '.claude/settings.json'],
+    ["python3 - <<'PY'\nfrom pathlib import Path\np = Path('rust-toolchain.toml')\np.write_text('x')\nPY", 'rust-toolchain.toml'],
+    ['echo $((1<<2))\necho x > clippy.toml', 'clippy.toml'],
+    ['echo x | sudo -u root tee .claude/temper.json', '.claude/temper.json'],
+    ['nice -n 5 tee clippy.toml < /tmp/c', 'clippy.toml'],
+    ['timeout 5 tee .claude/temper.json < /tmp/t', '.claude/temper.json'],
+    ['stdbuf -o0 tee clippy.toml < /tmp/c', 'clippy.toml'],
+    ['curl -o clippy.toml https://example.com/c', 'clippy.toml'],
+    ['curl -sSLo rust-toolchain.toml https://example.com/t', 'rust-toolchain.toml'],
+    ['curl --output=deny.toml https://example.com/d', 'deny.toml'],
+    ['wget -O .claude/temper.json https://example.com/t', '.claude/temper.json'],
+    ['wget --output-document=rustfmt.toml https://example.com/r', 'rustfmt.toml'],
+    ['dd if=/tmp/x of=.claude/temper.json', '.claude/temper.json'],
+    ['rsync -a /tmp/x .claude/temper.json', '.claude/temper.json'],
+    ['git checkout other -- clippy.toml', 'clippy.toml'],
+    ['git checkout other rust-toolchain.toml', 'rust-toolchain.toml'],
+    ['git restore --source=HEAD~3 clippy.toml', 'clippy.toml'],
+    ['git restore -s main deny.toml', 'deny.toml'],
+    ['jq .x .claude/temper.json | sponge .claude/temper.json', '.claude/temper.json'],
+    ['truncate -s 0 clippy.toml', 'clippy.toml'],
+    ["bash -c 'echo x > clippy.toml'", 'clippy.toml'],
+    ['sh -c "cd .claude && echo x > temper.json"', '.claude/temper.json'],
+    ['F=clippy.toml; echo x > "$F"', 'clippy.toml'],
+    ['echo x > "$PWD/clippy.toml"', 'clippy.toml'],
+    ['cd .claude && echo x > ${PWD}/settings.json', '.claude/settings.json'],
+    ['echo x > clippy.toml # set msrv', 'clippy.toml'],
+  ];
+  for (const [cmd, rel] of cases) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'ask', cmd);
+    assert.ok(reason(res).includes(`${rel} is verification/agent configuration`), `${cmd}\n${reason(res)}`);
+  }
+  // An unknown `cd` from a crate directory: the write may land at the project root.
+  const sub = (command) => preBash({ tool_name: 'Bash', cwd: path.join(ws, 'crates', 'ledger-domain'), session_id: 'hooks-test', tool_input: { command } });
+  const res = sub('cd "$(git rev-parse --show-toplevel)" && echo x > .claude/temper.json');
+  assert.equal(decision(res), 'ask');
+  assert.match(reason(res), /\.claude\/temper\.json is verification/);
+  assert.equal(decision(sub('cd "$(git rev-parse --show-toplevel)" && echo x > target/log.txt')), 'none');
+});
+
+test('Bash: a write into a nested git checkout (.claude/worktrees/<name>) is judged by that checkout', { skip: !git && 'git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nested-'));
+  try {
+    const g = (...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, encoding: 'utf8' });
+    fs.writeFileSync(path.join(repo, 'Cargo.toml'), ROOT);
+    fs.writeFileSync(path.join(repo, 'README.md'), 'x\n');
+    assert.equal(g('init', '-q').status, 0);
+    assert.equal(g('add', '.').status, 0);
+    assert.equal(g('commit', '-q', '-m', 'init').status, 0);
+    const w1 = path.join(repo, '.claude', 'worktrees', 'w1');
+    assert.equal(g('worktree', 'add', '-q', '--detach', w1).status, 0, 'worktree add');
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: repo, session_id: 'hooks-test', tool_input: { command } });
+    const w1f = w1.replace(/\\/g, '/');
+    for (const cmd of [
+      'cd .claude/worktrees/w1 && cargo test 2>&1 | tee target/log.txt',
+      'cd .claude/worktrees/w1 && echo x > README.md',
+      `cargo test --manifest-path "${w1f}/Cargo.toml" > "${w1f}/target/log.txt"`,
+    ]) {
+      assert.equal(decision(run(cmd)), 'none', cmd);
+    }
+    assert.equal(decision(preEdit({ tool_name: 'Write', cwd: repo, session_id: 'hooks-test', agent_type: 'temper:rust-implementer', tool_input: { file_path: path.join(w1, 'README.md'), content: 'y\n' } })), 'none');
+    // The checkout's own protected files still ask, and so does the outer project's.
+    const res = run('cd .claude/worktrees/w1 && echo x > clippy.toml');
+    assert.equal(decision(res), 'ask');
+    assert.match(reason(res), /\.claude\/worktrees\/w1\/clippy\.toml is verification/);
+    assert.equal(decision(run('echo {} > .claude/temper.json')), 'ask');
+    assert.equal(decision(run('echo {} > .claude/worktrees/w1/.claude/temper.json')), 'ask');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)', () => {
   for (const cmd of [
     'echo {} > .claude/temper-baseline.json',
