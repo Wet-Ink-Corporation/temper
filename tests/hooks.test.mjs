@@ -261,6 +261,600 @@ test('Bash: --ignore-rust-version only counts as a cargo flag', () => {
   assert.equal(decision(bash('cargo fmt && RUSTFLAGS=-Dwarnings cargo test --ignore-rust-version')), 'deny');
 });
 
+// cp/mv/install/Copy-Item/Move-Item onto .rs and git apply/patch (audit engine-1-8).
+// Sources outside the workspace are written with forward slashes and quoted, so the
+// commands read the same on Windows.
+const EVIL_RS = '//! Evil.\n\n/// F.\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n';
+const EXPECT_RS = '//! Excused.\n\n/// F.\n#[expect(clippy::unwrap_used, reason = "checked by the caller")]\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n';
+const CLEAN_RS = '//! Clean.\n\n/// F.\n#[must_use]\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap_or(0)\n}\n';
+const RS_PATCH = 'diff --git a/crates/ledger-domain/src/lib.rs b/crates/ledger-domain/src/lib.rs\n--- a/crates/ledger-domain/src/lib.rs\n+++ b/crates/ledger-domain/src/lib.rs\n@@ -5,3 +5,3 @@\n pub fn one() -> u8 {\n-    1\n+    Some(1).unwrap()\n }\n';
+const DOC_PATCH = '--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n';
+const withOutside = (fn) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-outside-'));
+  const out = (name) => path.join(dir, name).replace(/\\/g, '/');
+  try {
+    fs.writeFileSync(out('evil.rs'), EVIL_RS);
+    fs.writeFileSync(out('excused.rs'), EXPECT_RS);
+    fs.writeFileSync(out('clean.rs'), CLEAN_RS);
+    fs.writeFileSync(out('lib.rs.orig'), LIB_RS);
+    fs.writeFileSync(out('untested.rs'), LIB_RS.replace(/\n#\[cfg\(test\)\][^]*$/, '\n'));
+    fs.mkdirSync(path.join(dir, 'pkg', 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'pkg', 'inner', 'deep.rs'), EVIL_RS);
+    fs.writeFileSync(out('rs.diff'), RS_PATCH);
+    fs.writeFileSync(out('doc.diff'), DOC_PATCH);
+    fn(out);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+test('Bash: cp/mv/install/Copy-Item onto a .rs file is scanned like a Write: new escape hatches deny, #[expect] and test removal ask', () => {
+  withOutside((out) => {
+    const src = 'crates/ledger-domain/src';
+    for (const cmd of [
+      `cp "${out('evil.rs')}" ${src}/evil.rs`,
+      `mv "${out('evil.rs')}" ${src}/evil.rs`,
+      `install -m 644 "${out('evil.rs')}" ${src}/evil.rs`,
+      `cp "${out('evil.rs')}" ${src}/`,
+      `cp -t ${src} "${out('evil.rs')}"`,
+      `cp -f "${out('evil.rs')}" ${src}/lib.rs`,
+      `Copy-Item -Path "${out('evil.rs')}" -Destination ${src}/evil.rs`,
+      `Move-Item "${out('evil.rs')}" ${src}/evil.rs`,
+      `cd crates/ledger-domain && cp "${out('evil.rs')}" src/evil.rs`,
+      `cargo fmt && cp "${out('evil.rs')}" ${src}/evil.rs && cargo test`,
+      `cp -r "${out('pkg')}" ${src}/pkg`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/(?:evil|lib|pkg\/inner\/deep)\.rs:5/, cmd);
+      assert.match(reason(res), /#\[expect\(<lint>, reason = "\.\.\."\)\]/, cmd);
+    }
+    const excused = bash(`cp "${out('excused.rs')}" ${src}/excused.rs`);
+    assert.equal(decision(excused), 'ask', reason(excused));
+    assert.match(reason(excused), /Lint exception requested at crates\/ledger-domain\/src\/excused\.rs:4 \(clippy::unwrap_used\)/);
+    const untested = bash(`cp "${out('untested.rs')}" ${src}/lib.rs`);
+    assert.equal(decision(untested), 'ask', reason(untested));
+    assert.match(reason(untested), /removes 1 test\(s\) \(H-12\)/);
+    // A deny later in the command still wins over the copy's ask.
+    assert.equal(decision(bash(`cp "${out('excused.rs')}" ${src}/excused.rs && git commit --no-verify -m x`)), 'deny');
+    const both = bash(`cp "${out('excused.rs')}" ${src}/excused.rs && cargo add serde_yaml`);
+    assert.equal(decision(both), 'ask');
+    assert.match(reason(both), /Lint exception requested[^]*cargo add serde_yaml/);
+  });
+});
+
+test('Bash: a copy onto .rs whose content temper cannot read is refused with the Edit/Write guidance', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      'cp $SRC crates/ledger-domain/src/lib.rs',
+      'cp "$(mktemp)" crates/ledger-domain/src/lib.rs',
+      'cp /tmp/*.rs crates/ledger-domain/src/',
+      `cp "${out('evil.rs')}" "$DEST"`,
+      'cat body | install /dev/stdin crates/ledger-domain/src/new.rs',
+      `cp "${out('missing.rs')}" crates/ledger-domain/src/missing.rs`,
+      `cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+  });
+});
+
+test('Bash: git apply and patch that touch .rs files are refused; read-only forms and non-Rust patches are not', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      `git apply "${out('rs.diff')}"`,
+      `git apply --index -p1 "${out('rs.diff')}"`,
+      `git -C crates apply --stat --apply "${out('rs.diff')}"`,
+      `patch -p1 < "${out('rs.diff')}"`,
+      `patch -p1 -i "${out('rs.diff')}"`,
+      `patch --input="${out('rs.diff')}" -p1`,
+      `patch crates/ledger-domain/src/lib.rs "${out('doc.diff')}"`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /with the Edit tool/, cmd);
+      assert.match(reason(res), /crates\/ledger-domain\/src\/lib\.rs/, cmd);
+    }
+    for (const cmd of [`cat "${out('rs.diff')}" | git apply`, 'curl -sL https://example.com/fix.diff | patch -p1', `git apply "${out('missing.diff')}"`, 'git apply $PATCH']) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /cannot read/, cmd);
+    }
+    for (const cmd of [
+      `git apply --check "${out('rs.diff')}"`,
+      `git apply --stat "${out('rs.diff')}"`,
+      `git apply --numstat --summary "${out('rs.diff')}"`,
+      `patch --dry-run -p1 < "${out('rs.diff')}"`,
+      `git apply "${out('doc.diff')}"`,
+      `patch -p1 < "${out('doc.diff')}"`,
+      `git diff > "${out('mine.diff')}"`,
+      "git log --grep 'git apply'",
+      'echo "patch -p1 < fix.diff"',
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+test('Bash: renames, copies that pass the scan, copies out of the workspace and non-Rust copies stay allowed', () => {
+  withOutside((out) => {
+    write('crates/legacy/src/old.rs', EVIL_RS); // legacy debt: an unwrap already in the repository
+    write('crates/legacy/src/tested.rs', LIB_RS);
+    try {
+      for (const cmd of [
+        'mv crates/ledger-domain/src/lib.rs crates/ledger-domain/src/core.rs',
+        'git mv crates/ledger-domain/src/lib.rs crates/ledger-domain/src/core.rs',
+        'git mv -f crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'mv crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'Move-Item crates/legacy/src/old.rs crates/legacy/src/renamed.rs',
+        'mv crates/legacy/src crates/legacy/lib',
+        'mv crates/legacy crates/legacy-v1',
+        'cp crates/ledger-domain/src/lib.rs crates/ledger-domain/src/copy.rs',
+        `cp "${out('clean.rs')}" crates/ledger-domain/src/clean.rs`,
+        `cp "${out('lib.rs.orig')}" crates/ledger-domain/src/lib.rs`,
+        'cp crates/legacy/src/old.rs /tmp/old.rs.bak',
+        `cp crates/legacy/src/old.rs "${out('')}"`,
+        `cp -r crates/legacy "${out('legacy-copy')}"`,
+        'cp crates/ledger-domain/src/lib.rs crates/ledger-domain/src/lib.rs.bak',
+        'cp README.md docs/ && mv notes.txt docs/notes.md',
+        'cp $HOME/.cargo/config.toml docs/',
+        'cp -r $FIXTURES tests/data',
+        "git commit -m 'mv /tmp/evil.rs src/lib.rs'",
+        'echo "cp /tmp/evil.rs crates/ledger-domain/src/lib.rs"',
+        'cargo test --workspace',
+        `mv "${out('evil.rs')}" "${out('evil2.rs')}"`,
+        // A backup restored, and a file moved twice, in one command.
+        `cp crates/ledger-domain/src/lib.rs "${out('lib.rs.bak')}" && cargo test; mv "${out('lib.rs.bak')}" crates/ledger-domain/src/lib.rs`,
+        'mv crates/legacy/src/old.rs crates/legacy/src/mid.rs && mv crates/legacy/src/mid.rs crates/legacy/src/new.rs',
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+      // Moving onto an existing file deletes its tests (H-12); a move to a new mod.rs is ARC-06.
+      const over = bash('mv crates/legacy/src/old.rs crates/legacy/src/tested.rs');
+      assert.equal(decision(over), 'ask', reason(over));
+      assert.match(reason(over), /removes 1 test\(s\) \(H-12\)/);
+      const modRs = bash('git mv crates/legacy/src/old.rs crates/legacy/src/old/mod.rs');
+      assert.equal(decision(modRs), 'deny', reason(modRs));
+      assert.match(reason(modRs), /ARC-06/);
+    } finally {
+      fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+      fs.rmSync(file('crates/legacy/src/tested.rs'), { force: true });
+    }
+  });
+});
+
+// Review follow-ups for the copy/patch scan: shell structure, scratch directories,
+// heredoc patches, diff -u headers, wrapped commands and moves that change a file's kind.
+test('Bash: cd, subshells and pushd/popd resolve the directory a rename runs in', () => {
+  withOutside((out) => {
+    write('crates/legacy/src/old.rs', EVIL_RS);
+    try {
+      const mv = 'git mv crates/legacy/src/old.rs crates/legacy/src/renamed.rs';
+      for (const cmd of [
+        `cd "$(git rev-parse --show-toplevel)" && ${mv}`,
+        `cd crates/legacy && cargo test && cd - && ${mv}`,
+        `(cd crates/legacy && cargo build) && ${mv}`,
+        `pushd crates/legacy && cargo test && popd && ${mv}`,
+        `cd crates/legacy && cargo test; cd .. ; cd .. && ${mv}`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+      // The directory a subshell or popd leaves is not where the next command runs.
+      const outDir = out('').replace(/\/$/, '');
+      for (const cmd of [
+        `(cd "${outDir}"); cp "${out('evil.rs')}" crates/ledger-domain/src/x.rs`,
+        `pushd "${outDir}"; popd; cp "${out('evil.rs')}" crates/ledger-domain/src/x.rs`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'deny', cmd);
+        assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/x\.rs:5/, cmd);
+      }
+      const lost = bash(`cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`);
+      assert.equal(decision(lost), 'deny');
+      assert.match(reason(lost), /cannot tell which directory/);
+    } finally {
+      fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+    }
+  });
+});
+
+test('Bash: copies into the gate-excluded scratch directories (.temper/, target/) are not scanned', () => {
+  write('crates/legacy/src/old.rs', EVIL_RS);
+  try {
+    for (const cmd of ['cp -r crates/legacy/src .temper/src-backup', 'cp crates/legacy/src/old.rs target/old.rs', 'cp crates/legacy/src/old.rs .temper/']) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+    assert.equal(decision(bash('cp crates/legacy/src/old.rs crates/legacy/src/target.rs')), 'deny');
+  } finally {
+    fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+  }
+});
+
+test('Bash: a heredoc patch is read from the command; a patch file made earlier in the command is named as such', () => {
+  assert.equal(decision(bash(`git apply <<'EOF'\n${DOC_PATCH}EOF`)), 'none');
+  assert.equal(decision(bash(`patch -p1 <<EOF\n${DOC_PATCH}EOF\ncargo test`)), 'none');
+  const rs = bash(`git apply <<'EOF'\n${RS_PATCH}EOF`);
+  assert.equal(decision(rs), 'deny');
+  assert.match(reason(rs), /this patch changes Rust sources \(crates\/ledger-domain\/src\/lib\.rs\)/);
+  const expanded = bash(`git apply <<EOF\n${DOC_PATCH.replace('new', '$NEW')}EOF`);
+  assert.equal(decision(expanded), 'deny');
+  assert.match(reason(expanded), /cannot read/);
+  const later = bash('git diff > .temper/x.patch && git apply -R .temper/x.patch');
+  assert.equal(decision(later), 'deny');
+  assert.match(reason(later), /does not exist yet/);
+});
+
+test('Bash: diff -u headers with timestamps and CRLF patches are recognised as touching .rs files', () => {
+  withOutside((out) => {
+    const stamped = '--- a/crates/ledger-domain/src/lib.rs\t2026-10-01 10:00:00.000000000 +0000\n+++ b/crates/ledger-domain/src/lib.rs\t2026-10-01 10:05:00.000000000 +0000\n@@ -5,3 +5,3 @@\n pub fn one() -> u8 {\n-    1\n+    Some(1).unwrap()\n }\n';
+    fs.writeFileSync(out('stamped.diff'), stamped);
+    fs.writeFileSync(out('crlf.diff'), stamped.replace(/\n/g, '\r\n'));
+    fs.writeFileSync(out('ctx.diff'), stamped.replace('--- a/', '*** a/').replace('+++ b/', '--- b/'));
+    for (const cmd of [`patch -p1 < "${out('stamped.diff')}"`, `patch -p0 -i "${out('stamped.diff')}"`, `git apply "${out('stamped.diff')}"`, `git apply "${out('crlf.diff')}"`, `patch -p1 < "${out('ctx.diff')}"`]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /\(crates\/ledger-domain\/src\/lib\.rs\)/, cmd);
+    }
+    fs.writeFileSync(out('stamped-doc.diff'), '--- README.md\t2026-10-01 10:00:00 +0000\n+++ README.md\t2026-10-01 10:05:00 +0000\n@@ -1 +1 @@\n-old.rs\n+new.rs\n');
+    assert.equal(decision(bash(`patch -p0 < "${out('stamped-doc.diff')}"`)), 'none');
+    assert.equal(decision(bash(`git apply --check --apply "${out('rs.diff')}"`)), 'deny');
+  });
+});
+
+test('Bash: copies inside if/for/while/brace groups and wrapped commands are scanned; everyday wrapped commands are not', () => {
+  withOutside((out) => {
+    const evil = `"${out('evil.rs')}"`;
+    const outDir = out('pkg/inner');
+    for (const cmd of [
+      `if [ -f x ]; then cp ${evil} crates/ledger-domain/src/x.rs; fi`,
+      `if true; then :; else cp ${evil} crates/ledger-domain/src/x.rs; fi`,
+      `while false; do cp ${evil} crates/ledger-domain/src/x.rs; done`,
+      `{ cp ${evil} crates/ledger-domain/src/x.rs; }`,
+      `! cp ${evil} crates/ledger-domain/src/x.rs`,
+      `nice -n 10 cp ${evil} crates/ledger-domain/src/x.rs`,
+      `timeout 5 cp ${evil} crates/ledger-domain/src/x.rs`,
+      `bash -c 'cp ${evil} crates/ledger-domain/src/x.rs'`,
+      `sh -euc "cp ${evil} crates/ledger-domain/src/x.rs"`,
+      `eval 'cp ${evil} crates/ledger-domain/src/x.rs'`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/x\.rs:5/, cmd);
+    }
+    // A variable assigned earlier in the command is followed, so the copy is scanned.
+    const viaVar = bash(`SRC=${evil}; cp $SRC crates/ledger-domain/src/`);
+    assert.equal(decision(viaVar), 'deny');
+    assert.match(reason(viaVar), /H-02 crates\/ledger-domain\/src\/evil\.rs:5/);
+    for (const cmd of [
+      `for f in "${outDir}"/*; do cp "$f" crates/ledger-domain/src/; done`,
+      `cp "${outDir}"/* crates/ledger-domain/src/`,
+      `cp -r $OUT crates/ledger-domain/src`,
+      `find "${outDir}" -name '*.rs' -exec cp {} crates/ledger-domain/src/ \;`,
+      `ls "${outDir}" | xargs cp -t crates/ledger-domain/src`,
+      `ls "${outDir}" | xargs -I{} cp {} crates/ledger-domain/src/`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+    for (const cmd of [
+      "bash -c 'cargo test --workspace'",
+      'timeout 600 cargo test',
+      'nice cargo build --release',
+      "find . -name '*.rs' -exec grep -n unwrap {} +",
+      "find crates -name '*.rs' | xargs wc -l",
+      'git ls-files | xargs -n1 echo',
+      'if cargo test; then echo ok; fi',
+      'for f in crates/*/Cargo.toml; do grep -n version "$f"; done',
+      'cp $HOME/.cargo/config.toml docs/',
+      'cp $OUT/*.md docs/',
+      'cp -r $FIXTURES tests/data',
+      'cp target/release/app $DEST/',
+      'mv "$TMPFILE" crates/ledger-domain/src/data.txt',
+      `cd -P crates/ledger-domain && cp "${out('clean.rs')}" src/clean.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
+test('Bash: a move that turns test or example code into production code is scanned, and so is a copy laundered through a temp path', () => {
+  withOutside((out) => {
+    write('crates/legacy/tests/it.rs', EVIL_RS);
+    write('crates/legacy/examples/ex.rs', EVIL_RS);
+    write('crates/legacy/src/old.rs', EVIL_RS);
+    try {
+      for (const cmd of [
+        'mv crates/legacy/tests/it.rs crates/legacy/src/it.rs',
+        'git mv crates/legacy/examples/ex.rs crates/legacy/src/ex.rs',
+        'mv crates/legacy/tests crates/legacy/src/moved',
+        `cp crates/legacy/src/old.rs "${out('u.rs')}" && mv "${out('u.rs')}" crates/legacy/src/u2.rs`,
+        `cp -r crates/legacy/src "${out('l2')}" && mv "${out('l2')}" crates/legacy/src2`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'deny', `${cmd}\n${reason(res)}`);
+        assert.match(reason(res), /H-02 crates\/legacy\//, cmd);
+      }
+      for (const cmd of [
+        'mv crates/legacy/tests/it.rs crates/legacy/tests/it2.rs',
+        'git mv crates/legacy/examples/ex.rs crates/legacy/examples/ex2.rs',
+        `mv crates/legacy/src/old.rs "${out('o.rs')}" && mv "${out('o.rs')}" crates/legacy/src/old2.rs`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+    } finally {
+      for (const f of ['tests/it.rs', 'examples/ex.rs', 'src/old.rs']) fs.rmSync(file(`crates/legacy/${f}`), { force: true });
+    }
+  });
+});
+
+test('Bash: git-bash paths (/c/..., /tmp/...) are read as Windows paths on Windows', async () => {
+  const { msysPath } = await import('../scripts/lib/shell.mjs');
+  assert.equal(msysPath('/c/Users/me/x.rs', 'win32'), 'C:/Users/me/x.rs');
+  assert.equal(msysPath('/tmp/x.rs', 'win32'), `${os.tmpdir().replace(/\\/g, '/')}/x.rs`);
+  assert.equal(msysPath('/tmp', 'win32'), os.tmpdir().replace(/\\/g, '/'));
+  assert.equal(msysPath('/c/Users/me/x.rs', 'linux'), '/c/Users/me/x.rs');
+  assert.equal(msysPath('/tmp/x.rs', 'linux'), '/tmp/x.rs');
+  assert.equal(msysPath('C:/x.rs', 'win32'), 'C:/x.rs');
+  assert.equal(msysPath('/usr/x.rs', 'win32'), '/usr/x.rs');
+});
+
+// Review follow-ups after the shell parsers were unified (scripts/lib/shell.mjs).
+test('Bash: a crate moved or copied whole keeps its layout, so its unit tests stay tests', () => {
+  const ex = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-example-'));
+  try {
+    fs.cpSync(new URL('../templates/example-workspace', import.meta.url), ex, { recursive: true, filter: (src) => !/[\\/](?:target|\.git)$/.test(src) });
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: ex, session_id: 'hooks-test', tool_input: { command } });
+    for (const cmd of [
+      'mv crates/ledger-domain crates/ledger-core',
+      'git mv crates/ledger-domain crates/ledger-core',
+      'cp -r crates/ledger-domain crates/ledger-copy',
+      'cp -a crates/ledger-domain crates/ledger-copy && cargo test --workspace',
+      'rsync -a crates/ledger-domain/ crates/ledger-copy',
+    ]) {
+      const res = run(cmd);
+      // A copy duplicates the crate's .clone() calls, so it may carry the advisory a Write would.
+      assert.ok(['none', 'context'].includes(decision(res)), `${cmd}\n${reason(res)}`);
+    }
+    // Without its manifest the tree lands in no crate, so its test modules read as production code.
+    const bare = run('cp -r crates/ledger-domain/src crates/fresh-src');
+    assert.equal(decision(bare), 'deny', reason(bare));
+    assert.match(reason(bare), /H-02 crates\/fresh-src\/account\/tests\.rs/);
+  } finally {
+    fs.rmSync(ex, { recursive: true, force: true });
+  }
+});
+
+test('Bash: patch and git apply/am --help and --version apply nothing; git am and rsync are read like git apply and cp', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      'patch --version', 'patch -v', 'patch --help', 'git apply --help', 'git apply -h', 'git am --abort', 'git am --show-current-patch',
+      `git am "${out('doc.diff')}"`,
+      `rsync "${out('clean.rs')}" crates/ledger-domain/src/clean.rs`,
+      `rsync -n "${out('evil.rs')}" crates/ledger-domain/src/evil.rs`,
+      `rsync -a crates/ledger-domain/src/lib.rs "${out('lib-backup.rs')}"`,
+      'rsync -a crates/ledger-domain/src/lib.rs backup-host:/srv/lib.rs',
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+    for (const cmd of [`git am "${out('rs.diff')}"`, `git am -3 < "${out('rs.diff')}"`]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /this patch changes Rust sources \(crates\/ledger-domain\/src\/lib\.rs\)/, cmd);
+    }
+    for (const cmd of ['git am --continue', 'cat series.mbox | git am']) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /cannot read the patch/, cmd);
+    }
+    for (const [cmd, file] of [
+      [`rsync "${out('evil.rs')}" crates/ledger-domain/src/evil.rs`, 'evil'],
+      [`rsync -av "${out('pkg')}" crates/ledger-domain/src/`, 'pkg/inner/deep'],
+      [`rsync -a "${out('pkg')}/" crates/ledger-domain/src/pkg`, 'pkg/inner/deep'],
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), new RegExp(`H-02 crates/ledger-domain/src/${file}\\.rs:5`), cmd);
+    }
+  });
+});
+
+test('Bash: a ~/ source is read from the home directory and scanned', () => {
+  withOutside((out) => {
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = out('').replace(/\/$/, '');
+    process.env.USERPROFILE = process.env.HOME;
+    try {
+      const evil = bash('cp ~/evil.rs crates/ledger-domain/src/evil.rs');
+      assert.equal(decision(evil), 'deny');
+      assert.match(reason(evil), /H-02 crates\/ledger-domain\/src\/evil\.rs:5/);
+      assert.equal(decision(bash('cp ~/clean.rs crates/ledger-domain/src/clean.rs')), 'none');
+      assert.equal(decision(bash('cd ~ && cp clean.rs "$OLDPWD/crates/ledger-domain/src/clean.rs"')), 'none');
+      const missing = bash('cp ~/missing.rs crates/ledger-domain/src/missing.rs');
+      assert.equal(decision(missing), 'deny');
+      assert.match(reason(missing), /write Rust sources with the Edit or Write tools/);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  });
+});
+
+// Review follow-ups for the shared shell reader (scripts/lib/shell.mjs).
+test('Bash: a .rs file backed up to a temp dir or a variable destination passes; unclean content to an unknown place is still refused', () => {
+  write('crates/legacy/src/old.rs', EVIL_RS); // legacy debt: an unwrap already in the repository
+  const old = file('crates/legacy/src/old.rs').replace(/\\/g, '/');
+  try {
+    for (const cmd of [
+      'cp crates/ledger-domain/src/lib.rs "$TMPDIR/lib.rs"',
+      'TMP=$(mktemp -d); cp crates/ledger-domain/src/lib.rs $TMP/',
+      'cp crates/ledger-domain/src/lib.rs "$(mktemp)"',
+      'cp crates/ledger-domain/src/lib.rs ${OUT_DIR}/',
+      'mv crates/ledger-domain/src/lib.rs "$BACKUP"',
+      'Copy-Item crates/ledger-domain/src/lib.rs $env:TEMP/m.rs',
+      'pwsh -Command Copy-Item crates/ledger-domain/src/lib.rs $env:TEMP/m.rs',
+      `cd $(mktemp -d) && cp "${old}" b.rs`,
+      'cp crates/legacy/src/old.rs "$TMPDIR/"',
+      'D=$(mktemp -d) && cp crates/legacy/src/old.rs "$D/old.rs.bak"',
+      'cp -r crates/legacy "$TMPDIR/legacy-backup"',
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+    for (const cmd of [
+      'cp crates/legacy/src/old.rs "$BACKUP"',
+      'mv crates/legacy/src/old.rs ${OUT_DIR}/',
+      'cp crates/ledger-domain/src/lib.rs "$DEST/mod.rs"',
+      'cp "$TMPDIR/missing-temper-test.rs" crates/ledger-domain/src/x.rs',
+      'cp crates/ledger-domain/src/lib.rs "$(mktemp ./x.XXXX)" && cp "$TMPDIR/x" crates/ledger-domain/src/x.rs',
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+  } finally {
+    fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+  }
+});
+
+test('Bash: a command the shell reader cannot finish still gets the other Bash denies', () => {
+  const nested = `git commit --no-verify -m x; ${'find . -exec '.repeat(3000)}echo \\;`;
+  const res = bash(nested);
+  assert.equal(decision(res), 'deny');
+  assert.match(reason(res), /--no-verify/);
+  assert.equal(decision(bash(`${'find . -exec '.repeat(3000)}echo \\;`)), 'none');
+});
+
+test('Bash: Rust copies spelled c\\p, run with -WhatIf:$false, linked with ln or laundered through an existing file are scanned', () => {
+  withOutside((out) => {
+    fs.writeFileSync(out('stage.txt'), CLEAN_RS);
+    const src = 'crates/ledger-domain/src';
+    for (const cmd of [
+      `c\\p "${out('evil.rs')}" ${src}/evil.rs`,
+      `\\cp "${out('evil.rs')}" ${src}/evil.rs`,
+      `Copy-Item "${out('evil.rs')}" ${src}/evil.rs -WhatIf:$false`,
+      `ln "${out('evil.rs')}" ${src}/evil.rs`,
+      `ln -sf "${out('evil.rs')}" ${src}/evil.rs`,
+      `cp "${out('evil.rs')}" "${out('stage.txt')}" && mv "${out('stage.txt')}" ${src}/evil.rs`,
+      `cp "${out('evil.rs')}" "${out('stage.txt')}"; cp "${out('stage.txt')}" ${src}/evil.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/evil\.rs:5/, cmd);
+    }
+    for (const cmd of [
+      `Copy-Item "${out('evil.rs')}" ${src}/evil.rs -WhatIf`,
+      `ln -s lib.rs ${src}/again.rs`, // a relative link target is read from the link's directory
+      `cp "${out('stage.txt')}" ${src}/staged.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
+test('Bash: a symlinked .rs file inside a recursively copied tree is scanned for what it points at', (t) => {
+  withOutside((out) => {
+    fs.mkdirSync(out('linked'));
+    try { fs.symlinkSync(out('evil.rs'), out('linked/evil.rs')); } catch { t.skip('symlinks not available'); return; }
+    const res = bash(`cp -r "${out('linked')}" crates/ledger-domain/src/linked`);
+    assert.equal(decision(res), 'deny');
+    assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/linked\/evil\.rs:5/);
+  });
+});
+
+test('Bash: a patch whose git headers quote a path with spaces is still read as touching a .rs file', () => {
+  withOutside((out) => {
+    fs.writeFileSync(out('space.diff'), 'diff --git "a/src dir/lib.rs" "b/src dir/lib.rs"\n--- "a/src dir/lib.rs"\n+++ "b/src dir/lib.rs"\n@@ -1 +1 @@\n-a\n+b\n');
+    const res = bash(`git apply "${out('space.diff')}"`);
+    assert.equal(decision(res), 'deny');
+    assert.match(reason(res), /this patch changes Rust sources \(src dir\/lib\.rs\)/);
+  });
+});
+
+test('Bash: a copy\'s H-08 advisory survives when another check in the command asks', () => {
+  withOutside((out) => {
+    fs.writeFileSync(out('clone.rs'), '//! Clone.\n\n/// F.\n#[must_use]\npub fn f(v: &[u8]) -> Vec<u8> {\n    let w = v.to_vec();\n    w.clone()\n}\n');
+    const res = bash(`cp "${out('clone.rs')}" crates/ledger-domain/src/c.rs && cargo add serde_yaml`);
+    assert.equal(decision(res), 'ask');
+    assert.match(reason(res), /cargo add serde_yaml/);
+    assert.match(reason(res), /H-08 crates\/ledger-domain\/src\/c\.rs: 1 new \.clone\(\)/);
+  });
+});
+
+test('Bash: a Rust copy whose source an earlier non-copy write in the command rewrites is refused; later or unrelated writes are not', () => {
+  withOutside((out) => {
+    fs.writeFileSync(out('stage.txt'), CLEAN_RS);
+    const src = 'crates/ledger-domain/src';
+    const stage = `"${out('stage.txt')}"`;
+    for (const cmd of [
+      `cat "${out('evil.rs')}" > ${stage} && mv ${stage} ${src}/evil.rs`,
+      `cat "${out('evil.rs')}" | tee ${stage} >/dev/null && cp ${stage} ${src}/evil.rs`,
+      `sed -i 's/1$/Some(1).unwrap()/' ${stage} && cp ${stage} ${src}/evil.rs`,
+      `python3 -c "import shutil; shutil.copy('${out('evil.rs')}','${out('stage.txt')}')" && cp ${stage} ${src}/evil.rs`,
+      `curl -so ${stage} https://example.invalid/evil && cp ${stage} ${src}/evil.rs`,
+      `cp "${out('clean.rs')}" "${out('b.txt')}" && sed -i s/a/b/ "${out('b.txt')}" && cp "${out('b.txt')}" ${src}/evil.rs`,
+      `sed -i s/a/b/ ${stage} && cp ${stage} "${out('b.txt')}" && cp "${out('b.txt')}" ${src}/evil.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /rewritten earlier in this command/, cmd);
+    }
+    for (const cmd of [
+      `echo hi > "${out('other.txt')}" && cp ${stage} ${src}/staged.rs`,
+      `sed -i s/a/b/ ${stage} && cp "${out('clean.rs')}" ${stage} && cp ${stage} ${src}/staged.rs`,
+      `cp ${stage} ${src}/staged.rs && echo x >> ${stage}`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
+test('Bash: ln -sr reads its target from the current directory, and a linked directory of .rs files is scanned', () => {
+  withOutside((out) => {
+    const src = 'crates/ledger-domain/src';
+    for (const cmd of [`ln -sr ${src}/lib.rs ${src}/again.rs`, `ln --symbolic --relative ${src}/lib.rs ${src}/again.rs`]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+    const res = bash(`ln -s "${out('pkg')}" ${src}/pkg`);
+    assert.equal(decision(res), 'deny');
+    assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/pkg\/inner\/deep\.rs:5/);
+  });
+});
+
+test('Bash: a shell write into a .rs file spelled with a backslash or split quotes, or by curl or dd, is denied like a redirect', () => {
+  withOutside((out) => {
+    const src = 'crates/ledger-domain/src';
+    for (const cmd of [
+      `cat "${out('evil.rs')}" > ${src}/x.r\\s`,
+      `cat "${out('evil.rs')}" > ${src}/x.r''s`,
+      `cat "${out('evil.rs')}" >> ${src}/li\\b.rs`,
+      `curl -so ${src}/x.rs https://example.invalid/evil`,
+      `dd if="${out('evil.rs')}" of=${src}/x.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+    for (const cmd of [
+      `cat ${src}/lib.rs > "${out('copy.txt')}"`,
+      `git checkout -- ${src}/lib.rs`,
+      `git restore ${src}/lib.rs`,
+      `cat ${src}/lib.r\\s`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
 test('Bash: shell writes to Cargo.toml are refused so the manifest checks run', () => {
   for (const cmd of ["printf '[profile.release]\\nlto = true\\n' >> crates/a/Cargo.toml", "sed -i 's/1.96/1.97/' Cargo.toml", 'cp template/Cargo.toml crates/new/Cargo.toml', 'cat > crates/x/Cargo.toml <<EOF\n[package]\nEOF']) {
     const res = bash(cmd);
@@ -984,6 +1578,275 @@ test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks 
   const write = writeTo('.claude/temper-baseline.json', '{"temper_baseline":1,"totals":{}}\n');
   assert.equal(decision(write), 'ask');
   assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
+});
+
+const STATE_DENY = /verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command/;
+
+test('Bash: shell writes into the temper state dir (.git/temper/) are denied; reading, copying out and deleting are not', () => {
+  const telemetryFile = path.join(discover(ws).stateDir, 'telemetry.jsonl');
+  const denied = [
+    `echo '{"verdict":"approved"}' > .git/temper/verdicts/0123456789abcdef.json`,
+    'printf %s "{}" >> ./.git/temper/telemetry.jsonl',
+    'cat v.json &> .git/temper/gate/0123456789abcdef.json',
+    'node fake.js 2> .git/temper/logs/0123-clippy.log',
+    'echo {} >".git/temper/verdicts/a.json"',
+    'printf {} > /home/me/repo/.git/temper/gate/a.json',
+    'cp /tmp/v.json .git/temper/gate/0123456789abcdef.json',
+    'cp -f /tmp/v.json "./.git/temper/verdicts/a.json"',
+    'mv v.json .git/temper/verdicts/',
+    'cp -t .git/temper/verdicts v.json',
+    'rsync -avt v.json .git/temper/gate/a.json',
+    'install -m 644 v.json .git/temper/verdicts/a.json',
+    'ln -s /tmp/v.json .git/temper/verdicts/a.json',
+    'Copy-Item v.json -Destination .git\\temper\\verdicts\\a.json',
+    'Move-Item v.json .git/temper/gate/a.json',
+    'jq ".verdict=\\"approved\\"" old.json | tee .git/temper/verdicts/a.json',
+    'tee -a .git/temper/telemetry.jsonl < x',
+    "sed -i 's/changes_requested/approved/' .git/temper/verdicts/a.json",
+    "perl -pi -e 's/false/true/' .git/temper/gate/a.json",
+    `python3 -c "open('.git/temper/verdicts/a.json','w').write('{}')"`,
+    `python3 -c "import pathlib; pathlib.Path('.git/temper/verdicts/a.json').write_text('{}')"`,
+    `node -e "require('fs').writeFileSync('.git/temper/gate/a.json', '{}')"`,
+    "Set-Content -Path .git/temper/verdicts/a.json -Value '{}'",
+    "'{}' | Out-File .git\\temper\\gate\\a.json",
+    'Add-Content .git/temper/telemetry.jsonl x',
+    'dd if=v.json of=.git/temper/verdicts/a.json',
+    'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'cp v.json "$(git rev-parse --git-dir)/temper/gate/a.json"',
+    'echo {} > `git rev-parse --git-common-dir`/temper/verdicts/a.json',
+    'cp v.json $(git rev-parse --git-path temper/verdicts)/a.json',
+    'echo {} > target/temper/verdicts/a.json',
+    `echo {} > "${path.join(ws, 'target', 'temper', 'gate', 'a.json')}"`,
+    `echo {} > ${path.join(ws, 'target', 'temper', 'gate', 'a.json').split(path.sep).join('/')}`,
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const events = fs.readFileSync(telemetryFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.event === 'deny-shell-write' && e.file === 'state-dir'));
+  const allowed = [
+    'cat .git/temper/logs/0123-clippy.log',
+    'less .git/temper/logs/0123-test.log',
+    'grep -n error .git/temper/logs/*.log',
+    'ls -la .git/temper/verdicts',
+    'jq .verdict .git/temper/verdicts/a.json',
+    'tail -n 50 .git/temper/telemetry.jsonl',
+    'cat .git/temper/telemetry.jsonl | wc -l',
+    'sed -n 1,20p .git/temper/logs/a.log',
+    'cat "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'node "$TEMPER_CLI" status',
+    'node "$TEMPER_CLI" gate',
+    'node "$TEMPER_CLI" stats',
+    'grep x .git/temper/logs/a.log > /tmp/out',
+    'jq . .git/temper/gate/a.json > gate.json 2> /tmp/err',
+    'cp .git/temper/logs/a.log /tmp/',
+    'cp -t /tmp .git/temper/logs/a.log',
+    'cp -r .git/temper /tmp/temper-backup',
+    `python3 -c "print(open('.git/temper/verdicts/a.json').read())"`,
+    'cargo build > /tmp/b.log 2>&1',
+    'mv .git/temper/telemetry.jsonl /tmp/t.jsonl',
+    'rm "$(git rev-parse --git-common-dir)/temper/telemetry.jsonl"',
+    'rm -f .git/temper/telemetry.jsonl',
+    'git status',
+    'git gc --prune=now',
+    'git rev-parse --git-common-dir',
+    'ls target/temper',
+    'cargo build 2> /tmp/err.log',
+    'cargo test > target/debug/test-output.txt',
+    'echo hi > temper.txt',
+    'echo hi > notes/temper/todo.md',
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: shell writes into the absolute state dir of a git worktree are denied', { skip: !git && 'git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-statedir-'));
+  const g = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  try {
+    fs.writeFileSync(path.join(repo, 'Cargo.toml'), ROOT);
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const wt = path.join(repo, 'wt');
+    assert.equal(g('worktree', 'add', '-q', wt).status, 0);
+    const proj = discover(wt);
+    const state = path.resolve(proj.stateDir);
+    const slashed = state.split(path.sep).join('/');
+    assert.ok(!slashed.startsWith(`${path.resolve(proj.root).split(path.sep).join('/')}/`), 'the worktree state dir lives in the main repository');
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: wt, session_id: 'hooks-test', tool_input: { command } });
+    for (const cmd of [
+      `echo {} > "${path.join(state, 'verdicts', 'a.json')}"`,
+      `cp /tmp/v.json ${slashed}/gate/a.json`,
+      `python3 -c "open('${slashed}/verdicts/a.json','w')"`,
+      'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    ]) {
+      const res = run(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), STATE_DENY, cmd);
+    }
+    for (const cmd of [`cat "${path.join(state, 'telemetry.jsonl')}"`, `cp ${slashed}/logs/a.log /tmp/`, `rm ${slashed}/telemetry.jsonl`, 'git worktree list']) {
+      assert.equal(decision(run(cmd)), 'none', cmd);
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('Bash: state-dir writes hidden by trailing redirects, variables, quoting, cd or other writers are denied; reads stay allowed', () => {
+  const denied = [
+    'cp v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'cp v.json .git/temper/verdicts/a.json >/dev/null 2>&1',
+    'cp v.json .git/temper/verdicts/a.json # forge',
+    'ln -sf /tmp/v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'rsync v.json .git/temper/gate/a.json 2>&1',
+    'mv v.json .git/temper/gate/a.json -f',
+    'STATE=$(git rev-parse --git-common-dir)/temper; echo {} > $STATE/verdicts/a.json',
+    'STATE="$(git rev-parse --git-common-dir)/temper"; echo {} > "$STATE/gate/a.json"',
+    'STATE=.git/temper/gate; cp v.json $STATE/a.json',
+    'D=.git/temper && echo {} > ${D}/verdicts/x.json',
+    'echo {} > "$(git rev-parse --git-common-dir)"/temper/verdicts/a.json',
+    'echo {} > ".git/"temper/verdicts/a.json',
+    "echo {} > .git/'temper'/verdicts/a.json",
+    'cd .git/temper/verdicts && echo {} > x.json',
+    '(cd .git/temper/gate && echo {} > a.json)',
+    'pushd .git/temper/gate; echo {} > a.json',
+    'cd .git && echo {} > temper/verdicts/x.json',
+    'cd target/temper && echo {} > gate/a.json',
+    `python3 -c "open('.git/temper/verdicts/a.json', mode='w').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'x').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'r+').write('{}')"`,
+    `python3 -c "import shutil;shutil.copy('v.json','.git/temper/verdicts/a.json')"`,
+    "python3 <<'EOF'\np = '.git/temper/verdicts/a.json'\nwith open(p, 'w') as f:\n    f.write('{}')\nEOF",
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('.git/temper/verdicts/a.json')\np.write_text('{}')\nEOF",
+    `node -e "require('fs').copyFileSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "require('fs').renameSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "const fs=require('fs'); const p='.git/temper/gate/a.json'; fs.writeFileSync(p,'{}')"`,
+    `ruby -e 'File.write(".git/temper/verdicts/a.json","{}")'`,
+    `bash -c "echo {} > .git/temper/verdicts/a.json"`,
+    'curl -o .git/temper/verdicts/a.json file:///tmp/v.json',
+    'curl -sSLo .git/temper/verdicts/a.json file:///tmp/v.json',
+    'wget -O .git/temper/verdicts/a.json http://example.com/v.json',
+    `jq '.verdict="approved"' v.json | sponge .git/temper/verdicts/a.json`,
+    'tee --append .git/temper/verdicts/a.json < v.json',
+    'echo {} | tee /dev/null .git/temper/verdicts/a.json',
+    'tar -xf forged.tar -C .git/temper',
+    'unzip -o forged.zip -d .git/temper',
+    'find /tmp -name v.json -exec cp {} .git/temper/verdicts/a.json \\;',
+    'ls /tmp/v.json | xargs -I{} cp {} .git/temper/verdicts/a.json',
+    'Copy-Item -Destination .git\\temper\\verdicts\\a.json -Path v.json',
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const allowed = [
+    'cp a.log /tmp/\ncat .git/temper/verdicts/a.json',
+    'npm install\nls .git/temper/gate',
+    "sed -i 's/a/b/' README.md\ncat .git/temper/telemetry.jsonl",
+    "python3 <<'EOF'\nfrom pathlib import Path\nPath('/tmp/r.md').write_text('x')\nprint(open('.git/temper/telemetry.jsonl').read())\nEOF",
+    'git commit -m "deny shell writes like echo > .git/temper/verdicts/x"',
+    'git commit -m "docs: cp logs out of .git/temper/logs"',
+    'grep -rn "> .git/temper" scripts/',
+    "cat <<'EOF'\nTo forge: echo {} > .git/temper/verdicts/a.json\nEOF",
+    'echo x > .git/temper-notes.txt',
+    'echo x > target/temper-report.html',
+    'cargo test 2> target/temper-stderr.txt',
+    'echo hi > docs/.git/temper-notes.md',
+    'cp -r src .git/temper-backup',
+    'echo x > "$TMPDIR/temper/gate-summary.txt"',
+    'echo x > "$HOME/temper/logs/today.txt"',
+    'cp .git/temper/logs/a.log "$HOME/temper/logs/"',
+    `node -e "require('fs').writeFileSync('/tmp/g.json', require('fs').readFileSync('.git/temper/gate/a.json'))"`,
+    'Copy-Item -Destination C:\\tmp -Path .git\\temper\\logs\\a.log',
+    '(cd .git/temper/logs && cat a.log) ; echo hi > out.txt',
+    'cd .git/temper/logs && grep error *.log > /tmp/errors.txt',
+    'tar -cf /tmp/state.tar -C .git/temper .',
+    'cargo install cargo-nextest',
+    'D=.git/temper; cat $D/verdicts/a.json > /tmp/a.json',
+    'cd .git/temper && ls',
+    'cd crates/foo && cargo test > ../../out.txt 2>&1',
+    'cargo build --release 2>&1 | tail -20',
+    `python3 -c "import json; print(json.load(open('.git/temper/gate/a.json')))"`,
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: state-dir writes inside compound commands, command substitutions and moves into .git/ are denied', () => {
+  for (const cmd of [
+    'if true; then cp v.json .git/temper/verdicts/a.json; fi',
+    'for f in a; do echo {} > .git/temper/gate/$f.json; done',
+    '{ tee .git/temper/telemetry.jsonl < v; }',
+    '! cp v.json .git/temper/verdicts/a.json',
+    'while true; do cd .git/temper; echo {} > gate/a.json; break; done',
+    'echo "$(cp v.json .git/temper/verdicts/a.json)"',
+    'x=`cp v.json .git/temper/verdicts/a.json`',
+    'truncate -s 0 .git/temper/telemetry.jsonl',
+    'mv forged/temper .git/',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'if true; then cat .git/temper/verdicts/a.json; fi',
+    'for f in .git/temper/logs/*; do cat "$f"; done > /tmp/all.log',
+    'echo "$(cat .git/temper/telemetry.jsonl)" > /tmp/t',
+    'mv notes/temper.txt .git/',
+  ]) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: git rev-parse --path-format=absolute does not hide the state dir', () => {
+  for (const cmd of [
+    'echo x > "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a"',
+    'cp v.json "$(git rev-parse --path-format=absolute --git-common-dir)/temper/verdicts/a.json"',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  assert.equal(decision(bash('cat "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a" > /tmp/a')), 'none');
+});
+
+// ---- Greptile findings on #82, through the real preBash
+
+test('Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed', () => {
+  for (const cmd of [
+    "echo '{}' > .git/tem\\per/verdicts/a.json",
+    'c\\p /tmp/v.json .git/temper/gate/a.json',
+    `python3 -c "m='w'; open('.git/temper/verdicts/a.json', m).write('{}')"`,
+    `python3 -c "mode = 'a'; open('.git/temper/telemetry.jsonl', mode=mode)"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  // A bash function named like a PowerShell command does not make bash keep the backslash.
+  for (const cmd of [
+    "copy() { cat; }; echo '{}' | copy > .git/tem\\per/verdicts/v.json",
+    "'[a]::b'() { echo '{}'; }; [a]::b > .git/tem\\per/verdicts/v.json",
+    "Set-Content() { cat; }; echo '{}' | Set-Content > .git/tem\\per/gate/v.json",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'cat .git/tem\\per/verdicts/a.json',
+    "Set-Content -Path target\\temper-report.txt -Value x",
+    `python3 -c "m='r'; print(open('.git/temper/verdicts/a.json', m).read())"`,
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+  }
 });
 
 test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
