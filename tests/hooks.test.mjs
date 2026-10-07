@@ -679,6 +679,44 @@ test('Bash: state-dir writes hidden by trailing redirects, variables, quoting, c
   }
 });
 
+test('Bash: state-dir writes inside compound commands, command substitutions and moves into .git/ are denied', () => {
+  for (const cmd of [
+    'if true; then cp v.json .git/temper/verdicts/a.json; fi',
+    'for f in a; do echo {} > .git/temper/gate/$f.json; done',
+    '{ tee .git/temper/telemetry.jsonl < v; }',
+    '! cp v.json .git/temper/verdicts/a.json',
+    'while true; do cd .git/temper; echo {} > gate/a.json; break; done',
+    'echo "$(cp v.json .git/temper/verdicts/a.json)"',
+    'x=`cp v.json .git/temper/verdicts/a.json`',
+    'truncate -s 0 .git/temper/telemetry.jsonl',
+    'mv forged/temper .git/',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  for (const cmd of [
+    'if true; then cat .git/temper/verdicts/a.json; fi',
+    'for f in .git/temper/logs/*; do cat "$f"; done > /tmp/all.log',
+    'echo "$(cat .git/temper/telemetry.jsonl)" > /tmp/t',
+    'mv notes/temper.txt .git/',
+  ]) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: git rev-parse --path-format=absolute does not hide the state dir', () => {
+  for (const cmd of [
+    'echo x > "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a"',
+    'cp v.json "$(git rev-parse --path-format=absolute --git-common-dir)/temper/verdicts/a.json"',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  assert.equal(decision(bash('cat "$(git rev-parse --path-format=absolute --git-dir)/temper/gate/a" > /tmp/a')), 'none');
+});
+
 test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
   for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
     const res = bash(cmd);
