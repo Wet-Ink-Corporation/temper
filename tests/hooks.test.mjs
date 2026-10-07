@@ -424,6 +424,183 @@ test('Bash: renames, copies that pass the scan, copies out of the workspace and 
   });
 });
 
+// Review follow-ups for the copy/patch scan: shell structure, scratch directories,
+// heredoc patches, diff -u headers, wrapped commands and moves that change a file's kind.
+test('Bash: cd, subshells and pushd/popd resolve the directory a rename runs in', () => {
+  withOutside((out) => {
+    write('crates/legacy/src/old.rs', EVIL_RS);
+    try {
+      const mv = 'git mv crates/legacy/src/old.rs crates/legacy/src/renamed.rs';
+      for (const cmd of [
+        `cd "$(git rev-parse --show-toplevel)" && ${mv}`,
+        `cd crates/legacy && cargo test && cd - && ${mv}`,
+        `(cd crates/legacy && cargo build) && ${mv}`,
+        `pushd crates/legacy && cargo test && popd && ${mv}`,
+        `cd crates/legacy && cargo test; cd .. ; cd .. && ${mv}`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+      // The directory a subshell or popd leaves is not where the next command runs.
+      const outDir = out('').replace(/\/$/, '');
+      for (const cmd of [
+        `(cd "${outDir}"); cp "${out('evil.rs')}" crates/ledger-domain/src/x.rs`,
+        `pushd "${outDir}"; popd; cp "${out('evil.rs')}" crates/ledger-domain/src/x.rs`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'deny', cmd);
+        assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/x\.rs:5/, cmd);
+      }
+      const lost = bash(`cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`);
+      assert.equal(decision(lost), 'deny');
+      assert.match(reason(lost), /cannot tell which directory/);
+    } finally {
+      fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+    }
+  });
+});
+
+test('Bash: copies into the gate-excluded scratch directories (.temper/, target/) are not scanned', () => {
+  write('crates/legacy/src/old.rs', EVIL_RS);
+  try {
+    for (const cmd of ['cp -r crates/legacy/src .temper/src-backup', 'cp crates/legacy/src/old.rs target/old.rs', 'cp crates/legacy/src/old.rs .temper/']) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+    assert.equal(decision(bash('cp crates/legacy/src/old.rs crates/legacy/src/target.rs')), 'deny');
+  } finally {
+    fs.rmSync(file('crates/legacy/src/old.rs'), { force: true });
+  }
+});
+
+test('Bash: a heredoc patch is read from the command; a patch file made earlier in the command is named as such', () => {
+  assert.equal(decision(bash(`git apply <<'EOF'\n${DOC_PATCH}EOF`)), 'none');
+  assert.equal(decision(bash(`patch -p1 <<EOF\n${DOC_PATCH}EOF\ncargo test`)), 'none');
+  const rs = bash(`git apply <<'EOF'\n${RS_PATCH}EOF`);
+  assert.equal(decision(rs), 'deny');
+  assert.match(reason(rs), /this patch changes Rust sources \(crates\/ledger-domain\/src\/lib\.rs\)/);
+  const expanded = bash(`git apply <<EOF\n${DOC_PATCH.replace('new', '$NEW')}EOF`);
+  assert.equal(decision(expanded), 'deny');
+  assert.match(reason(expanded), /cannot read/);
+  const later = bash('git diff > .temper/x.patch && git apply -R .temper/x.patch');
+  assert.equal(decision(later), 'deny');
+  assert.match(reason(later), /does not exist yet/);
+});
+
+test('Bash: diff -u headers with timestamps and CRLF patches are recognised as touching .rs files', () => {
+  withOutside((out) => {
+    const stamped = '--- a/crates/ledger-domain/src/lib.rs\t2026-10-01 10:00:00.000000000 +0000\n+++ b/crates/ledger-domain/src/lib.rs\t2026-10-01 10:05:00.000000000 +0000\n@@ -5,3 +5,3 @@\n pub fn one() -> u8 {\n-    1\n+    Some(1).unwrap()\n }\n';
+    fs.writeFileSync(out('stamped.diff'), stamped);
+    fs.writeFileSync(out('crlf.diff'), stamped.replace(/\n/g, '\r\n'));
+    fs.writeFileSync(out('ctx.diff'), stamped.replace('--- a/', '*** a/').replace('+++ b/', '--- b/'));
+    for (const cmd of [`patch -p1 < "${out('stamped.diff')}"`, `patch -p0 -i "${out('stamped.diff')}"`, `git apply "${out('stamped.diff')}"`, `git apply "${out('crlf.diff')}"`, `patch -p1 < "${out('ctx.diff')}"`]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /\(crates\/ledger-domain\/src\/lib\.rs\)/, cmd);
+    }
+    fs.writeFileSync(out('stamped-doc.diff'), '--- README.md\t2026-10-01 10:00:00 +0000\n+++ README.md\t2026-10-01 10:05:00 +0000\n@@ -1 +1 @@\n-old.rs\n+new.rs\n');
+    assert.equal(decision(bash(`patch -p0 < "${out('stamped-doc.diff')}"`)), 'none');
+    assert.equal(decision(bash(`git apply --check --apply "${out('rs.diff')}"`)), 'deny');
+  });
+});
+
+test('Bash: copies inside if/for/while/brace groups and wrapped commands are scanned; everyday wrapped commands are not', () => {
+  withOutside((out) => {
+    const evil = `"${out('evil.rs')}"`;
+    const outDir = out('pkg/inner');
+    for (const cmd of [
+      `if [ -f x ]; then cp ${evil} crates/ledger-domain/src/x.rs; fi`,
+      `if true; then :; else cp ${evil} crates/ledger-domain/src/x.rs; fi`,
+      `while false; do cp ${evil} crates/ledger-domain/src/x.rs; done`,
+      `{ cp ${evil} crates/ledger-domain/src/x.rs; }`,
+      `! cp ${evil} crates/ledger-domain/src/x.rs`,
+      `nice -n 10 cp ${evil} crates/ledger-domain/src/x.rs`,
+      `timeout 5 cp ${evil} crates/ledger-domain/src/x.rs`,
+      `bash -c 'cp ${evil} crates/ledger-domain/src/x.rs'`,
+      `sh -euc "cp ${evil} crates/ledger-domain/src/x.rs"`,
+      `eval 'cp ${evil} crates/ledger-domain/src/x.rs'`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /H-02 crates\/ledger-domain\/src\/x\.rs:5/, cmd);
+    }
+    for (const cmd of [
+      `for f in "${outDir}"/*; do cp "$f" crates/ledger-domain/src/; done`,
+      `cp "${outDir}"/* crates/ledger-domain/src/`,
+      `SRC=${evil}; cp $SRC crates/ledger-domain/src/`,
+      `cp -r $OUT crates/ledger-domain/src`,
+      `find "${outDir}" -name '*.rs' -exec cp {} crates/ledger-domain/src/ \;`,
+      `ls "${outDir}" | xargs cp -t crates/ledger-domain/src`,
+      `ls "${outDir}" | xargs -I{} cp {} crates/ledger-domain/src/`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /write Rust sources with the Edit or Write tools/, cmd);
+    }
+    for (const cmd of [
+      "bash -c 'cargo test --workspace'",
+      'timeout 600 cargo test',
+      'nice cargo build --release',
+      "find . -name '*.rs' -exec grep -n unwrap {} +",
+      "find crates -name '*.rs' | xargs wc -l",
+      'git ls-files | xargs -n1 echo',
+      'if cargo test; then echo ok; fi',
+      'for f in crates/*/Cargo.toml; do grep -n version "$f"; done',
+      'cp $HOME/.cargo/config.toml .cargo/',
+      'cp $OUT/*.md docs/',
+      'cp -r $FIXTURES tests/data',
+      'cp target/release/app $DEST/',
+      'mv "$TMPFILE" crates/ledger-domain/src/data.txt',
+      `cd -P crates/ledger-domain && cp "${out('clean.rs')}" src/clean.rs`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
+test('Bash: a move that turns test or example code into production code is scanned, and so is a copy laundered through a temp path', () => {
+  withOutside((out) => {
+    write('crates/legacy/tests/it.rs', EVIL_RS);
+    write('crates/legacy/examples/ex.rs', EVIL_RS);
+    write('crates/legacy/src/old.rs', EVIL_RS);
+    try {
+      for (const cmd of [
+        'mv crates/legacy/tests/it.rs crates/legacy/src/it.rs',
+        'git mv crates/legacy/examples/ex.rs crates/legacy/src/ex.rs',
+        'mv crates/legacy/tests crates/legacy/src/moved',
+        `cp crates/legacy/src/old.rs "${out('u.rs')}" && mv "${out('u.rs')}" crates/legacy/src/u2.rs`,
+        `cp -r crates/legacy/src "${out('l2')}" && mv "${out('l2')}" crates/legacy/src2`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'deny', `${cmd}\n${reason(res)}`);
+        assert.match(reason(res), /H-02 crates\/legacy\//, cmd);
+      }
+      for (const cmd of [
+        'mv crates/legacy/tests/it.rs crates/legacy/tests/it2.rs',
+        'git mv crates/legacy/examples/ex.rs crates/legacy/examples/ex2.rs',
+        `mv crates/legacy/src/old.rs "${out('o.rs')}" && mv "${out('o.rs')}" crates/legacy/src/old2.rs`,
+      ]) {
+        const res = bash(cmd);
+        assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+      }
+    } finally {
+      for (const f of ['tests/it.rs', 'examples/ex.rs', 'src/old.rs']) fs.rmSync(file(`crates/legacy/${f}`), { force: true });
+    }
+  });
+});
+
+test('Bash: git-bash paths (/c/..., /tmp/...) are read as Windows paths on Windows', async () => {
+  const { msysPath } = await import('../scripts/lib/hooks.mjs');
+  assert.equal(msysPath('/c/Users/me/x.rs', 'win32'), 'C:/Users/me/x.rs');
+  assert.equal(msysPath('/tmp/x.rs', 'win32'), `${os.tmpdir().replace(/\\/g, '/')}/x.rs`);
+  assert.equal(msysPath('/tmp', 'win32'), os.tmpdir().replace(/\\/g, '/'));
+  assert.equal(msysPath('/c/Users/me/x.rs', 'linux'), '/c/Users/me/x.rs');
+  assert.equal(msysPath('/tmp/x.rs', 'linux'), '/tmp/x.rs');
+  assert.equal(msysPath('C:/x.rs', 'win32'), 'C:/x.rs');
+  assert.equal(msysPath('/usr/x.rs', 'win32'), '/usr/x.rs');
+});
+
 test('Bash: shell writes to Cargo.toml are refused so the manifest checks run', () => {
   for (const cmd of ["printf '[profile.release]\\nlto = true\\n' >> crates/a/Cargo.toml", "sed -i 's/1.96/1.97/' Cargo.toml", 'cp template/Cargo.toml crates/new/Cargo.toml', 'cat > crates/x/Cargo.toml <<EOF\n[package]\nEOF']) {
     const res = bash(cmd);
