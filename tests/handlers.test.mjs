@@ -6,8 +6,8 @@
 // The completion gate runs `cargo --version` and `cargo fmt --all` before it
 // reads the cached gate record for the tree fingerprint. These tests seed that
 // record (<stateDir>/gate/<fp>.json) instead of running clippy and the tests,
-// and skip the cases that reach the gate when cargo is not installed. Every
-// workspace is rustfmt-clean, so fmt leaves the fingerprint alone.
+// and skip the cases that reach the gate when cargo or rustfmt is not
+// installed. Every workspace is rustfmt-clean, so fmt leaves the fingerprint alone.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,10 +18,11 @@ import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, 
 import { discover, fingerprint, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
-const cargo = spawnSync('cargo', ['--version'], { encoding: 'utf8' }).status === 0;
+const cargo = spawnSync('cargo', ['--version'], { encoding: 'utf8' }).status === 0
+  && spawnSync('cargo', ['fmt', '--version'], { encoding: 'utf8' }).status === 0;
 const git = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
 const noGit = !git && 'git not installed';
-const noCargo = (!git || !cargo) && 'cargo or git not installed';
+const noCargo = (!git || !cargo) && 'cargo, rustfmt or git not installed';
 
 const ROOT = '[workspace]\nresolver = "3"\nmembers = ["crates/*"]\n\n[workspace.package]\nedition = "2024"\nversion = "0.1.0"\npublish = false\n';
 const MEMBER = '[package]\nname = "core"\nedition.workspace = true\nversion.workspace = true\npublish.workspace = true\n';

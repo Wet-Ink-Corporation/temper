@@ -2,8 +2,9 @@
 // final message, validation, and storage keyed by tree fingerprint.
 //
 // Left out on purpose: the suffix match between evidence.files_read and the
-// changed files, and an approval whose scores are all "n/a". Issue #16 may
-// change both, so these tests use exact paths and integer scores.
+// changed files, and an approval whose scores are all "n/a". Audit finding
+// 1-12 (docs/history/2026-10-audit/report.md) may change both, so these tests
+// use exact paths and integer scores.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
