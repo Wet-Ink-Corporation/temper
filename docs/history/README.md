@@ -15,13 +15,15 @@ These files were written for the agents doing the work, and they are kept as wri
 | `review-content.md` | Independent review of the standard's content changes (rules, references, examples). |
 | `review-machinery.md` | Independent review of the hooks, scanner, templates, CI and example workspace. |
 
+The adoption spec names the findings files by the short names they had in the scratch directory. They map to `findings/` as: `ms.md` is `microsoft-pragmatic-rust.md`, `apiguide.md` is `api-guidelines.md`, `effective.md` is `effective-rust.md`, `perf.md` is `performance-book.md`, `patterns.md` is `design-patterns.md`, `atomics.md` is `atomics-and-locks.md`, `tooling.md` is `cargo-std-miri.md`, and `rustskills.md` is `rust-skills.md`. The probe directories the reviews cite (`scratchpad/review-content/`, `scratchpad/review-machinery/`, and `review-baseline/` in the 1.2 review) were not kept, so their repros are described but cannot be re-run from this repository.
+
 ## 1.2: lint baseline and compliance report
 
 [`1.2-baseline-and-report/`](1.2-baseline-and-report/)
 
 | File | What it is |
 |---|---|
-| `baseline-spec.md` | The spec for `temper baseline` and `temper report`, written after decision wi-cc1518. The design changed during implementation and review. The ratchet now keys on changed lines and per-crate counts, not on (file, lint) pairs. The README's Brownfield adoption section describes what shipped. |
+| `baseline-spec.md` | The spec for `temper baseline` and `temper report`, written after decision wi-cc1518. The design changed during implementation and review. The ratchet now keys on changed lines and per-crate counts, not on (file, lint) pairs. The README's Brownfield adoption section describes what shipped. Other differences from the spec, recorded in the 1.2.0 CHANGELOG entry, in `review.md`, or both: the pull-request comment runs in its own `report-comment` job, not as a gate-job step, and every checkout sets `persist-credentials: false` (review item 17); the baseline's `files` table was dropped (review item 23); the baseline also records the host platform and each crate's directory (review items 14 and 5); `baseline --init` and `--update` are refused inside a Claude Code session unless `TEMPER_ALLOW_RAISE=1` is set, where the spec had the hook only ask (review item 18); and the gate and CI flag a raised baseline rather than failing it (decision wi-d23383). |
 | `review.md` | The independent review of 1.2.0 and its re-check: each finding, the evidence, and the fix. |
 
 ## 2026-10: status audit against the vision and plans
