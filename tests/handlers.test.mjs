@@ -249,7 +249,7 @@ test('change detection: .claude/temper.json and .cargo/config(.toml) count as Ru
   const u = repo(t);
   let fp = u.fp();
   for (const rel of ['.claude/temper.json', '.cargo/config', 'crates/core/.cargo/config.toml']) {
-    u.put(rel, rel.endsWith('.json') ? '{"review":"advisory"}' : '[build]\nrustflags = []\n');
+    u.put(rel, rel.endsWith('.json') ? '{"gate":{"doc":false}}' : '[build]\nrustflags = []\n');
     assert.ok(changedFor(u, 's-cfg-untracked').split(', ').includes(rel), `${rel} is a Rust change`);
     const next = u.fp();
     assert.notEqual(next, fp, `untracked ${rel} changes the fingerprint`);
@@ -268,6 +268,50 @@ test('change detection: other files under .claude/ and .cargo/ are not Rust chan
   assert.equal(changedFor(r, 's-near'), 'none');
   assert.equal(r.fp(), fp);
   assert.deepEqual(stop({ cwd: r.dir, session_id: 's-near' }), {});
+});
+
+test('change detection: .claude/temper.json counts only when a key the gate reads (gate, scanner, manifests) changes', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.config({ review: 'required', gate: { allFeatures: true } });
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const fp = r.fp();
+  // keys that steer hooks only, a reformat, another key order, and a default spelled out: no Rust change
+  const hookOnly = [
+    { review: 'off', gate: { allFeatures: true } },
+    { review: 'advisory', skillGate: false, askOnNewDependency: false, preapprovedDependencies: ['rand'], protected: [], gate: { allFeatures: true } },
+    { gate: { doc: true, allFeatures: true }, review: 'required', scanner: { exempt: [] } },
+  ];
+  for (const cfg of hookOnly) {
+    r.put('.claude/temper.json', `${JSON.stringify(cfg, null, 2)}\n`);
+    assert.equal(changedFor(r, 's-hook-only'), 'none', JSON.stringify(cfg));
+    assert.equal(r.fp(), fp, JSON.stringify(cfg));
+    assert.deepEqual(stop({ cwd: r.dir, session_id: 's-hook-only' }), {});
+  }
+  // each key the gate reads is a Rust change
+  for (const cfg of [{ gate: { allFeatures: false } }, { scanner: { exempt: [{ rule: 'H-01', paths: ['**'] }] } }, { manifests: { ownLints: ['crates/core'] } }]) {
+    r.config({ review: 'required', gate: { allFeatures: true }, ...cfg });
+    assert.equal(changedFor(r, 's-gate-key'), '.claude/temper.json', JSON.stringify(cfg));
+    assert.notEqual(r.fp(), fp, JSON.stringify(cfg));
+  }
+  // a deleted file falls back to the defaults, which here equal the committed gate config
+  fs.rmSync(r.file('.claude/temper.json'));
+  assert.equal(changedFor(r, 's-deleted'), 'none');
+  assert.equal(r.fp(), fp);
+});
+
+test('change detection: a git-ignored .claude/temper.json still counts, as temper reads it', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put('.gitignore', '.claude/\n');
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'ignore');
+  const fp = r.fp();
+  r.config({ review: 'off' });
+  assert.equal(changedFor(r, 's-ign'), 'none');
+  assert.equal(r.fp(), fp);
+  r.config({ gate: { allFeatures: false } });
+  assert.equal(changedFor(r, 's-ign'), '.claude/temper.json');
+  assert.notEqual(r.fp(), fp);
 });
 
 test('Stop: a session that edits only .claude/temper.json runs the gate and needs a review for the new tree', { skip: noCargo }, (t) => {
@@ -371,12 +415,10 @@ test('Stop: green with an approved verdict for the fingerprint ends the turn', {
 test('Stop: review "advisory" and "off" in .claude/temper.json', { skip: noCargo }, (t) => {
   const r = repo(t);
   r.put(LIB, LIB_RS_2);
-  // .claude/temper.json is part of the tree fingerprint, so the gate is seeded after each config change
+  const fp = r.gate(true);
   r.config({ review: 'advisory' });
-  let fp = r.gate(true);
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-adv' })), `temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
   r.config({ review: 'off' });
-  fp = r.gate(true);
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-off' })), `temper: gate green (fingerprint ${fp}).`);
   // a red gate still blocks when review is off
   r.gate(false);

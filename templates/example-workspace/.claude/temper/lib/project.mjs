@@ -312,22 +312,18 @@ export function telemetry(proj, input, event, detail = {}) {
 // ---------- change detection and fingerprint ----------
 
 // What counts as "the Rust change": sources, manifests, toolchain and lint config,
-// cargo config (rustflags), temper's own config (gate steps and features, scan,
-// review mode), test expectations (snapshots, trybuild .stderr) and anything
-// under a tests/ dir. Other files (notes, logs, transcripts) never invalidate a
-// gate result or a review. Paths are relative to the git top-level, which is
-// also the project root that temper reads .claude/temper.json from, so that
-// file counts at the root only. Cargo reads .cargo/config(.toml) from its cwd
-// and every parent, so one in any directory counts: the gate runs cargo at the
-// root, but a workspace in a subdirectory, or cargo run in a member, reads a
-// nested one too.
-const TEMPER_CONFIG_FILE = '.claude/temper.json';
-const RUST_RELEVANT = /(\.rs$)|(\.snap$)|(\.stderr$)|((^|\/)tests\/)|((^|\/)Cargo\.(toml|lock)$)|((^|\/)(rust-toolchain(\.toml)?|\.?clippy\.toml|\.?rustfmt\.toml|deny\.toml)$)|((^|\/)\.cargo\/config(\.toml)?$)|(^\.claude\/temper\.json$)/;
+// cargo config (rustflags), test expectations (snapshots, trybuild .stderr) and
+// anything under a tests/ dir. Other files (notes, logs, transcripts) never
+// invalidate a gate result or a review. Cargo reads .cargo/config(.toml) from its
+// cwd and every parent, so one in any directory counts: the gate runs cargo at
+// the root, but a workspace in a subdirectory, or cargo run in a member, reads a
+// nested one too. temper's own config counts too (see gateConfig below).
+const RUST_RELEVANT = /(\.rs$)|(\.snap$)|(\.stderr$)|((^|\/)tests\/)|((^|\/)Cargo\.(toml|lock)$)|((^|\/)(rust-toolchain(\.toml)?|\.?clippy\.toml|\.?rustfmt\.toml|deny\.toml)$)|((^|\/)\.cargo\/config(\.toml)?$)/;
 const RELEVANT_PATHSPECS = [
   ':(glob)**/*.rs', ':(glob)**/*.snap', ':(glob)**/*.stderr', ':(glob)**/tests/**',
   ':(glob)**/Cargo.toml', ':(glob)**/Cargo.lock', ':(glob)**/rust-toolchain', ':(glob)**/rust-toolchain.toml',
   ':(glob)**/clippy.toml', ':(glob)**/.clippy.toml', ':(glob)**/rustfmt.toml', ':(glob)**/.rustfmt.toml', ':(glob)**/deny.toml',
-  ':(glob)**/.cargo/config', ':(glob)**/.cargo/config.toml', `:(literal)${TEMPER_CONFIG_FILE}`,
+  ':(glob)**/.cargo/config', ':(glob)**/.cargo/config.toml',
 ];
 const EXCLUDE = ['.temper', 'target'];
 
@@ -338,6 +334,35 @@ const EXCLUDE = ['.temper', 'target'];
 export const BASELINE_FILE = '.claude/temper-baseline.json';
 const FINGERPRINT_PATHSPECS = [...RELEVANT_PATHSPECS, `:(literal)${BASELINE_FILE}`];
 const inFingerprint = (rel) => RUST_RELEVANT.test(rel) || rel === BASELINE_FILE;
+
+/**
+ * temper's config at the project root (the git top-level in a repository) counts
+ * by what the gate reads from it, not by its bytes: its `gate`, `scanner` and
+ * `manifests` keys, merged with the defaults as loadConfig does, as canonical
+ * JSON. A change to a key that only steers hooks (review, skillGate, protected,
+ * the dependency prompt), a reformat or a default spelled out leaves the gate's
+ * result as it was, so it is no Rust change. The file is read directly, so one
+ * that git ignores still counts.
+ */
+const TEMPER_CONFIG_FILE = '.claude/temper.json';
+const GATE_CONFIG_KEYS = ['gate', 'scanner', 'manifests'];
+const canonical = (v) => (Array.isArray(v) ? v.map(canonical)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonical(v[k])])) : v);
+function gateConfig(text) {
+  let user = {};
+  try { user = text ? JSON.parse(text) ?? {} : {}; } catch { /* loadConfig falls back to the defaults */ }
+  if (typeof user !== 'object') user = {};
+  return JSON.stringify(canonical(Object.fromEntries(GATE_CONFIG_KEYS.map((k) => [k, { ...DEFAULT_CONFIG[k], ...(user[k] ?? {}) }]))));
+}
+/** The gate config now, when it differs from the one at the base (the defaults outside git); else null. */
+function changedGateConfig(proj, base) {
+  const file = path.join(proj.root, ...TEMPER_CONFIG_FILE.split('/'));
+  const now = gateConfig(readText(file));
+  // the same revision fingerprint() diffs against: the base, or HEAD when it does not resolve
+  const rev = proj.gitRoot ? ((base ? resolveRev(proj, base) : null) ?? resolveRev(proj, 'HEAD')) : null;
+  const before = rev ? showAt(proj, rev, relTo(proj.gitRoot, file)) : null;
+  return now === gateConfig(before) ? null : now;
+}
 
 function untracked(proj) {
   const r = git(proj.gitRoot, ['ls-files', '--others', '--exclude-standard', '-z']);
@@ -357,7 +382,8 @@ export function changedFiles(proj, base) {
 }
 
 export function rustChanges(proj, base) {
-  return changedFiles(proj, base).filter((f) => RUST_RELEVANT.test(norm(f)));
+  const files = changedFiles(proj, base).filter((f) => RUST_RELEVANT.test(norm(f)));
+  return changedGateConfig(proj, base) === null ? files : [...files, TEMPER_CONFIG_FILE];
 }
 
 function walkRust(root) {
@@ -396,13 +422,15 @@ export function fingerprint(proj, base) {
       try { h.update(fs.readFileSync(path.join(proj.gitRoot, f))); } catch { /* vanished */ }
     }
   } else {
-    const extra = [BASELINE_FILE, TEMPER_CONFIG_FILE].map((rel) => path.join(proj.root, ...rel.split('/')));
-    const files = walkRust(proj.root).concat(extra.filter((f) => fs.existsSync(f)));
+    const baseline = path.join(proj.root, ...BASELINE_FILE.split('/'));
+    const files = walkRust(proj.root).concat(fs.existsSync(baseline) ? [baseline] : []);
     for (const f of files.sort()) {
       h.update(`\n${relTo(proj.root, f)}\n`);
       try { h.update(fs.readFileSync(f)); } catch { /* vanished */ }
     }
   }
+  const config = changedGateConfig(proj, base);
+  if (config !== null) h.update(`\n${TEMPER_CONFIG_FILE}\n${config}`);
   return h.digest('hex').slice(0, 16);
 }
 
