@@ -33,7 +33,6 @@ Rules covered: PROC-07, PROC-08 and the review side of every rule in `rules.md`.
 ## Dimensions and anchors
 
 Score each dimension 0 to 4, or `"n/a"` when the change doesn't touch it (for example, `concurrency` for synchronous code).
-`correctness`, `escape_hatches` and `craft` apply to every change, so every verdict rates at least three dimensions.
 
 | Score | Meaning |
 |---|---|
@@ -126,10 +125,8 @@ Field rules:
 - `fingerprint` is the value from your temper context block. The verdict is bound to that exact tree, and any later edit requires a new review.
 - `gate` values are `"pass"`, `"fail"` or `"n/a"`.
 - `scores` must include all twelve keys.
-- `scores` rates at least three of them 0 to 4, never fewer.
 - `findings[].rule` is a rule ID from `rules.md`, or `"none"` for a `nit` that no rule covers. Put `line` where one applies. `evidence` quotes the code. `fix` is concrete.
 - `evidence.files_read` lists every file you read (repo-relative), and `commands_run` lists what you executed.
-- Name each changed Rust file in `evidence.files_read` by the full repo-relative path your temper context block lists (or its absolute path), not by a bare file name or a shorter tail.
 
 ## Handling rebuttals
 
