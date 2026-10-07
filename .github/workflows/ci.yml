@@ -9,9 +9,11 @@ on:
 permissions:
   contents: read
 
+# A PR's runs share one group, and a newer push cancels the older run. Every
+# other run (a push to main) gets a group of its own, so GitHub neither cancels
+# it nor drops it from the queue as superseded: each merge commit runs in full.
 concurrency:
-  group: ci-${{ github.ref }}
-  # Cancel superseded PR runs only; every push to main runs to completion.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
