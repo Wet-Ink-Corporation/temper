@@ -9,10 +9,10 @@ export const DIMENSIONS = [
 const SEVERITIES = ['blocker', 'major', 'minor', 'nit'];
 
 /**
- * The fewest dimensions a verdict must rate 0-4 rather than "n/a". Three apply
- * to any Rust change, however small: correctness, escape_hatches and craft.
+ * The dimensions every verdict must rate 0-4 rather than "n/a": they apply to
+ * any Rust change, however small.
  */
-export const MIN_APPLICABLE_SCORES = 3;
+export const ALWAYS_SCORED = ['correctness', 'escape_hatches', 'craft'];
 
 /** A path with "/" separators and no leading "./". */
 const normPath = (f) => String(f).trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
@@ -74,8 +74,8 @@ export function validateVerdict(v, ctx = {}) {
       if (s === undefined) p.push(`scores.${d} is missing (0-4 or "n/a")`);
       else if (s !== 'n/a' && !(Number.isInteger(s) && s >= 0 && s <= 4)) p.push(`scores.${d} must be 0-4 or "n/a"`);
     }
-    const rated = DIMENSIONS.filter((d) => Number.isInteger(scores[d]) && scores[d] >= 0 && scores[d] <= 4).length;
-    if (rated < MIN_APPLICABLE_SCORES) p.push(`scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 (correctness, escape_hatches and craft apply to any change; "n/a" only where a dimension does not apply); ${rated} rated`);
+    const na = ALWAYS_SCORED.filter((d) => scores[d] === 'n/a');
+    if (na.length) p.push(`scores must rate ${ALWAYS_SCORED.slice(0, -1).join(', ')} and ${ALWAYS_SCORED.at(-1)} 0-4: they apply to any change ("n/a" only where another dimension does not apply); "n/a": ${na.join(', ')}`);
   }
   const ev = v.evidence ?? {};
   if (!Array.isArray(ev.files_read) || ev.files_read.length === 0) p.push('evidence.files_read must list the files you actually read');

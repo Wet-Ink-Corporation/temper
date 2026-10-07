@@ -4,15 +4,15 @@
 // Audit finding engine-1-12 (docs/history/2026-10-audit/findings.json): a
 // files_read entry covers a changed file only when it is that repo-relative path,
 // or an absolute path ending in it (a bare suffix such as "lib.rs" does not, nor
-// does another file's path that ends the same way), and every verdict rates at
-// least MIN_APPLICABLE_SCORES dimensions with an integer score.
+// does another file's path that ends the same way), and every verdict rates
+// ALWAYS_SCORED (correctness, escape_hatches and craft) with an integer score.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { DIMENSIONS, MIN_APPLICABLE_SCORES, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { DIMENSIONS, ALWAYS_SCORED, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
 import { discover, rustChanges } from '../scripts/lib/project.mjs';
 
 const FP = '0123456789abcdef';
@@ -191,22 +191,28 @@ test('validateVerdict: the paths SubagentStart lists, as given or absolute, cove
   assert.deepEqual(check(member.map((f) => path.join(dir, ...f.split('/')))), ['changed files not reviewed: src/lib.rs']);
 });
 
-test(`validateVerdict: every verdict rates at least ${MIN_APPLICABLE_SCORES} dimensions with an integer score`, () => {
-  assert.equal(MIN_APPLICABLE_SCORES, 3);
-  const scored = (n, over = {}) => verdict({ scores: Object.fromEntries(DIMENSIONS.map((d, i) => [d, i < n ? 3 : 'n/a'])), ...over });
-  const msg = (n) => `scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 (correctness, escape_hatches and craft apply to any change; "n/a" only where a dimension does not apply); ${n} rated`;
-  // refused: an approval with every score "n/a", or with fewer than the minimum rated
-  assert.deepEqual(validateVerdict(scored(0)), [msg(0)]);
-  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES - 1)), [msg(MIN_APPLICABLE_SCORES - 1)]);
+test(`validateVerdict: every verdict rates ${ALWAYS_SCORED.join(', ')} with an integer score`, () => {
+  assert.deepEqual(ALWAYS_SCORED, ['correctness', 'escape_hatches', 'craft']);
+  /** Only the named dimensions rated 3, every other one "n/a". */
+  const scored = (rated, over = {}) => verdict({ scores: Object.fromEntries(DIMENSIONS.map((d) => [d, rated.includes(d) ? 3 : 'n/a'])), ...over });
+  const msg = (na) => `scores must rate correctness, escape_hatches and craft 0-4: they apply to any change ("n/a" only where another dimension does not apply); "n/a": ${na.join(', ')}`;
+  // refused: an approval with every score "n/a"
+  assert.deepEqual(validateVerdict(scored([])), [msg(ALWAYS_SCORED)]);
+  // refused: three other dimensions rated in place of craft, or of correctness
+  assert.deepEqual(validateVerdict(scored(['correctness', 'escape_hatches', 'ownership'])), [msg(['craft'])]);
+  assert.deepEqual(validateVerdict(scored(['ownership', 'errors', 'api', 'escape_hatches', 'craft'])), [msg(['correctness'])]);
   // refused too for changes-requested: the scores are the review's evidence either way
-  assert.deepEqual(validateVerdict(scored(0, { verdict: 'changes-requested' })), [msg(0)]);
-  // accepted: exactly the minimum, for either verdict, and a 0 counts as rated
-  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES)), []);
-  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES, { verdict: 'changes-requested' })), []);
-  const zero = { ...scored(MIN_APPLICABLE_SCORES).scores, correctness: 0 };
+  assert.deepEqual(validateVerdict(scored([], { verdict: 'changes-requested' })), [msg(ALWAYS_SCORED)]);
+  // accepted: exactly the named three, for either verdict, and a 0 counts as rated
+  assert.deepEqual(validateVerdict(scored(ALWAYS_SCORED)), []);
+  assert.deepEqual(validateVerdict(scored(ALWAYS_SCORED, { verdict: 'changes-requested' })), []);
+  const zero = { ...scored(ALWAYS_SCORED).scores, correctness: 0 };
   assert.deepEqual(validateVerdict(verdict({ verdict: 'changes-requested', scores: zero })), []);
-  // a missing scores object reports that problem, not the minimum as well
+  // a missing or malformed score reports that problem, not this one as well
   assert.ok(!validateVerdict(verdict({ scores: undefined })).some((p) => p.startsWith('scores must rate')));
+  const { craft: _craft, ...noCraft } = scored(ALWAYS_SCORED).scores;
+  assert.deepEqual(validateVerdict(verdict({ scores: noCraft })), ['scores.craft is missing (0-4 or "n/a")']);
+  assert.deepEqual(validateVerdict(verdict({ scores: { ...scored(ALWAYS_SCORED).scores, craft: 5 } })), ['scores.craft must be 0-4 or "n/a"']);
 });
 
 test('validateVerdict: "approved" must agree with the findings, the scores and the gate', () => {

@@ -14,7 +14,7 @@ Clearer messages for new adopters. Only the text changes: every hook decision, e
 
 Stricter review verdicts. `SubagentStop` blocks, and the `PreToolUse` `SubagentHandback` hook denies, two kinds of verdict they used to accept.
 - **Files read.** An `evidence.files_read` entry covers a changed file only when it is the repo-relative path that the reviewer's context block lists, or an absolute path that ends in `/` followed by that whole path (`/home/me/repo/crates/core/src/lib.rs`), even one outside the repository. A bare suffix no longer counts: `lib.rs`, `src/lib.rs` or `s` used to cover `crates/core/src/lib.rs`, and now that file is reported as not reviewed. One entry covers one file, and an absolute entry covers only the longest changed path it ends with, so `crates/core/src/lib.rs` no longer also covers a root package's changed `src/lib.rs`. When the Cargo workspace sits in a subdirectory of the repository, the paths are still relative to the repository root (`rust/crates/core/src/lib.rs`), as the context block lists them. Either separator and a leading `./` still work.
-- **Scores.** Every verdict, approved or not, rates at least three dimensions 0-4 (`MIN_APPLICABLE_SCORES`). An approval with every score `"n/a"` used to pass. `correctness`, `escape_hatches` and `craft` apply to any Rust change, and the reviewer agent's instructions now say so.
+- **Scores.** Every verdict, approved or not, rates `correctness`, `escape_hatches` and `craft` 0-4 (`ALWAYS_SCORED`), because they apply to any Rust change; `"n/a"` for any of them is refused, whatever else is rated. An approval with every score `"n/a"` used to pass. The reviewer agent's instructions now say so.
 
 `scripts/lib/verdict.mjs` changed too; `temper setup --vendor-only` refreshes it.
 
