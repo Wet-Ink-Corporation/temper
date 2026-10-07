@@ -6,6 +6,16 @@ Documentation.
 - **Cloud sessions.** `docs/troubleshooting.md` has a new section on why temper is missing from Claude Code cloud sessions, and how to install it from the environment's setup script. A repository's `.claude/settings.json` does not install the plugin there, and a `SessionStart` hook installs it too late. The section also covers what works in claude.ai chat: the skills load, but the hooks and agents do not.
 - **The organization sync.** The same section says how claude.ai's organization sync keeps temper current: sync `Wet-Ink-Corporation/temper` with Sync automatically on, and remove any uploaded zip copy. It also corrects an earlier line that called the repository public; it is internal.
 
+Clearer messages for new adopters. Only the text changes: every hook decision, exit code and gate result is the same.
+- **The skill-gate denial** lists all sixteen Iron rules, H-01 to H-16. It used to stop at H-12, while `SessionStart` printed all sixteen.
+- **Malformed hook input.** When a hook's stdin is not valid JSON, the hook still exits 0 with no decision, but it now prints a `systemMessage`: `temper hook <event>: could not parse the hook input as JSON; nothing was checked`. Before, it printed nothing, which read as a clean pass. With `TEMPER_DISABLE=1` it stays silent.
+- **The gate's fmt summary when cargo cannot load the workspace.** `cargo fmt` fails before formatting anything when a `members` glob matches no crate (a fresh setup with an empty `crates/`) or a manifest does not parse, and the summary used to be the tail of rustfmt's help text. It now says that cargo cannot load the workspace, quotes cargo's `error:` and `-->` lines with paths relative to the workspace, and, for a glob that matches nothing, suggests `cargo new --lib crates/<name>`. The fmt step and the gate stay RED.
+- **Vendored-CLI drift.** `temper setup`'s drift line ends with `rerun with --vendor-only to replace only the vendored CLI (or --force to also overwrite every template file)`, in place of `rerun with --force to replace it`.
+
+`temper setup` adds `/target/` to `.gitignore` when no line ignores `target` already (`target`, `target/`, `/target` and `/target/` all count), next to the `.temper/` line it already added. `--dry-run` reports it without writing, `--vendor-only` leaves `.gitignore` alone, and a second run adds nothing. `Cargo.lock` is not added: it is committed.
+
+Upgrading from 1.3.x: `scripts/temper.mjs`, `scripts/lib/gate.mjs`, `scripts/lib/hooks.mjs` and `scripts/lib/vendor.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. A full `temper setup` also appends `/target/` to `.gitignore` if no `target` line is there.
+
 ## 1.3.0 (2026-10-05)
 
 Fixes from the pilot adoptions in weigh-in and redkiln-rs (#32).

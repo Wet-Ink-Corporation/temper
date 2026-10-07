@@ -58,7 +58,7 @@ test('vendor: drift is reported, and replaced only with --force', () => {
 
     const report = vendorTool(root);
     assert.equal(report.drift, true);
-    assert.match(report.actions[0], /^drift  \.claude\/temper\/ differs from temper [^:]+: lib\/gate\.mjs \(changed\), VERSION \(missing\), lib\/stale\.mjs \(not in temper [^)]+\); rerun with --force to replace it$/);
+    assert.match(report.actions[0], /^drift  \.claude\/temper\/ differs from temper [^:]+: lib\/gate\.mjs \(changed\), VERSION \(missing\), lib\/stale\.mjs \(not in temper [^)]+\); rerun with --vendor-only to replace only the vendored CLI \(or --force to also overwrite every template file\)$/);
     assert.equal(fs.readFileSync(gate, 'utf8'), '// edited by hand\n', 'no --force: untouched');
 
     const dry = vendorTool(root, { force: true, dry: true });

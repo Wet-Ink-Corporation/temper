@@ -257,7 +257,7 @@ export function preEdit(input) {
     return deny([
       'temper: the rust-craft standard is not loaded in this agent context, so this Rust edit was not applied.',
       'Invoke the Skill tool with skill "temper:rust-craft" (or read the rust-craft SKILL.md), then retry the same edit.',
-      `Non-negotiables this edit will be checked against: ${IRON_RULES.slice(0, 12).join('; ')}.`,
+      `Non-negotiables this edit will be checked against: ${IRON_RULES.join('; ')}.`,
     ].join('\n'));
   }
 
