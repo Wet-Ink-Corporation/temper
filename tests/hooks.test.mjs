@@ -255,32 +255,67 @@ test('Bash: shell writes to Cargo.lock are denied; cargo and git are not', () =>
   }
 });
 
-test('Bash: --no-verify and lint lowering inside a quoted message are allowed (H-12, H-05)', () => {
+// engine-1-17: message option values, here-document bodies and search patterns are prose;
+// everything else, including a command string handed to another runner, is still read.
+const commitHeredoc = (body, tail = '') => `git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"${tail}`;
+
+test('Bash: --no-verify and lint lowering in a message, here-document or search pattern are allowed (H-12, H-05)', () => {
   for (const cmd of [
     'git commit -m "docs: mention --no-verify flag"',
     "git commit -m 'hooks: deny git commit -n'",
     'git commit -m "docs: explain why cargo clippy -- -A clippy::x is refused"',
     'git commit -m "ci: RUSTFLAGS=-A warnings is gone; no --cap-lints either"',
-    "git commit -F- <<'EOF'\nhooks: refuse --no-verify and cargo clippy -- -A x\nEOF",
-    "git commit -m \"$(cat <<'EOF'\ndocs: --no-verify and git commit -n are refused\nEOF\n)\"",
+    'git commit --message="docs: --no-verify" -a',
+    'git commit --message "docs: --no-verify"',
+    'git commit -m"docs: --no-verify"',
     'git commit -m -n',
     'git commit -am "fix: -n flag"',
     'git commit -m x -- -n.txt',
+    "git commit -F- <<'EOF'\nhooks: refuse --no-verify and cargo clippy -- -A x\nEOF",
+    'git commit -F - <<EOF\nmention --no-verify\nEOF',
+    'git commit -F- <<"EOF"\nmention --no-verify\nEOF',
+    'git commit -F- <<-EOF\n\tmention --no-verify\n\tEOF',
+    'git commit -F- <<EOF\nmention --no-verify and cargo clippy -- -A x\nEOF\ngit push',
+    "cargo fmt && bash tests/ci.sh --quick && git commit -F- <<'EOF'\nhooks: allow quoted --no-verify\nEOF",
+    commitHeredoc('docs: --no-verify and git commit -n are refused'),
+    commitHeredoc('hooks: allow quoted flags\n\n1) quote the flag\n2) `--no-verify` in a message is text'),
+    commitHeredoc("fix: don't crash on --no-verify"),
+    commitHeredoc('fix: handle a) and b) cases; mention `cargo clippy -- -A x`'),
+    'gh pr create --title "fix: -A flag" --body "cargo clippy -- -A x and --no-verify are refused"',
+    'gh pr create --body="RUSTFLAGS=-A warnings stays denied" -t x',
+    "gh pr create --title x --body \"$(cat <<'EOF'\n- Point 1) done\n- `RUSTFLAGS=-A warnings` stays denied\nEOF\n)\"",
+    "gh release create v1 --notes 'no --no-verify'",
+    'glab mr create --description "cargo clippy -- -A x" --title y',
+    'grep -- "--no-verify" file',
+    'grep -- --no-verify file',
+    "grep -rn -e '--no-verify' scripts/",
+    'grep -rn "cargo clippy -- -A" docs',
+    "egrep '-A warnings|--no-verify' ci.log",
+    "rg -n 'git commit --no-verify' docs",
+    "rg -n -- '--no-verify' docs",
+    'rg "--cap-lints"',
+    'git grep -n -- --no-verify',
     'git push -n',
     'git push -n origin main',
+    'git checkout -b fix-no-verify',
     'git add -A',
     'ls -A',
-    "rg -n 'git commit --no-verify' docs",
-    'grep -rn "cargo clippy -- -A" docs',
     'cargo clippy -- -D warnings',
     'cargo clippy --all-targets -- -W clippy::pedantic',
     'cargo clippy --workspace --all-targets --locked -- -D warnings',
+    'cargo clippy --fix --allow-dirty',
+    'cargo clippy --fix --allow-staged',
+    'cargo clippy --fix --allow-no-vcs',
+    'cargo clippy --fix --lib -p ledger-domain --allow-dirty',
+    'cargo clippy --fix --allow-dirty -- -D warnings',
+    'cargo -q clippy --all-targets -- -D warnings',
     'RUSTFLAGS="-D warnings" cargo build',
     'RUSTFLAGS=-Dwarnings cargo test',
+    'RUSTDOCFLAGS="-D warnings" cargo doc --no-deps',
   ]) assert.equal(decision(bash(cmd)), 'none', cmd);
 });
 
-test('Bash: --no-verify and lint lowering stay denied however they are quoted (H-12, H-05)', () => {
+test('Bash: skipping git hooks stays denied however it is quoted or handed on (H-12)', () => {
   for (const cmd of [
     'git commit --no-verify -m x',
     'git commit "--no-verify" -m x',
@@ -288,6 +323,7 @@ test('Bash: --no-verify and lint lowering stay denied however they are quoted (H
     'git commit -m "x" --no-verify',
     'git push --no-verify',
     'git merge --no-verify feature',
+    'git commit -n',
     'git commit -n -m x',
     'git commit -m x -n',
     'git commit -nm msg',
@@ -295,89 +331,72 @@ test('Bash: --no-verify and lint lowering stay denied however they are quoted (H
     'git commit "-n" -m x',
     'git -C crates/a commit -n -m x',
     'cargo fmt && git commit -n -m x',
+    'grep x f && git commit --no-verify -m x',
+    // A command string handed to another runner is read, quoted or not.
+    'git rebase -x "git commit --amend --no-edit --no-verify" HEAD~3',
+    'git rebase --exec "git commit --amend --no-edit -n" HEAD~3',
     'bash -c "git commit --no-verify -m x"',
+    'bash -c -- "git commit --no-verify"',
     "sh -c 'git commit -nm x'",
+    '"C:\\Git\\bin\\bash.exe" -c "git commit --no-verify -m x"',
+    'powershell -Command "git commit --no-verify"',
+    'cmd /c "git commit --no-verify -m x"',
     'echo "$(git commit --no-verify -m x)"',
     'eval "git commit --no-verify -m x"',
-    'cat <<EOF | bash\ngit commit --no-verify -m x\nEOF',
-    'git commit -F- <<< "msg"\ngit commit --no-verify -m x',
-  ]) {
-    const res = bash(cmd);
-    assert.equal(decision(res), 'deny', cmd);
-    assert.match(reason(res), /H-12/, cmd);
-  }
-  for (const cmd of [
-    'cargo clippy -- -A clippy::unwrap_used',
-    'cargo +1.96 clippy --workspace -- -A warnings',
-    'cargo clippy -- "-A" clippy::unwrap_used',
-    'cargo clippy -- --allow clippy::unwrap_used',
-    'cargo clippy -- --cap-lints warn',
-    'RUSTFLAGS="-A warnings" cargo build',
-    "RUSTFLAGS='--cap-lints warn' cargo build",
-    'RUSTFLAGS=-Awarnings cargo build',
-    'export RUSTFLAGS="-A warnings" && cargo build',
-    "bash -c 'cargo clippy -- -A warnings'",
-  ]) {
-    const res = bash(cmd);
-    assert.equal(decision(res), 'deny', cmd);
-    assert.match(reason(res), /H-05/, cmd);
-  }
-});
-
-test('Bash: here-document messages are text, and input the parser cannot follow falls back to the raw check (H-12, H-05)', () => {
-  const heredoc = (body, tail = '') => `git commit -m "$(cat <<'EOF'\n${body}\nEOF\n)"${tail}`;
-  for (const cmd of [
-    heredoc('hooks: allow quoted flags\n\n1) quote the flag\n2) `--no-verify` in a message is text'),
-    heredoc("fix: don't crash on --no-verify"),
-    heredoc('fix: handle a) and b) cases; mention `cargo clippy -- -A x`'),
-    "gh pr create --title x --body \"$(cat <<'EOF'\n- Point 1) done\n- `RUSTFLAGS=-A warnings` stays denied\nEOF\n)\"",
-    "cargo fmt && bash tests/ci.sh --quick && git commit -F- <<'EOF'\nhooks: allow quoted --no-verify\nEOF",
-    'git commit -F- <<"E"OF\nmention --no-verify\nEOF',
-    'git commit -F- <<EOF\nmention --no-verify and cargo clippy -- -A x\nEOF\ngit push',
-    'grep -- "--no-verify" file',
-    "grep -rn -e '--no-verify' scripts/",
-    "rg -n -- '--no-verify' docs",
-    'git grep -n -- --no-verify',
-    'cargo clippy --fix --allow-dirty',
-    'cargo clippy --fix --allow-staged',
-    'cargo clippy --fix --allow-no-vcs',
-    'cargo clippy --fix --lib -p ledger-domain --allow-dirty',
-    'cargo clippy --fix --allow-dirty -- -D warnings',
-    'cargo -q clippy --all-targets -- -D warnings',
-    'RUSTDOCFLAGS="-D warnings" cargo doc --no-deps',
-  ]) assert.equal(decision(bash(cmd)), 'none', cmd);
-  for (const cmd of [
-    heredoc("fix: don't crash", ' --no-verify'),
-    heredoc("fix: don't crash", ' -n'),
-    heredoc("fix: don't crash") + ' && git push --no-verify',
-    heredoc('handle (a case') + ' --no-verify',
-    heredoc("it's 1) fine", ' --no-verify'),
-    'cat <<"E"OF\nhi\nEOF\ngit commit --no-verify -m x',
-    'cat <<E\\OF\nhi\nEOF\ngit commit --no-verify -m x',
-    'cat <<EOF\nnever closed\ngit commit --no-verify -m x',
-    'cat <<EOF\n$(git commit --no-verify -m x)\nEOF',
     'echo "git commit -n" | bash',
     "printf 'git commit -n\\n' | sh",
     'bash <<<"git commit -n -m x"',
+    // echo is not a message command: its quoted text is still read.
+    'echo "--no-verify"',
+    // A here-document a shell reads, or an unquoted one that runs $(...), is not prose.
+    'cat <<EOF | bash\ngit commit --no-verify -m x\nEOF',
+    'bash <<EOF\ngit commit --no-verify -m x\nEOF',
+    'cat <<EOF\n$(git commit --no-verify -m x)\nEOF',
+    'git commit -F- <<< "msg"\ngit commit --no-verify -m x',
+    commitHeredoc("fix: don't crash", ' --no-verify'),
+    commitHeredoc("fix: don't crash", ' -n'),
+    commitHeredoc("fix: don't crash") + ' && git push --no-verify',
+    commitHeredoc('handle (a case') + ' --no-verify',
+    commitHeredoc("it's 1) fine", ' --no-verify'),
+    // Input the blanking does not recognise keeps the raw match.
+    'cat <<"E"OF\nhi\nEOF\ngit commit --no-verify -m x',
+    'cat <<EOF\nnever closed\ngit commit --no-verify -m x',
     'git commit -m "unterminated --no-verify',
-    '"C:\\Git\\bin\\bash.exe" -c "git commit --no-verify -m x"',
-    'bash.exe -c "git commit -n -m x"',
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'deny', cmd);
     assert.match(reason(res), /H-12/, cmd);
   }
+});
+
+test('Bash: lowering lint levels stays denied however it is quoted or handed on (H-05)', () => {
   for (const cmd of [
-    heredoc("fix: don't crash") + '\ncargo clippy -- -A warnings',
+    'cargo clippy -- -A clippy::unwrap_used',
+    'cargo clippy -- -A warnings',
     'cargo clippy -- -Awarnings',
     'cargo clippy -- -Aclippy::all',
+    'cargo clippy -- "-A" clippy::unwrap_used',
+    'cargo clippy -- --allow clippy::unwrap_used',
+    'cargo clippy -- --allow=warnings',
+    'cargo clippy -- --cap-lints warn',
+    'cargo +1.96 clippy --workspace -- -A warnings',
     'cargo -q clippy -- -A x',
     'cargo +nightly --locked clippy -- -A x',
     'cargo --config net.offline=true clippy -- -A x',
-    'cargo clippy -- --allow=clippy::unwrap_used',
     'cargo rustc -- -A warnings',
+    "bash -c 'cargo clippy -- -A warnings'",
+    'watchexec -- "cargo clippy -- -A warnings"',
+    commitHeredoc("fix: don't crash") + '\ncargo clippy -- -A warnings',
+    'RUSTFLAGS="-A warnings" cargo build',
+    "RUSTFLAGS='--cap-lints warn' cargo build",
+    'RUSTFLAGS=-Awarnings cargo build',
+    'RUSTFLAGS="-D warnings -A x" cargo build',
     'RUSTDOCFLAGS="-A warnings" cargo doc',
     "CARGO_ENCODED_RUSTFLAGS=$'-Dwarnings\\x1f-Awarnings' cargo build",
+    'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS="-A warnings" cargo build',
+    'env "RUSTFLAGS=-A warnings" cargo build',
+    "export 'RUSTFLAGS=-Awarnings'",
+    'export RUSTFLAGS="-A warnings" && cargo build',
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'deny', cmd);
