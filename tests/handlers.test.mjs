@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart, preHandback } from '../scripts/lib/hooks.mjs';
-import { discover, fingerprint, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
+import { discover, fingerprint, loadConfig, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
 const cargo = spawnSync('cargo', ['--version'], { encoding: 'utf8' }).status === 0
@@ -298,6 +298,62 @@ test('change detection: .claude/temper.json counts only when a key the gate read
   fs.rmSync(r.file('.claude/temper.json'));
   assert.equal(changedFor(r, 's-deleted'), 'none');
   assert.equal(r.fp(), fp);
+});
+
+test('change detection: a property the gate does not read under gate, scanner or manifests is no Rust change', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.config({ gate: { allFeatures: true } });
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const fp = r.fp();
+  for (const cfg of [
+    { gate: { allFeatures: true, colour: 'blue' } },
+    { gate: { allFeatures: true }, scanner: { exempt: [], note: 'see ADR-7' } },
+    { gate: { allFeatures: true }, manifests: { ownLints: [], owner: 'ffi team' } },
+  ]) {
+    r.config(cfg);
+    assert.equal(changedFor(r, 's-unused'), 'none', JSON.stringify(cfg));
+    assert.equal(r.fp(), fp, JSON.stringify(cfg));
+  }
+});
+
+test('change detection outside git: config files count, and the fingerprint is stable and follows only the gate settings', (t) => {
+  // a Cargo workspace with no repository: changedFiles walks the tree, fingerprint hashes the files
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nogit-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const put = (rel, text) => { const f = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
+  put('Cargo.toml', ROOT);
+  put('crates/core/Cargo.toml', MEMBER);
+  put(LIB, LIB_RS);
+  const proj = () => ({ root: dir, gitRoot: null, stateDir: path.join(dir, 'target', 'temper'), config: loadConfig(dir) });
+  const changes = () => rustChanges(proj()).map((f) => f.split(path.sep).join('/')).sort();
+  const fp = () => fingerprint(proj());
+  const start = fp();
+  assert.equal(fp(), start, 'the same tree hashes the same across calls');
+  assert.deepEqual(changes(), ['Cargo.toml', 'crates/core/Cargo.toml', LIB]);
+  // keys that steer hooks only, a default spelled out, and an unused property: the defaults' gate settings
+  for (const cfg of [{ review: 'off', skillGate: false }, { gate: { doc: true }, scanner: { exempt: [] } }, { gate: { colour: 'blue' }, manifests: { owner: 'x' } }]) {
+    put('.claude/temper.json', JSON.stringify(cfg));
+    assert.equal(fp(), start, JSON.stringify(cfg));
+    assert.ok(!changes().includes('.claude/temper.json'), JSON.stringify(cfg));
+  }
+  put('.claude/temper.json', JSON.stringify({ gate: { allFeatures: false } }));
+  const afterJson = fp();
+  assert.notEqual(afterJson, start, 'a gate setting changes the fingerprint');
+  assert.equal(fp(), afterJson, 'and stays stable');
+  assert.ok(changes().includes('.claude/temper.json'));
+  put('.cargo/config.toml', '[build]\nrustflags = []\n');
+  const afterCargo = fp();
+  assert.notEqual(afterCargo, afterJson, 'a .cargo/config.toml changes the fingerprint');
+  assert.ok(changes().includes('.cargo/config.toml'));
+  put('.cargo/config.toml', '[build]\nrustflags = ["-Dwarnings"]\n');
+  assert.notEqual(fp(), afterCargo, 'so does an edit to it');
+  // other files under .claude/ and .cargo/ leave it alone
+  const settled = fp();
+  put('.claude/settings.json', '{}\n');
+  put('.cargo/credentials.toml', '{}\n');
+  assert.equal(fp(), settled);
+  assert.ok(!changes().some((f) => f.endsWith('settings.json') || f.endsWith('credentials.toml')));
 });
 
 test('change detection: a git-ignored .claude/temper.json still counts, as temper reads it', { skip: noGit }, (t) => {

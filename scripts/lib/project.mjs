@@ -338,9 +338,11 @@ const inFingerprint = (rel) => RUST_RELEVANT.test(rel) || rel === BASELINE_FILE;
 /**
  * temper's config at the project root (the git top-level in a repository) counts
  * by what the gate reads from it, not by its bytes: its `gate`, `scanner` and
- * `manifests` keys, merged with the defaults as loadConfig does, as canonical
+ * `manifests` keys, merged with the defaults as loadConfig does and cut to the
+ * properties the defaults list (the only ones the gate reads), as canonical
  * JSON. A change to a key that only steers hooks (review, skillGate, protected,
- * the dependency prompt), a reformat or a default spelled out leaves the gate's
+ * the dependency prompt), a property the gate does not read (`gate.colour`), a
+ * reformat or a default spelled out leaves the gate's
  * result as it was, so it is no Rust change. The file is read directly, so one
  * that git ignores still counts.
  */
@@ -352,7 +354,12 @@ function gateConfig(text) {
   let user = {};
   try { user = text ? JSON.parse(text) ?? {} : {}; } catch { /* loadConfig falls back to the defaults */ }
   if (typeof user !== 'object') user = {};
-  return JSON.stringify(canonical(Object.fromEntries(GATE_CONFIG_KEYS.map((k) => [k, { ...DEFAULT_CONFIG[k], ...(user[k] ?? {}) }]))));
+  // only the properties the gate reads, which are exactly the ones DEFAULT_CONFIG lists
+  const pick = (k) => {
+    const merged = { ...DEFAULT_CONFIG[k], ...(user[k] ?? {}) };
+    return Object.fromEntries(Object.keys(DEFAULT_CONFIG[k]).map((p) => [p, merged[p]]));
+  };
+  return JSON.stringify(canonical(Object.fromEntries(GATE_CONFIG_KEYS.map((k) => [k, pick(k)]))));
 }
 /** The gate config now, when it differs from the one at the base (the defaults outside git); else null. */
 function changedGateConfig(proj, base) {
