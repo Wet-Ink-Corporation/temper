@@ -411,8 +411,11 @@ const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
 // is still read; only text that is clearly prose is blanked to '' first.
 const QUOTED = `'[^']*'|"(?:[^"\\\\]|\\\\.)*"`;
 const HEREDOC = /(?<!<)<<-?[ \t]*(['"]?)([\w.-]+)\1([^\n]*)\n[\s\S]*?\n\t*\2(?=\n|$)/g;
-const FEEDS_SHELL = /\||(?:^|[\s(])(?:\S*[\\/])?(?:(?:ba|da|z|k|pw)?sh|powershell|cmd|eval|source|xargs|python[\d.]*|py|node|perl|ruby)(?:\.exe)?(?=\s|$)/i;
+const FEEDS_SHELL = /\||(?:^|[\s(])["']?(?:\S*[\\/])?(?:(?:ba|da|z|k|pw)?sh|powershell|cmd|eval|source|xargs|python[\d.]*|py|node|perl|ruby)(?:\.exe)?["']?(?=\s|$)/i;
 const MESSAGE_VALUE = new RegExp(`((?:^|\\s)(?:--(?:message|body|title|notes|description)=?|-[a-zA-Z]*m|-[bt])\\s*)(?:${QUOTED}|(?!--)[^\\s'"]+)`, 'g');
+// Command substitution runs, except a bare `$(cat <<'EOF' ... EOF)` whose body is already blanked.
+const CAT_HEREDOC = /\$\(\s*cat\s+<<-?(['"]?)([\w.-]+)\1[ \t]*\n\2\s*\)/g;
+const runsCode = (text) => /\$\(|\x60/.test(text.replace(CAT_HEREDOC, ''));
 const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])\\s*(?:\\w+=\\S*\\s+|(?:sudo|env|time|xargs)\\s+)*(?:\\S*[\\\\/])?(?:git\\s+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
 
 /** `cmd` with here-document bodies, message option values and search patterns blanked. */
@@ -425,13 +428,15 @@ function blankProse(cmd) {
       const head = s.slice(s.lastIndexOf('\n', off) + 1, off).split(/&&|\|\||;|\(/).pop() + rest;
       return FEEDS_SHELL.test(head) || (!q && /\$\(|`/.test(m)) ? m : `<<${q}${tag}${q}${rest}\n${tag}`;
     })
-    .replace(MESSAGE_VALUE, "$1''")
-    .replace(SEARCH, (m) => m.replace(new RegExp(QUOTED, 'g'), "''").replace(/\s--\s.*/, ' -- '));
+    // Command substitution runs, so a value or pattern that holds one is never blanked.
+    .replace(MESSAGE_VALUE, (m, pre) => (runsCode(m) ? m : `${pre}''`))
+    .replace(SEARCH, (m) => (runsCode(m) ? m : m.replace(new RegExp(QUOTED, 'g'), "''").replace(/\s--\s.*/, ' -- ')));
 }
 
 /** `--no-verify` anywhere, or `-n` in a `git commit` short-flag cluster before any valued flag. */
-const skipsGitHooks = (text) => /--no-verify\b/.test(text)
-  || /\bgit\s+(?:-[cC]\s+\S+\s+|--?[\w-]+(?:=\S*)?\s+)*commit(?=\s|$)(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n/.test(text);
+// Each option word matches one way only, so a long option list cannot backtrack exponentially.
+const GIT_COMMIT_N = new RegExp(`\\bgit\\s+(?:-[cC]\\s+(?:${QUOTED}|\\S+)\\s+|--?(?![cC]\\s)\\w[\\w-]*(?:=(?:${QUOTED}|\\S*))?\\s+)*commit(?=\\s|$)(?:(?!\\s--\\s)[^|;&\\n])*\\s["']?-[aehiopqsvz]*n`);
+const skipsGitHooks = (text) => /--no-verify\b/.test(text) || GIT_COMMIT_N.test(text);
 
 /** `cargo clippy`/`rustc` with -A, --allow or --cap-lints, or a *RUSTFLAGS assignment holding one. */
 const lowersLints = (text) => text.split(/[|;&\n]/).some((seg) => {

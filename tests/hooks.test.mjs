@@ -326,6 +326,12 @@ test('Bash: --no-verify and lint lowering in a message, here-document or search 
     'git commit -m x \\\n  --author "A <a@b>"',
     'cargo clippy --workspace \\\n  --all-targets -- -D warnings',
     'cargo clippy -p grep -- -D warnings',
+    // Near misses: plain prose, single-quoted text and a quoted -C value without -n.
+    'git commit -m "docs: the -n and --no-verify flags are refused"',
+    'gh pr create --title "fix: -A flag" --body "run cargo clippy -- -A x? no"',
+    'git -C "dir with space" commit -m "mention -n"',
+    'git -C "dir with space" log -n 3',
+    '"bash" tests/ci.sh --quick',
   ]) assert.equal(decision(bash(cmd)), 'none', cmd);
 });
 
@@ -384,6 +390,20 @@ test('Bash: skipping git hooks stays denied however it is quoted or handed on (H
     'git rebase -m --no-verify main',
     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git', 'commit', '--no-verify', '-m', 'x'])\nEOF",
     "node <<'EOF'\nrequire('child_process').execSync('git commit --no-verify -m x')\nEOF",
+    // Command substitution in a message value or search pattern runs, so it is read.
+    'git commit -m "$(git commit --no-verify -m x)"',
+    'git commit -m "wip `git commit --no-verify -m x`"',
+    'gh pr create --body "$(git commit -n -m x)" --title t',
+    'grep -- $(git commit --no-verify -m x) file',
+    'rg "$(git commit --no-verify -m x)"',
+    'grep -e "`git commit -n -m x`" f',
+    // A quoted interpreter name still reads its here-document.
+    '"bash" <<\'EOF\'\ngit commit --no-verify -m x\nEOF',
+    "'/bin/sh' <<EOF\ngit commit --no-verify -m x\nEOF",
+    // A quoted -C or -c value does not hide the subcommand.
+    'git -C "dir with space" commit -n -m x',
+    "git -c 'user.name=A B' commit -nm x",
+    'git --git-dir="a b/.git" commit -n -m x',
   ]) {
     const res = bash(cmd);
     assert.equal(decision(res), 'deny', cmd);
@@ -436,7 +456,8 @@ test('Bash: lowering lint levels stays denied however it is quoted or handed on 
 
 test('Bash: the flag checks stay fast on long commands', () => {
   const start = Date.now();
-  for (const cmd of ['cargo clippy '.repeat(800), 'cargo '.repeat(400) + 'clippy '.repeat(430), 'git commit '.repeat(800)]) {
+  for (const cmd of ['cargo clippy '.repeat(800), 'cargo '.repeat(400) + 'clippy '.repeat(430), 'git commit '.repeat(800),
+    'git ' + '--a=b '.repeat(400), 'git ' + '--a="b c" '.repeat(400), 'git ' + '-c '.repeat(400)]) {
     assert.equal(decision(bash(cmd)), 'none');
   }
   assert.ok(Date.now() - start < 2000, `took ${Date.now() - start} ms`);
