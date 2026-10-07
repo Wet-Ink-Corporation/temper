@@ -255,6 +255,75 @@ test('Bash: shell writes to Cargo.lock are denied; cargo and git are not', () =>
   }
 });
 
+test('Bash: --no-verify and lint lowering inside a quoted message are allowed (H-12, H-05)', () => {
+  for (const cmd of [
+    'git commit -m "docs: mention --no-verify flag"',
+    "git commit -m 'hooks: deny git commit -n'",
+    'git commit -m "docs: explain why cargo clippy -- -A clippy::x is refused"',
+    'git commit -m "ci: RUSTFLAGS=-A warnings is gone; no --cap-lints either"',
+    "git commit -F- <<'EOF'\nhooks: refuse --no-verify and cargo clippy -- -A x\nEOF",
+    "git commit -m \"$(cat <<'EOF'\ndocs: --no-verify and git commit -n are refused\nEOF\n)\"",
+    'git commit -m -n',
+    'git commit -am "fix: -n flag"',
+    'git commit -m x -- -n.txt',
+    'git push -n',
+    'git push -n origin main',
+    'git add -A',
+    'ls -A',
+    "rg -n 'git commit --no-verify' docs",
+    'grep -rn "cargo clippy -- -A" docs',
+    'cargo clippy -- -D warnings',
+    'cargo clippy --all-targets -- -W clippy::pedantic',
+    'cargo clippy --workspace --all-targets --locked -- -D warnings',
+    'RUSTFLAGS="-D warnings" cargo build',
+    'RUSTFLAGS=-Dwarnings cargo test',
+  ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+});
+
+test('Bash: --no-verify and lint lowering stay denied however they are quoted (H-12, H-05)', () => {
+  for (const cmd of [
+    'git commit --no-verify -m x',
+    'git commit "--no-verify" -m x',
+    "git commit '--no-verify' -m x",
+    'git commit -m "x" --no-verify',
+    'git push --no-verify',
+    'git merge --no-verify feature',
+    'git commit -n -m x',
+    'git commit -m x -n',
+    'git commit -nm msg',
+    'git commit -anm msg',
+    'git commit "-n" -m x',
+    'git -C crates/a commit -n -m x',
+    'cargo fmt && git commit -n -m x',
+    'bash -c "git commit --no-verify -m x"',
+    "sh -c 'git commit -nm x'",
+    'echo "$(git commit --no-verify -m x)"',
+    'eval "git commit --no-verify -m x"',
+    'cat <<EOF | bash\ngit commit --no-verify -m x\nEOF',
+    'git commit -F- <<< "msg"\ngit commit --no-verify -m x',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /H-12/, cmd);
+  }
+  for (const cmd of [
+    'cargo clippy -- -A clippy::unwrap_used',
+    'cargo +1.96 clippy --workspace -- -A warnings',
+    'cargo clippy -- "-A" clippy::unwrap_used',
+    'cargo clippy -- --allow clippy::unwrap_used',
+    'cargo clippy -- --cap-lints warn',
+    'RUSTFLAGS="-A warnings" cargo build',
+    "RUSTFLAGS='--cap-lints warn' cargo build",
+    'RUSTFLAGS=-Awarnings cargo build',
+    'export RUSTFLAGS="-A warnings" && cargo build',
+    "bash -c 'cargo clippy -- -A warnings'",
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), /H-05/, cmd);
+  }
+});
+
 test('Bash: --ignore-rust-version only counts as a cargo flag', () => {
   assert.equal(decision(bash("git commit -m 'ci: stop passing --ignore-rust-version'")), 'none');
   assert.equal(decision(bash("rg -n -- '--ignore-rust-version' .github")), 'none');

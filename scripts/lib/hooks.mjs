@@ -405,6 +405,186 @@ export function claudeRestore(cmd) {
 /** Command segments with quoted strings blanked, so flags inside messages do not count. */
 const segments = (cmd) => cmd.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "''").split(/&&|\|\||[;|\n]/);
 const isCargo = (seg) => /(?:^|\s)cargo(?:\s|$)/.test(seg);
+const SHELL_PROG = /^(?:\S*\/)?(?:ba|da|z|k)?sh$/;
+
+/** Index just past the `)` that closes a `$(` opened before `i`. */
+function closeParen(s, i) {
+  for (let depth = 1; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\\') i++;
+    else if (c === "'") i = s.indexOf("'", i + 1) === -1 ? s.length : s.indexOf("'", i + 1);
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i + 1;
+  }
+  return s.length;
+}
+
+/**
+ * The shell words of each command segment: `{ value, raw }`, where `value` has the
+ * quotes removed and `raw` is the source text. The shell unquotes `"--no-verify"`
+ * into the flag, so it reads as `--no-verify`, while a quoted message stays one
+ * word. Command substitutions, `sh -c '...'`, `eval '...'` and here-documents
+ * on a line that runs a shell are parsed as commands too; other here-documents
+ * are data.
+ */
+function shellWords(cmd, depth = 0) {
+  const s = String(cmd);
+  const segs = [];
+  const nested = [];
+  let words = [];
+  let value = null;
+  let raw = '';
+  let docs = [];
+  let lineStart = 0;
+  const add = (v, r) => { value = (value ?? '') + v; raw += r; };
+  const endWord = () => { if (value !== null) words.push({ value, raw }); value = null; raw = ''; };
+  const endSeg = () => { endWord(); if (words.length) segs.push(words); words = []; };
+  let i = 0;
+  while (i < s.length) {
+    const c = s[i];
+    const two = s.slice(i, i + 2);
+    if (c === '\\') {
+      if (s[i + 1] !== '\n') add(s[i + 1] ?? '', two);
+      i += 2;
+    } else if (c === "'" || two === "$'") {
+      const from = i + (c === "'" ? 1 : 2);
+      let end = from;
+      while (end < s.length && s[end] !== "'") end += c === '$' && s[end] === '\\' ? 2 : 1;
+      add(c === '$' ? s.slice(from, end).replace(/\\(.)/g, '$1') : s.slice(from, end), s.slice(i, end + 1));
+      i = end + 1;
+    } else if (c === '"') {
+      let end = i + 1;
+      let v = '';
+      while (end < s.length && s[end] !== '"') {
+        if (s[end] === '\\' && '"\\$`\n'.includes(s[end + 1] ?? '')) { v += s[end + 1] === '\n' ? '' : s[end + 1]; end += 2; continue; }
+        if (s.startsWith('$(', end)) {
+          const close = closeParen(s, end + 2);
+          nested.push(s.slice(end + 2, close - 1));
+          v += s.slice(end, close);
+          end = close;
+          continue;
+        }
+        if (s[end] === '`') {
+          const close = s.indexOf('`', end + 1) === -1 ? s.length : s.indexOf('`', end + 1);
+          nested.push(s.slice(end + 1, close));
+          v += s.slice(end, close + 1);
+          end = close + 1;
+          continue;
+        }
+        v += s[end++];
+      }
+      add(v, s.slice(i, end + 1));
+      i = end + 1;
+    } else if (two === '$(' || c === '`') {
+      const close = c === '`' ? (s.indexOf('`', i + 1) === -1 ? s.length : s.indexOf('`', i + 1) + 1) : closeParen(s, i + 2);
+      nested.push(s.slice(i + (c === '`' ? 1 : 2), close - 1));
+      add(s.slice(i, close), s.slice(i, close));
+      i = close;
+    } else if (s.startsWith('<<<', i)) {
+      endWord();
+      i += 3;
+    } else if (two === '<<') {
+      endWord();
+      const m = /^<<(-?)\s*(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/.exec(s.slice(i));
+      if (m) docs.push({ delim: m[2] ?? m[3] ?? m[4], strip: m[1] === '-' });
+      i += m ? m[0].length : 2;
+    } else if (c === '\n') {
+      endSeg();
+      i++;
+      const toShell = segs.slice(lineStart).some((seg) => seg.some((w) => SHELL_PROG.test(w.value)));
+      for (const doc of docs) {
+        const lines = [];
+        while (i < s.length) {
+          const nl = s.indexOf('\n', i) === -1 ? s.length : s.indexOf('\n', i);
+          const line = s.slice(i, nl);
+          i = nl + 1;
+          if ((doc.strip ? line.replace(/^\t+/, '') : line) === doc.delim) break;
+          lines.push(line);
+        }
+        if (toShell) nested.push(lines.join('\n'));
+      }
+      docs = [];
+      lineStart = segs.length;
+    } else if (two === '&&' || two === '||') {
+      endSeg();
+      i += 2;
+    } else if (c === ';' || c === '|' || c === '(' || c === ')') {
+      endSeg();
+      i++;
+    } else if (c === '#' && value === null) {
+      i = s.indexOf('\n', i) === -1 ? s.length : s.indexOf('\n', i);
+    } else if (/\s/.test(c)) {
+      endWord();
+      i++;
+    } else {
+      add(c, c);
+      i++;
+    }
+  }
+  endSeg();
+  for (const seg of segs) {
+    const values = seg.map((w) => w.value);
+    const sh = values.findIndex((v) => SHELL_PROG.test(v));
+    const dashC = sh === -1 ? -1 : values.findIndex((v, k) => k > sh && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(v));
+    if (dashC !== -1 && dashC + 1 < values.length) nested.push(values[dashC + 1]);
+    const ev = values.indexOf('eval');
+    if (ev !== -1) nested.push(values.slice(ev + 1).join(' '));
+  }
+  if (depth < 4) for (const inner of nested) segs.push(...shellWords(inner, depth + 1));
+  return segs;
+}
+
+// git global options that take a separate value, and `git commit` options that do.
+const GIT_GLOBAL_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path']);
+const COMMIT_VALUE_LONG = new Set(['--message', '--file', '--reuse-message', '--reedit-message', '--template', '--author', '--date', '--fixup', '--squash', '--trailer', '--cleanup', '--pathspec-from-file']);
+
+/** A segment's git subcommand and the words after it, or null. */
+function gitCall(values) {
+  const g = values.findIndex((v) => /^(?:\S*[\\/])?git(?:\.exe)?$/.test(v));
+  if (g === -1) return null;
+  let i = g + 1;
+  while (i < values.length && values[i].startsWith('-')) i += GIT_GLOBAL_VALUE.has(values[i]) ? 2 : 1;
+  return i < values.length ? { sub: values[i], args: values.slice(i + 1) } : null;
+}
+
+/** `git commit` arguments carry `-n` (`--no-verify`), alone or in a cluster like `-anm`. */
+function commitNoVerify(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') return false;
+    if (COMMIT_VALUE_LONG.has(a)) { i++; continue; }
+    if (!/^-[^-]/.test(a)) continue;
+    for (let k = 1; k < a.length; k++) {
+      if (a[k] === 'n') return true;
+      if ('mFcCt'.includes(a[k])) { if (k === a.length - 1) i++; break; }
+      if ('Su'.includes(a[k])) break;
+    }
+  }
+  return false;
+}
+
+/** The command skips git hooks: a `--no-verify` word, or `git commit -n`. Quoted messages do not count (H-12). */
+function skipsGitHooks(cmd) {
+  return shellWords(cmd).some((seg) => {
+    const values = seg.map((w) => w.value);
+    if (values.includes('--no-verify')) return true;
+    const git = gitCall(values);
+    return git?.sub === 'commit' && commitNoVerify(git.args);
+  });
+}
+
+/** The command lowers lint levels: `cargo clippy` with `-A`/`--allow`/`--cap-lints`, or RUSTFLAGS that do (H-05). */
+function lowersLints(cmd) {
+  return shellWords(cmd).some((seg) => {
+    const values = seg.map((w) => w.value);
+    const c = values.findIndex((v) => /^(?:\S*[\\/])?cargo(?:\.exe)?$/.test(v));
+    if (c !== -1) {
+      const k = values[c + 1]?.startsWith('+') ? c + 2 : c + 1;
+      if (values[k] === 'clippy' && values.slice(k + 1).some((v) => v === '-A' || /^--allow\b/.test(v) || v.startsWith('--cap-lints'))) return true;
+    }
+    return seg.some((w) => /^[A-Z_]*RUSTFLAGS=/.test(w.raw) && /(?:^|[\s\x1f])(?:-A|--cap-lints)/.test(w.value.slice(w.value.indexOf('=') + 1)));
+  });
+}
 
 // cargo add/remove options that take a separate value.
 const CARGO_VALUE_FLAGS = new Set(['-p', '--package', '-F', '--features', '--rename', '--registry', '--path', '--git', '--branch', '--tag', '--rev', '--manifest-path', '--target', '--lockfile-path', '--config', '-Z', '--color']);
@@ -468,10 +648,10 @@ export function preBash(input) {
     telemetry(proj, input, 'deny-ignore-rust-version', {});
     return deny('temper: --ignore-rust-version bypasses the MSRV check, so green would not mean the declared rust-version builds (MOD-01, H-12). If a dependency needs a newer Rust, raising rust-version is a human decision (H-16): say so and ask.');
   }
-  if (/--no-verify\b|\bgit\s+commit\b[^|;&]*\s-n\b/.test(cmd)) {
+  if (skipsGitHooks(cmd)) {
     return deny('temper: skipping git hooks (--no-verify) is not allowed (H-12). Fix what the hook reports.');
   }
-  if (/\bcargo\s+(?:\+\S+\s+)?clippy\b[^|;&]*(\s-A\s|\s--allow\b|--cap-lints)/.test(cmd) || /RUSTFLAGS=[^\s]*(-A|--cap-lints)/.test(cmd)) {
+  if (lowersLints(cmd)) {
     return deny('temper: lowering lint levels on the command line is not allowed (H-05). Fix the code the lint points at.');
   }
   if (proj.config.askOnNewDependency) {
