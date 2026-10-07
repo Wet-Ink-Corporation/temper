@@ -6,15 +6,17 @@ import path from 'node:path';
 import {
   discover, relTo, norm, readText, writeAtomic, globMatch, crateOf, sessionDir, agentKey,
   markSkillLoaded, skillLoaded, setBase, baseRev, pruneSessions, pruneMarkers, telemetry, rustChanges,
-  fingerprint, diffStat, run, startFingerprint,
+  fingerprint, diffStat, run, startFingerprint, pruneFingerprintState,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
+import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
   ownLintsMember, splitProblems, dependencyNames, majorOf,
 } from './manifest.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
+import { writeTargets, msysPath } from './shell.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 
 const REVIEWER = /(^|:)rust-reviewer$/;
@@ -71,7 +73,7 @@ export function sessionStart(input) {
   const sid = input.session_id;
   const fresh = ['startup', 'clear', 'fork'].includes(input.source);
   setBase(proj, sid, fresh);
-  if (input.source === 'startup') { pruneSessions(proj); pruneMarkers(); }
+  if (input.source === 'startup') { pruneSessions(proj); pruneMarkers(); pruneFingerprintState(proj, startFingerprint(proj, sid)); }
   if (process.env.CLAUDE_ENV_FILE) {
     const baseLine = baseRev(proj, sid) ? `export TEMPER_BASE="${baseRev(proj, sid)}"\n` : '';
     try { fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export TEMPER_CLI="${norm(cli())}"\n${baseLine}`); } catch { /* ignore */ }
@@ -347,11 +349,368 @@ const shellWrites = (target, { copies = false } = {}) => {
   return res;
 };
 const SHELL_WRITE_RS = shellWrites('\\.rs');
+const RS_SHELL_DENY = 'temper: write Rust sources with the Edit or Write tools, not the shell, so the standard\'s checks run on them (H-12). Use the Edit tool for this change.';
+
+// ---- cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs, and git apply/am/patch (audit engine-1-8)
+
+const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
+const isDirPath = (p) => statOf(p)?.isDirectory() ?? false;
+const SPECIAL_FILE = /^\/(?:dev|proc)\//;
+const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
+const RS_COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp', 'git mv', 'copy-item', 'move-item', 'cpi', 'mi', 'copy', 'move']);
+const RS_MOVES = new Set(['mv', 'git mv', 'move-item', 'mi', 'move']);
+
+/** Every .rs file (or symlink named .rs, which the compiler follows) under dir, or null past `limit` entries. */
+function rustFilesUnder(dir, limit = 10000) {
+  const out = [];
+  const stack = [dir];
+  let seen = 0;
+  while (stack.length) {
+    const d = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (++seen > limit) return null;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (e.name !== '.git') stack.push(p); } else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith('.rs')) out.push(p);
+    }
+  }
+  return out;
+}
+
+/**
+ * The .rs files (or the files `want` keeps) a patch command changes: `{ read: true, touched }`, or `{ read: false }` when
+ * temper cannot read the patch (`later` when an earlier command in the line writes it).
+ */
+function patchTouches(p, c, written, want = (f) => /\.rs$/.test(f)) {
+  if (p.stored) return { read: false };
+  const touched = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.raw).filter(want);
+  const inputs = p.inputs.map((w) => ({ abs: wordPath(w, p.cwd) }));
+  if (!inputs.length) {
+    if (c.stdin?.kind === 'heredoc' && c.stdin.literal !== null && !c.piped) inputs.push({ body: c.stdin.literal });
+    else if (c.stdin?.kind === 'file' && !c.piped) inputs.push({ abs: wordPath(c.stdin.word, c.cwd) });
+    else return { read: false };
+  }
+  for (const i of inputs) {
+    if (i.abs && written.has(i.abs)) return { read: false, later: true };
+    const st = i.abs && !SPECIAL_FILE.test(norm(i.abs)) ? statOf(i.abs) : null;
+    const text = i.body ?? (st?.isFile() && st.size <= MAX_SOURCE_BYTES * 8 ? readText(i.abs) : null);
+    if (text === null) return { read: false };
+    touched.push(...patchFiles(text).filter(want));
+  }
+  return { read: true, touched: [...new Set(touched.map((f) => f.replace(/^[ab]\//, '')))] };
+}
+
+const RS_COPY_SCANNED = Symbol('temper-rs-copies-scanned');
+
+/**
+ * cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs files, and git apply/am/patch of
+ * Rust sources (audit engine-1-8), read with scripts/lib/shell.mjs. A copy whose source
+ * temper can read is scanned the way preEdit scans a Write of that content to the
+ * destination; a move of an in-repository .rs file compares against the source's own
+ * content, as the gate does for a rename, so moving legacy debt does not count as adding
+ * it. A copy duplicates the content, so it is compared with the destination only, as a
+ * Write and the gate's view of a new file are. A copied tree that carries its crate's
+ * Cargo.toml keeps the source crate's layout (a test stays a test in the new crate). A
+ * write temper cannot read (variable, glob, stdin, missing source) is refused, and so is a
+ * patch that touches .rs files: the Edit tool applies it with the checks.
+ * Returns a hook result, or null when the command writes no Rust source.
+ */
+function shellRustWrites(cmd, proj, input) {
+  const denies = [];
+  const asks = [];
+  const advice = [];
+  const unknown = []; // { t, why: 'dyn' | 'cwd' | 'patch' | 'later' | 'stale' }
+  const patched = [];
+  const direct = []; // content written straight into a .rs file (`> x.r\s`, `curl -o x.rs`)
+  const inProject = (abs) => {
+    const r = relTo(proj.root, abs);
+    return !(r.startsWith('..') || path.isAbsolute(r) || /^[A-Za-z]:/.test(r) || /(^|\/)\.git(\/|$)/.test(r));
+  };
+  // The gate's scratch directories (project.mjs EXCLUDE): nothing there is gated or built.
+  const scratch = (abs) => /^(?:\.temper|target)(?:\/|$)/.test(relTo(proj.root, abs));
+  const exempt = (h, rel) => (proj.config.scanner.exempt ?? []).some((e) => e.rule === h.id && (e.paths ?? []).some((p) => globMatch(p, rel)));
+  const kindOf = (abs) => {
+    const krate = crateOf(abs);
+    const crateRel = krate ? relTo(krate.dir, abs) : relTo(proj.root, abs);
+    return { kind: krate ? classifyPath(crateRel, krate.hasLib) : 'prod', build: isBuildScript(crateRel) };
+  };
+  // A directory a copy would put Rust sources in: one that holds .rs files, or a crate's src/ (or under it), tests/, benches/ or examples/.
+  const rustDir = (abs) => {
+    if (!inProject(abs) || scratch(abs)) return false;
+    try { if (fs.readdirSync(abs).some((n) => n.endsWith('.rs'))) return true; } catch { /* a new directory */ }
+    const krate = crateOf(path.join(abs, 'x.rs'));
+    return Boolean(krate) && /^(?:src(?:\/.*)?|tests|benches|examples)$/.test(relTo(krate.dir, abs));
+  };
+
+  // `tree` is the copied directory ({ real, root }) when `from` came with one.
+  const checkFile = (target, from, move, tree = null) => {
+    if (path.resolve(target) === path.resolve(from)) return;
+    if (scratch(target)) return;
+    const st = SPECIAL_FILE.test(norm(from)) ? null : statOf(from);
+    const after = st?.isFile() && st.size <= MAX_SOURCE_BYTES ? readText(from) : null;
+    if (after === null) { unknown.push({ t: norm(from), why: 'dyn' }); return; }
+    const rel = relTo(proj.root, target);
+    const exists = statOf(target)?.isFile() ?? false;
+    const before = exists ? readText(target) ?? '' : '';
+    // A tree that carries its crate's manifest lands as that crate: the target maps the way its source does.
+    const srcCrate = tree ? crateOf(from) : null;
+    const carried = srcCrate && !path.relative(tree.real, srcCrate.dir).startsWith('..') && !path.isAbsolute(path.relative(tree.real, srcCrate.dir));
+    const { kind, build } = carried ? kindOf(from) : kindOf(target);
+    // A moved repository source brings its own findings along: count them as already there,
+    // unless the move changes how the scanner reads it (test or example code into src/).
+    const fromKind = move && from.endsWith('.rs') && inProject(from) ? kindOf(from) : null;
+    const lenient = Boolean(fromKind) && fromKind.kind === kind && fromKind.build === build;
+    if (proj.config.protected.some((p) => globMatch(p, rel))) asks.push(`${rel} is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.`);
+    if (!exists && /(^|\/)mod\.rs$/.test(rel) && kind !== 'test' && !(lenient && path.basename(from) === 'mod.rs')) {
+      denies.push(`ARC-06 ${rel}: new mod.rs file.\n    fix: use \`foo.rs\` plus \`foo/bar.rs\`.`);
+    }
+    if (lenient && !exists) return; // nothing new can appear
+    const b = scanSource(before, { kind, build });
+    const a = scanSource(after, { kind, build });
+    const was = lenient
+      ? { hits: [...b.hits, ...a.hits], tests: b.tests + a.tests, ignores: b.ignores + a.ignores, clones: b.clones + a.clones }
+      : b;
+    const fresh = newHits(was.hits, a.hits).filter((h) => !exempt(h, rel));
+    const attrLints = new Set(fresh.filter((h) => h.key === 'expect-attr' && h.severity === 'ask').map((h) => h.exception));
+    for (const h of fresh) {
+      if (h.severity === 'ask' && h.key !== 'expect-attr' && [...attrLints].some((l) => (h.exception ?? '').length && String(l).includes(h.exception))) continue;
+      if (h.severity === 'hard') denies.push(formatHit(h, rel));
+      else if (h.severity === 'ask') asks.push(`Lint exception requested at ${rel}:${h.line} (${h.exception ?? h.id}): \`${h.text}\`. Approve only if the stated reason holds (H-05).`);
+      else advice.push(formatHit(h, rel));
+    }
+    if (a.tests < was.tests) asks.push(`${rel}: this command removes ${was.tests - a.tests} test(s) (H-12). Approve only if the test is being moved or intentionally retired.`);
+    const ignored = a.ignores - was.ignores - Math.max(0, a.tests - was.tests);
+    if (ignored > 0) asks.push(`${rel}: this command adds \`#[ignore]\` to ${ignored} existing test(s) (H-12). Approve only if you asked for the test to stop running.`);
+    if (a.clones > was.clones) advice.push(`H-08 ${rel}: ${a.clones - was.clones} new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).`);
+  };
+
+  // Paths an earlier cp/mv in this command creates: { real, copy, step, stale }, where `real` is
+  // what they hold, `copy` says the content was duplicated (so moving it on is still a copy),
+  // `step` is the command that made them and `stale` says `real` was rewritten before that.
+  const earlierCopies = new Map();
+  const earlier = (abs) => {
+    for (let p = abs, rest = ''; ; rest = path.join(path.basename(p), rest), p = path.dirname(p)) {
+      const hit = earlierCopies.get(p);
+      if (hit) return { real: rest ? path.join(hit.real, rest) : hit.real, copy: hit.copy, step: hit.step, stale: hit.stale };
+      if (path.dirname(p) === p) return null;
+    }
+  };
+  // Every path a command in this line writes, with the last command that wrote it. A file that a
+  // write other than a copy (a redirect, tee, sed -i, curl -o, interpreter code) changed after
+  // the copy that made it, or that no copy made, holds content the disk does not show yet.
+  let step = 0;
+  const lastWrite = new Map();
+  const rewritten = (abs, hit) => {
+    if (hit?.stale) return true;
+    const since = hit?.step ?? 0;
+    abs = path.resolve(abs);
+    const inside = `${abs}${path.sep}`;
+    for (const [w, n] of lastWrite) {
+      if (n <= since) continue;
+      if (w === abs || w.startsWith(inside) || abs.startsWith(`${w}${path.sep}`)) return true;
+    }
+    return false;
+  };
+  // What `abs` holds when this command reaches it: what an earlier copy put there (over a file
+  // that already exists too), else what is on disk now (a file a copied tree did not bring).
+  const prior = (abs) => {
+    const hit = earlier(abs);
+    return hit && (!statOf(abs) || statOf(hit.real)) ? hit : null;
+  };
+  // A readable source copied to a destination held in a variable (`"$BACKUP"`, `${OUT_DIR}/`)
+  // lands clean wherever it goes when it scans clean as production code and does not land as a
+  // mod.rs. A literal destination after a `cd` temper cannot follow is still refused.
+  const cleanAnywhere = (srcAbs, s, t) => {
+    const made = prior(srcAbs);
+    if (rewritten(srcAbs, made)) return false;
+    const real = made?.real ?? srcAbs;
+    const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
+    const text = st?.isFile() && st.size <= MAX_SOURCE_BYTES ? readText(real) : null;
+    if (text === null) return false;
+    const name = /[\\/]$/.test(t.raw) || t.intoDir ? path.basename(real) : path.basename(t.raw);
+    if (name === 'mod.rs' || (path.basename(real) === 'mod.rs' && !name.endsWith('.rs'))) return false;
+    return !scanSource(text, { kind: 'prod', build: false }).hits.some((h) => h.severity === 'hard' || h.severity === 'ask');
+  };
+  // `ln -s` reads a relative source from the link's directory (`ln -sr` from the current one).
+  const linkSource = (t, s, relative) => {
+    if (relative) return wordPath(s, t.cwd);
+    if (s.value === null || s.glob) return null;
+    const abs = rsResolvePath(s.value, null);
+    if (abs) return abs;
+    const at = landing(t, s, isDirPath(t.path));
+    return at ? path.resolve(path.dirname(at), s.value) : null;
+  };
+  const copy = (t, move, symbolic = false, relative = false) => {
+    const destAbs = t.path;
+    for (const s of t.sources) {
+      const srcAbs = symbolic ? linkSource(t, s, relative) : wordPath(s, t.cwd);
+      if (srcAbs !== null && t.value === null && cleanAnywhere(srcAbs, s, t)) continue;
+      if (srcAbs === null || destAbs === null) {
+        const why = t.cwd === null && s.value !== null && !s.glob && t.value !== null && !t.glob ? 'cwd' : 'dyn';
+        const named = /\.rs$/.test(s.raw) || /\.rs$/.test(t.raw);
+        // A source temper cannot name, copied into a Rust source directory, may be Rust (`cp $DIR/* src/`).
+        const intoRust = destAbs !== null && srcAbs === null && !/\.(?!rs$)\w+$/.test(s.raw)
+          && (t.intoDir || isDirPath(destAbs) || /[\\/]$/.test(t.raw) || (t.recursive && !/\.\w+$/.test(path.basename(destAbs))))
+          && rustDir(destAbs);
+        if ((named && (destAbs === null || (inProject(destAbs) && !scratch(destAbs)))) || intoRust) unknown.push({ t: srcAbs === null ? s.raw : t.raw, why });
+        continue;
+      }
+      // A path an earlier command in this line creates reads as what it was made from.
+      const made = prior(srcAbs);
+      const real = made?.real ?? srcAbs;
+      const copied = !move || Boolean(made?.copy);
+      const stale = rewritten(srcAbs, made);
+      const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
+      const staleUnread = () => unknown.push({ t: s.raw, why: 'stale' });
+      if (st?.isDirectory()) {
+        // A symbolic link to a directory brings its whole tree, as a recursive copy does.
+        if (!t.recursive && !symbolic) continue;
+        // rsync copies `src/`'s contents, and puts `src` itself inside the destination.
+        const contents = t.verb === 'rsync' && /[\\/]$/.test(s.raw);
+        const root = contents ? destAbs : (t.verb === 'rsync' || (t.intoDir ?? isDirPath(destAbs))) ? path.join(destAbs, path.basename(srcAbs)) : destAbs;
+        earlierCopies.set(root, { real, copy: copied, step, stale });
+        if (!inProject(root) || scratch(root)) continue;
+        if (stale) { staleUnread(); continue; }
+        const files = rustFilesUnder(real);
+        if (files === null) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
+        for (const f of files) {
+          const target = path.join(root, path.relative(real, f));
+          if (inProject(target)) checkFile(target, f, !copied, { real, root });
+        }
+        continue;
+      }
+      const target = landing(t, s, isDirPath(destAbs));
+      if (st?.isFile()) earlierCopies.set(target, { real, copy: copied, step, stale });
+      if (!target.endsWith('.rs') || !inProject(target) || scratch(target)) continue;
+      if (stale) { staleUnread(); continue; }
+      if (!st?.isFile()) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
+      checkFile(target, real, !copied);
+    }
+  };
+
+  const written = new Set();
+  for (const c of parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root })) {
+    const writes = commandWrites(c);
+    for (const w of writes) if (w.verb === 'redirect' && w.path) written.add(w.path);
+    const p = patchCommand(c);
+    if (p?.apply) {
+      const r = patchTouches(p, c, written);
+      if (!r.read) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
+      else patched.push(...r.touched);
+    }
+    const lnFlag = (letter, long) => c.name === 'ln' && c.args.some((a) => new RegExp(`^-[a-zA-Z]*${letter}`).test(a.raw) || a.raw === long);
+    const symbolic = lnFlag('s', '--symbolic');
+    const relative = symbolic && lnFlag('r', '--relative');
+    step += 1;
+    for (const t of writes) if (RS_COPIES.has(t.verb)) copy(t, RS_MOVES.has(t.verb), t.verb === 'ln' && symbolic, t.verb === 'ln' && relative);
+    for (const w of writes) if (w.path) { written.add(w.path); lastWrite.set(path.resolve(w.path), step); }
+    // What SHELL_WRITE_RS reads from the raw text, read the way the shell does: a name spelled
+    // `x.r\s` or `x.r''s`, or a writer the regex does not know (curl -o, dd of=, sponge).
+    for (const w of writes) {
+      if (RS_COPIES.has(w.verb) || w.verb.startsWith('git ') || w.dir || w.glob || !w.path) continue;
+      if (w.path.endsWith('.rs') && inProject(w.path) && !scratch(w.path)) direct.push(w.path);
+    }
+  }
+
+  if (direct.length) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'shell-reader' });
+    return deny(RS_SHELL_DENY);
+  }
+  const unreadPatch = unknown.find((u) => u.why === 'patch' || u.why === 'later');
+  if (unreadPatch) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'patch-unread' });
+    const why = unreadPatch.why === 'later'
+      ? 'its patch file does not exist yet, or is rewritten, earlier in this command'
+      : 'stdin, a variable or a missing file';
+    return deny(`temper: temper cannot read the patch that \`${unreadPatch.t.slice(0, 120)}\` applies (${why}), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with \`git apply --stat <file>\`; make changes to .rs files with the Edit tool so the standard's checks run on them.`);
+  }
+  if (unknown.length) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'copy-unread' });
+    const u = unknown[0];
+    const why = u.why === 'cwd'
+      ? `temper cannot tell which directory \`${u.t.slice(0, 120)}\` is relative to (an earlier \`cd\` it cannot follow)`
+      : u.why === 'stale'
+        ? `temper cannot read what this command would write to a .rs file (\`${u.t.slice(0, 120)}\` is rewritten earlier in this command, so the file on disk is not what gets copied)`
+        : `temper cannot read what this command would write to a .rs file (\`${u.t.slice(0, 120)}\` is a variable, glob, stdin or a missing path)`;
+    return deny(`temper: write Rust sources with the Edit or Write tools, not the shell, so the standard's checks run on them (H-12). ${why}, so it was not run. Copy from a literal path that exists, or use the Edit tool.`);
+  }
+  if (patched.length) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'patch', files: patched.length });
+    const list = patched.slice(0, 5).join(', ') + (patched.length > 5 ? `, and ${patched.length - 5} more` : '');
+    return deny(`temper: this patch changes Rust sources (${list}), and applying it from the shell skips the standard's checks (H-12), so it was not run. Make the change with the Edit tool, so the scanner checks each hunk. \`git apply --check\`, \`git apply --stat\` and \`patch --dry-run\` still run for inspecting it.`);
+  }
+  if (denies.length) {
+    telemetry(proj, input, 'deny-scan', { via: 'shell-copy', rules: denies.map((d) => d.split(' ')[0]) });
+    return deny([
+      `temper: this command writes ${denies.length} escape hatch(es) into Rust sources, so it was not run. Rewrite the source without them, or make the change with the Edit or Write tools:`,
+      ...denies.slice(0, 10),
+      denies.length > 10 ? `... and ${denies.length - 10} more.` : '',
+      'If one of these is a genuine exception, put `#[expect(<lint>, reason = "...")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.',
+    ].filter(Boolean).join('\n'));
+  }
+  if (asks.length) {
+    telemetry(proj, input, 'ask', { via: 'shell-copy', count: asks.length });
+    return ask(`temper needs your approval:\n- ${asks.join('\n- ')}`, advice.length ? `temper advisories for this command:\n${advice.join('\n')}` : undefined);
+  }
+  if (advice.length) return ctx('PreToolUse', `temper advisories for this command (not blocking, but a reviewer will ask):\n${advice.slice(0, 8).join('\n')}`);
+  return null;
+}
 const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock', { copies: true });
 const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
 const SHELL_WRITE_BASELINE = shellWrites('temper-baseline\\.json', { copies: true });
 const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/[\\w./-]*', { copies: true });
 const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.';
+const STATE_SHELL_DENY = 'temper: temper\'s state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it: verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command (`node "$TEMPER_CLI" gate`). Reading the files, copying them elsewhere and deleting telemetry.jsonl stay allowed.';
+// `$VAR/temper/<entry>` counts as the state dir unless VAR is a home or temp directory.
+const OUTSIDE_VARS = /^(?:HOME|TMPDIR|TMP|TEMP|USERPROFILE|APPDATA|LOCALAPPDATA|PWD|OLDPWD|XDG_\w+)$/;
+
+/**
+ * Shell writes into the project's temper state dir: `.git/temper/` under any prefix, the
+ * absolute `proj.stateDir` (in a worktree it is in the main repository's git dir) with
+ * either separator, `target/temper/` when there is no git, and `$VAR/temper/<state entry>`.
+ * Only destinations count, as scripts/lib/shell.mjs reads them: redirection targets, the
+ * destination of a copy (and where each source lands in it), tee, sed -i, dd, curl, wget,
+ * tar -x -C, unzip -d, the PowerShell writers and interpreter code, inside `bash -c` and
+ * compound commands too. Variables, `$(git rev-parse --git-common-dir)` and `cd`/`pushd`
+ * are followed. Reading a state file, or redirecting what a read prints elsewhere, does
+ * not match, and neither does quoted text.
+ */
+export function stateDirWrite(proj, cmd, cwd = proj.root) {
+  const win = process.platform === 'win32';
+  const fold = (s) => (win ? s.toLowerCase() : s);
+  const slash = (s) => String(s).replace(/\\/g, '/');
+  const absState = fold(slash(path.resolve(proj.stateDir)));
+  const start = path.resolve(cwd);
+  // shell.mjs keeps a backslash before a word character as a separator when it takes the
+  // command for PowerShell, but a bash function can carry a cmdlet-shaped name and bash then
+  // drops it (`copy() { cat; }; ... | copy > .git/tem\per/...`). Deny if either reading is the state dir.
+  const bashReading = (s) => (s == null ? s : String(s).replace(/\\(?=[\w-])/g, ''));
+  const isState = (text, value, base) => isStateAs(text, value, base)
+    || (/\\[\w-]/.test(`${text}${value ?? ''}`) && isStateAs(bashReading(text), bashReading(value), base));
+  const isStateAs = (text, value, base) => {
+    const v =/^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(slash(text));
+    if (v && !OUTSIDE_VARS.test(v[1])) return true;
+    let p = slash(msysPath(value ?? text));
+    if (!/^(?:\/|[a-z]:\/|\$|~)/i.test(p)) p = `${slash(base)}/${p}`;
+    const f = fold(path.posix.normalize(p));
+    if (/(?:^|\/)\.git\/temper(?:\/|$)/.test(f)) return true;
+    if (!proj.gitRoot && /(?:^|\/)target\/temper(?:\/|$)/.test(f)) return true;
+    return value !== null && (f === absState || f.startsWith(`${absState}/`));
+  };
+  const gitDir = proj.gitRoot ? path.dirname(path.resolve(proj.stateDir)) : '.git';
+  for (const t of writeTargets(cmd, { cwd: start, top: proj.gitRoot ?? proj.root, gitDir })) {
+    const base = t.cwd ?? start;
+    const value = t.glob ? null : t.value;
+    if (isState(t.text, value, base)) return true;
+    // A copy into a directory lands as <dest>/<source name> (`mv temper .git/`).
+    for (const s of t.sources ?? []) {
+      const name = s.value === null ? null : path.posix.basename(slash(s.value).replace(/\/+$/, ''));
+      if (name && isState(`${t.text}/${name}`, value === null ? null : `${value}/${name}`, base)) return true;
+    }
+  }
+  return false;
+}
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
@@ -426,13 +785,30 @@ export function cargoDependencyCommands(cmd) {
   return out;
 }
 
+/** A rule built on scripts/lib/shell.mjs; if reading the command throws, the rule is skipped and the other checks still run. */
+const readerRule = (rule, fallback) => { try { return rule(); } catch { return fallback; } };
+
 export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
   if (!proj) return none();
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', {});
-    return deny('temper: write Rust sources with the Edit or Write tools, not the shell, so the standard\'s checks run on them (H-12). Use the Edit tool for this change.');
+    return deny(RS_SHELL_DENY);
+  }
+  // cp/mv/install onto .rs and git apply/patch: scanned like an Edit/Write (engine-1-8).
+  // Only a deny returns at once; an ask or advisory waits for the checks below, and a deny from them wins.
+  const rsWrite = input[RS_COPY_SCANNED] ? null : readerRule(() => shellRustWrites(cmd, proj, input), null);
+  if (rsWrite) {
+    const own = rsWrite.json.hookSpecificOutput.permissionDecision;
+    if (own === 'deny') return rsWrite;
+    const rest = preBash({ ...input, [RS_COPY_SCANNED]: true });
+    const other = rest.json?.hookSpecificOutput?.permissionDecision;
+    if (other === 'deny') return rest;
+    // The copy's advisories ride along with another check's ask.
+    if (other === 'ask' && own !== 'ask') return ask(rest.json.hookSpecificOutput.permissionDecisionReason, [rest.json.hookSpecificOutput.additionalContext, rsWrite.json.hookSpecificOutput.additionalContext].filter(Boolean).join('\n'));
+    if (other === 'ask') return ask(`${rsWrite.json.hookSpecificOutput.permissionDecisionReason}\n${rest.json.hookSpecificOutput.permissionDecisionReason}`, rsWrite.json.hookSpecificOutput.additionalContext);
+    return rsWrite;
   }
   if (SHELL_WRITE_LOCK.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-lockfile', { via: 'shell' });
@@ -445,6 +821,10 @@ export function preBash(input) {
   if (SHELL_WRITE_BASELINE.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
     return deny(BASELINE_SHELL_DENY);
+  }
+  if (readerRule(() => stateDirWrite(proj, cmd, input.cwd ?? proj.root), false)) {
+    telemetry(proj, input, 'deny-shell-write', { file: 'state-dir' });
+    return deny(STATE_SHELL_DENY);
   }
   if (/TEMPER_ALLOW_RAISE/.test(cmd)) {
     telemetry(proj, input, 'ask', { via: 'TEMPER_ALLOW_RAISE' });

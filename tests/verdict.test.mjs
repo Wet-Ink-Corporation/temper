@@ -1,18 +1,22 @@
 // Review verdicts (scripts/lib/verdict.mjs): extraction from the reviewer's
 // final message, validation, and storage keyed by tree fingerprint.
 //
-// Left out on purpose: the suffix match between evidence.files_read and the
-// changed files, and an approval whose scores are all "n/a". Audit finding
-// 1-12 (docs/history/2026-10-audit/report.md) may change both, so these tests
-// use exact paths and integer scores.
+// Audit finding engine-1-12 (docs/history/2026-10-audit/findings.json): a
+// files_read entry covers a changed file only when it is that repo-relative path,
+// or an absolute path ending in it (a bare suffix such as "lib.rs" does not, nor
+// does another file's path that ends the same way), and every verdict rates
+// ALWAYS_SCORED (correctness, escape_hatches and craft) with an integer score.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DIMENSIONS, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { DIMENSIONS, ALWAYS_SCORED, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { discover, rustChanges } from '../scripts/lib/project.mjs';
 
 const FP = '0123456789abcdef';
+const noGit = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0 ? false : 'git is not installed';
 
 /** A well-formed approval; `over` replaces top-level fields. */
 const verdict = (over = {}) => ({
@@ -121,6 +125,94 @@ test('validateVerdict: a changed .rs file missing from files_read is reported', 
   // Windows separators in files_read compare equal
   const win = verdict({ evidence: { files_read: ['crates\\core\\src\\lib.rs', 'crates/core/src/new.rs'], commands_run: ['gate'] } });
   assert.deepEqual(validateVerdict(win, ctx), []);
+});
+
+test('validateVerdict: files_read covers a changed file by whole path components, not by a bare suffix', () => {
+  const ctx = { changedRust: ['crates/core/src/lib.rs'] };
+  const read = (...files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), ctx);
+  // refused: a suffix of the changed path, a longer path that does not split at a "/",
+  // or a longer relative path (it names some other file)
+  for (const entry of ['s', 'lib.rs', 'src/lib.rs', 'core/src/lib.rs', 'ore/src/lib.rs', 'xcrates/core/src/lib.rs', 'crates/core/src/lib', 'crates/core/src/lib.rs/', '', 'proj/crates/core/src/lib.rs', '../crates/core/src/lib.rs']) {
+    assert.deepEqual(read(entry), ['changed files not reviewed: crates/core/src/lib.rs'], `files_read ${JSON.stringify(entry)}`);
+  }
+  // accepted: the path itself (either separator, with or without ./), or an absolute path ending in /<the path>
+  for (const entry of [
+    'crates/core/src/lib.rs', './crates/core/src/lib.rs', '.\\crates\\core\\src\\lib.rs', ' crates/core/src/lib.rs ',
+    '/home/dev/proj/crates/core/src/lib.rs', 'C:\\Users\\dev\\proj\\crates\\core\\src\\lib.rs', 'C:/Users/dev/proj/crates/core/src/lib.rs',
+    '\\\\?\\C:\\proj\\crates\\core\\src\\lib.rs', '\\\\server\\share\\proj\\crates\\core\\src\\lib.rs',
+  ]) {
+    assert.deepEqual(read(entry), [], `files_read ${JSON.stringify(entry)}`);
+  }
+  // a crate at the repository root: the short path is the whole changed path
+  const root = { changedRust: ['src/main.rs', 'build.rs'] };
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['src/main.rs', '/repo/build.rs'], commands_run: ['gate'] } }), root), []);
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['main.rs', 'build.rs'], commands_run: ['gate'] } }), root), ['changed files not reviewed: src/main.rs']);
+  // one entry covers only its own file: "lib.rs" no longer covers every lib.rs in the workspace
+  const two = { changedRust: ['crates/a/src/lib.rs', 'crates/b/src/lib.rs'] };
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['crates/a/src/lib.rs', 'lib.rs'], commands_run: ['gate'] } }), two), ['changed files not reviewed: crates/b/src/lib.rs']);
+  // a root package next to a member crate: a member's path does not cover the root file it ends with
+  const nested = { changedRust: ['src/lib.rs', 'crates/core/src/lib.rs', 'build.rs'] };
+  const nest = (...files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), nested);
+  assert.deepEqual(nest('crates/core/src/lib.rs', 'build.rs'), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(nest('/repo/crates/core/src/lib.rs', 'C:\\repo\\crates\\core\\build.rs', 'build.rs'), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(nest('src/lib.rs', 'crates/core/src/lib.rs', 'crates/core/build.rs'), ['changed files not reviewed: build.rs']);
+  // ...and each file named by its own path, relative or absolute, still covers it
+  assert.deepEqual(nest('src/lib.rs', 'crates/core/src/lib.rs', 'build.rs'), []);
+  assert.deepEqual(nest('/repo/src/lib.rs', '/repo/crates/core/src/lib.rs', 'C:\\repo\\build.rs'), []);
+});
+
+test('validateVerdict: the paths SubagentStart lists, as given or absolute, cover the changed files', { skip: noGit }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-verdict-repo-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const put = (rel, text) => { const f = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  put('Cargo.toml', '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2024"\n\n[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n');
+  put('src/lib.rs', '//! App.\n');
+  put('crates/core/Cargo.toml', '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2024"\n');
+  put('crates/core/src/lib.rs', '//! Core.\n');
+  git('init', '-q');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  put('crates/core/src/lib.rs', '//! Core, changed.\n');
+  put('crates/core/src/new.rs', '//! New.\n');
+  put('src/lib.rs', '//! App, changed.\n');
+  const proj = discover(dir);
+  const changedRust = rustChanges(proj, git('rev-parse', 'HEAD')).filter((f) => f.endsWith('.rs'));
+  assert.deepEqual([...changedRust].sort(), ['crates/core/src/lib.rs', 'crates/core/src/new.rs', 'src/lib.rs']);
+  const check = (files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), { changedRust });
+  // the repo-relative paths SubagentStart prints, and the same files as native absolute paths
+  assert.deepEqual(check(changedRust), []);
+  assert.deepEqual(check(changedRust.map((f) => path.join(proj.root, ...f.split('/')))), []);
+  assert.deepEqual(check(changedRust.map((f) => path.join(dir, ...f.split('/')))), []);
+  has(check(['lib.rs', 'new.rs']), /^changed files not reviewed: /);
+  // the member crate's lib.rs, relative or absolute, does not cover the root package's src/lib.rs
+  const member = changedRust.filter((f) => f.startsWith('crates/'));
+  assert.deepEqual(check(member), ['changed files not reviewed: src/lib.rs']);
+  assert.deepEqual(check(member.map((f) => path.join(dir, ...f.split('/')))), ['changed files not reviewed: src/lib.rs']);
+});
+
+test(`validateVerdict: every verdict rates ${ALWAYS_SCORED.join(', ')} with an integer score`, () => {
+  assert.deepEqual(ALWAYS_SCORED, ['correctness', 'escape_hatches', 'craft']);
+  /** Only the named dimensions rated 3, every other one "n/a". */
+  const scored = (rated, over = {}) => verdict({ scores: Object.fromEntries(DIMENSIONS.map((d) => [d, rated.includes(d) ? 3 : 'n/a'])), ...over });
+  const msg = (na) => `scores must rate correctness, escape_hatches and craft 0-4: they apply to any change ("n/a" only where another dimension does not apply); "n/a": ${na.join(', ')}`;
+  // refused: an approval with every score "n/a"
+  assert.deepEqual(validateVerdict(scored([])), [msg(ALWAYS_SCORED)]);
+  // refused: three other dimensions rated in place of craft, or of correctness
+  assert.deepEqual(validateVerdict(scored(['correctness', 'escape_hatches', 'ownership'])), [msg(['craft'])]);
+  assert.deepEqual(validateVerdict(scored(['ownership', 'errors', 'api', 'escape_hatches', 'craft'])), [msg(['correctness'])]);
+  // refused too for changes-requested: the scores are the review's evidence either way
+  assert.deepEqual(validateVerdict(scored([], { verdict: 'changes-requested' })), [msg(ALWAYS_SCORED)]);
+  // accepted: exactly the named three, for either verdict, and a 0 counts as rated
+  assert.deepEqual(validateVerdict(scored(ALWAYS_SCORED)), []);
+  assert.deepEqual(validateVerdict(scored(ALWAYS_SCORED, { verdict: 'changes-requested' })), []);
+  const zero = { ...scored(ALWAYS_SCORED).scores, correctness: 0 };
+  assert.deepEqual(validateVerdict(verdict({ verdict: 'changes-requested', scores: zero })), []);
+  // a missing or malformed score reports that problem, not this one as well
+  assert.ok(!validateVerdict(verdict({ scores: undefined })).some((p) => p.startsWith('scores must rate')));
+  const { craft: _craft, ...noCraft } = scored(ALWAYS_SCORED).scores;
+  assert.deepEqual(validateVerdict(verdict({ scores: noCraft })), ['scores.craft is missing (0-4 or "n/a")']);
+  assert.deepEqual(validateVerdict(verdict({ scores: { ...scored(ALWAYS_SCORED).scores, craft: 5 } })), ['scores.craft must be 0-4 or "n/a"']);
 });
 
 test('validateVerdict: "approved" must agree with the findings, the scores and the gate', () => {
