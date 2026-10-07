@@ -371,6 +371,24 @@ function ownerOf(proj, rel, cache) {
   return proj;
 }
 
+/** Files under `dir`, relative to it with `/`, or null past `limit` entries (a copied tree's protected files land under its destination). */
+function configFilesUnder(dir, limit = 10000) {
+  const out = [];
+  const stack = [''];
+  let seen = 0;
+  while (stack.length) {
+    const rel = stack.pop();
+    let entries;
+    try { entries = fs.readdirSync(path.join(dir, rel), { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (++seen > limit) return null;
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) { if (e.name !== '.git') stack.push(r); } else out.push(r);
+    }
+  }
+  return out;
+}
+
 /** Protected globs a whole directory `rel` replaces: `<dir>/**` at or below it, and every glob for the project root. */
 const protectedUnder = (globs, rel) => (rel === '' ? globs : globs.filter((g) => g.endsWith('/**') && (globMatch(g.slice(0, -3), rel) || g.startsWith(`${rel}/`))));
 
@@ -423,11 +441,11 @@ function protectedShellWrites(proj, cmd, cwd) {
     if (tree) hits.push(...protectedUnder(owner.config.protected, own).map((g) => (owner === proj ? g : `${relTo(proj.root, owner.root)}/${g}`)));
     for (const h of hits) if (!rels.includes(h)) rels.push(h);
   };
-  // A wildcard or magic pathspec (`git checkout main -- '*.toml'`): the files it would change, as git lists them.
-  const pathspec = (t, base) => {
+  // A wildcard or magic pathspec (`git checkout main -- '*.toml'`), or a directory: the files it would change, as git lists them.
+  const pathspec = (t, base, fallback = true) => {
     const top = run('git', ['rev-parse', '--show-toplevel'], { cwd: base, timeoutMs: 5000 });
     const diff = run('git', ['diff', '--name-only', '--no-renames', '-z', t.source, '--', t.raw], { cwd: base, timeoutMs: 5000 });
-    if (top.error || diff.error) { check(proj.root, true); return; } // git could not say: every protected glob
+    if (top.error || diff.error) { if (fallback) check(proj.root, true); return; } // git could not say: every protected glob
     if (top.code !== 0 || diff.code !== 0) return; // not a repository, or no such revision: the restore fails too
     for (const f of diff.stdout.split('\0').filter(Boolean)) check(path.resolve(top.stdout.trim(), f), false);
   };
@@ -450,12 +468,22 @@ function protectedShellWrites(proj, cmd, cwd) {
         if (restore && pathspecPattern(t)) { pathspec(t, base); continue; }
         const dest = t.glob ? null : resolvePath(t.value, base);
         if (!dest) continue;
-        if (!t.sources) { check(dest, restore); continue; }
+        if (!t.sources) {
+          check(dest, restore);
+          // A directory from another revision brings back the protected files git lists in it (`docs/clippy.toml`).
+          if (restore && !(stat(dest)?.isFile() ?? false)) pathspec(t, base, false);
+          continue;
+        }
         const destIsDir = stat(dest)?.isDirectory() ?? false;
         for (const s of t.sources) {
           const land = protectedLanding({ ...t, path: dest }, s, destIsDir);
-          // A recursive copy or a move of anything but a known file may bring a whole tree.
-          if (land) check(land, t.recursive && !(stat(resolvePath(s.value, base) ?? '')?.isFile() ?? false));
+          if (!land) continue;
+          // A recursive copy or a move of anything but a known file may bring a whole tree,
+          // and with it the protected files inside it (`cfg/sub/clippy.toml`).
+          const srcAbs = resolvePath(s.value, base);
+          const srcStat = srcAbs ? stat(srcAbs) : null;
+          check(land, t.recursive && !(srcStat?.isFile() ?? false));
+          if (t.recursive && srcStat?.isDirectory()) for (const f of configFilesUnder(srcAbs) ?? []) check(path.join(land, f), false);
         }
       }
     }
@@ -587,24 +615,25 @@ export function preBash(input) {
   }
   // Protected configuration written from the shell asks, as an Edit/Write to it does.
   // After every deny above, so a command that also does something denied stays denied.
+  // Its ask is shown together with the dependency and snapshot asks below, as preEdit collects asks.
   const configWrites = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), []);
-  if (configWrites.length) {
-    telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
-    const what = configWrites.join(', ');
-    return ask(`temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`);
-  }
+  const what = configWrites.join(', ');
+  const configAsk = configWrites.length ? `temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.` : null;
+  if (configAsk) telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+  const withConfig = (reason) => ask(configAsk ? `${configAsk}\n${reason}` : reason);
   if (proj.config.askOnNewDependency) {
     const approved = new Set(proj.config.preapprovedDependencies ?? []);
     const changes = cargoDependencyCommands(cmd).filter((c) => !c.crates.length || c.crates.some((n) => !approved.has(n)));
     if (changes.length) {
       telemetry(proj, input, 'ask', { via: 'cargo-deps' });
       const what = changes.map((c) => `cargo ${c.op} ${c.crates.join(' ') || '(no crate named)'}`).join('; ');
-      return ask(`temper: \`${what}\` changes the dependency graph without the manifest checks. Adding or removing a dependency is a human decision (H-16, ARC-12). Approve only if you asked for it.`);
+      return withConfig(`temper: \`${what}\` changes the dependency graph without the manifest checks. Adding or removing a dependency is a human decision (H-16, ARC-12). Approve only if you asked for it.`);
     }
   }
   if (/\bcargo\s+insta\s+(?:accept|test\b[^|;&]*--accept)/.test(cmd)) {
-    return ask('temper: accepting all snapshot changes at once can hide regressions (H-12). Approve only after reviewing the snapshot diffs (cargo insta review).');
+    return withConfig('temper: accepting all snapshot changes at once can hide regressions (H-12). Approve only after reviewing the snapshot diffs (cargo insta review).');
   }
+  if (configAsk) return ask(configAsk);
   return none();
 }
 

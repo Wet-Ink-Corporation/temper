@@ -885,3 +885,82 @@ test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; readi
     assert.equal(decision(bash(cmd)), 'none', cmd);
   }
 });
+
+// ---- Greptile findings on #83, through the real preBash
+
+test('Bash: protected config written by a clustered curl/wget output option or by a recursive copy of protected files asks', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-cfg-tree-'));
+  const out = (name) => path.join(dir, name).replace(/\\/g, '/');
+  try {
+    fs.mkdirSync(path.join(dir, 'cfg', 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'cfg', 'sub', 'clippy.toml'), 'a = 1\n');
+    fs.writeFileSync(path.join(dir, 'cfg', 'notes.md'), 'x\n');
+    fs.mkdirSync(path.join(dir, 'plain'));
+    fs.writeFileSync(path.join(dir, 'plain', 'notes.md'), 'x\n');
+    for (const [cmd, what] of [
+      ['curl -sSLo.claude/settings.json https://example.com/s', /writes \.claude\/settings\.json/],
+      ['wget -qO.cargo/config.toml https://example.com/c', /writes \.cargo\/config\.toml/],
+      [`cp -r "${out('cfg')}" docs/imported`, /writes docs\/imported\/sub\/clippy\.toml/],
+      [`rsync -a "${out('cfg')}/" docs/imported/`, /writes docs\/imported\/sub\/clippy\.toml/],
+      [`Copy-Item -Recurse "${out('cfg')}" -Destination docs/imported`, /writes docs\/imported\/sub\/clippy\.toml/],
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'ask', `${cmd}\n${reason(res)}`);
+      assert.match(reason(res), what, cmd);
+    }
+    for (const cmd of [
+      `cp -r "${out('plain')}" docs/imported`,
+      `cp -r "${out('cfg')}/notes.md" docs/`,
+      'curl -dfoo -sSo out.txt https://example.com/x',
+      `cp -r docs/sub "${out('backup')}"`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('Bash: a protected-config ask does not hide the dependency or snapshot ask in the same command', () => {
+  const both = bash('echo x > clippy.toml; cargo add serde_yaml');
+  assert.equal(decision(both), 'ask');
+  assert.match(reason(both), /writes clippy\.toml[^]*cargo add serde_yaml/);
+  const snap = bash('echo x > clippy.toml && cargo insta accept');
+  assert.equal(decision(snap), 'ask');
+  assert.match(reason(snap), /writes clippy\.toml[^]*accepting all snapshot changes/);
+  const alone = bash('echo x > clippy.toml');
+  assert.equal(decision(alone), 'ask');
+  assert.doesNotMatch(reason(alone), /cargo add|snapshot/);
+});
+
+test('Bash: git checkout/restore of a directory from another revision asks when it would change a protected file inside it', { skip: !git && 'git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-dircheckout-'));
+  try {
+    const g = (...args) => spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, encoding: 'utf8' });
+    fs.writeFileSync(path.join(repo, 'Cargo.toml'), ROOT);
+    fs.mkdirSync(path.join(repo, 'docs'));
+    fs.writeFileSync(path.join(repo, 'docs', 'clippy.toml'), 'a = 1\n');
+    fs.mkdirSync(path.join(repo, 'notes'));
+    fs.writeFileSync(path.join(repo, 'notes', 'a.md'), 'x\n');
+    assert.equal(g('init', '-q').status, 0);
+    assert.equal(g('add', '.').status, 0);
+    assert.equal(g('commit', '-q', '-m', 'init').status, 0);
+    assert.equal(g('tag', 'v1').status, 0);
+    fs.writeFileSync(path.join(repo, 'docs', 'clippy.toml'), 'a = 2\n');
+    fs.writeFileSync(path.join(repo, 'notes', 'a.md'), 'y\n');
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: repo, session_id: 'hooks-test', tool_input: { command } });
+    for (const cmd of ['git checkout v1 -- docs', 'git restore -s v1 docs', 'cd docs && git checkout v1 -- .']) {
+      const res = run(cmd);
+      assert.equal(decision(res), 'ask', cmd);
+      assert.match(reason(res), /docs\/clippy\.toml/, cmd);
+    }
+    for (const cmd of ['git checkout v1 -- notes', 'git checkout -- docs', 'git restore docs', 'git checkout HEAD -- docs']) {
+      const res = run(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
