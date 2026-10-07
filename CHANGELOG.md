@@ -14,11 +14,11 @@ Clearer messages for new adopters. Only the text changes: every hook decision, e
 
 `temper setup` adds `/target/` to `.gitignore` when no line ignores `target` already (`target`, `target/`, `/target` and `/target/` all count), next to the `.temper/` line it already added. `--dry-run` reports it without writing, `--vendor-only` leaves `.gitignore` alone, and a second run adds nothing. `Cargo.lock` is not added: it is committed.
 
-Bounded local state. No hook decision changes; what temper keeps under `.git/temper/` goes from unbounded to bounded.
-- **Pruning at startup.** `SessionStart` on startup already pruned session state after 14 days. It now also prunes review verdicts (after 60 days, newest 300 kept) and gate runs (after 30 days, newest 300 kept, 64 MB in all). A gate run is the gate result with its step logs, pruned together, so a kept result never points at a deleted log. The records of the tree the session starts on are always kept. A tree whose verdict was pruned needs a fresh review at Stop, and one whose gate result was pruned runs the gate again. A `temper gate` run from the command line prunes nothing.
+Bounded local state. No hook rule changes, but what temper keeps under `.git/temper/` goes from unbounded to bounded, so Stop on a tree whose records were pruned now runs the gate again or asks for a fresh review, where it used to reuse them.
+- **Pruning at startup.** `SessionStart` on startup in a Rust project already pruned session state after 14 days. It now also prunes review verdicts (after 60 days, newest 300 kept) and gate runs (after 30 days, newest 300 kept, 64 MiB in all, though the newest run is always kept). A gate run is the gate result with its step logs, pruned together, so a kept result never points at a deleted log. The records of the tree the session starts on are always kept and count toward no limit. A tree whose verdict was pruned needs a fresh review at Stop, and one whose gate result was pruned runs the gate again. A `temper gate` run from the command line prunes nothing.
 - **Telemetry rotation.** `telemetry.jsonl` was only ever appended. At 1 MiB it is now renamed to `telemetry.1.jsonl`, replacing the previous one, and `temper stats` reads both files.
 
-`scripts/lib/project.mjs` also changed, beyond the files the upgrading note below names; `temper setup --vendor-only` refreshes it with the rest.
+This also changes `scripts/lib/project.mjs`, so refresh the vendored copy with `temper setup --vendor-only`. Until then the old vendored `temper stats` reads only `telemetry.jsonl`, not the rotated `telemetry.1.jsonl`.
 
 Upgrading from 1.3.x: `scripts/temper.mjs`, `scripts/lib/gate.mjs`, `scripts/lib/hooks.mjs` and `scripts/lib/vendor.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. A full `temper setup` also appends `/target/` to `.gitignore` if no `target` line is there.
 
