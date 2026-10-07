@@ -221,3 +221,11 @@ test('shell: -WhatIf:$false runs the PowerShell command; -WhatIf and -WhatIf:$tr
   assert.deepEqual(targets('Set-Content -Path s.txt -Value x -WhatIf:$false').map((t) => t[0]), ['set-content']);
   for (const cmd of ['Copy-Item a.rs b.rs -WhatIf', 'Copy-Item a.rs b.rs -WhatIf:$true', 'Set-Content -Path s.txt -Value x -WhatIf']) assert.deepEqual(targets(cmd), [], cmd);
 });
+
+test('shell: only a bare -WhatIf or -WhatIf:$true is a PowerShell dry run; any other value runs the command', () => {
+  for (const v of ['0', '$f', '(1 -eq 0)', '$False', '$x', '1']) {
+    assert.deepEqual(targets(`Copy-Item a.rs b.rs -WhatIf:${v}`).map((t) => t[0]), ['copy-item'], v);
+    assert.deepEqual(targets(`Set-Content -Path s.txt -Value x -WhatIf:${v}`).map((t) => t[0]), ['set-content'], v);
+  }
+  for (const cmd of ['Copy-Item a.rs b.rs -whatif', 'Copy-Item a.rs b.rs -WHATIF:$TRUE', 'Set-Content -Path s.txt -Value x -WhatIf:$true']) assert.deepEqual(targets(cmd), [], cmd);
+});

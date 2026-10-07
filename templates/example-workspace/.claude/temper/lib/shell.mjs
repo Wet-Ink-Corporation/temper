@@ -673,8 +673,14 @@ function psParams(args, switches = /^(?:force|append|noclobber|nonewline|recurse
   return { named, pos, get };
 }
 
-/** `-WhatIf` (or `-WhatIf:$true`) makes a PowerShell command a dry run; `-WhatIf:$false` runs it. */
-const psDryRun = (named) => named.has('whatif') && !/^\$false$/i.test(named.get('whatif')?.raw ?? '');
+/**
+ * Only a bare `-WhatIf` or `-WhatIf:$true` makes a PowerShell command a dry run. Any other value
+ * (`$false`, `0`, `$f`, `(1 -eq 0)`, a variable) may be false, so the command counts as running.
+ */
+const psDryRun = (named) => {
+  const w = named.get('whatif');
+  return w === true || (w !== undefined && /^\$true$/i.test(w.raw));
+};
 
 /** Copy-Item / Move-Item (and copy, move, cpi, mi): `{ sources, dest, intoDir, recursive }`, or null. */
 function psCopyArgs(move, args) {

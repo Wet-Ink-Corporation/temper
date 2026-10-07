@@ -425,11 +425,14 @@ function configPatchTouches(p, c) {
  * `git checkout <rev> -- .github`, `git restore --source=<rev> .`) reports the protected
  * globs it replaces. `git checkout`/`git restore` from HEAD or the index pass; for a
  * wildcard pathspec from another revision, git lists the files it would change. A patch
- * (git apply, git am, patch) writes the files it names.
+ * (git apply, git am, patch) writes the files it names. Returns `{ files, unreadPatch }`:
+ * `unreadPatch` is the first patch command whose patch temper cannot read (a pipe, a variable,
+ * a missing file, `git am --continue`), or null.
  */
 function protectedShellWrites(proj, cmd, cwd) {
   const start = cwd && fs.existsSync(cwd) ? path.resolve(cwd) : proj.root;
   const rels = [];
+  let unreadPatch = null;
   const owners = new Map();
   const stat = (p) => { try { return fs.statSync(p); } catch { return null; } };
   const check = (abs, tree) => {
@@ -450,10 +453,11 @@ function protectedShellWrites(proj, cmd, cwd) {
     for (const f of diff.stdout.split('\0').filter(Boolean)) check(path.resolve(top.stdout.trim(), f), false);
   };
   for (const c of protectedCommands(cmd, { cwd: start, top: proj.gitRoot ?? proj.root })) {
-    // A patch writes the files it names, its target and its -o output (an unreadable one is the .rs rule's deny).
+    // A patch writes the files it names, its target and its -o output. One temper cannot read asks.
     const p = protectedPatch(c);
     if (p?.apply) {
       const r = configPatchTouches(p, c);
+      if (!r.read && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
       const named = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.value);
       const listed = r.read ? r.touched.filter((f) => !named.includes(f)) : [];
       for (const base of p.cwd ? [p.cwd] : [start, proj.root]) {
@@ -488,7 +492,7 @@ function protectedShellWrites(proj, cmd, cwd) {
       }
     }
   }
-  return rels;
+  return { files: rels, unreadPatch };
 }
 
 /** Shell segments of a command with quotes removed (`"--update"` and `'x'` read as `--update` and `x`). */
@@ -616,10 +620,16 @@ export function preBash(input) {
   // Protected configuration written from the shell asks, as an Edit/Write to it does.
   // After every deny above, so a command that also does something denied stays denied.
   // Its ask is shown together with the dependency and snapshot asks below, as preEdit collects asks.
-  const configWrites = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), []);
+  const { files: configWrites, unreadPatch } = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), { files: [], unreadPatch: null });
   const what = configWrites.join(', ');
-  const configAsk = configWrites.length ? `temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.` : null;
-  if (configAsk) telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+  const configAsks = [
+    ...(configWrites.length ? [`temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`] : []),
+    // A patch from a pipe, a variable or a missing file may change protected configuration too.
+    ...(unreadPatch !== null ? [`temper: \`${unreadPatch.slice(0, 120)}\`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes.`] : []),
+  ];
+  const configAsk = configAsks.length ? configAsks.join('\n') : null;
+  if (configWrites.length) telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+  else if (configAsk) telemetry(proj, input, 'ask', { via: 'shell-patch-unread' });
   const withConfig = (reason) => ask(configAsk ? `${configAsk}\n${reason}` : reason);
   if (proj.config.askOnNewDependency) {
     const approved = new Set(proj.config.preapprovedDependencies ?? []);

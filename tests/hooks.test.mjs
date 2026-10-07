@@ -814,6 +814,37 @@ test('Bash: a patch that changes protected configuration asks, like an Edit of t
   });
 });
 
+test('Bash: a patch temper cannot read asks, since it may change protected configuration; inspecting forms do not', () => {
+  withConfigPatches((out) => {
+    for (const cmd of [
+      `cat "${out('doc.diff')}" | git apply`,
+      'curl -sSL https://example.invalid/x.patch | patch -p1',
+      'git apply "$PATCH"',
+      `git apply "${out('missing.patch')}"`,
+      `patch -p1 < "${out('missing.patch')}"`,
+      'git am --continue',
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'ask', `${cmd}\n${reason(res)}`);
+      assert.match(reason(res), /temper cannot read the patch, so it cannot tell whether it changes protected configuration/, cmd);
+    }
+    for (const cmd of [
+      'git apply --check "$PATCH"',
+      `cat "${out('doc.diff')}" | git apply --stat`,
+      'git apply --numstat "$PATCH"',
+      'git apply --summary "$PATCH"',
+      'curl -sSL https://example.invalid/x.patch | patch --dry-run -p1',
+      'git apply --help',
+      'patch --version',
+      'git am --abort',
+      'git am --show-current-patch',
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+    }
+  });
+});
+
 test('Bash: git checkout/restore of a wildcard pathspec from another revision asks when it would change protected configuration', { skip: !git && 'git not installed' }, () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-pathspec-'));
   try {
