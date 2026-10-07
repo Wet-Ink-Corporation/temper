@@ -825,6 +825,8 @@ test('Bash: a patch temper cannot read asks, since it may change protected confi
       'git am --continue',
     ]) {
       const res = bash(cmd);
+      // Where the .rs rule's deny of an unreadable patch is also present, that deny comes first.
+      if (decision(res) === 'deny') { assert.match(reason(res), /cannot read the patch that .* changes Rust sources/s, cmd); continue; }
       assert.equal(decision(res), 'ask', `${cmd}\n${reason(res)}`);
       assert.match(reason(res), /temper cannot read the patch, so it cannot tell whether it changes protected configuration/, cmd);
     }
