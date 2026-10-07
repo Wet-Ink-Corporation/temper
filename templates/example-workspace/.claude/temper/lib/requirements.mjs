@@ -44,6 +44,16 @@ function inRustWorkspace(dir) {
   }
 }
 
+/** The hook input's `cwd` when it names a directory that exists (as discover() takes it), else null. */
+function inputCwd(raw) {
+  try {
+    const input = JSON.parse(raw || '{}');
+    return input && typeof input.cwd === 'string' && input.cwd && fs.existsSync(input.cwd) ? input.cwd : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * What temper.mjs does before anything else on a Node below the minimum, or null to carry on.
  * `hook session-start` stops early only where temper cannot run (no structuredClone, Node 16 and
@@ -51,17 +61,22 @@ function inRustWorkspace(dir) {
  * model (additionalContext) and exits 0. Where temper can run (Node 17), SessionStart runs as usual
  * and adds the warning itself. Other hooks carry on unchanged, so the warning comes once per
  * session. Commands warn on stderr and carry on, keeping their own output and exit code.
- * TEMPER_DISABLE=1 stays silent. `runtime` is injectable for tests.
+ * TEMPER_DISABLE=1 stays silent.
+ *
+ * The Rust workspace is judged where SessionStart judges it: the hook input's `cwd`, else the
+ * process directory. That needs the hook input, and stdin can be read only once, so when this path
+ * reads it and carries on, it returns `{ stdin }` for the hook to parse instead of reading again.
+ * `runtime` (canRun, cwd, readStdin) is injectable for tests.
  */
-export function earlyNodeCheck(node, argv, env, runtime = {}) {
+export async function earlyNodeCheck(node, argv, env, runtime = {}) {
   if (!isOlder(node, MINIMUM_VERSIONS.node) || (env && env.TEMPER_DISABLE === '1')) return null;
   const msg = nodeWarning(node);
   if (argv[0] === 'hook') {
     if (argv[1] !== 'session-start') return null;
     const canRun = runtime.canRun !== undefined ? runtime.canRun : typeof globalThis.structuredClone === 'function';
     if (canRun) return null;
-    const dirs = [runtime.cwd || process.cwd(), env && env.CLAUDE_PROJECT_DIR].filter(Boolean);
-    if (!dirs.some(inRustWorkspace)) return null;
+    const stdin = runtime.readStdin ? await runtime.readStdin() : '';
+    if (!inRustWorkspace(inputCwd(stdin) || runtime.cwd || process.cwd())) return { stdin };
     return { stdout: JSON.stringify({ systemMessage: msg, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg } }), exit: 0 };
   }
   return { stderr: `${msg}\n` };

@@ -235,7 +235,7 @@ test('earlyNodeCheck: SessionStart stops early only where temper cannot run, and
     const nested = path.join(ws, 'crates', 'core');
     // Node 16: no structuredClone, so the handler would throw. Report the old Node instead.
     for (const cwd of [ws, nested]) {
-      const start = earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd });
+      const start = await earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd });
       assert.equal(start.exit, 0);
       const json = JSON.parse(start.stdout);
       assert.match(json.systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum/);
@@ -243,18 +243,28 @@ test('earlyNodeCheck: SessionStart stops early only where temper cannot run, and
       assert.equal(json.hookSpecificOutput.additionalContext, json.systemMessage);
       assert.ok(!('decision' in json) && !('permissionDecision' in json.hookSpecificOutput));
     }
-    // CLAUDE_PROJECT_DIR names the project when the hook runs elsewhere.
-    assert.notEqual(earlyNodeCheck('16.20.2', ['hook', 'session-start'], { CLAUDE_PROJECT_DIR: ws }, { canRun: false, cwd: norust }), null);
+    // The hook input's cwd decides, as in SessionStart; the process directory is the fallback.
+    let reads = 0;
+    const stdinOf = (input) => () => { reads += 1; return Promise.resolve(JSON.stringify(input)); };
+    const named = await earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd: norust, readStdin: stdinOf({ cwd: ws }) });
+    assert.equal(named.exit, 0);
+    const elsewhere = JSON.stringify({ cwd: norust, source: 'startup' });
+    const away = await earlyNodeCheck('16.20.2', ['hook', 'session-start'], { CLAUDE_PROJECT_DIR: ws }, { canRun: false, cwd: ws, readStdin: () => Promise.resolve(elsewhere) });
+    assert.deepEqual(away, { stdin: elsewhere }, 'carries on and hands the input it read to the hook');
+    for (const raw of ['', 'not json', JSON.stringify({ cwd: path.join(norust, 'gone') })]) {
+      assert.equal((await earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd: ws, readStdin: () => Promise.resolve(raw) })).exit, 0, raw);
+    }
     // Near misses that carry on unchanged: outside a Rust workspace (SessionStart does nothing there),
     // a Node 17 where temper runs (the handler adds the warning itself), and every other hook.
-    assert.equal(earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd: norust }), null);
-    assert.equal(earlyNodeCheck('17.9.1', ['hook', 'session-start'], {}, { canRun: true, cwd: ws }), null);
-    for (const event of ['pre-bash', 'pre-edit', 'stop', 'user-prompt']) assert.equal(earlyNodeCheck('16.20.2', ['hook', event], {}, { canRun: false, cwd: ws }), null, event);
-    const gate = earlyNodeCheck('17.9.1', ['gate'], {}, { canRun: true, cwd: ws });
+    assert.deepEqual(await earlyNodeCheck('16.20.2', ['hook', 'session-start'], {}, { canRun: false, cwd: norust }), { stdin: '' });
+    assert.equal(await earlyNodeCheck('17.9.1', ['hook', 'session-start'], {}, { canRun: true, cwd: ws, readStdin: stdinOf({}) }), null);
+    for (const event of ['pre-bash', 'pre-edit', 'stop', 'user-prompt']) assert.equal(await earlyNodeCheck('16.20.2', ['hook', event], {}, { canRun: false, cwd: ws, readStdin: stdinOf({}) }), null, event);
+    const gate = await earlyNodeCheck('17.9.1', ['gate'], {}, { canRun: true, cwd: ws });
     assert.match(gate.stderr, /^temper: Node 17\.9\.1 is older than the documented minimum.*\n$/);
     assert.ok(!('stdout' in gate) && !('exit' in gate), 'the command still runs, with its own exit code');
-    for (const v of ['18.0.0', '18.20.4', '20.11.1', process.versions.node]) assert.equal(earlyNodeCheck(v, ['hook', 'session-start'], {}, { canRun: false, cwd: ws }), null, v);
-    assert.equal(earlyNodeCheck('16.20.2', ['hook', 'session-start'], { TEMPER_DISABLE: '1' }, { canRun: false, cwd: ws }), null);
+    for (const v of ['18.0.0', '18.20.4', '20.11.1', process.versions.node]) assert.equal(await earlyNodeCheck(v, ['hook', 'session-start'], {}, { canRun: false, cwd: ws, readStdin: stdinOf({}) }), null, v);
+    assert.equal(await earlyNodeCheck('16.20.2', ['hook', 'session-start'], { TEMPER_DISABLE: '1' }, { canRun: false, cwd: ws, readStdin: stdinOf({}) }), null);
+    assert.equal(reads, 1, 'stdin is read only on the path that needs the input');
   } finally { fs.rmSync(norust, { recursive: true, force: true }); }
 });
 
@@ -304,5 +314,28 @@ test('the CLI on a simulated Node 16: SessionStart warns in a Rust workspace; el
     // Current Node: SessionStart outside a Rust project still prints nothing.
     const now = cliAsNode(process.versions.node, dir, ['hook', 'session-start'], input);
     assert.deepEqual({ code: now.code, stdout: now.stdout }, { code: 0, stdout: '' });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the CLI on a simulated Node 16: SessionStart judges the workspace by the hook input cwd, as the handler does', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-oldnode-cwd-'));
+  try {
+    // The hook process runs outside the project, but the input names the Rust workspace: warn.
+    const rustInput = JSON.stringify({ cwd: ws, session_id: 's-cwd', source: 'startup', hook_event_name: 'SessionStart' });
+    const start = cliAsNode('16.20.2', dir, ['hook', 'session-start'], rustInput, { noClone: true });
+    assert.equal(start.code, 0, start.stderr);
+    assert.match(JSON.parse(start.stdout).systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum/);
+    // The hook process runs in the Rust workspace, but the input names another directory: the
+    // handler gets the same input (stdin is read once and passed on) and prints nothing.
+    const input = JSON.stringify({ cwd: dir, session_id: 's-cwd', source: 'startup', hook_event_name: 'SessionStart' });
+    const away = cliAsNode('16.20.2', ws, ['hook', 'session-start'], input, { noClone: true });
+    assert.deepEqual({ code: away.code, stdout: away.stdout }, { code: 0, stdout: '' });
+    // CLAUDE_PROJECT_DIR does not decide it either: the handler never reads it.
+    const env = cliAsNode('16.20.2', dir, ['hook', 'session-start'], input, { noClone: true, env: { CLAUDE_PROJECT_DIR: ws } });
+    assert.deepEqual({ code: env.code, stdout: env.stdout }, { code: 0, stdout: '' });
+    // No cwd in the input: both fall back to the process directory.
+    const bare = cliAsNode('16.20.2', ws, ['hook', 'session-start'], JSON.stringify({ session_id: 's-cwd', source: 'startup' }), { noClone: true });
+    assert.equal(bare.code, 0, bare.stderr);
+    assert.match(JSON.parse(bare.stdout).systemMessage, /^temper: Node 16\.20\.2 is older than the documented minimum/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

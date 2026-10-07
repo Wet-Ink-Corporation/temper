@@ -31,8 +31,9 @@ import { earlyNodeCheck } from './lib/requirements.mjs';
 // First, before any other code: on a Node below the documented minimum, say so plainly. Where
 // temper cannot run (Node 16, no structuredClone), SessionStart in a Rust workspace reports it and
 // stops; on Node 17 it runs as usual and adds the warning. Other hooks and commands carry on as before.
-// (Node 14 and older stop earlier still: this file's syntax needs Node 15.)
-const early = earlyNodeCheck(process.versions.node, process.argv.slice(2), process.env);
+// (Node 14 and older stop earlier still: this file's syntax needs Node 15.) When that check reads
+// the hook input to find the workspace, it hands the input on in `early.stdin` for hook().
+const early = await earlyNodeCheck(process.versions.node, process.argv.slice(2), process.env, { readStdin });
 if (early && early.stderr) process.stderr.write(early.stderr);
 if (early && early.stdout !== undefined) {
   await new Promise((done) => { process.stdout.write(early.stdout, done); });
@@ -66,7 +67,8 @@ async function hook(event) {
   if (!handler) { process.stderr.write(`temper: unknown hook event ${event}\n`); return 0; }
   let input = {};
   try {
-    input = JSON.parse((await readStdin()) || '{}');
+    const raw = early && early.stdin !== undefined ? early.stdin : await readStdin();
+    input = JSON.parse(raw || '{}');
   } catch {
     // Same decision as before (none, exit 0), but say so: a silent pass reads as "checked and clean".
     if (process.env.TEMPER_DISABLE === '1') return 0;
