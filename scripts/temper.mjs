@@ -474,8 +474,9 @@ function strictLints(root, tpl) {
 
 function stats() {
   const proj = project();
-  const t = readText(path.join(proj.stateDir, 'telemetry.jsonl')) ?? '';
-  const rows = t.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  // telemetry.jsonl and, once it has rotated, telemetry.1.jsonl (lib/project.mjs telemetry()).
+  const rows = ['telemetry.1.jsonl', 'telemetry.jsonl'].flatMap((f) => (readText(path.join(proj.stateDir, f)) ?? '').split('\n'))
+    .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
   const count = {};
   for (const r of rows) count[r.event] = (count[r.event] ?? 0) + 1;
   const rules = {};

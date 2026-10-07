@@ -300,13 +300,75 @@ export function pruneSessions(proj, maxAgeDays = 14) {
   }
 }
 
+/**
+ * How long the per-fingerprint records under the state dir are kept: by age
+ * (mtime) and by count, newest first, and for logs also by total size.
+ * SessionStart prunes them on startup (pruneFingerprintState). A verdict is
+ * the costliest to lose (a fresh reviewer run), a gate result costs a gate
+ * re-run, and a log only explains a past red step. telemetry.jsonl rotates to
+ * telemetry.1.jsonl at telemetryBytes, and one old file is kept.
+ */
+export const RETENTION = {
+  verdicts: { maxAgeDays: 60, keep: 300 },
+  gate: { maxAgeDays: 30, keep: 300 },
+  logs: { maxAgeDays: 14, keep: 150, maxBytes: 64 * 1024 * 1024 },
+  telemetryBytes: 1024 * 1024,
+};
+
+/**
+ * Remove the files in `dir` older than `maxAgeDays`, then all but the newest
+ * `keep`, then the oldest until the rest fit in `maxBytes` (the newest file
+ * always stays: it may be a log a running gate is still writing). Files for which
+ * `protect(name)` is true are never removed and count toward no limit.
+ * Errors (a file in use on Windows, a race with another session) are ignored.
+ */
+function pruneFiles(dir, { maxAgeDays, keep, maxBytes = Infinity }, protect) {
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return; }
+  const cutoff = Date.now() - maxAgeDays * 86400000;
+  const files = names.filter((n) => !protect(n)).map((n) => {
+    const p = path.join(dir, n);
+    try { const s = fs.statSync(p); return s.isFile() ? { p, t: s.mtimeMs, size: s.size } : null; } catch { return null; }
+  }).filter(Boolean).sort((a, b) => b.t - a.t);
+  let bytes = 0;
+  files.forEach((f, i) => {
+    bytes += f.size;
+    if (f.t < cutoff || i >= keep || (i > 0 && bytes > maxBytes)) {
+      try { fs.rmSync(f.p, { force: true }); } catch { /* ignore */ }
+    }
+  });
+}
+
+/**
+ * Prune gate/<fp>.json, verdicts/<fp>.json and logs/<fp>-<step>.log to the
+ * RETENTION limits. The records of `currentFp`, the tree the session starts
+ * on, are kept whatever their age. A pruned verdict means a later Stop on that
+ * tree asks for a fresh review; a pruned gate result, a fresh gate run.
+ */
+export function pruneFingerprintState(proj, currentFp) {
+  const mine = (n) => Boolean(currentFp) && (n === `${currentFp}.json` || n.startsWith(`${currentFp}-`));
+  for (const d of ['verdicts', 'gate', 'logs']) pruneFiles(path.join(proj.stateDir, d), RETENTION[d], mine);
+}
+
+const TELEMETRY = 'telemetry.jsonl';
+const TELEMETRY_OLD = 'telemetry.1.jsonl';
+
 export function telemetry(proj, input, event, detail = {}) {
   try {
     fs.mkdirSync(proj.stateDir, { recursive: true });
-    fs.appendFileSync(path.join(proj.stateDir, 'telemetry.jsonl'), JSON.stringify({
+    const file = path.join(proj.stateDir, TELEMETRY);
+    // Rotate at the cap and keep one old file, so the pair stays under about twice the cap.
+    try { if (fs.statSync(file).size >= RETENTION.telemetryBytes) fs.renameSync(file, path.join(proj.stateDir, TELEMETRY_OLD)); } catch { /* absent, or rotated by another hook */ }
+    fs.appendFileSync(file, JSON.stringify({
       t: new Date().toISOString(), sid: input?.session_id, agent: input?.agent_type ?? 'main', event, ...detail,
     }) + '\n');
   } catch { /* best effort */ }
+}
+
+/** The telemetry rows that remain, oldest file first; lines that do not parse are skipped. */
+export function readTelemetry(proj) {
+  return [TELEMETRY_OLD, TELEMETRY].flatMap((f) => (readText(path.join(proj.stateDir, f)) ?? '').split('\n'))
+    .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 }
 
 // ---------- change detection and fingerprint ----------

@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   discover, relTo, norm, readText, writeAtomic, globMatch, crateOf, sessionDir, agentKey,
   markSkillLoaded, skillLoaded, setBase, baseRev, pruneSessions, pruneMarkers, telemetry, rustChanges,
-  fingerprint, diffStat, run, startFingerprint,
+  fingerprint, diffStat, run, startFingerprint, pruneFingerprintState,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
 import { parseToml } from './toml.mjs';
@@ -71,7 +71,7 @@ export function sessionStart(input) {
   const sid = input.session_id;
   const fresh = ['startup', 'clear', 'fork'].includes(input.source);
   setBase(proj, sid, fresh);
-  if (input.source === 'startup') { pruneSessions(proj); pruneMarkers(); }
+  if (input.source === 'startup') { pruneSessions(proj); pruneMarkers(); pruneFingerprintState(proj, startFingerprint(proj, sid)); }
   if (process.env.CLAUDE_ENV_FILE) {
     const baseLine = baseRev(proj, sid) ? `export TEMPER_BASE="${baseRev(proj, sid)}"\n` : '';
     try { fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export TEMPER_CLI="${norm(cli())}"\n${baseLine}`); } catch { /* ignore */ }
