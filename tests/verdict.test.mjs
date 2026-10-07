@@ -1,18 +1,21 @@
 // Review verdicts (scripts/lib/verdict.mjs): extraction from the reviewer's
 // final message, validation, and storage keyed by tree fingerprint.
 //
-// Left out on purpose: the suffix match between evidence.files_read and the
-// changed files, and an approval whose scores are all "n/a". Audit finding
-// 1-12 (docs/history/2026-10-audit/report.md) may change both, so these tests
-// use exact paths and integer scores.
+// Audit finding engine-1-12 (docs/history/2026-10-audit/findings.json): a
+// files_read entry covers a changed file only by whole path components (a bare
+// suffix such as "lib.rs" does not), and every verdict rates at least
+// MIN_APPLICABLE_SCORES dimensions with an integer score.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DIMENSIONS, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { DIMENSIONS, MIN_APPLICABLE_SCORES, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { discover, rustChanges } from '../scripts/lib/project.mjs';
 
 const FP = '0123456789abcdef';
+const noGit = spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0 ? false : 'git is not installed';
 
 /** A well-formed approval; `over` replaces top-level fields. */
 const verdict = (over = {}) => ({
@@ -121,6 +124,72 @@ test('validateVerdict: a changed .rs file missing from files_read is reported', 
   // Windows separators in files_read compare equal
   const win = verdict({ evidence: { files_read: ['crates\\core\\src\\lib.rs', 'crates/core/src/new.rs'], commands_run: ['gate'] } });
   assert.deepEqual(validateVerdict(win, ctx), []);
+});
+
+test('validateVerdict: files_read covers a changed file by whole path components, not by a bare suffix', () => {
+  const ctx = { changedRust: ['crates/core/src/lib.rs'] };
+  const read = (...files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), ctx);
+  // refused: a suffix of the changed path, or a longer path that does not split at a "/"
+  for (const entry of ['s', 'lib.rs', 'src/lib.rs', 'core/src/lib.rs', 'ore/src/lib.rs', 'xcrates/core/src/lib.rs', 'crates/core/src/lib', 'crates/core/src/lib.rs/', '']) {
+    assert.deepEqual(read(entry), ['changed files not reviewed: crates/core/src/lib.rs'], `files_read ${JSON.stringify(entry)}`);
+  }
+  // accepted: the path itself (either separator, with or without ./), or a longer path ending in /<the path>
+  for (const entry of [
+    'crates/core/src/lib.rs', './crates/core/src/lib.rs', '.\\crates\\core\\src\\lib.rs', ' crates/core/src/lib.rs ',
+    '/home/dev/proj/crates/core/src/lib.rs', 'C:\\Users\\dev\\proj\\crates\\core\\src\\lib.rs', 'C:/Users/dev/proj/crates/core/src/lib.rs',
+    '\\\\?\\C:\\proj\\crates\\core\\src\\lib.rs', 'proj/crates/core/src/lib.rs',
+  ]) {
+    assert.deepEqual(read(entry), [], `files_read ${JSON.stringify(entry)}`);
+  }
+  // a crate at the repository root: the short path is the whole changed path
+  const root = { changedRust: ['src/main.rs', 'build.rs'] };
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['src/main.rs', '/repo/build.rs'], commands_run: ['gate'] } }), root), []);
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['main.rs', 'build.rs'], commands_run: ['gate'] } }), root), ['changed files not reviewed: src/main.rs']);
+  // one entry covers only its own file: "lib.rs" no longer covers every lib.rs in the workspace
+  const two = { changedRust: ['crates/a/src/lib.rs', 'crates/b/src/lib.rs'] };
+  assert.deepEqual(validateVerdict(verdict({ evidence: { files_read: ['crates/a/src/lib.rs', 'lib.rs'], commands_run: ['gate'] } }), two), ['changed files not reviewed: crates/b/src/lib.rs']);
+});
+
+test('validateVerdict: the paths SubagentStart lists, as given or absolute, cover the changed files', { skip: noGit }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-verdict-repo-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const put = (rel, text) => { const f = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
+  const git = (...args) => execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  put('Cargo.toml', '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n');
+  put('crates/core/Cargo.toml', '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2024"\n');
+  put('crates/core/src/lib.rs', '//! Core.\n');
+  git('init', '-q');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  put('crates/core/src/lib.rs', '//! Core, changed.\n');
+  put('crates/core/src/new.rs', '//! New.\n');
+  const proj = discover(dir);
+  const changedRust = rustChanges(proj, git('rev-parse', 'HEAD')).filter((f) => f.endsWith('.rs'));
+  assert.deepEqual([...changedRust].sort(), ['crates/core/src/lib.rs', 'crates/core/src/new.rs']);
+  const check = (files_read) => validateVerdict(verdict({ evidence: { files_read, commands_run: ['gate'] } }), { changedRust });
+  // the repo-relative paths SubagentStart prints, and the same files as native absolute paths
+  assert.deepEqual(check(changedRust), []);
+  assert.deepEqual(check(changedRust.map((f) => path.join(proj.root, ...f.split('/')))), []);
+  assert.deepEqual(check(changedRust.map((f) => path.join(dir, ...f.split('/')))), []);
+  has(check(['lib.rs', 'new.rs']), /^changed files not reviewed: crates\/core\/src\/(lib|new)\.rs, crates\/core\/src\/(lib|new)\.rs$/);
+});
+
+test(`validateVerdict: every verdict rates at least ${MIN_APPLICABLE_SCORES} dimensions with an integer score`, () => {
+  assert.equal(MIN_APPLICABLE_SCORES, 3);
+  const scored = (n, over = {}) => verdict({ scores: Object.fromEntries(DIMENSIONS.map((d, i) => [d, i < n ? 3 : 'n/a'])), ...over });
+  const msg = (n) => `scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 ("n/a" only where a dimension does not apply); ${n} rated`;
+  // refused: an approval with every score "n/a", or with fewer than the minimum rated
+  assert.deepEqual(validateVerdict(scored(0)), [msg(0)]);
+  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES - 1)), [msg(MIN_APPLICABLE_SCORES - 1)]);
+  // refused too for changes-requested: the scores are the review's evidence either way
+  assert.deepEqual(validateVerdict(scored(0, { verdict: 'changes-requested' })), [msg(0)]);
+  // accepted: exactly the minimum, for either verdict, and a 0 counts as rated
+  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES)), []);
+  assert.deepEqual(validateVerdict(scored(MIN_APPLICABLE_SCORES, { verdict: 'changes-requested' })), []);
+  const zero = { ...scored(MIN_APPLICABLE_SCORES).scores, correctness: 0 };
+  assert.deepEqual(validateVerdict(verdict({ verdict: 'changes-requested', scores: zero })), []);
+  // a missing scores object reports that problem, not the minimum as well
+  assert.ok(!validateVerdict(verdict({ scores: undefined })).some((p) => p.startsWith('scores must rate')));
 });
 
 test('validateVerdict: "approved" must agree with the findings, the scores and the gate', () => {

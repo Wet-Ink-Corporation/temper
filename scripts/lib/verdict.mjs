@@ -8,6 +8,23 @@ export const DIMENSIONS = [
 ];
 const SEVERITIES = ['blocker', 'major', 'minor', 'nit'];
 
+/**
+ * The fewest dimensions a verdict must rate 0-4 rather than "n/a". Three apply
+ * to any Rust change, however small: correctness, escape_hatches and craft.
+ */
+export const MIN_APPLICABLE_SCORES = 3;
+
+/** A path with "/" separators and no leading "./". */
+const normPath = (f) => String(f).trim().replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+
+/**
+ * Whether a files_read entry names the changed file (both normalised): the same
+ * path, or a longer one (absolute, or under the project root) whose trailing
+ * components are the whole changed path. A bare suffix such as "lib.rs" or
+ * "src/lib.rs" for crates/core/src/lib.rs does not cover it.
+ */
+const covers = (read, changed) => changed !== '' && (read === changed || read.endsWith(`/${changed}`));
+
 /** Extract the last fenced json block containing "temper_verdict". */
 export function extractVerdict(text) {
   if (!text) return null;
@@ -48,13 +65,15 @@ export function validateVerdict(v, ctx = {}) {
       if (s === undefined) p.push(`scores.${d} is missing (0-4 or "n/a")`);
       else if (s !== 'n/a' && !(Number.isInteger(s) && s >= 0 && s <= 4)) p.push(`scores.${d} must be 0-4 or "n/a"`);
     }
+    const rated = DIMENSIONS.filter((d) => Number.isInteger(scores[d]) && scores[d] >= 0 && scores[d] <= 4).length;
+    if (rated < MIN_APPLICABLE_SCORES) p.push(`scores must rate at least ${MIN_APPLICABLE_SCORES} dimensions 0-4 ("n/a" only where a dimension does not apply); ${rated} rated`);
   }
   const ev = v.evidence ?? {};
   if (!Array.isArray(ev.files_read) || ev.files_read.length === 0) p.push('evidence.files_read must list the files you actually read');
   if (!Array.isArray(ev.commands_run) || ev.commands_run.length === 0) p.push('evidence.commands_run must list the commands you ran (at least the gate)');
   if (ctx.changedRust?.length && Array.isArray(ev.files_read)) {
-    const read = ev.files_read.map((f) => String(f).replace(/\\/g, '/'));
-    const missed = ctx.changedRust.filter((f) => f.endsWith('.rs') && !read.some((r) => r.endsWith(f) || f.endsWith(r)));
+    const read = ev.files_read.map(normPath);
+    const missed = ctx.changedRust.filter((f) => f.endsWith('.rs') && !read.some((r) => covers(r, normPath(f))));
     if (missed.length) p.push(`changed files not reviewed: ${missed.slice(0, 10).join(', ')}`);
   }
   if (v.verdict === 'approved') {

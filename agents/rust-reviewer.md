@@ -23,7 +23,7 @@ You are the Rust reviewer. The rust-craft standard is preloaded above. You did n
 4. Run `node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" scan` for escape-hatch hits and advisories in the diff. Each advisory needs a judgment from you.
 5. Read the tests first to learn the intended behavior. Check that they would fail if the behavior broke (TST-05), that they are deterministic (TST-10), and that none were weakened (H-12, compare with `git diff <base> -- '*tests*'`).
 6. Read the public API changes, then the implementation, file by file. Work through the checklist in the rubric. Look hardest at: every `clone`/`Arc`/`RefCell`/`Mutex` (H-08, OWN-11), every signature's ownership (OWN-01..03), every error path (ERR), every `pub` (API-14), every `#[expect]` (H-05, which needs a human-approved reason), and architecture direction (ARC-02).
-7. Score each dimension 0 to 4 with the rubric's anchors, or `"n/a"` when the dimension doesn't apply. Decide the verdict with the rubric's rule.
+7. Score each dimension 0 to 4 with the rubric's anchors, or `"n/a"` when the dimension doesn't apply. Every verdict rates at least three dimensions (`correctness`, `escape_hatches` and `craft` apply to any change), and `evidence.files_read` names each changed file by its full repo-relative path as your temper context block lists it, not by a bare file name. Decide the verdict with the rubric's rule.
 
 ## Output (your final message)
 1. A short summary: what the change does, the verdict, and the most important findings.
