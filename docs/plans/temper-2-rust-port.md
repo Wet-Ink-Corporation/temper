@@ -2,7 +2,7 @@
 
 ## Goal
 
-temper's enforcement engine (the `temper` CLI and every hook handler: 5,593 lines of Node in `scripts/`, plus the copy vendored into user repositories) becomes a Rust workspace in this repository that follows the rust-craft standard. It ships as per-platform npm packages that Claude Code installs itself (exact pins, `--ignore-scripts`), with a `cargo build --release --locked` fallback into `${CLAUDE_PLUGIN_DATA}`. Hooks, messages, exit codes and on-disk state behave exactly as in 1.2.3, except for a short list of divergences a human approves (D16). User repositories stop vendoring a Node copy and install a pinned `temper` binary instead.
+temper's enforcement engine (the `temper` CLI and every hook handler: about 5,650 lines of Node (1.3.0) in `scripts/`, plus the copy vendored into user repositories) becomes a Rust workspace in this repository that follows the rust-craft standard. It ships as per-platform npm packages that Claude Code installs itself (exact pins, `--ignore-scripts`), with a `cargo build --release --locked` fallback into `${CLAUDE_PLUGIN_DATA}`. Hooks, messages, exit codes and on-disk state behave exactly as in the last 1.x release before the port (1.3.0 today), except for a short list of divergences a human approves (D16). User repositories stop vendoring a Node copy and install a pinned `temper` binary instead.
 
 Settled by Weigh-In wi-30ed25 (`.kb/_intake/decisions/wi-30ed25-port-temper-s-cli-and-hooks-to-rust-shipped-as.md`) and not reopened here: Rust engine, per-platform npm packages with a cargo fallback, a small Node launcher, hooks in exec form (`node <launcher> ...`).
 
@@ -503,7 +503,7 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
 
 #### 2.2 How parity is established
 
-1. **Port each Node test as a Rust test** at the narrowest real seam (TST-02). Keep its inputs and expected values verbatim and its name in snake_case. There are 140 tests:
+1. **Port each Node test as a Rust test** at the narrowest real seam (TST-02). Keep its inputs and expected values verbatim and its name in snake_case. There are 143 engine tests at 1.3.0 (recounted when Phase 0a starts); `tests/release-check.test.mjs` (13 tests) checks the bash script `tests/release-check.sh`, not the engine, and is covered in §7:
 
    | Node file | Tests | Rust destination |
    |---|---|---|
@@ -511,7 +511,7 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
    | `toml.test.mjs` | 7 | `temper-domain` manifest tests; the template-manifest test goes to `temper-cli/tests/it` |
    | `findings.test.mjs` | 15 | parser and model tests in domain; collection, cache and the `rulemap` check in `cli/tests/it` |
    | `hooks.test.mjs` | 33 | bash and edit policy in domain; manifest-on-disk, gate-manifest and git cases in `cli/tests/it` |
-   | `baseline.test.mjs` | 28 | ratchet, parse_diff, tighten and render in domain; git, temp index, 8.3 names, symlinks and CLI in `cli/tests/it` |
+   | `baseline.test.mjs` | 31 | ratchet, parse_diff, tighten and render in domain; git, temp index, 8.3 names, symlinked ancestors, symlinks and CLI (including setup's strict-lint report) in `cli/tests/it`; "CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else" is not in the D16(i) list: pending owner decision |
    | `report.test.mjs` | 19 | build and render in domain (insta snapshots seeded from 1.x output); CLI in `cli/tests/it` |
    | `vendor.test.mjs` | 6 | **retired** (D16(i)), replaced by pin and migrate tests |
 
@@ -557,9 +557,9 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 | Phase | Content | Graduates |
 |---|---|---|
 | 0a | Workspace skeleton, template lints, 4 crates and xtask with charters, `temper --version`, CI Rust job (fmt, clippy, test, doc, deny on 3 OSes, plus an MSRV job) | none |
-| 0b | **Distribution spike**: `scripts/launch.mjs` with node:test tests; `xtask npm-pack`, `check-npm-lock`, `versions`; `release.yml`; publish `2.0.0-alpha.1` to npm under dist-tag `next` from a throwaway `release/2.0.0-alpha.1` branch; `verify-install` matrix on 6 runners (`npm ci --ignore-scripts` in a copied plugin dir, 60 s budget, `--version`). `package.json` is **not** on `main` yet. | none |
+| 0b | **Distribution spike**: `scripts/launch.mjs` with node:test tests; `xtask npm-pack`, `check-npm-lock`, `versions`; `release.yml`; publish `2.0.0-alpha.1` to npm under dist-tag `next` from a throwaway `release/2.0.0-alpha.1` branch; `verify-install` matrix on 6 runners (`npm ci --ignore-scripts` in a copied plugin dir, 60 s budget, `--version`); verify-install also covers a claude.ai organization-synced install and a cloud environment setup-script install (manual, recorded in Progress); both must pass before 0b exits (wi-48fb44). `package.json` is **not** on `main` yet. | none |
 | 0c | Fallback build in the launcher: lock, `cargo build --release --locked`, atomic install, `build.failed` marker; D6 behaviours tested with the binary absent | none |
-| 1 | Domain: lexer, regions, rules, finders, `Scanner`, `new_hits`, `classify_path`; scanner differential corpus job. App: minimal `discover`, `crate_of`, `rel_to` (verbatim and 8.3 cases). `temper scan` | `scan` |
+| 1 | Domain: lexer, regions, rules, finders, `Scanner`, `new_hits`, `classify_path`; scanner differential corpus job. App: minimal `discover`, `crate_of`, `rel_to` (verbatim, 8.3 and symlinked-ancestor cases). `temper scan` | `scan` |
 | 2 | Manifest, config, glob; hook I/O; telemetry; skill markers. Handlers `pre-bash`, `pre-edit`, `post-tool`, `user-prompt` (the hot path) | `hook pre-bash`, `hook pre-edit`, `hook post-tool`, `hook user-prompt` |
 | 3 | Fingerprint (parity corpus), sessions (base, start-fp, prune), gate-cache read, verdict extract, validate and record. Handlers `session-start`, `subagent-start`, `pre-handback`, `subagent-stop` (reviewer branch); `status` | those hooks, `status` |
 | 4 | `StdProcess` with timeouts; gate steps, manifests step, scan step, cache, render; `stop` and `subagent-stop` (implementer branch); `temper gate` | `gate`, `hook stop`, `hook subagent-stop` |
@@ -645,7 +645,7 @@ The commands and args are unchanged (`node ${CLAUDE_PLUGIN_ROOT}/scripts/temper.
 
 | Situation | What happens |
 |---|---|
-| Marketplace install or update, npm present and fast | Claude Code copies the plugin to `cache/temper/temper/X/` and runs `npm ci --ignore-scripts`; the matching `@wet-ink/temper-*` lands in `node_modules`. The first hook resolves it (b). No build, no wait. |
+| Marketplace install or update (also `claude plugin install` in a cloud environment's setup script, unverified: see Risks), npm present and fast | Claude Code copies the plugin to `cache/temper/temper/X/` and runs `npm ci --ignore-scripts`; the matching `@wet-ink/temper-*` lands in `node_modules`. The first hook resolves it (b). No build, no wait. |
 | npm missing, install failed or over 60 s, or unsupported platform (freebsd, linux-ppc64, ...) | No `node_modules`. The first SessionStart runs the fallback build synchronously (about 1 to 3 min, with a status message), then works normally. If the build fails: `build.failed` is recorded, the session starts in the D6 degraded mode, and SessionStart context says how to fix it (install Rust ≥ MSRV, or `TEMPER_DISABLE=1`). |
 | `--plugin-dir` or local-directory marketplace (dev) | Loaded in place, no npm install. Every SessionStart runs `cargo build --release --locked` into the dev engine dir; cargo makes it a no-op when the sources are unchanged. Maintainers can set `TEMPER_BIN`. |
 | Eval sandbox that hides `~/.rustup` | The fallback cannot build; set `TEMPER_BIN` to a prebuilt binary visible in the sandbox (documented in README "Development"). |
@@ -681,7 +681,7 @@ The commands and args are unchanged (`node ${CLAUDE_PLUGIN_ROOT}/scripts/temper.
 - `vendorTool` is replaced by `pin`: create `.claude/temper-version`, or report `drift  .claude/temper-version says Y, this temper is X; rerun with --force to update it`.
 
 **`temper setup --migrate`** (D15), offered when `.claude/temper/temper.mjs` exists:
-- For each of `.github/workflows/rust.yml`, `.githooks/pre-commit` and `.claude/settings.json`: when the file's SHA-256 is in `LEGACY_TEMPLATES` (a checked-in table in `temper-app::setup::legacy`, generated once by `cargo xtask legacy-hashes` from the git history of `templates/workspace/**` at tags v1.0.0..v1.2.3), replace it with the 2.0 template. Otherwise print `manual .github/workflows/rust.yml: replace "node .claude/temper/temper.mjs" with "temper" (N lines) and add the "Install temper" step from <template path>`.
+- For each of `.github/workflows/rust.yml`, `.githooks/pre-commit` and `.claude/settings.json`: when the file's SHA-256 is in `LEGACY_TEMPLATES` (a checked-in table in `temper-app::setup::legacy`, generated once by `cargo xtask legacy-hashes` from the git history of `templates/workspace/**` at every `v1.*` tag up to the cutover, v1.0.0..v1.3.0 today; the tag list comes from `git tag -l "v1.*"`, not a hard-coded range), replace it with the 2.0 template. Otherwise print `manual .github/workflows/rust.yml: replace "node .claude/temper/temper.mjs" with "temper" (N lines) and add the "Install temper" step from <template path>`.
 - For `settings.json` (customised): line-exact replacement of the four known allow entries when present; otherwise manual.
 - Remove `.claude/temper/`; write `.claude/temper-version`.
 - `--dry-run` shows everything without writing.
@@ -699,6 +699,7 @@ The commands and args are unchanged (`node ${CLAUDE_PLUGIN_ROOT}/scripts/temper.
   - The Python checks.
   - `cargo xtask versions --check` and `check-npm-lock`.
   - The vendored-copy diff is removed; a "templates' temper-version equals plugin.json" check is added.
+- **`tests/release-check.sh`** (129 lines, added in 1.3.0) and its 13 tests in `tests/release-check.test.mjs`: it checks that `plugin.json`, the top CHANGELOG heading, `templates/example-workspace/.claude/temper/VERSION` and, given `--tag`, the tag agree, and that a release changing `scripts/` or `templates/workspace/` has an "Upgrading from" note. `tests/ci.sh` and the 1.x `release.yml` run it, and `release.yml` also calls it with `--notes` to write the GitHub release notes from the CHANGELOG section (`.github/workflows/release.yml:63`), so retiring the script moves that job to the port's `release.yml` or xtask. The vendored `VERSION` is deleted at cutover, and the version agreement overlaps `cargo xtask versions --check`. Whether the script is adapted to `xtask versions --check` or retired, and whether its tests join the D16(i) retired list: pending owner decision. Either way, the port keeps its three jobs: writing the release notes from the CHANGELOG section (`--notes`), refusing an `## Unreleased` section above the release heading, and requiring the "Upgrading from" note.
 - **`registry.py`:** scan `crates/**/*.rs` and `scripts/*.mjs` for rule IDs instead of `scripts/**/*.mjs`.
 - **`lint-claims.py` and `gen_rulemap.py`:** read `(key, id)` pairs from `crates/temper-domain/src/scan/rules.rs` as text; `OUT_REL` becomes `crates/temper-domain/data/rulemap.json`.
 - **`doc_examples.py`:** the scanner pass writes each block to `<tmp>/b<N>/src/lib.rs` (or `src/main.rs` when it has `fn main`) with a minimal `[package]` manifest, and runs `$TEMPER_BIN scan <files> --json` once.
@@ -728,6 +729,7 @@ Phase 0
 - [ ] `xtask versions --check` fails when any one of the version sites differs (one case per site).
 - [ ] `xtask check-npm-lock` fails on: a missing platform entry (the #4828 shape), a non-exact pin, an `http` resolved URL, a missing integrity, an extra package, `overrides` or `scripts` in `package.json`, lockfileVersion 1.
 - [ ] `xtask npm-pack` produces six package dirs with the correct `os`/`cpu`, mode 0755 binaries and no lifecycle scripts (snapshot of the generated package.json files, insta).
+- [ ] verify-install, manual, once in Phase 0b: install `2.0.0-alpha.1` through a claude.ai organization sync (`~/.claude/plugins/synced/`) and through a cloud environment's setup script (`claude plugin marketplace add` plus `claude plugin install`). Record in Progress whether `node_modules/@wet-ink/temper-*` is present in each, and if not, whether the fallback build or D6 degraded mode follows. Phase 0b does not exit until both paths have an engine (wi-48fb44): a path that skips `npm ci` gets a step in the environment's setup script that installs the npm package, and this check is run again.
 
 Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
 - [ ] masks strings, raw strings, chars and comments but keeps lifetimes (incl. `'\''`, `br#".."#`, nested block comments, unterminated string at EOF).
@@ -747,6 +749,7 @@ Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
 - [ ] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
 - [ ] differential corpus (CI job, not a unit test): zero unexplained diffs over the example workspace, the skill code blocks and the registry sources.
 - [ ] `rel_to`: verbatim `\\?\C:\...` and `//?/C:/...` inputs (domain, both `PathStyle`s); 8.3 short name vs long name is the same root (cli/it, `#[cfg(windows)]`, uses `cmd /c for %I in (..) do @echo %~sI` as 1.x does).
+- [ ] `rel_to`: one directory reached through a symlinked ancestor and through its real path is the same root (cli/it, every OS; ported from the 1.3.0 relTo symlink test; the symlink probe and the Windows privilege handling as in `safe_output_path`).
 - [ ] `temper scan --all --json` and `scan FILE` output equal the parity cases (cli/it with the fixture workspace).
 
 Phase 2: manifests, config, hooks hot path
@@ -779,7 +782,7 @@ Phase 3: state, fingerprint, sessions, verdicts
 - [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line.
 - [ ] `subagent-start` context for implementer and reviewer (the reviewer runs `cargo fmt --all` first, gets the fingerprint instruction and the diff stat last 25 lines); the 5 newest plans by mtime.
 - [ ] `status` lines (root, state, base, fingerprint, changed, gate, review, baseline variants, config).
-- [ ] state cross-read: Rust reads 1.2.3-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
+- [ ] state cross-read: Rust reads 1.x-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
 
 Phase 4: gate and completion hooks
 - [ ] `StdProcess`: captures stdout and stderr; enforces the stderr cap; a timeout kills the child and returns `TimedOut` (test uses the test binary itself as the child via `std::env::current_exe` with a "hang" argument handled in `tests/it/main.rs`, so no `sleep` is needed: it blocks on reading stdin that never closes); spawn failure gives `ProcessError::Spawn`; stdin is null.
@@ -823,14 +826,16 @@ Phase 6: report (ported from `report.test.mjs`)
 Phase 7: setup, migration, stats
 - [ ] `setup --dry-run` lists create, skip, manual and append actions exactly as 1.x for a fresh repo (minus the vendoring line, plus `create .claude/temper-version`).
 - [ ] setup never overwrites without `--force`; the root `Cargo.toml` without `[workspace.lints]` gives the manual line; `.gitignore` gets `.temper/` once.
+- [ ] setup reports, exactly as 1.x: a `manual <path>:<lines>` line for each workflow or contributor doc (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, the PR template) that differs from the template and uses `-D warnings`; without `--force`, a `manual clippy.toml` line naming the `allow-*-in-tests` keys an existing `clippy.toml` lacks; and the closing `cargo machete` reminder (ported from "CLI: setup reports strict lint steps and the test exemptions an existing clippy.toml lacks").
 - [ ] setup without a plugin root refuses with exit 2.
 - [ ] pin drift is reported and replaced only with `--force` (replaces the retired vendor drift test).
 - [ ] `--migrate`: a 1.x-template `rust.yml`, `pre-commit` and `settings.json` are replaced; customised ones produce manual lines and stay untouched; `.claude/temper/` is removed; `--dry-run` writes nothing.
-- [ ] `LEGACY_TEMPLATES` covers every historic version of the three files (an xtask test regenerates from git history and compares).
+- [ ] `--migrate` on a customised `rust.yml` (the case for both 1.x pilots, see Risks): the manual line's N equals the number of lines in the file that contain `node .claude/temper/temper.mjs`, and it names the template path of the "Install temper" step.
+- [ ] `LEGACY_TEMPLATES` covers every historic version of the three files (an xtask test regenerates from git history and compares; the xtask derives the tag list from git, so a later 1.x release is covered without a code change).
 - [ ] the example workspace's `.claude/temper-version` equals the plugin version (replaces "the example workspace carries an up-to-date copy").
 
 Phase 8: cutover
-- [ ] `tests/parity/check_test_map.py`: all 140 1.x tests mapped or retired (D16(i)), every mapped Rust test exists. Run once before deleting the Node tests, and its output is recorded in Progress.
+- [ ] `tests/parity/check_test_map.py`: all 1.x engine tests (143 at 1.3.0) mapped or retired (D16(i)), every mapped Rust test exists. Run once before deleting the Node tests, and its output is recorded in Progress.
 - [ ] `verify-npm` matrix green for the 2.0.0 release candidate on all six runners.
 - [ ] `claude plugin validate --strict` passes with `package.json` present.
 - [ ] `tests/e2e/smoke.sh` (manual, model calls) with the marketplace-style install: SessionStart and the Stop gate work.
@@ -847,7 +852,9 @@ Phase 8: cutover
 - **Windows paths** (verbatim, 8.3, case, separators): ported tests plus `PathStyle`-parameterised domain tests that run on every OS.
 - **Binary size and npm download time**: expect a 3 to 6 MB stripped musl binary (no `strip`/LTO changes beyond the template's `lto = "thin"`, `codegen-units = 1`; stripping symbols is an H-16 profile decision, not taken here).
 - **Scope creep in the port** (rewriting rules "while we are here"): forbidden by the constraints. Any rule change is a separate 2.x change.
-- **Missing upstream facts**: the npm org's existence, the availability of `windows-11-arm` and `ubuntu-24.04-arm` runners to this repository, `(?-u:\b)` acceptance in `regex` 1.13, and the `sha2` 0.11 default features. Each is verified in the phase that first uses it (PROC-01), and a failure is reported as BLOCKED.
+- **Install paths that may skip npm.** Cloud sessions are a primary way this organization works, and they get temper in two ways that §5.3 does not cover as verified: claude.ai's organization sync into `~/.claude/plugins/synced/`, and `claude plugin marketplace add` plus `claude plugin install` in the cloud environment's setup script (`docs/troubleshooting.md`, "Cloud sessions and claude.ai"). Nothing establishes yet whether either runs `npm ci --ignore-scripts`. If one does not, its sessions take the fallback build, which needs Rust ≥ MSRV in the image (the setup script must install it) and costs the first SessionStart 1 to 3 min, or else D6 degraded mode. The Phase 0b manual verify-install step settles both. Decided by the owner (wi-48fb44, 2026-10-07): a passing verify-install on both paths is a Phase 0b exit criterion, and a path that does not run `npm ci` installs the npm package from the environment's setup script. Prebuilt binaries in the plugin and the fallback build with Rust in the image were not chosen.
+- **Customised CI files in the 1.x adopters.** The audit (`docs/history/2026-10-audit/findings.json`, port-2.0-1-13) found that both pilots (weigh-in, redkiln-rs) have a customised `rust.yml`, and weigh-in a customised `.claude/settings.json`, so their SHA-256 is not in `LEGACY_TEMPLATES`. `--migrate` will print manual steps for their `rust.yml` (and settings.json falls to the line-exact allow-entry replacement). The manual lines must be exact and complete, and the CHANGELOG 2.0.0 migration guide (§7) walks through a customised `rust.yml`. Whether `--migrate` should rewrite the `rust.yml` call sites line by line is pending owner decision.
+- **Missing upstream facts**: the npm org's existence and the availability of `windows-11-arm` and `ubuntu-24.04-arm` runners to this repository (both confirmed 2026-10-02, `docs/plans/v1-readiness.md` steps 0.8 and 0.9; the arm64 runners by `runner-probe.yml` [run 2](https://github.com/Wet-Ink-Corporation/temper/actions/runs/37043545399), on a branch, while #23 still lists them as open), `(?-u:\b)` acceptance in `regex` 1.13, and the `sha2` 0.11 default features. Each is verified in the phase that first uses it (PROC-01), and a failure is reported as BLOCKED.
 
 ## Size estimate (lower bound)
 
@@ -855,7 +862,7 @@ Phase 8: cutover
 - **Rust tests:** domain and app unit tests ~5,000, `cli/tests/it` ~3,500 in ~14 files, fixtures.
 - **Launcher** (~120 lines), launcher tests (~250), parity harness (~700, temporary), `release.yml` (~350), `ci.yml` (+~150), manifests and charters (~15 files, ~700).
 - **Docs, templates, skills and Python check edits:** ~25 files, ~800 changed lines.
-- **Total:** at least ~110 files and ~26,000 lines added. ~14,000 lines deleted at cutover (`scripts/lib`, the old CLI, the 140 Node tests and the vendored copy in the example workspace).
+- **Total:** at least ~110 files and ~26,000 lines added. ~14,000 lines deleted at cutover (`scripts/lib`, the old CLI, the 143 Node engine tests and the vendored copy in the example workspace).
 
 ## Decisions (H-16) record
 
@@ -886,5 +893,6 @@ Phase 8: cutover
 - 2026-10-02: Owner decided D1, D2, D5, D6, D11, D12, D16 as recommended and the crate licence as `MIT OR Apache-2.0` (override of the MIT recommendation; §1.1, §1.2 and the npm-pack step updated). D7, D8, D9 recorded as two-way defaults. Records in `.kb/_intake/decisions/`.
 - 2026-10-02: Owner decided D3 (four crates), D4 (MSRV 1.96), D10 (regex, toml, sha2, wait-timeout) and D17 (PATH export) as recommended.
 - 2026-10-02: Owner decided D13 (install-action), D14 (`.claude/temper-version`) and D15 (hash-guarded `--migrate`) as recommended. All D1..D17 and the licence are decided.
-- 2026-10-02 (owner, via `docs/plans/v1-readiness.md` steps 0.8 and 0.9): the `@wet-ink` npm org exists. The four crate names are reserved as `0.0.0` placeholders. Arm64 targets use GitHub's standard arm64 runners, pending `runner-probe.yml`. The port's CI is tiered: Linux on every PR; Windows and macOS on code-touching PRs and `main`; the corpus scan weekly and on `release/*`; the release matrix on `release/*` only.
-- Next: Phase 0a (adds `LICENSE-APACHE`). Before the alpha publish: create the `wet-ink` npm org, reserve the four crate names, confirm `windows-11-arm` and `ubuntu-24.04-arm` runners.
+- 2026-10-02 (owner, via `docs/plans/v1-readiness.md` steps 0.8 and 0.9): the `@wet-ink` npm org exists. The four crate names are reserved as `0.0.0` placeholders. Arm64 targets use GitHub's standard arm64 runners, confirmed by `runner-probe.yml` on 2026-10-02 (all five labels run, v1-readiness 0.9; [run 2](https://github.com/Wet-Ink-Corporation/temper/actions/runs/37043545399), on a branch, not rerun on `main`). The port's CI is tiered: Linux on every PR; Windows and macOS on code-touching PRs and `main`; the corpus scan weekly and on `release/*`; the release matrix on `release/*` only.
+- 2026-10-07: Facts refreshed after the 2026-10 audit: engine size and test counts rebased to 1.3.0 (5,649 lines in `scripts/temper.mjs` and 12 `scripts/lib/` modules; 143 engine tests, `baseline.test.mjs` 31), the 1.3.0 setup and `rel_to` tests added to the test list, `LEGACY_TEMPLATES` tags derived from git, `tests/release-check.sh` in §7, and risks for the cloud install paths and the pilots' customised CI files. Open for the owner: the `setup --vendor-only` test and `tests/release-check.sh` against D16(i), and a line-level `rust.yml` rewrite against D15.
+- Next: Phase 0a (adds `LICENSE-APACHE`), after v1 goes live and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the `release` environment and the npm and crates.io trusted publishers (D12); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9); tick the arm64 box in #23, which still shows it open.
