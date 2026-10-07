@@ -9,7 +9,7 @@ import {
   fingerprint, diffStat, run, startFingerprint,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
-import os from 'node:os';
+import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing } from './shell.mjs';
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
@@ -349,353 +349,14 @@ const shellWrites = (target, { copies = false } = {}) => {
 };
 const SHELL_WRITE_RS = shellWrites('\\.rs');
 
-// ---- cp/mv/install/git mv/Copy-Item/Move-Item onto .rs, and git apply/patch (audit engine-1-8)
+// ---- cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs, and git apply/am/patch (audit engine-1-8)
 
-/**
- * The simple commands of a shell line, read the way the shell reads quotes: each is
- * `{ words, stdin, piped, writes }`. A word is `{ t, dyn }`, where `dyn` marks a value
- * temper cannot know (a variable, command or process substitution, a glob, `~`). `stdin`
- * is the word after `<` (`dyn` for a here-string; for a heredoc, `{ heredoc: true, text }`
- * where `text` is the body when it is literal: a quoted delimiter, or no `$` or backquote).
- * `piped` is true after `|`; `writes` are the `>` targets. A subshell's `(` and `)` appear
- * as `{ open: true }` and `{ close: true }` entries, so a `cd` inside one can be undone.
- */
-function shellCommands(cmd) {
-  const s = String(cmd);
-  const out = [];
-  let cur = { words: [], stdin: null, piped: false, writes: [] };
-  let w = null;
-  let redirect = null;
-  let heredocs = [];
-  const word = () => (w ??= { t: '', dyn: false });
-  const endWord = () => {
-    if (!w) return;
-    if (redirect === '<') cur.stdin = w;
-    else if (redirect === '<<' || redirect === '<<-') {
-      cur.stdin = { t: '', dyn: true, heredoc: true, text: null };
-      heredocs.push({ d: w.t, quoted: Boolean(w.q), tabs: redirect === '<<-', into: cur.stdin });
-    } else if (redirect === '<<<') cur.stdin = { t: '', dyn: true };
-    else if (redirect === '>') cur.writes.push(w);
-    else cur.words.push(w);
-    redirect = null;
-    w = null;
-  };
-  const endCmd = (piped) => {
-    endWord();
-    if (cur.words.length) out.push(cur);
-    cur = { words: [], stdin: null, piped, writes: [] };
-  };
-  // Index of the closing `close` that balances an `open` at i (or the end).
-  const balanced = (i, open, close) => {
-    let depth = 0;
-    for (let j = i; j < s.length; j++) {
-      if (s[j] === open) depth++;
-      else if (s[j] === close && --depth === 0) return j;
-    }
-    return s.length - 1;
-  };
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (c === "'") {
-      const j = s.indexOf("'", i + 1);
-      const end = j === -1 ? s.length : j;
-      word().t += s.slice(i + 1, end);
-      w.q = true;
-      i = end;
-    } else if (c === '"') {
-      const ww = word();
-      ww.q = true;
-      let j = i + 1;
-      for (; j < s.length && s[j] !== '"'; j++) {
-        if (s[j] === '\\' && '"\\$`\n'.includes(s[j + 1] ?? '')) { j++; if (s[j] !== '\n') ww.t += s[j]; continue; }
-        if (s[j] === '$' || s[j] === '`') ww.dyn = true;
-        ww.t += s[j];
-      }
-      i = j;
-    } else if (c === '\\') {
-      if (s[i + 1] !== '\n') { word().t += s[i + 1] ?? ''; w.q = true; }
-      i++;
-    } else if (c === '#' && !w) {
-      const j = s.indexOf('\n', i);
-      i = (j === -1 ? s.length : j) - 1;
-    } else if (c === '\n') {
-      endCmd(false);
-      // Skip heredoc bodies up to each delimiter line, keeping a literal body as the command's stdin.
-      for (const h of heredocs) {
-        let pos = i + 1;
-        const body = [];
-        let closed = false;
-        for (;;) {
-          const nl = s.indexOf('\n', pos);
-          const line = s.slice(pos, nl === -1 ? s.length : nl);
-          pos = nl === -1 ? s.length : nl + 1;
-          if (line.replace(/^\t+/, '').replace(/\r$/, '') === h.d) { closed = true; break; }
-          if (nl === -1) break;
-          body.push(h.tabs ? line.replace(/^\t+/, '') : line);
-        }
-        const text = body.length ? `${body.join('\n')}\n` : '';
-        if (closed && (h.quoted || !/[$`]|\\[\\$`\n]/.test(text))) h.into.text = text;
-        i = pos - 1;
-      }
-      heredocs = [];
-    } else if (c === ';') {
-      endCmd(false);
-    } else if (c === '(' || c === ')') {
-      endCmd(false);
-      out.push(c === '(' ? { open: true } : { close: true });
-    } else if (c === '&') {
-      if (s[i + 1] === '>') { endWord(); redirect = '>'; i++; if (s[i + 1] === '>') i++; } else { if (s[i + 1] === '&') i++; endCmd(false); }
-    } else if (c === '|') {
-      if (s[i + 1] === '|') { i++; endCmd(false); } else { if (s[i + 1] === '&') i++; endCmd(true); }
-    } else if ((c === '<' || c === '>') && s[i + 1] === '(') {
-      const j = balanced(i + 1, '(', ')');
-      const ww = word();
-      ww.t += s.slice(i, j + 1);
-      ww.dyn = true;
-      i = j;
-    } else if (c === '<' || c === '>') {
-      if (w && !w.dyn && /^\d+$/.test(w.t)) w = null; else endWord();
-      if (c === '>') {
-        redirect = '>';
-        while ('>|&'.includes(s[i + 1] ?? 'x')) i++;
-      } else if (s.startsWith('<<<', i)) { redirect = '<<<'; i += 2; }
-      else if (s.startsWith('<<', i)) { redirect = '<<'; i++; if (s[i + 1] === '-') { i++; redirect = '<<-'; } }
-      else { redirect = '<'; if (s[i + 1] === '&') i++; }
-    } else if (/\s/.test(c)) {
-      endWord();
-    } else if (c === '$' && (s[i + 1] === '(' || s[i + 1] === '{')) {
-      const j = balanced(i + 1, s[i + 1], s[i + 1] === '(' ? ')' : '}');
-      const ww = word();
-      ww.t += s.slice(i, j + 1);
-      ww.dyn = true;
-      i = j;
-    } else if (c === '`') {
-      const j = s.indexOf('`', i + 1);
-      const end = j === -1 ? s.length : j;
-      const ww = word();
-      ww.t += s.slice(i, end + 1);
-      ww.dyn = true;
-      i = end;
-    } else {
-      const ww = word();
-      if ('$*?[{'.includes(c) || (c === '~' && ww.t === '')) ww.dyn = true;
-      ww.t += c;
-    }
-  }
-  endCmd(false);
-  return out;
-}
-
-// Wrappers that run the command after them, with the options that take a value.
-const COMMAND_WRAPPERS = new Map([
-  ['sudo', ['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U']], ['doas', ['-u', '-C']], ['command', []], ['builtin', []],
-  ['exec', ['-a']], ['nohup', []], ['time', []], ['env', ['-u', '-C', '-S']], ['nice', ['-n']], ['ionice', ['-c', '-n', '-p']],
-  ['stdbuf', ['-i', '-o', '-e']], ['timeout', ['-s', '-k']], ['xargs', ['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s']],
-]);
-// Reserved words that a command can follow (`if cp ...`, `then cp ...`, `{ cp ...; }`, `! cp ...`).
-const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{']);
-
-/**
- * The words of a simple command without leading `VAR=value` assignments, reserved words and
- * wrappers (`sudo`, `env`, `timeout 5`, ...). After `xargs` without `-I`, the input xargs adds
- * is appended as an unknown word.
- */
-function commandWords(words) {
-  let i = 0;
-  let xargs = false;
-  while (i < words.length) {
-    const t = words[i].t;
-    if (SHELL_KEYWORDS.has(t)) { i++; continue; }
-    if (!words[i].dyn && /^[A-Za-z_]\w*=/.test(t)) { i++; continue; }
-    const valued = COMMAND_WRAPPERS.get(t);
-    if (!valued || words[i].dyn) break;
-    i++;
-    if (t === 'xargs') xargs = true;
-    for (; i < words.length && words[i].t.startsWith('-') && words[i].t !== '-'; i++) {
-      if (t === 'xargs' && words[i].t.startsWith('-I')) xargs = false;
-      if (valued.includes(words[i].t)) i++;
-    }
-    if (t === 'timeout' && i < words.length) i++; // the duration
-  }
-  const rest = words.slice(i);
-  return xargs && rest.length ? [...rest, { t: '(xargs input)', dyn: true }] : rest;
-}
-
-/** A git-bash path (`/c/Users/...`, `/tmp/...`) as the Windows path it names; other paths unchanged. */
-export function msysPath(t, platform = process.platform) {
-  if (platform !== 'win32') return t;
-  const drive = /^\/([A-Za-z])(\/.*)?$/.exec(t);
-  if (drive) return `${drive[1].toUpperCase()}:${drive[2] ?? '/'}`;
-  const tmp = /^\/tmp(\/.*)?$/.exec(t);
-  if (tmp) return `${os.tmpdir().replace(/\\/g, '/')}${tmp[1] ?? ''}`;
-  return t;
-}
-
-/** The absolute path a word names, or null when it is not a literal path or the directory is unknown. */
-const shellPath = (cwd, w) => {
-  if (!w || w.dyn || w.t === '') return null;
-  const t = msysPath(w.t);
-  if (path.isAbsolute(t)) return path.resolve(t);
-  return cwd ? path.resolve(cwd, t) : null;
-};
 const statOf = (p) => { try { return fs.statSync(p); } catch { return null; } };
 const isDirPath = (p) => statOf(p)?.isDirectory() ?? false;
 const SPECIAL_FILE = /^\/(?:dev|proc)\//;
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
-
-/** cp, mv and install arguments: sources, destination, and whether the destination is a directory. */
-function posixCopyArgs(name, args) {
-  const valueLetters = name === 'install' ? 'tSmog' : 'tS';
-  let target = null;
-  let noTarget = false;
-  let recursive = name !== 'cp';
-  const pos = [];
-  let opts = true;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (opts && !a.dyn && a.t === '--') { opts = false; continue; }
-    if (opts && !a.dyn && a.t.startsWith('--')) {
-      const eq = a.t.indexOf('=');
-      const k = eq === -1 ? a.t : a.t.slice(0, eq);
-      const v = eq === -1 ? undefined : { t: a.t.slice(eq + 1), dyn: false };
-      if (k === '--target-directory') { target = v ?? args[++i] ?? null; if (!target) return null; }
-      else if (k === '--no-target-directory') noTarget = true;
-      else if (k === '--recursive' || k === '--archive') recursive = true;
-      else if (k === '--directory' || k === '--dry-run') return null; // install -d makes directories
-      else if (v === undefined && ['--suffix', '--mode', '--owner', '--group', '--strip-program'].includes(k)) i++;
-      continue;
-    }
-    if (opts && !a.dyn && /^-[^-]/.test(a.t)) {
-      const cluster = a.t.slice(1);
-      for (let j = 0; j < cluster.length; j++) {
-        const ch = cluster[j];
-        if (valueLetters.includes(ch)) {
-          const v = cluster.slice(j + 1) ? { t: cluster.slice(j + 1), dyn: false } : args[++i];
-          if (ch === 't') { target = v ?? null; if (!target) return null; }
-          break;
-        }
-        if (ch === 'T') noTarget = true;
-        else if ('rRa'.includes(ch)) recursive = true;
-        else if (ch === 'd' && name === 'install') return null;
-        else if (ch === 'n' && name === 'git') return null; // git mv -n is a dry run
-      }
-      continue;
-    }
-    pos.push(a);
-  }
-  if (target) return { sources: pos, dest: target, destDir: true, recursive };
-  if (pos.length < 2) return null;
-  return { sources: pos.slice(0, -1), dest: pos.at(-1), destDir: noTarget ? false : pos.length > 2 ? true : undefined, recursive };
-}
-
-/** Copy-Item / Move-Item arguments (named or positional -Path and -Destination). */
-function psCopyArgs(move, args) {
-  const paths = [];
-  const pos = [];
-  let dest = null;
-  let recursive = move;
-  let filtered = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (!a.dyn && /^-[A-Za-z]/.test(a.t)) {
-      const colon = a.t.indexOf(':');
-      const k = (colon === -1 ? a.t : a.t.slice(0, colon)).toLowerCase();
-      const val = () => (colon === -1 ? args[++i] : { t: a.t.slice(colon + 1), dyn: false });
-      if (['-path', '-literalpath', '-lp', '-pspath'].includes(k)) { const v = val(); if (v) paths.push(v); }
-      else if (k.length > 2 && '-destination'.startsWith(k)) dest = val() ?? null;
-      else if (['-filter', '-include', '-exclude'].includes(k)) { val(); filtered = true; }
-      else if (['-credential', '-tosession', '-fromsession'].includes(k)) val();
-      else if (k === '-recurse') recursive = true;
-      else if (k === '-whatif') return null;
-      continue;
-    }
-    pos.push(a);
-  }
-  if (!paths.length && pos.length) paths.push(pos.shift());
-  if (!dest && pos.length) dest = pos.shift();
-  if (!paths.length || !dest) return null;
-  const sources = paths.flatMap((p) => (p.dyn ? [p] : p.t.split(',').map((t) => ({ t, dyn: filtered }))));
-  return { sources, dest, destDir: sources.length > 1 ? true : undefined, recursive };
-}
-
-/** `git [-C dir] [-c k=v] <sub> args`: the subcommand, its arguments and the directory it runs in. */
-function gitSubcommand(args, cwd) {
-  let dir = cwd;
-  for (let i = 0; i < args.length; i++) {
-    const t = args[i].t;
-    if (t === '-C') { dir = shellPath(dir, args[++i]); continue; }
-    if (t === '-c') { i++; continue; }
-    if (t.startsWith('-')) continue;
-    return { sub: args[i].dyn ? '' : t, args: args.slice(i + 1), cwd: dir };
-  }
-  return { sub: '', args: [], cwd: dir };
-}
-
-/**
- * Files a unified, context or git diff names, with prefixes left on. A `---`/`+++`/`***`
- * header may end in a tab or space and a timestamp (`diff -u`), and lines may end in CR.
- */
-const patchFiles = (text) => [...String(text).matchAll(/^(?:(?:\+\+\+|---|\*\*\*)[ \t]+("[^"]*"|[^\t\r\n]*?)(?:\t[^\r\n]*)?|diff --git ("[^"]*"|\S+) ("[^"]*"|\S+)|(?:rename|copy) (?:from|to) (.+?)|Index: (.+?))\r?$/gm)]
-  .flatMap((m) => m.slice(1).filter(Boolean))
-  .map((f) => f.replace(/^"|"$/g, '').replace(/\s+\d{4}-\d\d-\d\d[ \t].*$/, '').trim());
-
-/**
- * git apply / patch: { read: false } when the patch cannot be read (`later` when the patch
- * file is written earlier in the same command), else the .rs files it changes.
- */
-function patchCommand(name, c, args, cwd, written = new Set()) {
-  let readOnly = false;
-  let reportOnly = false;
-  let applyToo = false;
-  let base = cwd;
-  const inputs = [];
-  const touched = [];
-  const pos = [];
-  const PATCH_VALUE = new Set(['-p', '-i', '-o', '-d', '-D', '-F', '-B', '-Y', '-z', '-V', '-r', '-g', '--strip', '--input', '--output', '--directory', '--ifdef', '--fuzz', '--prefix', '--basename-prefix', '--suffix', '--version-control', '--reject-file', '--get', '--quoting-style']);
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.dyn || !a.t.startsWith('-') || a.t === '-') { pos.push(a); continue; }
-    const eq = a.t.indexOf('=');
-    const k = eq === -1 ? a.t : a.t.slice(0, eq);
-    if (name === 'git') {
-      // --check never applies; --stat/--numstat/--summary only report unless --apply is given too.
-      if (k === '--check') readOnly = true;
-      else if (['--stat', '--numstat', '--summary'].includes(k)) reportOnly = true;
-      else if (k === '--apply') applyToo = true;
-      continue;
-    }
-    if (k === '--dry-run') { readOnly = true; continue; }
-    let v = eq === -1 ? undefined : { t: a.t.slice(eq + 1), dyn: false };
-    const short = /^-[pioDdFBYzVrg]/.test(k) && !k.startsWith('--');
-    if (short && k.length > 2) v = { t: k.slice(2), dyn: false };
-    const key = short ? k.slice(0, 2) : k;
-    if (!PATCH_VALUE.has(key)) continue;
-    if (v === undefined) v = args[++i];
-    if (key === '-i' || key === '--input') inputs.push(v);
-    else if (key === '-o' || key === '--output') { if (v && /\.rs$/.test(v.t)) touched.push(v.t); }
-    else if (key === '-d' || key === '--directory') base = shellPath(cwd, v);
-  }
-  if ((readOnly || reportOnly) && !applyToo) return null;
-  if (name === 'git') inputs.push(...pos.filter((p) => p.t !== '-'));
-  else {
-    if (pos[0] && /\.rs$/.test(pos[0].t)) touched.push(pos[0].t);
-    if (pos[1]) inputs.push(pos[1]);
-  }
-  if (!inputs.length) {
-    if (c.stdin?.heredoc && c.stdin.text !== null && !c.piped) inputs.push({ body: c.stdin.text });
-    else if (c.stdin && !c.stdin.dyn && !c.piped) inputs.push({ ...c.stdin, fromCwd: true });
-    else return { read: false };
-  }
-  for (const p of inputs) {
-    const abs = p.body === undefined ? shellPath(p.fromCwd ? cwd : base, p) : null;
-    if (abs && written.has(abs)) return { read: false, later: true };
-    const st = abs && !SPECIAL_FILE.test(norm(abs)) ? statOf(abs) : null;
-    const text = p.body ?? (st?.isFile() && st.size <= MAX_SOURCE_BYTES * 8 ? readText(abs) : null);
-    if (text === null) return { read: false };
-    touched.push(...patchFiles(text).filter((f) => /\.rs$/.test(f)));
-  }
-  return { read: true, touched: [...new Set(touched.map((f) => f.replace(/^[ab]\//, '')))] };
-}
+const RS_COPIES = new Set(['cp', 'mv', 'install', 'rsync', 'scp', 'git mv', 'copy-item', 'move-item', 'cpi', 'mi', 'copy', 'move']);
+const RS_MOVES = new Set(['mv', 'git mv', 'move-item', 'mi', 'move']);
 
 /** Every .rs file under dir, or null past `limit` entries. */
 function rustFilesUnder(dir, limit = 10000) {
@@ -715,17 +376,42 @@ function rustFilesUnder(dir, limit = 10000) {
   return out;
 }
 
+/**
+ * The .rs files (or the files `want` keeps) a patch command changes: `{ read: true, touched }`, or `{ read: false }` when
+ * temper cannot read the patch (`later` when an earlier command in the line writes it).
+ */
+function patchTouches(p, c, written, want = (f) => /\.rs$/.test(f)) {
+  if (p.stored) return { read: false };
+  const touched = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.raw).filter(want);
+  const inputs = p.inputs.map((w) => ({ abs: wordPath(w, p.cwd) }));
+  if (!inputs.length) {
+    if (c.stdin?.kind === 'heredoc' && c.stdin.literal !== null && !c.piped) inputs.push({ body: c.stdin.literal });
+    else if (c.stdin?.kind === 'file' && !c.piped) inputs.push({ abs: wordPath(c.stdin.word, c.cwd) });
+    else return { read: false };
+  }
+  for (const i of inputs) {
+    if (i.abs && written.has(i.abs)) return { read: false, later: true };
+    const st = i.abs && !SPECIAL_FILE.test(norm(i.abs)) ? statOf(i.abs) : null;
+    const text = i.body ?? (st?.isFile() && st.size <= MAX_SOURCE_BYTES * 8 ? readText(i.abs) : null);
+    if (text === null) return { read: false };
+    touched.push(...patchFiles(text).filter(want));
+  }
+  return { read: true, touched: [...new Set(touched.map((f) => f.replace(/^[ab]\//, '')))] };
+}
+
 const RS_COPY_SCANNED = Symbol('temper-rs-copies-scanned');
 
 /**
- * cp/mv/install/git mv/Copy-Item/Move-Item onto .rs files, and git apply/patch of Rust
- * sources (audit engine-1-8). A copy whose source temper can read is scanned the way
- * preEdit scans a Write of that content to the destination; a move of an in-repository
- * .rs file compares against the source's own content, as the gate does for a rename, so
- * moving legacy debt does not count as adding it. A copy duplicates the content, so it
- * is compared with the destination only, as a Write and the gate's view of a new file
- * are. A write temper cannot read (variable, glob, stdin, missing source) is refused,
- * and so is a patch that touches .rs files: the Edit tool applies it with the checks.
+ * cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs files, and git apply/am/patch of
+ * Rust sources (audit engine-1-8), read with scripts/lib/shell.mjs. A copy whose source
+ * temper can read is scanned the way preEdit scans a Write of that content to the
+ * destination; a move of an in-repository .rs file compares against the source's own
+ * content, as the gate does for a rename, so moving legacy debt does not count as adding
+ * it. A copy duplicates the content, so it is compared with the destination only, as a
+ * Write and the gate's view of a new file are. A copied tree that carries its crate's
+ * Cargo.toml keeps the source crate's layout (a test stays a test in the new crate). A
+ * write temper cannot read (variable, glob, stdin, missing source) is refused, and so is a
+ * patch that touches .rs files: the Edit tool applies it with the checks.
  * Returns a hook result, or null when the command writes no Rust source.
  */
 function shellRustWrites(cmd, proj, input) {
@@ -754,7 +440,8 @@ function shellRustWrites(cmd, proj, input) {
     return Boolean(krate) && /^(?:src(?:\/.*)?|tests|benches|examples)$/.test(relTo(krate.dir, abs));
   };
 
-  const checkFile = (target, from, move) => {
+  // `tree` is the copied directory ({ real, root }) when `from` came with one.
+  const checkFile = (target, from, move, tree = null) => {
     if (path.resolve(target) === path.resolve(from)) return;
     if (scratch(target)) return;
     const st = SPECIAL_FILE.test(norm(from)) ? null : statOf(from);
@@ -763,7 +450,10 @@ function shellRustWrites(cmd, proj, input) {
     const rel = relTo(proj.root, target);
     const exists = statOf(target)?.isFile() ?? false;
     const before = exists ? readText(target) ?? '' : '';
-    const { kind, build } = kindOf(target);
+    // A tree that carries its crate's manifest lands as that crate: the target maps the way its source does.
+    const srcCrate = tree ? crateOf(from) : null;
+    const carried = srcCrate && !path.relative(tree.real, srcCrate.dir).startsWith('..') && !path.isAbsolute(path.relative(tree.real, srcCrate.dir));
+    const { kind, build } = carried ? kindOf(from) : kindOf(target);
     // A moved repository source brings its own findings along: count them as already there,
     // unless the move changes how the scanner reads it (test or example code into src/).
     const fromKind = move && from.endsWith('.rs') && inProject(from) ? kindOf(from) : null;
@@ -802,18 +492,31 @@ function shellRustWrites(cmd, proj, input) {
       if (path.dirname(p) === p) return null;
     }
   };
-  const copy = (op, here, move) => {
-    const destAbs = shellPath(here, op.dest);
-    for (const s of op.sources) {
-      const srcAbs = shellPath(here, s);
+  // A readable source copied to a destination held in a variable (`"$BACKUP"`, `${OUT_DIR}/`)
+  // lands clean wherever it goes when it scans clean as production code and does not land as a
+  // mod.rs. A literal destination after a `cd` temper cannot follow is still refused.
+  const cleanAnywhere = (srcAbs, s, t) => {
+    const real = (statOf(srcAbs) ? null : earlier(srcAbs))?.real ?? srcAbs;
+    const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
+    const text = st?.isFile() && st.size <= MAX_SOURCE_BYTES ? readText(real) : null;
+    if (text === null) return false;
+    const name = /[\\/]$/.test(t.raw) || t.intoDir ? path.basename(real) : path.basename(t.raw);
+    if (name === 'mod.rs' || (path.basename(real) === 'mod.rs' && !name.endsWith('.rs'))) return false;
+    return !scanSource(text, { kind: 'prod', build: false }).hits.some((h) => h.severity === 'hard' || h.severity === 'ask');
+  };
+  const copy = (t, move) => {
+    const destAbs = t.path;
+    for (const s of t.sources) {
+      const srcAbs = wordPath(s, t.cwd);
+      if (srcAbs !== null && t.value === null && cleanAnywhere(srcAbs, s, t)) continue;
       if (srcAbs === null || destAbs === null) {
-        const why = here === null && !s.dyn && !op.dest.dyn ? 'cwd' : 'dyn';
-        const named = /\.rs$/.test(s.t) || /\.rs$/.test(op.dest.t);
+        const why = t.cwd === null && s.value !== null && !s.glob && t.value !== null && !t.glob ? 'cwd' : 'dyn';
+        const named = /\.rs$/.test(s.raw) || /\.rs$/.test(t.raw);
         // A source temper cannot name, copied into a Rust source directory, may be Rust (`cp $DIR/* src/`).
-        const intoRust = destAbs !== null && srcAbs === null && !/\.(?!rs$)\w+$/.test(s.t)
-          && (op.destDir || isDirPath(destAbs) || /[\\/]$/.test(op.dest.t) || (op.recursive && !/\.\w+$/.test(path.basename(destAbs))))
+        const intoRust = destAbs !== null && srcAbs === null && !/\.(?!rs$)\w+$/.test(s.raw)
+          && (t.intoDir || isDirPath(destAbs) || /[\\/]$/.test(t.raw) || (t.recursive && !/\.\w+$/.test(path.basename(destAbs))))
           && rustDir(destAbs);
-        if ((named && (destAbs === null || (inProject(destAbs) && !scratch(destAbs)))) || intoRust) unknown.push({ t: s.dyn || srcAbs === null ? s.t : op.dest.t, why });
+        if ((named && (destAbs === null || (inProject(destAbs) && !scratch(destAbs)))) || intoRust) unknown.push({ t: srcAbs === null ? s.raw : t.raw, why });
         continue;
       }
       // A path an earlier command in this line creates reads as what it was made from.
@@ -822,106 +525,41 @@ function shellRustWrites(cmd, proj, input) {
       const copied = !move || Boolean(prior?.copy);
       const st = SPECIAL_FILE.test(norm(real)) ? null : statOf(real);
       if (st?.isDirectory()) {
-        if (!op.recursive) continue;
-        const root = isDirPath(destAbs) ? path.join(destAbs, path.basename(srcAbs)) : destAbs;
+        if (!t.recursive) continue;
+        // rsync copies `src/`'s contents, and puts `src` itself inside the destination.
+        const contents = t.verb === 'rsync' && /[\\/]$/.test(s.raw);
+        const root = contents ? destAbs : (t.verb === 'rsync' || (t.intoDir ?? isDirPath(destAbs))) ? path.join(destAbs, path.basename(srcAbs)) : destAbs;
         earlierCopies.set(root, { real, copy: copied });
         if (!inProject(root) || scratch(root)) continue;
         const files = rustFilesUnder(real);
-        if (files === null) { unknown.push({ t: s.t, why: 'dyn' }); continue; }
+        if (files === null) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
         for (const f of files) {
           const target = path.join(root, path.relative(real, f));
-          if (inProject(target)) checkFile(target, f, !copied);
+          if (inProject(target)) checkFile(target, f, !copied, { real, root });
         }
         continue;
       }
-      const intoDir = op.destDir ?? (isDirPath(destAbs) || /[\\/]$/.test(op.dest.t));
-      const target = intoDir ? path.join(destAbs, path.basename(srcAbs)) : destAbs;
+      const target = landing(t, s, isDirPath(destAbs));
       if (st?.isFile()) earlierCopies.set(target, { real, copy: copied });
       if (!target.endsWith('.rs') || !inProject(target) || scratch(target)) continue;
-      if (!st?.isFile()) { unknown.push({ t: s.t, why: 'dyn' }); continue; }
+      if (!st?.isFile()) { unknown.push({ t: s.raw, why: 'dyn' }); continue; }
       checkFile(target, real, !copied);
     }
   };
 
-  // The directory each command runs in. null when temper cannot follow a `cd`; a subshell's
-  // `(`...`)`, `bash -c` and pushd/popd restore it the way the shell does.
-  let cwd = path.resolve(input.cwd ?? proj.root);
-  let prev = null;
-  const subshells = [];
-  const dirStack = [];
   const written = new Set();
-  const top = proj.gitRoot ?? proj.root;
-  const cdTarget = (args) => {
-    const a = args.filter((x) => x.dyn || !/^(?:--|-[LPe@]+)$/.test(x.t));
-    if (!a.length) return os.homedir();
-    if (a.length > 1) return null;
-    const t = a[0].t;
-    if (t === '-') return prev;
-    if (t === '~' || t.startsWith('~/')) return path.join(os.homedir(), t.slice(2));
-    if (/^(?:\$\(|`)git rev-parse --show-toplevel(?:\)|`)$/.test(t)) return top;
-    return shellPath(cwd, a[0]);
-  };
-  const visit = (commands) => {
-    for (const c of commands) {
-      if (c.open) { subshells.push({ cwd, prev, dirs: dirStack.length }); continue; }
-      if (c.close) { const o = subshells.pop(); if (o) { ({ cwd, prev } = o); dirStack.length = o.dirs; } continue; }
-      for (const t of c.writes) { const abs = shellPath(cwd, t); if (abs) written.add(abs); }
-      const words = commandWords(c.words);
-      if (!words.length || words[0].dyn) continue;
-      const name = path.basename(words[0].t.replace(/\\/g, '/')).toLowerCase();
-      const args = words.slice(1);
-      if (name === 'cd' || name === 'pushd' || name === 'popd') {
-        const before = cwd;
-        if (name === 'popd') cwd = dirStack.length ? dirStack.pop() : null;
-        else {
-          if (name === 'pushd') dirStack.push(cwd);
-          cwd = cdTarget(args);
-        }
-        prev = before;
-        continue;
-      }
-      if (['bash', 'sh', 'zsh', 'dash', 'ksh'].includes(name)) {
-        const flag = args.findIndex((a) => !a.dyn && /^-[A-Za-z]*c[A-Za-z]*$/.test(a.t));
-        if (flag !== -1 && args[flag + 1]) {
-          const depth = subshells.push({ cwd, prev, dirs: dirStack.length });
-          visit(shellCommands(args[flag + 1].t));
-          const o = subshells[depth - 1];
-          subshells.length = depth - 1;
-          ({ cwd, prev } = o);
-          dirStack.length = Math.min(dirStack.length, o.dirs);
-        }
-        continue;
-      }
-      if (name === 'eval') { visit(shellCommands(args.map((a) => a.t).join(' '))); continue; }
-      if (name === 'find') {
-        // find ... -exec cmd {} \; runs cmd once per match; `{}` reads as an unknown word.
-        for (let i = 0; i < args.length; i++) {
-          if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[i].t)) continue;
-          const j = args.findIndex((a, k) => k > i && (a.t === ';' || a.t === '+'));
-          const sub = args.slice(i + 1, j === -1 ? args.length : j);
-          if (sub.length) visit([{ words: sub, stdin: null, piped: false, writes: [] }]);
-          i = j === -1 ? args.length : j;
-        }
-        continue;
-      }
-      let op = null;
-      let here = cwd;
-      let move = false;
-      let p = null;
-      if (name === 'cp' || name === 'install' || name === 'mv') { op = posixCopyArgs(name, args); move = name === 'mv'; }
-      else if (name === 'copy-item' || name === 'move-item') { move = name === 'move-item'; op = psCopyArgs(move, args); }
-      else if (name === 'git') {
-        const g = gitSubcommand(args, cwd);
-        here = g.cwd;
-        if (g.sub === 'mv') { op = posixCopyArgs('git', g.args); move = true; }
-        else if (g.sub === 'apply') p = patchCommand('git', c, g.args, here, written);
-      } else if (name === 'patch') p = patchCommand('patch', c, args, here, written);
-      if (p && !p.read) unknown.push({ t: words.map((x) => x.t).join(' '), why: p.later ? 'later' : 'patch' });
-      else if (p?.touched.length) patched.push(...p.touched);
-      if (op) copy(op, here, move);
+  for (const c of parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root })) {
+    const writes = commandWrites(c);
+    for (const w of writes) if (w.verb === 'redirect' && w.path) written.add(w.path);
+    const p = patchCommand(c);
+    if (p?.apply) {
+      const r = patchTouches(p, c, written);
+      if (!r.read) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
+      else patched.push(...r.touched);
     }
-  };
-  visit(shellCommands(cmd));
+    for (const t of writes) if (RS_COPIES.has(t.verb)) copy(t, RS_MOVES.has(t.verb));
+    for (const w of writes) if (w.path) written.add(w.path);
+  }
 
   const unreadPatch = unknown.find((u) => u.why === 'patch' || u.why === 'later');
   if (unreadPatch) {
@@ -1039,6 +677,9 @@ export function cargoDependencyCommands(cmd) {
   return out;
 }
 
+/** A rule built on scripts/lib/shell.mjs; if reading the command throws, the rule is skipped and the other checks still run. */
+const readerRule = (rule, fallback) => { try { return rule(); } catch { return fallback; } };
+
 export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
@@ -1049,7 +690,7 @@ export function preBash(input) {
   }
   // cp/mv/install onto .rs and git apply/patch: scanned like an Edit/Write (engine-1-8).
   // Only a deny returns at once; an ask or advisory waits for the checks below, and a deny from them wins.
-  const rsWrite = input[RS_COPY_SCANNED] ? null : shellRustWrites(cmd, proj, input);
+  const rsWrite = input[RS_COPY_SCANNED] ? null : readerRule(() => shellRustWrites(cmd, proj, input), null);
   if (rsWrite) {
     const own = rsWrite.json.hookSpecificOutput.permissionDecision;
     if (own === 'deny') return rsWrite;
