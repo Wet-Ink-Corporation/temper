@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart, preHandback } from '../scripts/lib/hooks.mjs';
-import { discover, fingerprint, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
+import { discover, fingerprint, loadConfig, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
 const cargo = spawnSync('cargo', ['--version'], { encoding: 'utf8' }).status === 0
@@ -221,6 +221,166 @@ test('skill gate: "skillGate": false in .claude/temper.json turns it off', { ski
 });
 
 // ------------------------------------------------- Stop: before the gate runs
+
+/** The "Changed Rust files" line SubagentStart gives an implementer: the session's Rust changes. */
+const changedFor = (r, sid) => {
+  const line = context(subagentStart({ cwd: r.dir, session_id: sid, agent_type: 'rust-implementer', agent_id: 'im-cfg' }))
+    .split('\n').find((l) => l.startsWith('- Changed Rust files'));
+  return line.replace(/^- Changed Rust files \(\d+\): /, '');
+};
+
+test('change detection: .claude/temper.json and .cargo/config(.toml) count as Rust changes and change the fingerprint', { skip: noGit }, (t) => {
+  // tracked files edited after the base commit (the git diff pathspecs)
+  const r = repo(t);
+  r.config({ review: 'required' });
+  r.put('.cargo/config.toml', '[build]\nrustflags = []\n');
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const clean = r.fp();
+  assert.equal(changedFor(r, 's-cfg-clean'), 'none');
+  r.config({ review: 'required', gate: { allFeatures: false } });
+  assert.equal(changedFor(r, 's-cfg-json'), '.claude/temper.json');
+  const afterJson = r.fp();
+  assert.notEqual(afterJson, clean, 'an edited .claude/temper.json changes the fingerprint');
+  r.put('.cargo/config.toml', '[build]\nrustflags = ["-Dwarnings"]\n');
+  assert.deepEqual(changedFor(r, 's-cfg-cargo').split(', ').sort(), ['.cargo/config.toml', '.claude/temper.json']);
+  assert.notEqual(r.fp(), afterJson, 'an edited .cargo/config.toml changes the fingerprint');
+  // untracked files: the legacy .cargo/config and a nested one, which cargo reads when run in that directory
+  const u = repo(t);
+  let fp = u.fp();
+  for (const rel of ['.claude/temper.json', '.cargo/config', 'crates/core/.cargo/config.toml']) {
+    u.put(rel, rel.endsWith('.json') ? '{"gate":{"doc":false}}' : '[build]\nrustflags = []\n');
+    assert.ok(changedFor(u, 's-cfg-untracked').split(', ').includes(rel), `${rel} is a Rust change`);
+    const next = u.fp();
+    assert.notEqual(next, fp, `untracked ${rel} changes the fingerprint`);
+    fp = next;
+  }
+});
+
+test('change detection: other files under .claude/ and .cargo/ are not Rust changes and leave the fingerprint alone', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const fp = r.fp();
+  const nearMisses = [
+    '.claude/settings.json', '.claude/settings.local.json', '.claude/temper.json.bak', '.claude/temper-notes.json',
+    'docs/.claude/temper.json', '.cargo/credentials.toml', '.cargo/config.toml.orig', 'notes/cargo-config.toml', 'NOTES.md',
+  ];
+  for (const rel of nearMisses) r.put(rel, '{}\n');
+  assert.equal(changedFor(r, 's-near'), 'none');
+  assert.equal(r.fp(), fp);
+  assert.deepEqual(stop({ cwd: r.dir, session_id: 's-near' }), {});
+});
+
+test('change detection: .claude/temper.json counts only when a key the gate reads (gate, scanner, manifests) changes', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.config({ review: 'required', gate: { allFeatures: true } });
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const fp = r.fp();
+  // keys that steer hooks only, a reformat, another key order, and a default spelled out: no Rust change
+  const hookOnly = [
+    { review: 'off', gate: { allFeatures: true } },
+    { review: 'advisory', skillGate: false, askOnNewDependency: false, preapprovedDependencies: ['rand'], protected: [], gate: { allFeatures: true } },
+    { gate: { doc: true, allFeatures: true }, review: 'required', scanner: { exempt: [] } },
+  ];
+  for (const cfg of hookOnly) {
+    r.put('.claude/temper.json', `${JSON.stringify(cfg, null, 2)}\n`);
+    assert.equal(changedFor(r, 's-hook-only'), 'none', JSON.stringify(cfg));
+    assert.equal(r.fp(), fp, JSON.stringify(cfg));
+    assert.deepEqual(stop({ cwd: r.dir, session_id: 's-hook-only' }), {});
+  }
+  // each key the gate reads is a Rust change
+  for (const cfg of [{ gate: { allFeatures: false } }, { scanner: { exempt: [{ rule: 'H-01', paths: ['**'] }] } }, { manifests: { ownLints: ['crates/core'] } }]) {
+    r.config({ review: 'required', gate: { allFeatures: true }, ...cfg });
+    assert.equal(changedFor(r, 's-gate-key'), '.claude/temper.json', JSON.stringify(cfg));
+    assert.notEqual(r.fp(), fp, JSON.stringify(cfg));
+  }
+  // a deleted file falls back to the defaults, which here equal the committed gate config
+  fs.rmSync(r.file('.claude/temper.json'));
+  assert.equal(changedFor(r, 's-deleted'), 'none');
+  assert.equal(r.fp(), fp);
+});
+
+test('change detection: a property the gate does not read under gate, scanner or manifests is no Rust change', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.config({ gate: { allFeatures: true } });
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'config');
+  const fp = r.fp();
+  for (const cfg of [
+    { gate: { allFeatures: true, colour: 'blue' } },
+    { gate: { allFeatures: true }, scanner: { exempt: [], note: 'see ADR-7' } },
+    { gate: { allFeatures: true }, manifests: { ownLints: [], owner: 'ffi team' } },
+  ]) {
+    r.config(cfg);
+    assert.equal(changedFor(r, 's-unused'), 'none', JSON.stringify(cfg));
+    assert.equal(r.fp(), fp, JSON.stringify(cfg));
+  }
+});
+
+test('change detection outside git: config files count, and the fingerprint is stable and follows only the gate settings', (t) => {
+  // a Cargo workspace with no repository: changedFiles walks the tree, fingerprint hashes the files
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nogit-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const put = (rel, text) => { const f = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
+  put('Cargo.toml', ROOT);
+  put('crates/core/Cargo.toml', MEMBER);
+  put(LIB, LIB_RS);
+  const proj = () => ({ root: dir, gitRoot: null, stateDir: path.join(dir, 'target', 'temper'), config: loadConfig(dir) });
+  const changes = () => rustChanges(proj()).map((f) => f.split(path.sep).join('/')).sort();
+  const fp = () => fingerprint(proj());
+  const start = fp();
+  assert.equal(fp(), start, 'the same tree hashes the same across calls');
+  assert.deepEqual(changes(), ['Cargo.toml', 'crates/core/Cargo.toml', LIB]);
+  // keys that steer hooks only, a default spelled out, and an unused property: the defaults' gate settings
+  for (const cfg of [{ review: 'off', skillGate: false }, { gate: { doc: true }, scanner: { exempt: [] } }, { gate: { colour: 'blue' }, manifests: { owner: 'x' } }]) {
+    put('.claude/temper.json', JSON.stringify(cfg));
+    assert.equal(fp(), start, JSON.stringify(cfg));
+    assert.ok(!changes().includes('.claude/temper.json'), JSON.stringify(cfg));
+  }
+  put('.claude/temper.json', JSON.stringify({ gate: { allFeatures: false } }));
+  const afterJson = fp();
+  assert.notEqual(afterJson, start, 'a gate setting changes the fingerprint');
+  assert.equal(fp(), afterJson, 'and stays stable');
+  assert.ok(changes().includes('.claude/temper.json'));
+  put('.cargo/config.toml', '[build]\nrustflags = []\n');
+  const afterCargo = fp();
+  assert.notEqual(afterCargo, afterJson, 'a .cargo/config.toml changes the fingerprint');
+  assert.ok(changes().includes('.cargo/config.toml'));
+  put('.cargo/config.toml', '[build]\nrustflags = ["-Dwarnings"]\n');
+  assert.notEqual(fp(), afterCargo, 'so does an edit to it');
+  // other files under .claude/ and .cargo/ leave it alone
+  const settled = fp();
+  put('.claude/settings.json', '{}\n');
+  put('.cargo/credentials.toml', '{}\n');
+  assert.equal(fp(), settled);
+  assert.ok(!changes().some((f) => f.endsWith('settings.json') || f.endsWith('credentials.toml')));
+});
+
+test('change detection: a git-ignored .claude/temper.json still counts, as temper reads it', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put('.gitignore', '.claude/\n');
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'ignore');
+  const fp = r.fp();
+  r.config({ review: 'off' });
+  assert.equal(changedFor(r, 's-ign'), 'none');
+  assert.equal(r.fp(), fp);
+  r.config({ gate: { allFeatures: false } });
+  assert.equal(changedFor(r, 's-ign'), '.claude/temper.json');
+  assert.notEqual(r.fp(), fp);
+});
+
+test('Stop: a session that edits only .claude/temper.json runs the gate and needs a review for the new tree', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const before = r.gate(true);
+  recordVerdict(r.proj(), verdict(before));
+  r.config({ gate: { allFeatures: false } });
+  const fp = r.gate(true);
+  assert.notEqual(fp, before, 'the cached gate and verdict for the old tree do not apply');
+  const res = blocked(stop({ cwd: r.dir, session_id: 's-cfg-stop' }));
+  assert.ok(res, 'blocked');
+  assert.match(res, new RegExp(`^The gate is green, but the current tree \\(fingerprint ${fp}\\) has no approving independent review \\(PROC-08\\)`));
+});
 
 test('Stop: no Rust change, plan mode, or a tree the session started with ends the turn silently', { skip: noGit }, (t) => {
   const r = repo(t);
