@@ -31,7 +31,7 @@ Marketplace users install whatever `main` holds, so every merge to `main` reache
 
 | Purpose | Command |
 |---|---|
-| Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the two that compile Rust) |
+| Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the steps that compile Rust) |
 | Unit tests | `node --test tests/*.test.mjs` |
 | Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |
 | Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
@@ -52,7 +52,7 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
   node -p 'require("./.claude-plugin/plugin.json").version' > "$v/VERSION"
   ```
 - **The rule map.** After editing `skills/rust-craft/references/rules.md`, run `python3 tests/gen_rulemap.py` to regenerate `scripts/lib/rulemap.json`, then sync the vendored copy.
-- **Code in the standard is tested.** Every code block in `skills/rust-craft/` is compiled and linted by `tests/doc_examples.py`. "Do" blocks must pass, and "Don't" blocks must fire the diagnostic they claim.
+- **Code in the standard is tested.** `tests/doc_examples.py` checks every code block in `skills/rust-craft/`. "Do" blocks are compiled and linted and must pass. "Don't" blocks that carry `expect=` must fire the diagnostic they claim; "Don't" blocks for review-only rules carry none, are not compiled, and are listed in the harness's report without failing it.
 - **Rule IDs are permanent.** Never renumber or reuse one. Every cited ID must exist (`tests/registry.py`).
 - **Decisions.** Questions that need the owner go through Weigh-In. The records in `.kb/_intake/decisions/` are generated, so do not hand-edit them, except to repoint an anchor. Each decision is also listed in `docs/history/decisions.md`.
 - **No `CLAUDE.md` at the repository root.** The repository root is the plugin root, and `claude plugin validate --strict` rejects a root `CLAUDE.md`, because a plugin never loads it. Project memory for working here is `.claude/CLAUDE.md`, which imports this file.
