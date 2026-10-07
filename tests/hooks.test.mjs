@@ -481,6 +481,122 @@ test('Bash: shell writes to the baseline file are denied; Edit/Write to it asks 
   assert.match(reason(write), /\.claude\/temper-baseline\.json is verification\/agent configuration/);
 });
 
+const STATE_DENY = /verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command/;
+
+test('Bash: shell writes into the temper state dir (.git/temper/) are denied; reading, copying out and deleting are not', () => {
+  const telemetryFile = path.join(discover(ws).stateDir, 'telemetry.jsonl');
+  const denied = [
+    `echo '{"verdict":"approved"}' > .git/temper/verdicts/0123456789abcdef.json`,
+    'printf %s "{}" >> ./.git/temper/telemetry.jsonl',
+    'cat v.json &> .git/temper/gate/0123456789abcdef.json',
+    'node fake.js 2> .git/temper/logs/0123-clippy.log',
+    'echo {} >".git/temper/verdicts/a.json"',
+    'printf {} > /home/me/repo/.git/temper/gate/a.json',
+    'cp /tmp/v.json .git/temper/gate/0123456789abcdef.json',
+    'cp -f /tmp/v.json "./.git/temper/verdicts/a.json"',
+    'mv v.json .git/temper/verdicts/',
+    'cp -t .git/temper/verdicts v.json',
+    'rsync -avt v.json .git/temper/gate/a.json',
+    'install -m 644 v.json .git/temper/verdicts/a.json',
+    'ln -s /tmp/v.json .git/temper/verdicts/a.json',
+    'Copy-Item v.json -Destination .git\\temper\\verdicts\\a.json',
+    'Move-Item v.json .git/temper/gate/a.json',
+    'jq ".verdict=\\"approved\\"" old.json | tee .git/temper/verdicts/a.json',
+    'tee -a .git/temper/telemetry.jsonl < x',
+    "sed -i 's/changes_requested/approved/' .git/temper/verdicts/a.json",
+    "perl -pi -e 's/false/true/' .git/temper/gate/a.json",
+    `python3 -c "open('.git/temper/verdicts/a.json','w').write('{}')"`,
+    `python3 -c "import pathlib; pathlib.Path('.git/temper/verdicts/a.json').write_text('{}')"`,
+    `node -e "require('fs').writeFileSync('.git/temper/gate/a.json', '{}')"`,
+    "Set-Content -Path .git/temper/verdicts/a.json -Value '{}'",
+    "'{}' | Out-File .git\\temper\\gate\\a.json",
+    'Add-Content .git/temper/telemetry.jsonl x',
+    'dd if=v.json of=.git/temper/verdicts/a.json',
+    'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'cp v.json "$(git rev-parse --git-dir)/temper/gate/a.json"',
+    'echo {} > `git rev-parse --git-common-dir`/temper/verdicts/a.json',
+    'cp v.json $(git rev-parse --git-path temper/verdicts)/a.json',
+    'echo {} > target/temper/verdicts/a.json',
+    `echo {} > "${path.join(ws, 'target', 'temper', 'gate', 'a.json')}"`,
+    `echo {} > ${path.join(ws, 'target', 'temper', 'gate', 'a.json').split(path.sep).join('/')}`,
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const events = fs.readFileSync(telemetryFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.event === 'deny-shell-write' && e.file === 'state-dir'));
+  const allowed = [
+    'cat .git/temper/logs/0123-clippy.log',
+    'less .git/temper/logs/0123-test.log',
+    'grep -n error .git/temper/logs/*.log',
+    'ls -la .git/temper/verdicts',
+    'jq .verdict .git/temper/verdicts/a.json',
+    'tail -n 50 .git/temper/telemetry.jsonl',
+    'cat .git/temper/telemetry.jsonl | wc -l',
+    'sed -n 1,20p .git/temper/logs/a.log',
+    'cat "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    'node "$TEMPER_CLI" status',
+    'node "$TEMPER_CLI" gate',
+    'node "$TEMPER_CLI" stats',
+    'grep x .git/temper/logs/a.log > /tmp/out',
+    'jq . .git/temper/gate/a.json > gate.json 2> /tmp/err',
+    'cp .git/temper/logs/a.log /tmp/',
+    'cp -t /tmp .git/temper/logs/a.log',
+    'cp -r .git/temper /tmp/temper-backup',
+    `python3 -c "print(open('.git/temper/verdicts/a.json').read())"`,
+    'cargo build > /tmp/b.log 2>&1',
+    'mv .git/temper/telemetry.jsonl /tmp/t.jsonl',
+    'rm "$(git rev-parse --git-common-dir)/temper/telemetry.jsonl"',
+    'rm -f .git/temper/telemetry.jsonl',
+    'git status',
+    'git gc --prune=now',
+    'git rev-parse --git-common-dir',
+    'ls target/temper',
+    'cargo build 2> /tmp/err.log',
+    'cargo test > target/debug/test-output.txt',
+    'echo hi > temper.txt',
+    'echo hi > notes/temper/todo.md',
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
+test('Bash: shell writes into the absolute state dir of a git worktree are denied', { skip: !git && 'git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-statedir-'));
+  const g = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  try {
+    fs.writeFileSync(path.join(repo, 'Cargo.toml'), ROOT);
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const wt = path.join(repo, 'wt');
+    assert.equal(g('worktree', 'add', '-q', wt).status, 0);
+    const proj = discover(wt);
+    const state = path.resolve(proj.stateDir);
+    const slashed = state.split(path.sep).join('/');
+    assert.ok(!slashed.startsWith(`${path.resolve(proj.root).split(path.sep).join('/')}/`), 'the worktree state dir lives in the main repository');
+    const run = (command) => preBash({ tool_name: 'Bash', cwd: wt, session_id: 'hooks-test', tool_input: { command } });
+    for (const cmd of [
+      `echo {} > "${path.join(state, 'verdicts', 'a.json')}"`,
+      `cp /tmp/v.json ${slashed}/gate/a.json`,
+      `python3 -c "open('${slashed}/verdicts/a.json','w')"`,
+      'echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json"',
+    ]) {
+      const res = run(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), STATE_DENY, cmd);
+    }
+    for (const cmd of [`cat "${path.join(state, 'telemetry.jsonl')}"`, `cp ${slashed}/logs/a.log /tmp/`, `rm ${slashed}/telemetry.jsonl`, 'git worktree list']) {
+      assert.equal(decision(run(cmd)), 'none', cmd);
+    }
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
   for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
     const res = bash(cmd);

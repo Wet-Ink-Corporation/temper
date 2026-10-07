@@ -352,6 +352,49 @@ const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
 const SHELL_WRITE_BASELINE = shellWrites('temper-baseline\\.json', { copies: true });
 const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/[\\w./-]*', { copies: true });
 const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.';
+const STATE_SHELL_DENY = 'temper: temper\'s state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it: verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command (`node "$TEMPER_CLI" gate`). Reading the files, copying them elsewhere and deleting telemetry.jsonl stay allowed.';
+
+// `$(git rev-parse --git-common-dir)`, `--git-dir`, `--absolute-git-dir` and `--git-path <p>`
+// (also in backticks) read as `.git` and `.git/<p>`, so the state-dir patterns see the path.
+const GIT_DIR_SUBST = [
+  [/\$\(\s*git\b[^()`]*?\brev-parse\b[^()`]*?--git-path\s+["']?([^\s()"'`]*)["']?\s*\)/g, '.git/$1'],
+  [/`\s*git\b[^()`]*?\brev-parse\b[^()`]*?--git-path\s+["']?([^\s()"'`]*)["']?\s*`/g, '.git/$1'],
+  [/\$\(\s*git\b[^()`]*?\brev-parse\b[^()`]*?--(?:absolute-git-dir|git-(?:common-)?dir)\s*\)/g, '.git'],
+  [/`\s*git\b[^()`]*?\brev-parse\b[^()`]*?--(?:absolute-git-dir|git-(?:common-)?dir)\s*`/g, '.git'],
+];
+
+/**
+ * Shell writes into the project's temper state dir: `.git/temper/` under any prefix, the
+ * absolute `proj.stateDir` (in a worktree it is in the main repository's git dir) with
+ * either separator, `target/temper/` when there is no git, and `$VAR/temper/<state file>`.
+ * Destinations only: reading a state file, or redirecting a read elsewhere, does not match.
+ */
+export function stateDirWrite(proj, cmd) {
+  const sep = String.raw`[/\\]+`;
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const alts = [
+    path.resolve(proj.stateDir).split(/[\\/]+/).map(esc).join(sep),
+    String.raw`\.git${sep}temper`,
+    String.raw`\$\{?\w+\}?${sep}temper(?=${sep}(?:verdicts|gate|logs|sessions|telemetry\.jsonl|findings-))`,
+  ];
+  if (!proj.gitRoot) alts.push(String.raw`(?<![\w.-])target${sep}temper`);
+  const target = String.raw`(?:${alts.join('|')})(?:[/\\][\w./\\*\${}-]*)?`;
+  const t = String.raw`${target}(?![\w.])`;
+  const path_ = String.raw`["']?[^\s"'|;&<>]*${t}`;
+  const res = [
+    ...shellWrites(target),
+    new RegExp(String.raw`\d>>?\|?\s*${path_}`),
+    new RegExp(String.raw`\bdd\b[^|;&]*\bof=${path_}`),
+    // The last argument is the destination, unless -t/--target-directory names it.
+    new RegExp(String.raw`\b(?:cp|mv|install|ln)\b(?![^|;&]*\s(?:-[a-zA-Z]*t\b|--target-directory))[^|;&]*\s${path_}["']?\s*(?:$|[|;&)])`, 'm'),
+    new RegExp(String.raw`\b(?:rsync|Copy-Item|Move-Item)\b[^|;&]*\s${path_}["']?\s*(?:$|[|;&)])`, 'm'),
+    new RegExp(String.raw`\b(?:cp|mv|install|ln)\b[^|;&]*\s(?:-[a-zA-Z]*t\s*|--target-directory[=\s]\s*)${path_}`),
+    new RegExp(String.raw`${t}["']?\s*\)?\s*\.\s*(?:write_text|write_bytes)\b`),
+    new RegExp(String.raw`\b(?:(?:writeFile|appendFile)(?:Sync)?|createWriteStream|New-Item|WriteAll(?:Text|Bytes|Lines))\b[^|;&]*${t}`),
+  ];
+  const text = GIT_DIR_SUBST.reduce((s, [re, to]) => s.replace(re, to), String(cmd));
+  return res.some((re) => re.test(text));
+}
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
@@ -445,6 +488,10 @@ export function preBash(input) {
   if (SHELL_WRITE_BASELINE.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
     return deny(BASELINE_SHELL_DENY);
+  }
+  if (stateDirWrite(proj, cmd)) {
+    telemetry(proj, input, 'deny-shell-write', { file: 'state-dir' });
+    return deny(STATE_SHELL_DENY);
   }
   if (/TEMPER_ALLOW_RAISE/.test(cmd)) {
     telemetry(proj, input, 'ask', { via: 'TEMPER_ALLOW_RAISE' });

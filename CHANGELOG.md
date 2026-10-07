@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+One hook decision changes.
+- **Shell writes into the state dir are denied.** `PreToolUse` on Bash used to allow a shell command that writes into temper's state dir, so a redirect, `cp`, `tee`, `sed -i` or a Python `open(..., 'w')` could forge a review verdict or a green gate record. It now denies it, as `Edit` and `Write` already were: verdicts come only from the `temper:rust-reviewer` subagent, and gate results only from the gate command. The check covers `.git/temper/` under any prefix, the absolute state dir (in a worktree it is in the main repository's git dir), `target/temper/` without git, and `"$(git rev-parse --git-common-dir)/temper/..."`. Reading the files, copying them elsewhere, `temper status`, `gate` and `stats`, and `rm` of `telemetry.jsonl` stay allowed.
+
 Documentation.
 - **Cloud sessions.** `docs/troubleshooting.md` has a new section on why temper is missing from Claude Code cloud sessions, and how to install it from the environment's setup script. A repository's `.claude/settings.json` does not install the plugin there, and a `SessionStart` hook installs it too late. The section also covers what works in claude.ai chat: the skills load, but the hooks and agents do not.
 - **The organization sync.** The same section says how claude.ai's organization sync keeps temper current: sync `Wet-Ink-Corporation/temper` with Sync automatically on, and remove any uploaded zip copy. It also corrects an earlier line that called the repository public; it is internal.
