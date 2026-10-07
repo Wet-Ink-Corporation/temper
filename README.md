@@ -187,7 +187,7 @@ The only measured cost is the smoke test: one session that adds a function, runs
 
 ## Local data and telemetry
 
-temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Because it lives inside `.git`, none of it is committed or pushed. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
+temper keeps its state in `.git/temper/` (in the main repository's git directory when you work in a worktree, and in `target/temper/` when the Cargo project is not inside a git repository): gate results and review verdicts per tree fingerprint, step logs, per-session state, and `telemetry.jsonl`. Because it lives inside `.git`, none of it is committed or pushed. temper's own code makes no network calls; the gate runs cargo, which can fetch crates.
 
 `telemetry.jsonl` is what `temper stats` summarizes. The hooks append one JSON line, about 100 to 200 bytes, for each session start, skill load, denial, question, reviewer verdict and Stop outcome. Each line holds a timestamp, the Claude Code session ID, the agent type and the event name, and for some events a repository-relative file path, rule IDs, a fingerprint or a count. The file is never pruned, and only `stats` reads it, so delete it whenever you like (`rm .git/temper/telemetry.jsonl`). There is no separate switch to turn it off; `TEMPER_DISABLE=1` turns off the hooks, and with them the telemetry.
 
@@ -217,7 +217,8 @@ tests/ci.sh                         # everything below that needs no model call,
 node --test tests/*.test.mjs        # scanner, hook, manifest, baseline, report and vendor unit tests
 python3 tests/doc_examples.py       # every code block in the skill: Do blocks compile, pass clippy and tests
                                     # under the template lints; Don't blocks that carry expect= fire the
-                                    # diagnostic they claim (Don't blocks for review-only rules carry none)
+                                    # diagnostic they claim; Don't blocks without expect= are not compiled
+                                    # and are reported without failing
                                     # (--fetch on a machine without a registry cache)
 python3 tests/registry.py           # every rule has one section; every cited rule ID exists; counts match
 python3 tests/lint-claims.py        # every lint and scanner key the standard cites exists and is enabled
