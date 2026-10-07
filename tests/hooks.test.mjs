@@ -597,6 +597,88 @@ test('Bash: shell writes into the absolute state dir of a git worktree are denie
   }
 });
 
+test('Bash: state-dir writes hidden by trailing redirects, variables, quoting, cd or other writers are denied; reads stay allowed', () => {
+  const denied = [
+    'cp v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'cp v.json .git/temper/verdicts/a.json >/dev/null 2>&1',
+    'cp v.json .git/temper/verdicts/a.json # forge',
+    'ln -sf /tmp/v.json .git/temper/verdicts/a.json 2>/dev/null',
+    'rsync v.json .git/temper/gate/a.json 2>&1',
+    'mv v.json .git/temper/gate/a.json -f',
+    'STATE=$(git rev-parse --git-common-dir)/temper; echo {} > $STATE/verdicts/a.json',
+    'STATE="$(git rev-parse --git-common-dir)/temper"; echo {} > "$STATE/gate/a.json"',
+    'STATE=.git/temper/gate; cp v.json $STATE/a.json',
+    'D=.git/temper && echo {} > ${D}/verdicts/x.json',
+    'echo {} > "$(git rev-parse --git-common-dir)"/temper/verdicts/a.json',
+    'echo {} > ".git/"temper/verdicts/a.json',
+    "echo {} > .git/'temper'/verdicts/a.json",
+    'cd .git/temper/verdicts && echo {} > x.json',
+    '(cd .git/temper/gate && echo {} > a.json)',
+    'pushd .git/temper/gate; echo {} > a.json',
+    'cd .git && echo {} > temper/verdicts/x.json',
+    'cd target/temper && echo {} > gate/a.json',
+    `python3 -c "open('.git/temper/verdicts/a.json', mode='w').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'x').write('{}')"`,
+    `python3 -c "open('.git/temper/verdicts/a.json', 'r+').write('{}')"`,
+    `python3 -c "import shutil;shutil.copy('v.json','.git/temper/verdicts/a.json')"`,
+    "python3 <<'EOF'\np = '.git/temper/verdicts/a.json'\nwith open(p, 'w') as f:\n    f.write('{}')\nEOF",
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('.git/temper/verdicts/a.json')\np.write_text('{}')\nEOF",
+    `node -e "require('fs').copyFileSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "require('fs').renameSync('v.json','.git/temper/gate/a.json')"`,
+    `node -e "const fs=require('fs'); const p='.git/temper/gate/a.json'; fs.writeFileSync(p,'{}')"`,
+    `ruby -e 'File.write(".git/temper/verdicts/a.json","{}")'`,
+    `bash -c "echo {} > .git/temper/verdicts/a.json"`,
+    'curl -o .git/temper/verdicts/a.json file:///tmp/v.json',
+    'curl -sSLo .git/temper/verdicts/a.json file:///tmp/v.json',
+    'wget -O .git/temper/verdicts/a.json http://example.com/v.json',
+    `jq '.verdict="approved"' v.json | sponge .git/temper/verdicts/a.json`,
+    'tee --append .git/temper/verdicts/a.json < v.json',
+    'echo {} | tee /dev/null .git/temper/verdicts/a.json',
+    'tar -xf forged.tar -C .git/temper',
+    'unzip -o forged.zip -d .git/temper',
+    'find /tmp -name v.json -exec cp {} .git/temper/verdicts/a.json \\;',
+    'ls /tmp/v.json | xargs -I{} cp {} .git/temper/verdicts/a.json',
+    'Copy-Item -Destination .git\\temper\\verdicts\\a.json -Path v.json',
+  ];
+  for (const cmd of denied) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'deny', cmd);
+    assert.match(reason(res), STATE_DENY, cmd);
+  }
+  const allowed = [
+    'cp a.log /tmp/\ncat .git/temper/verdicts/a.json',
+    'npm install\nls .git/temper/gate',
+    "sed -i 's/a/b/' README.md\ncat .git/temper/telemetry.jsonl",
+    "python3 <<'EOF'\nfrom pathlib import Path\nPath('/tmp/r.md').write_text('x')\nprint(open('.git/temper/telemetry.jsonl').read())\nEOF",
+    'git commit -m "deny shell writes like echo > .git/temper/verdicts/x"',
+    'git commit -m "docs: cp logs out of .git/temper/logs"',
+    'grep -rn "> .git/temper" scripts/',
+    "cat <<'EOF'\nTo forge: echo {} > .git/temper/verdicts/a.json\nEOF",
+    'echo x > .git/temper-notes.txt',
+    'echo x > target/temper-report.html',
+    'cargo test 2> target/temper-stderr.txt',
+    'echo hi > docs/.git/temper-notes.md',
+    'cp -r src .git/temper-backup',
+    'echo x > "$TMPDIR/temper/gate-summary.txt"',
+    'echo x > "$HOME/temper/logs/today.txt"',
+    'cp .git/temper/logs/a.log "$HOME/temper/logs/"',
+    `node -e "require('fs').writeFileSync('/tmp/g.json', require('fs').readFileSync('.git/temper/gate/a.json'))"`,
+    'Copy-Item -Destination C:\\tmp -Path .git\\temper\\logs\\a.log',
+    '(cd .git/temper/logs && cat a.log) ; echo hi > out.txt',
+    'cd .git/temper/logs && grep error *.log > /tmp/errors.txt',
+    'tar -cf /tmp/state.tar -C .git/temper .',
+    'cargo install cargo-nextest',
+    'D=.git/temper; cat $D/verdicts/a.json > /tmp/a.json',
+    'cd .git/temper && ls',
+    'cd crates/foo && cargo test > ../../out.txt 2>&1',
+    'cargo build --release 2>&1 | tail -20',
+    `python3 -c "import json; print(json.load(open('.git/temper/gate/a.json')))"`,
+  ];
+  for (const cmd of allowed) {
+    assert.equal(decision(bash(cmd)), 'none', cmd);
+  }
+});
+
 test('Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not', () => {
   for (const cmd of ['sed -i "s/unwrap_used/x/" .claude/temper/lib/baseline.mjs', 'echo x > .claude/temper/temper.mjs', 'cp /tmp/evil.mjs .claude/temper/lib/baseline.mjs', 'tee .claude/temper/VERSION < x', "perl -pi -e 's/a/b/' .claude/temper/lib/gate.mjs"]) {
     const res = bash(cmd);

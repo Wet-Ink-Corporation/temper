@@ -363,37 +363,306 @@ const GIT_DIR_SUBST = [
   [/`\s*git\b[^()`]*?\brev-parse\b[^()`]*?--(?:absolute-git-dir|git-(?:common-)?dir)\s*`/g, '.git'],
 ];
 
+/** Index just past the `)` that closes the `(` at `open`, skipping quoted text. */
+const closeParen = (src, open) => {
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "'" || c === '"') { const e = src.indexOf(c, i + 1); if (e === -1) return src.length; i = e; continue; }
+    if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return i + 1;
+  }
+  return src.length;
+};
+
+/**
+ * A small shell tokenizer for the state-dir check. It splits a command into segments on
+ * unquoted `;`, `&&`, `||`, `|`, `&`, newlines and subshell parentheses (as `{ mark }`
+ * entries), each with its words (quotes removed, adjacent parts joined), its redirection
+ * targets, its heredoc and here-string bodies, its separator and its raw text. Quoted text
+ * is never an operator, `#` starts a comment, and a backslash escapes only shell syntax,
+ * so a Windows path keeps its separators.
+ */
+function shellParse(src) {
+  const out = [];
+  let seg = null;
+  let word = null;
+  let into = null;
+  const heredocs = [];
+  const start = (sep, from) => {
+    if (seg) seg.raw = src.slice(seg.from, from);
+    seg = { words: [], redirs: [], bodies: [], sep, from };
+    out.push(seg);
+  };
+  const endWord = () => {
+    if (word === null) return;
+    if (into === 'redir') seg.redirs.push(word);
+    else if (into === 'heredoc' || into === 'heredoc-') heredocs.push({ seg, delim: word, strip: into === 'heredoc-' });
+    else if (into === 'herestring') seg.bodies.push(word);
+    else if (into !== 'input') seg.words.push(word);
+    word = null;
+    into = null;
+  };
+  const add = (s) => { word = (word ?? '') + s; };
+  start('', 0);
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    const c = src[i];
+    if (c === '\\') {
+      if (src[i + 1] === '\n') { i += 2; continue; }
+      if (i + 1 < n && ` \t;&|<>()'"$\`#\\`.includes(src[i + 1])) { add(src[i + 1]); i += 2; continue; }
+      add(c); i++; continue;
+    }
+    if (c === "'") { const e = src.indexOf("'", i + 1); const end = e === -1 ? n : e; add(src.slice(i + 1, end)); i = end + 1; continue; }
+    if (c === '"') {
+      let j = i + 1;
+      let s = '';
+      while (j < n && src[j] !== '"') {
+        if (src[j] === '\\' && j + 1 < n && '"\\$`'.includes(src[j + 1])) { s += src[j + 1]; j += 2; continue; }
+        if (src[j] === '$' && src[j + 1] === '(') { const e = closeParen(src, j + 1); s += src.slice(j, e); j = e; continue; }
+        s += src[j++];
+      }
+      add(s); i = j + 1; continue;
+    }
+    if (c === '$' && src[i + 1] === '(') { const e = closeParen(src, i + 1); add(src.slice(i, e)); i = e; continue; }
+    if (c === '`') { const e = src.indexOf('`', i + 1); const end = e === -1 ? n : e + 1; add(src.slice(i, end)); i = end; continue; }
+    if (c === '#' && word === null) { while (i < n && src[i] !== '\n') i++; continue; }
+    if (c === '\n') {
+      endWord();
+      i++;
+      for (const h of heredocs.splice(0)) {
+        const lines = [];
+        while (i < n) {
+          const e = src.indexOf('\n', i);
+          const end = e === -1 ? n : e;
+          const line = src.slice(i, end);
+          i = end + 1;
+          if ((h.strip ? line.replace(/^\t+/, '') : line).replace(/\r$/, '') === h.delim) break;
+          lines.push(line);
+        }
+        h.seg.bodies.push(lines.join('\n'));
+      }
+      start('\n', i);
+      continue;
+    }
+    if (c === ' ' || c === '\t' || c === '\r') { endWord(); i++; continue; }
+    const op = /^(?:&>>?|>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)/.exec(src.slice(i, i + 3));
+    if (op) {
+      if (word !== null && /^\d+$/.test(word) && into === null) word = null; // an fd number
+      else endWord();
+      i += op[0].length;
+      const dup = /^\s*(?:\d+|-)(?![^\s;&|<>()])/.exec(src.slice(i));
+      if ((op[0] === '>&' || op[0] === '<&') && dup) { i += dup[0].length; continue; }
+      into = { '<<<': 'herestring', '<<-': 'heredoc-', '<<': 'heredoc', '<': 'input', '<&': 'input' }[op[0]] ?? 'redir';
+      continue;
+    }
+    const sep = /^(?:&&|\|\||\|&|;;|[;&|()])/.exec(src.slice(i, i + 2));
+    if (sep) {
+      endWord();
+      i += sep[0].length;
+      if (sep[0] === '(' || sep[0] === ')') out.push({ mark: sep[0] });
+      start(sep[0] === '|&' ? '|' : sep[0], i);
+      continue;
+    }
+    add(c);
+    i++;
+  }
+  endWord();
+  seg.raw = src.slice(seg.from);
+  return out;
+}
+
+const cmdName = (w) => String(w ?? '').replace(/\\/g, '/').split('/').pop().toLowerCase().replace(/\.exe$/, '');
+const SHELL_KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'do', 'while', 'until']);
+const WRAPPERS = /^(?:sudo|doas|env|command|builtin|exec|nohup|time|nice|stdbuf|timeout|xargs)$/;
+const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pwsh|powershell)$/;
+const PS_WRITERS = /^(?:set-content|add-content|out-file|new-item|tee-object|copy-item|move-item|sc|ac|ni|cpi|mi|copy|move)$/;
+const PS_SWITCHES = /^(?:force|append|noclobber|nonewline|recurse|passthru|whatif|confirm|container)$/;
+// `$VAR/temper/<entry>` counts as the state dir unless VAR is a home or temp directory.
+const OUTSIDE_VARS = /^(?:HOME|TMPDIR|TMP|TEMP|USERPROFILE|APPDATA|LOCALAPPDATA|PWD|OLDPWD|XDG_\w+)$/;
+
+/**
+ * Interpreter code (python -c, node -e, a heredoc fed to ruby...) that writes a state
+ * path: open() in a write mode, write_text/writeFileSync/File.write/WriteAllText on it, or
+ * a copy, move or rename with it as the destination, given as a literal or through a
+ * variable assigned one. Reading a state file and writing the data elsewhere passes.
+ */
+const codeWrites = (code, isState) => {
+  const text = String(code).replace(/(['"`])((?:\\.|(?!\1)[^\\])*)\1/g,
+    (_m, _q, s) => (isState(s) ? '__STATE__' : `'${s.replace(/[^\w+<>]/g, '')}'`));
+  if (!text.includes('__STATE__')) return false;
+  const lit = String.raw`[rbfuRBFU]{0,2}__STATE__`;
+  const wrap = String.raw`(?:(?:pathlib\s*\.\s*)?Path\s*\(\s*)?`;
+  const names = [...text.matchAll(new RegExp(String.raw`(?:^|[^\w$.])\$?([A-Za-z_]\w*)\s*=(?!=)\s*${wrap}${lit}`, 'g'))].map((m) => m[1]);
+  const arg = String.raw`${wrap}(?:${[lit, ...names.map((v) => String.raw`\$?${v}\b`)].join('|')})\s*\)?`;
+  return [
+    String.raw`\bopen\s*\(\s*${arg}\s*,\s*(?:mode\s*=\s*)?'[^']*[wax+]`,
+    String.raw`\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*'(?:\+?>>?|\+<)'\s*,\s*${arg}`,
+    String.raw`\bos\s*\.\s*open\s*\(\s*${arg}\s*,[^)]*O_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)`,
+    String.raw`${arg}\s*\.\s*(?:write_text|write_bytes|touch)\b`,
+    String.raw`${arg}\s*\.\s*open\s*\(\s*(?:mode\s*=\s*)?'[^']*[wax+]`,
+    String.raw`\b(?:(?:write|append|output)File(?:Sync)?|writeJson(?:Sync)?|createWriteStream|truncate(?:Sync)?|(?:File|IO)\s*\.\s*(?:bin)?write|(?:Write|Append)All(?:Text|Bytes|Lines))\s*\(\s*${arg}`,
+    String.raw`\b(?:copy(?:file|2|tree|File(?:Sync)?)?|copy_file|move|mv|rename(?:Sync)?|replace|cp(?:Sync)?|(?:sym)?link(?:Sync)?)\s*\(\s*[^,()]*(?:\([^()]*\))?[^,()]*,\s*${arg}`,
+  ].some((re) => new RegExp(re).test(text));
+};
+
 /**
  * Shell writes into the project's temper state dir: `.git/temper/` under any prefix, the
  * absolute `proj.stateDir` (in a worktree it is in the main repository's git dir) with
- * either separator, `target/temper/` when there is no git, and `$VAR/temper/<state file>`.
- * Destinations only: reading a state file, or redirecting a read elsewhere, does not match.
+ * either separator, `target/temper/` when there is no git, and `$VAR/temper/<state entry>`.
+ * Only destinations count: redirection targets, the destination of cp/mv/install/ln/rsync
+ * and Copy-Item/Move-Item, tee/sponge/dd/sed -i/perl -i/curl -o/wget -O/tar -x -C/unzip -d
+ * targets, PowerShell writers, `bash -c` and interpreter code. Variables assigned in the
+ * same command and `cd`/`pushd` into the state dir are followed. Reading a state file, or
+ * redirecting what a read prints elsewhere, does not match, and neither does quoted text.
  */
-export function stateDirWrite(proj, cmd) {
-  const sep = String.raw`[/\\]+`;
-  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const alts = [
-    path.resolve(proj.stateDir).split(/[\\/]+/).map(esc).join(sep),
-    String.raw`\.git${sep}temper`,
-    String.raw`\$\{?\w+\}?${sep}temper(?=${sep}(?:verdicts|gate|logs|sessions|telemetry\.jsonl|findings-))`,
-  ];
-  if (!proj.gitRoot) alts.push(String.raw`(?<![\w.-])target${sep}temper`);
-  const target = String.raw`(?:${alts.join('|')})(?:[/\\][\w./\\*\${}-]*)?`;
-  const t = String.raw`${target}(?![\w.])`;
-  const path_ = String.raw`["']?[^\s"'|;&<>]*${t}`;
-  const res = [
-    ...shellWrites(target),
-    new RegExp(String.raw`\d>>?\|?\s*${path_}`),
-    new RegExp(String.raw`\bdd\b[^|;&]*\bof=${path_}`),
-    // The last argument is the destination, unless -t/--target-directory names it.
-    new RegExp(String.raw`\b(?:cp|mv|install|ln)\b(?![^|;&]*\s(?:-[a-zA-Z]*t\b|--target-directory))[^|;&]*\s${path_}["']?\s*(?:$|[|;&)])`, 'm'),
-    new RegExp(String.raw`\b(?:rsync|Copy-Item|Move-Item)\b[^|;&]*\s${path_}["']?\s*(?:$|[|;&)])`, 'm'),
-    new RegExp(String.raw`\b(?:cp|mv|install|ln)\b[^|;&]*\s(?:-[a-zA-Z]*t\s*|--target-directory[=\s]\s*)${path_}`),
-    new RegExp(String.raw`${t}["']?\s*\)?\s*\.\s*(?:write_text|write_bytes)\b`),
-    new RegExp(String.raw`\b(?:(?:writeFile|appendFile)(?:Sync)?|createWriteStream|New-Item|WriteAll(?:Text|Bytes|Lines))\b[^|;&]*${t}`),
-  ];
-  const text = GIT_DIR_SUBST.reduce((s, [re, to]) => s.replace(re, to), String(cmd));
-  return res.some((re) => re.test(text));
+export function stateDirWrite(proj, cmd, cwd = proj.root) {
+  const win = process.platform === 'win32';
+  const fold = (s) => (win ? s.toLowerCase() : s);
+  const slash = (s) => String(s).replace(/\\/g, '/');
+  const absState = fold(slash(path.resolve(proj.stateDir)));
+  const absCwd = path.resolve(cwd);
+  const vars = new Map();
+  const expand = (w) => String(w).replace(/\$\{(\w+)\}|\$(\w+)/g, (m, a, b) => vars.get(a ?? b) ?? m);
+  const isAbs = (p) => /^(?:\/|[a-z]:\/|~|\$)/i.test(p);
+  const isState = (word, dir) => {
+    let p = slash(expand(word));
+    if (win && /^\/[a-z]\//i.test(p)) p = `${p[1]}:${p.slice(2)}`;
+    if (dir && !isAbs(p)) p = `${dir}/${p}`;
+    p = path.posix.normalize(p);
+    const f = fold(p);
+    if (/(?:^|\/)\.git\/temper(?:\/|$)/.test(f)) return true;
+    if (!proj.gitRoot && /(?:^|\/)target\/temper(?:\/|$)/.test(f)) return true;
+    const v = /^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(p);
+    if (v && !OUTSIDE_VARS.test(v[1])) return true;
+    if (p.includes('$') || p.startsWith('~')) return false;
+    const r = fold(slash(path.resolve(absCwd, p)));
+    return r === absState || r.startsWith(`${absState}/`);
+  };
+  const assign = (w) => {
+    const m = /^([A-Za-z_]\w*)=(.*)$/s.exec(w);
+    if (m) vars.set(m[1], expand(m[2]));
+    return Boolean(m);
+  };
+
+  const writes = (words, seg, bodies, dir, depth) => {
+    const st = (w) => w !== undefined && isState(w, dir);
+    let i = 0;
+    for (;;) {
+      const w = cmdName(words[i]);
+      if (!WRAPPERS.test(w)) break;
+      i++;
+      while (i < words.length && (words[i].startsWith('-') || /^[A-Za-z_]\w*=/.test(words[i]))) {
+        if (w === 'xargs' && /^-[IdELnPsa]$/.test(words[i])) i++;
+        i++;
+      }
+      if (w === 'timeout') i++;
+    }
+    if (i >= words.length) return false;
+    const n = cmdName(words[i]);
+    const args = words.slice(i + 1);
+    const ops = args.filter((w) => !w.startsWith('-'));
+    const valueOf = (short, long) => {
+      for (let j = 0; j < args.length; j++) {
+        const a = args[j];
+        if (short && new RegExp(`^-[a-zA-Z]*${short}$`).test(a)) return args[j + 1];
+        if (short && a.startsWith(`-${short}`) && a.length > 2) return a.slice(2);
+        for (const l of long) {
+          if (a === l) return args[j + 1];
+          if (a.startsWith(`${l}=`)) return a.slice(l.length + 1);
+        }
+      }
+      return undefined;
+    };
+    if (n === 'find') {
+      for (let j = 0; j < args.length; j++) {
+        if (!/^-(?:exec|execdir|ok|okdir)$/.test(args[j])) continue;
+        const end = args.findIndex((w, x) => x > j && (w === ';' || w === '+'));
+        if (writes(args.slice(j + 1, end === -1 ? undefined : end), seg, [], dir, depth)) return true;
+      }
+      return false;
+    }
+    if (/^(?:cp|mv|install|ln)$/.test(n)) {
+      const t = valueOf('t', ['--target-directory']);
+      if (t !== undefined) return st(t);
+      return ops.length > 1 && st(ops.at(-1));
+    }
+    if (/^(?:rsync|scp)$/.test(n)) return ops.length > 1 && st(ops.at(-1));
+    if (/^(?:tee|sponge)$/.test(n)) return ops.some(st);
+    if (n === 'dd') return args.some((w) => w.startsWith('of=') && st(w.slice(3)));
+    if ((n === 'sed' || n === 'perl') && args.some((w) => /^-[a-zA-Z]*i|^--in-place/.test(w)) && ops.some(st)) return true;
+    if (n === 'curl') return st(valueOf('o', ['--output', '--output-dir']));
+    if (n === 'wget') return st(valueOf('O', ['--output-document'])) || st(valueOf('P', ['--directory-prefix']));
+    if (n === 'tar') {
+      const extract = args.some((w, j) => /^--(?:extract|get)$/.test(w) || (/^-[a-zA-Z]*x[a-zA-Z]*$/.test(w)) || (j === 0 && /^[a-zA-Z]*x[a-zA-Z]*$/.test(w)));
+      return extract && st(valueOf('C', ['--directory']));
+    }
+    if (n === 'unzip') return st(valueOf('d', []));
+    if (PS_WRITERS.test(n)) {
+      const named = new Map();
+      const pos = [];
+      for (let j = 0; j < args.length; j++) {
+        const m = /^-([A-Za-z]+)(?::(.*))?$/s.exec(args[j]);
+        if (!m) { pos.push(args[j]); continue; }
+        const key = m[1].toLowerCase();
+        named.set(key, m[2] !== undefined ? m[2] : PS_SWITCHES.test(key) ? true : args[++j]);
+      }
+      const get = (...full) => [...named].find(([k]) => full.some((f) => f.startsWith(k)))?.[1];
+      const pathArg = get('path', 'literalpath', 'filepath');
+      const target = /^(?:copy-item|move-item|cpi|mi|copy|move)$/.test(n)
+        ? get('destination') ?? (pathArg !== undefined ? pos[0] : pos[1])
+        : pathArg ?? pos[0];
+      return typeof target === 'string' && st(target);
+    }
+    if (/^(?:bash|sh|zsh|dash|ksh)$/.test(n)) {
+      const c = valueOf('c', []);
+      return [...(c !== undefined ? [c] : []), ...bodies].some((b) => walk(b, dir, depth + 1));
+    }
+    if (n === 'eval') return walk(args.join(' '), dir, depth + 1);
+    if (INTERPRETERS.test(n)) {
+      const code = [...bodies];
+      for (let j = 0; j < args.length; j++) if (/^(?:-c|-e|-E|-p|-r|--eval|--print|-command)$/i.test(args[j]) && j + 1 < args.length) code.push(args[j + 1]);
+      if (code.some((c) => codeWrites(c, st))) return true;
+      if (/^(?:pwsh|powershell)$/.test(n)) return code.some((c) => walk(c, dir, depth + 1));
+      return false;
+    }
+    if (/^[[$]/.test(words[i])) return codeWrites(seg.raw, st); // a PowerShell expression
+    return false;
+  };
+
+  const walk = (src, startDir, depth) => {
+    if (depth > 4) return false;
+    const segs = shellParse(src);
+    let dir = startDir;
+    const stack = [];
+    for (let k = 0; k < segs.length; k++) {
+      const s = segs[k];
+      if (s.mark === '(') { stack.push(dir); continue; }
+      if (s.mark === ')') { if (stack.length) dir = stack.pop(); continue; }
+      if (s.redirs.some((r) => isState(r, dir))) return true;
+      let words = s.words;
+      while (words.length && (SHELL_KEYWORDS.has(words[0]) || assign(words[0]))) words = words.slice(1);
+      if (/^(?:export|declare|local|readonly|typeset)$/.test(words[0] ?? '')) { words.slice(1).forEach(assign); continue; }
+      if (words.length === 3 && /^\$\w+$/.test(words[0]) && words[1] === '=') { vars.set(words[0].slice(1), expand(words[2])); continue; }
+      if (!words.length) continue;
+      const name = cmdName(words[0]);
+      if (/^(?:cd|pushd|chdir|set-location|sl)$/.test(name)) {
+        const arg = words.slice(1).find((w) => !w.startsWith('-'));
+        if (!arg || arg.startsWith('~')) dir = null;
+        else {
+          const p = slash(expand(arg));
+          dir = path.posix.normalize(dir && !isAbs(p) ? `${dir}/${p}` : p);
+        }
+        continue;
+      }
+      if (name === 'popd') { dir = startDir; continue; }
+      const piped = s.sep === '|' && segs[k - 1]?.bodies ? segs[k - 1].bodies : [];
+      if (writes(words, s, [...s.bodies, ...piped], dir, depth)) return true;
+    }
+    return false;
+  };
+  return walk(GIT_DIR_SUBST.reduce((s, [re, to]) => s.replace(re, to), String(cmd)), null, 0);
 }
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
@@ -489,7 +758,7 @@ export function preBash(input) {
     telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
     return deny(BASELINE_SHELL_DENY);
   }
-  if (stateDirWrite(proj, cmd)) {
+  if (stateDirWrite(proj, cmd, input.cwd ?? proj.root)) {
     telemetry(proj, input, 'deny-shell-write', { file: 'state-dir' });
     return deny(STATE_SHELL_DENY);
   }
