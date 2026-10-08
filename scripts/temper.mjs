@@ -48,7 +48,6 @@ const HOOKS = {
   'user-prompt': H.userPromptSubmit,
   'pre-edit': H.preEdit,
   'pre-bash': H.preBash,
-  'pre-handback': H.preHandback,
   'post-tool': H.postTool,
   stop: H.stop,
   'subagent-stop': H.subagentStop,

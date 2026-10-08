@@ -28,12 +28,6 @@
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "pre-bash"], "timeout": 15 }
         ]
-      },
-      {
-        "matcher": "SubagentHandback",
-        "hooks": [
-          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs", "hook", "pre-handback"], "timeout": 60 }
-        ]
       }
     ],
     "PostToolUse": [
