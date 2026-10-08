@@ -1076,17 +1076,6 @@ export function preBash(input) {
   return none();
 }
 
-export function preHandback(input) {
-  if (!REVIEWER.test(input.agent_type ?? '')) return none();
-  const proj = discover(input.cwd);
-  if (!proj) return none();
-  const v = extractVerdict(String(input.tool_input?.message ?? ''));
-  const problems = checkVerdict(proj, input, v);
-  if (problems.length) return deny(`temper: the review verdict is invalid, so the report was not delivered:\n- ${problems.join('\n- ')}\nFix the verdict block and hand back again.`);
-  storeVerdict(proj, input, v);
-  return none();
-}
-
 function checkVerdict(proj, input, v) {
   const base = baseRev(proj, input.session_id);
   const gate = v?.fingerprint ? cachedGate(proj, v.fingerprint) : null;
@@ -1194,7 +1183,7 @@ export function subagentStop(input) {
     if (!proj) return none();
     const already = readText(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`));
     const v = extractVerdict(input.last_assistant_message);
-    if (!v && already) return none(); // delivered through SubagentHandback
+    if (!v && already) return none(); // recorded by an earlier SubagentStop for this agent
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }

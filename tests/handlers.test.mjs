@@ -1,7 +1,6 @@
 // Hook orchestration handlers called directly on throwaway git workspaces:
 // SessionStart, UserPromptSubmit, the PostToolUse skill marker and the skill
-// gate in PreToolUse, the Stop completion gate, SubagentStart, SubagentStop and
-// the SubagentHandback check.
+// gate in PreToolUse, the Stop completion gate, SubagentStart and SubagentStop.
 //
 // The completion gate runs `cargo --version` and `cargo fmt --all` before it
 // reads the cached gate record for the tree fingerprint. These tests seed that
@@ -14,7 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart, preHandback } from '../scripts/lib/hooks.mjs';
+import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart } from '../scripts/lib/hooks.mjs';
 import { discover, fingerprint, loadConfig, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
@@ -590,21 +589,4 @@ test('SubagentStop: other agent types are not checked', { skip: noGit }, (t) => 
   for (const agent_type of ['general-purpose', 'temper:rust-architect', undefined]) {
     assert.deepEqual(subagentStop({ cwd: r.dir, session_id: 's-other', agent_type, agent_id: 'x1' }), {}, String(agent_type));
   }
-});
-
-// ---------------------------------------------------- PreToolUse SubagentHandback
-
-test('SubagentHandback: only the reviewer is checked; an invalid verdict is denied with the problem list', { skip: noGit }, (t) => {
-  const r = repo(t);
-  r.put(LIB, LIB_RS_2);
-  const input = { cwd: r.dir, session_id: 's-hb', tool_name: 'SubagentHandback', agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
-  assert.deepEqual(preHandback({ ...input, agent_type: 'temper:rust-implementer', tool_input: { message: 'done' } }), {});
-  const res = preHandback({ ...input, tool_input: { message: fenced(verdict('nothex')) } });
-  assert.equal(decision(res), 'deny');
-  assert.match(reason(res), /^temper: the review verdict is invalid, so the report was not delivered:\n- "fingerprint" must be the 16-hex fingerprint/);
-  assert.match(reason(res), /\nFix the verdict block and hand back again\.$/);
-  const fp = r.fp();
-  assert.deepEqual(preHandback({ ...input, tool_input: { message: fenced(verdict(fp)) } }), {});
-  assert.equal(verdictFor(r.proj(), fp).stale, false);
-  assert.equal(fs.readFileSync(path.join(sessionDir(r.proj(), 's-hb'), 'verdict-agent-rv1'), 'utf8'), fp);
 });
