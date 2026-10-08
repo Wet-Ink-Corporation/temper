@@ -10,6 +10,13 @@ temper is developed by Wet Ink Corporation and is internal for now. [`AGENTS.md`
 4. CI must be green: `Checks` and `Unit tests (Windows)` are required on `main`.
 5. Merging to `main` ships to marketplace users, so merge only what is ready for them.
 
+## Priority
+
+Every open issue that is a defect or a gap carries one priority label (wi-7c3212). The v1 go-live checklist counts P0 and P1 among the `v1-live` issues.
+- **P0**: enforcement can be bypassed or is wrong for everyone, or a release breaks adopters' CI. Fix before anything else, and never release with one open.
+- **P1**: a wrong decision or result in a realistic case (a false positive that blocks normal work, a false negative on a MUST rule, a broken documented workflow). Fix before the next release.
+- **P2**: everything else that should change: rough edges, docs, minor false positives with a workaround. Fix when convenient.
+
 ## Changing the standard
 
 A rule change is a change in behaviour for every repository that uses temper.
