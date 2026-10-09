@@ -171,3 +171,22 @@ test('hook stop: hands the session\'s telemetry to a detached push that lands on
   assert.equal(files.length, 1);
   assert.match(git(origin, 'show', `temper-telemetry:${files[0]}`), /"event":"session-start"/);
 });
+
+test('stats --branch: a named branch wins over the config; a missing branch or name is an error', { skip: noGit }, (t) => {
+  const { ws, proj } = workspace(t, {});
+  const stats = (...args) => spawnSync(process.execPath, [CLI, 'stats', ...args], { cwd: ws, encoding: 'utf8' });
+  const unnamed = stats('--branch');
+  assert.equal(unnamed.status, 2);
+  assert.match(unnamed.stderr, /name the branch, or set telemetry\.branch/);
+  const missing = stats('--branch', 'no-such-branch');
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /could not fetch the no-such-branch branch/);
+  fs.writeFileSync(path.join(ws, '.claude', 'temper.json'), JSON.stringify({ telemetry: { branch: 'elsewhere' } }));
+  const p = discover(ws);
+  log(p, 's1', 'session-start');
+  assert.equal(pushTelemetry(p, 's1').pushed, true);
+  const named = stats('--branch', 'elsewhere');
+  assert.equal(named.status, 0, named.stderr);
+  assert.match(named.stdout, /^sessions: 1$/m);
+  assert.equal(proj.config.telemetry.branch, null);
+});
