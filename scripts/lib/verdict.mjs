@@ -50,7 +50,7 @@ export function extractVerdict(text) {
  */
 export function validateVerdict(v, ctx = {}) {
   const p = [];
-  if (!v) return ['no verdict block found: end the final message with a ```json block containing "temper_verdict": 1'];
+  if (!v) return ['no verdict block found: end the final report with a ```json block containing "temper_verdict": 1'];
   if (v.__parseError) return [`verdict JSON does not parse: ${v.__parseError}`];
   if (v.temper_verdict !== 1) p.push('"temper_verdict" must be 1');
   if (!['approved', 'changes-requested'].includes(v.verdict)) p.push('"verdict" must be "approved" or "changes-requested"');

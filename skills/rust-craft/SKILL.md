@@ -102,7 +102,7 @@ The reviewer works in a fresh context and is adversarial by design. Its job is t
 3. Read the tests first to learn the intent, then the public API, then the implementation.
 4. Score each rubric dimension from 0 to 4 using the anchors in `references/review-rubric.md`. Record findings with rule ID, severity (blocker, major, minor or nit), `file:line`, evidence and a concrete fix.
 5. Verdict: `approved` only when the gate is green, there are no blocker or major findings, and every applicable dimension scores at least 3. Otherwise `changes-requested`.
-6. Emit the verdict JSON block (schema in `references/review-rubric.md`) as the last thing in your final message.
+6. Emit the verdict JSON block (schema in `references/review-rubric.md`) as the last thing in your final report (your final message, or your `SubagentHandback` message).
 
 Style preferences are not findings unless they break a rule. Label them as nits. Every finding needs evidence: quote the line.
 

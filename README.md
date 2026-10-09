@@ -25,7 +25,7 @@ A skill is advice that the model chooses to load. Rules the model can't skip hav
 ## Install
 
 Requirements:
-- **Claude Code 2.1.286 or later.** The end-to-end smoke test passes on 2.1.286, 2.1.288 and 2.1.289. Every hook now in `hooks/hooks.json` ran on these versions; `SubagentStop` validates and records the reviewer's verdict ([results](docs/history/evals.md#smoke-runs)). Older releases are untested.
+- **Claude Code 2.1.286 or later.** The end-to-end smoke test passes on 2.1.286, 2.1.288 and 2.1.289. Every hook in `hooks/hooks.json` ran on these versions except the `PreToolUse` `SubagentHandback` hook: local sessions never call it, and `SubagentStop` validates and records the reviewer's verdict there ([results](docs/history/evals.md#smoke-runs)). In a cloud session a subagent delivers its report through `SubagentHandback`, and that hook records the verdict. Older releases are untested.
 - **Node 18 or later** on the `PATH` that Claude Code sees. On Windows it must be a real `node.exe`; see [troubleshooting](docs/troubleshooting.md#windows). In a Rust workspace, `SessionStart` warns on Node 15 to 17 (older Node cannot load temper at all); it blocks nothing. The Claude Code version is not checked: hooks are not told it.
 - **git**, and the Rust toolchain that `rust-toolchain.toml` pins (1.98.1 in the template), with clippy and rustfmt.
 - **Access to `Wet-Ink-Corporation/temper`.** The repository is internal to the organization, so `marketplace add` works only where git has credentials for it ([troubleshooting](docs/troubleshooting.md#cloud-sessions-and-claudeai)).
