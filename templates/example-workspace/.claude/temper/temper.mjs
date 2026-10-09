@@ -7,7 +7,8 @@
 //   temper status              fingerprint, changed files, gate and review state
 //   temper setup [--dry-run] [--force]   install repo templates (lints, rules, charters, CI) and vendor the CLI
 //   temper setup --vendor-only [--dry-run]   refresh only the vendored CLI (.claude/temper/)
-//   temper stats               enforcement telemetry summary
+//   temper stats [--branch [NAME]]   enforcement telemetry summary (--branch: every session pushed to NAME)
+//   temper telemetry push --session ID   push one session's telemetry to telemetry.branch (Stop runs it)
 //   temper baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]
 //                              lint baseline for legacy code: status, record, lower, or ratchet
 //   temper report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]
@@ -18,7 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
-import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry } from './lib/project.mjs';
+import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry, pushTelemetry, fetchTelemetryBranch,
+} from './lib/project.mjs';
 import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
@@ -485,16 +487,67 @@ function strictLints(root, tpl) {
   return hits;
 }
 
-function stats() {
+const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length * p) / 100))];
+const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
+const STOP_OUTCOMES = new Set(['stop-green', 'stop-blocked', 'stop-allowed-red', 'stop-allowed-unreviewed', 'gate-unavailable']);
+
+function stats(args) {
   const proj = project();
-  const rows = readTelemetry(proj);
+  const i = args.indexOf('--branch');
+  let rows;
+  if (i >= 0) {
+    const named = args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : null;
+    const branch = named ?? proj.config.telemetry?.branch;
+    if (!branch) { process.stderr.write('temper stats --branch: name the branch, or set telemetry.branch in .claude/temper.json\n'); return 2; }
+    rows = fetchTelemetryBranch(proj, branch);
+    if (rows === null) { process.stderr.write(`temper stats: could not fetch the ${branch} branch from origin\n`); return 1; }
+  } else {
+    rows = readTelemetry(proj);
+  }
   const count = {};
   for (const r of rows) count[r.event] = (count[r.event] ?? 0) + 1;
   const rules = {};
   for (const r of rows.filter((x) => x.event === 'deny-scan')) for (const id of r.rules ?? []) rules[id] = (rules[id] ?? 0) + 1;
-  const sessions = new Set(rows.map((r) => r.sid)).size;
-  process.stdout.write(`sessions: ${sessions}\nevents:\n${Object.entries(count).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(26)} ${v}`).join('\n')}\n`);
-  if (Object.keys(rules).length) process.stdout.write(`escape hatches blocked by rule:\n${Object.entries(rules).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(8)} ${v}`).join('\n')}\n`);
+  const bySession = new Map();
+  for (const r of rows) bySession.set(r.sid, [...(bySession.get(r.sid) ?? []), r]);
+  const out = [`sessions: ${bySession.size}`];
+  if (rows.length) out.push(`from ${rows.map((r) => r.t).sort()[0]} to ${rows.map((r) => r.t).sort().at(-1)}`);
+  out.push(`events:\n${Object.entries(count).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(26)} ${v}`).join('\n')}`);
+  if (Object.keys(rules).length) out.push(`escape hatches blocked by rule:\n${Object.entries(rules).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(8)} ${v}`).join('\n')}`);
+  // Gate latency at Stop (older rows carry no ms). A gate-start that the same session and agent
+  // never follows with an outcome was a hook killed mid-gate, most likely by its timeout.
+  const fresh = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached).map((r) => r.ms).sort((a, b) => a - b);
+  const cached = rows.filter((r) => STOP_OUTCOMES.has(r.event) && r.cached === true).length;
+  let killed = 0;
+  for (const list of bySession.values()) {
+    const pending = new Set();
+    for (const r of list) {
+      const who = r.agent ?? 'main';
+      if (r.event === 'gate-start') { if (pending.has(who)) killed += 1; pending.add(who); }
+      else if (STOP_OUTCOMES.has(r.event)) pending.delete(who);
+    }
+    killed += pending.size;
+  }
+  if (fresh.length || cached || killed) {
+    out.push(`gate at Stop: ${fresh.length} run(s), ${cached} cached${fresh.length ? `; p50 ${secs(pct(fresh, 50))}, p90 ${secs(pct(fresh, 90))}, max ${secs(fresh.at(-1))}` : ''}${killed ? `; ${killed} cut short (hook timeout?)` : ''}`);
+  }
+  // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
+  const rounds = [...bySession.values()].map((list) => list.filter((r) => r.event === 'verdict')).filter((v) => v.length);
+  if (rounds.length) {
+    const n = rounds.map((v) => v.length).sort((a, b) => a - b);
+    const first = rounds.filter((v) => v[0].verdict === 'approved').length;
+    out.push(`review loop: ${rounds.length} session(s) with verdicts; rounds per session p50 ${pct(n, 50)}, max ${n.at(-1)}; approved on the first verdict in ${first}`);
+  }
+  process.stdout.write(`${out.join('\n')}\n`);
+  return 0;
+}
+
+function telemetryCmd(args) {
+  const i = args.indexOf('--session');
+  const sid = i >= 0 ? args[i + 1] : null;
+  if (args[0] !== 'push' || !sid) { process.stderr.write('usage: temper telemetry push --session ID\n'); return 2; }
+  const res = pushTelemetry(project(), sid);
+  process.stdout.write(res.pushed ? `pushed ${res.rows} row(s) to ${res.branch}:${res.file}\n` : `not pushed: ${res.why}\n`);
   return 0;
 }
 
@@ -509,11 +562,12 @@ const code = await (async () => {
     case 'scan': return scan(rest);
     case 'status': return status();
     case 'setup': return setup(rest);
-    case 'stats': return stats();
+    case 'stats': return stats(rest);
+    case 'telemetry': return telemetryCmd(rest);
     case 'baseline': return baseline(rest);
     case 'report': return report(rest);
     default:
-      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status | setup [--dry-run] [--force | --vendor-only] | stats\n'
+      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status | setup [--dry-run] [--force | --vendor-only] | stats [--branch [NAME]] | telemetry push --session ID\n'
         + '              | baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]\n'
         + '              | report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]>\n');
       return cmd ? 2 : 0;

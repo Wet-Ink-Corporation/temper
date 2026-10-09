@@ -43,6 +43,7 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-46d668](../../.kb/_intake/decisions/wi-46d668-should-the-stop-gate-block-rather-than-pass.md) | Should the Stop gate block, rather than pass with a notice, when cargo is unusable after a toolchain change (engine-1-7, second half)? | Keep as is: UNAVAILABLE passes with a notice; the Bash ask on toolchain-file writes (#83) covers the direct route. Decided 2026-10-08. |
 | [wi-8b8a16](../../.kb/_intake/decisions/wi-8b8a16-should.md) | Should #84 accept that `cp` to an unknown destination (`$DEST` from the environment or computed) is not compared against what that destination already holds? | Accept as built, so `cp x.rs "$BACKUP"` backups keep working. Decided 2026-10-08. |
 | [wi-2000a3](../../.kb/_intake/decisions/wi-2000a3-should-the-bash-hook-also-ask-when-a-command.md) | Should the Bash hook also ask when a command deletes a protected config file (`rm deny.toml`, `rm .claude/temper.json`)? | Yes, as a small follow-up. Decided 2026-10-08. |
+| [wi-641f99](../../.kb/_intake/decisions/wi-641f99-the-proxy-refuses-hidden-refs-so-may-temper-s.md) | The cloud git proxy refuses hidden refs, so may temper's `Stop` hook push each session's telemetry to a dedicated `temper-telemetry` branch, opt-in per repository and with `[skip ci]`? | Yes: `telemetry.branch` in `.claude/temper.json`, set in weigh-in and redkiln-rs for the pilot. Decided 2026-10-09. |
 
 ## Defaults taken without the owner
 
@@ -68,6 +69,7 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 | wi-f22cef | D7: cargo-dist, or a hand-written release workflow? | A hand-written `release.yml` plus `cargo xtask` | cargo-dist's npm installer downloads at run time, so the npm packaging and checks would be ours anyway. A hand-written workflow keeps the supply chain small. | `docs/plans/temper-2-rust-port.md:79` |
 | wi-2f31ee | D8: should the scanner use syn, rustc's lexer, or a port of the masking lexer? | Port `lexer.mjs` and the 56 rules faithfully | The scanner must handle code that does not parse, and a faithful port can be compared byte for byte with 1.x. `ra_ap_rustc_lexer` could follow in 2.x. | `docs/plans/temper-2-rust-port.md:84` |
 | wi-e9386f | D9: which regex engine? | `regex`, with explicit predicates for the ~10 look-around patterns | Linear time, so agent-written input cannot cause ReDoS (H-13). `fancy-regex` is the fallback. | `docs/plans/temper-2-rust-port.md:91` |
+| wi-292a7d | When should the unattended pilot report be compiled? | 2026-10-18 | The pilot's exit in `v1-readiness.md` Phase 2 is at least two weeks of use from the 2026-10-04 adoption; the scheduled run is one call to move. | `docs/plans/v1-readiness.md:110` |
 
 ## Dismissed
 

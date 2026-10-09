@@ -99,6 +99,8 @@ export const DEFAULT_CONFIG = {
   // their own full [lints] table instead of `[lints] workspace = true`: the H-01 FFI exception,
   // the ERR-09 arithmetic opt-in. Any change to their [lints] still asks (H-05).
   manifests: { ownLints: [] },
+  // Opt-in: the branch on origin that Stop pushes each session's telemetry to (pushTelemetry).
+  telemetry: { branch: null },
 };
 
 export function loadConfig(root) {
@@ -111,6 +113,7 @@ export function loadConfig(root) {
       gate: { ...DEFAULT_CONFIG.gate, ...(user.gate ?? {}) },
       scanner: { ...DEFAULT_CONFIG.scanner, ...(user.scanner ?? {}) },
       manifests: { ...DEFAULT_CONFIG.manifests, ...(user.manifests ?? {}) },
+      telemetry: { ...DEFAULT_CONFIG.telemetry, ...(user.telemetry ?? {}) },
       protected: user.protected ?? DEFAULT_CONFIG.protected,
     };
   } catch {
@@ -387,16 +390,86 @@ export function telemetry(proj, input, event, detail = {}) {
     // Rotate at the cap and keep one old file, so the pair stays under about twice the cap.
     // Two hooks rotating at once can drop the older file's history; telemetry is best effort.
     try { if (fs.statSync(file).size >= RETENTION.telemetryBytes) fs.renameSync(file, path.join(proj.stateDir, TELEMETRY_OLD)); } catch { /* absent, or rotated by another hook */ }
+    // ccr: the Claude Code cloud session (cse_X is claude.ai/code/session_X), which links the row to the
+    // Claude-Session trailer of the commits it made; sid is the CLI's own session id.
+    const ccr = process.env.CLAUDE_CODE_REMOTE_SESSION_ID || undefined;
     fs.appendFileSync(file, JSON.stringify({
-      t: new Date().toISOString(), sid: input?.session_id, agent: input?.agent_type ?? 'main', event, ...detail,
+      t: new Date().toISOString(), sid: input?.session_id, ...(ccr ? { ccr } : {}), agent: input?.agent_type ?? 'main', event, ...detail,
     }) + '\n');
   } catch { /* best effort */ }
 }
 
+const parseRows = (text) => String(text ?? '').split('\n')
+  .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
 /** The telemetry rows that remain, oldest file first; lines that do not parse are skipped. */
 export function readTelemetry(proj) {
-  return [TELEMETRY_OLD, TELEMETRY].flatMap((f) => (readText(path.join(proj.stateDir, f)) ?? '').split('\n'))
-    .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  return [TELEMETRY_OLD, TELEMETRY].flatMap((f) => parseRows(readText(path.join(proj.stateDir, f))));
+}
+
+const TELEMETRY_TIP = 'refs/temper/telemetry-tip';
+
+/**
+ * Keep a session's telemetry beyond its machine. A Claude Code cloud session runs in a container
+ * that is discarded when the session ends, and .git/temper/ with it, so its telemetry never
+ * reaches `temper stats`. With `telemetry.branch` set in .claude/temper.json, Stop runs this (in a
+ * detached process) to push the session's rows to that branch on `remote` as
+ * sessions/<date>-<session>.jsonl, rewritten whole on each push. It is temper's only network call,
+ * and it is off by default. It builds the commit with a private index and a private ref, so the
+ * working tree, the index, HEAD and the clone's branches are untouched, and the commit message
+ * carries [skip ci] so the push starts no workflow. A rejected push (another session pushed first)
+ * is retried on the new tip: each session writes only its own file.
+ */
+export function pushTelemetry(proj, sid, { remote = 'origin', attempts = 3 } = {}) {
+  const branch = proj.config.telemetry?.branch;
+  if (!branch || !proj.gitRoot) return { pushed: false, why: 'telemetry.branch is not set' };
+  const rows = readTelemetry(proj).filter((r) => r.sid === sid);
+  if (!rows.length) return { pushed: false, why: 'no telemetry for this session' };
+  const text = rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
+  const digest = createHash('sha256').update(text).digest('hex');
+  const mark = path.join(sessionDir(proj, sid), 'telemetry-pushed');
+  if (readText(mark) === digest) return { pushed: false, why: 'unchanged since the last push' };
+  const key = String(rows.find((r) => r.ccr)?.ccr ?? sid).replace(/[^\w.-]/g, '_');
+  const file = `sessions/${String(rows[0].t ?? '').slice(0, 10)}-${key}.jsonl`;
+  const who = { name: 'temper', email: 'temper@users.noreply.github.com' };
+  const env = {
+    GIT_INDEX_FILE: path.join(proj.stateDir, `telemetry-index.${process.pid}`),
+    GIT_AUTHOR_NAME: who.name, GIT_AUTHOR_EMAIL: who.email, GIT_COMMITTER_NAME: who.name, GIT_COMMITTER_EMAIL: who.email,
+  };
+  const g = (args) => git(proj.gitRoot, args, { env, timeoutMs: 60000 });
+  const tmp = path.join(proj.stateDir, `telemetry-push.${process.pid}.jsonl`);
+  let why = 'git push failed';
+  try {
+    fs.writeFileSync(tmp, text);
+    const blob = g(['hash-object', '-w', tmp]).stdout.trim();
+    for (let i = 0; i < attempts; i += 1) {
+      // A branch that does not exist yet fails the fetch; the push then creates it from a root commit.
+      const fetched = g(['fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${TELEMETRY_TIP}`]).code === 0;
+      const tip = fetched ? g(['rev-parse', '--verify', '--quiet', TELEMETRY_TIP]).stdout.trim() : '';
+      g(tip ? ['read-tree', tip] : ['read-tree', '--empty']);
+      g(['update-index', '--add', '--cacheinfo', `100644,${blob},${file}`]);
+      const tree = g(['write-tree']).stdout.trim();
+      const commit = tree ? g(['commit-tree', tree, ...(tip ? ['-p', tip] : []), '-m', `telemetry: ${key} [skip ci]`]).stdout.trim() : '';
+      if (!commit) { why = 'git could not build the telemetry commit'; break; }
+      const pushed = g(['push', '--quiet', remote, `${commit}:refs/heads/${branch}`]);
+      if (pushed.code === 0) { writeAtomic(mark, digest); return { pushed: true, branch, file, rows: rows.length }; }
+      why = pushed.stderr.trim().split('\n').at(-1) || why;
+    }
+  } catch (e) {
+    why = e?.message ?? String(e);
+  } finally {
+    for (const f of [tmp, env.GIT_INDEX_FILE]) { try { fs.rmSync(f, { force: true }); } catch { /* ignore */ } }
+  }
+  return { pushed: false, why };
+}
+
+/** Every session's rows on `branch` of `remote`, fetched fresh; null when the branch cannot be fetched. */
+export function fetchTelemetryBranch(proj, branch, { remote = 'origin' } = {}) {
+  if (!proj.gitRoot) return null;
+  const g = (args) => git(proj.gitRoot, args, { timeoutMs: 120000 });
+  if (g(['fetch', '--quiet', '--no-tags', remote, `+refs/heads/${branch}:${TELEMETRY_TIP}`]).code !== 0) return null;
+  const files = g(['ls-tree', '-r', '--name-only', TELEMETRY_TIP, 'sessions/']).stdout.split('\n').filter((f) => f.endsWith('.jsonl'));
+  return files.flatMap((f) => parseRows(g(['show', `${TELEMETRY_TIP}:${f}`]).stdout));
 }
 
 // ---------- change detection and fingerprint ----------

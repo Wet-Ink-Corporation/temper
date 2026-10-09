@@ -346,7 +346,7 @@ pub fn edit_policy(facts: &EditFacts<'_>, scanner: &Scanner) -> Verdict<..>;    
 pub fn apply_edit(before: &str, edit: &EditOp<'_>) -> Option<String>;            // JS replace semantics incl. empty old_string
 pub fn parse_status(last_message: &str) -> Option<DeclaredStatus>;               // Done | Wip | Blocked
 pub const IRON_RULES: [&str; 16];
-pub enum TelemetryEvent { .. }   // typed payloads for the 18 1.x event names; serialised as {"t","sid"?,"agent","event",..detail}
+pub enum TelemetryEvent { .. }   // typed payloads for the 19 1.x event names (gate-start added after 1.3.0); serialised as {"t","sid"?,"agent","event",..detail}
 ```
 
 **`temper-app` (ports and use cases)**:

@@ -1,8 +1,10 @@
 // Hook handlers. Each returns { json?, text?, exit? }.
 // Context strings are phrased as facts about the project, not as out-of-band
 // commands, so Claude treats them as project information.
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   discover, relTo, norm, readText, writeAtomic, globMatch, crateOf, sessionDir, agentKey,
   markSkillLoaded, skillLoaded, setBase, baseRev, pruneSessions, pruneMarkers, telemetry, rustChanges,
@@ -1133,9 +1135,13 @@ function completionGate(input, { requireReview }) {
     telemetry(proj, input, 'stop-declared', { status });
     return notice(`temper: Rust changes left ${status === 'WIP' ? 'in progress' : 'blocked'}; the gate and review were not enforced for this turn.`);
   }
+  // gate-start with no Stop outcome after it in the session means the hook was killed (its timeout).
+  telemetry(proj, input, 'gate-start', {});
+  const t0 = Date.now();
   const res = runGate(proj, { base });
+  const timing = { ms: Date.now() - t0, cached: Boolean(res.cached) };
   if (res.unavailable) {
-    telemetry(proj, input, 'gate-unavailable', {});
+    telemetry(proj, input, 'gate-unavailable', timing);
     return notice(`temper: ${renderGate(res)}`);
   }
   const fp = res.fp;
@@ -1145,11 +1151,11 @@ function completionGate(input, { requireReview }) {
 
   if (!res.ok) {
     if (stuck('gate')) {
-      telemetry(proj, input, 'stop-allowed-red', { fp });
+      telemetry(proj, input, 'stop-allowed-red', { fp, ...timing });
       return notice(`temper: stopped with a RED gate (no progress after the previous block). ${res.steps.filter((s) => !s.ok).map((s) => s.name).join(', ')} failing.`);
     }
     save({ fp, kind: 'gate', at: Date.now() });
-    telemetry(proj, input, 'stop-blocked', { reason: 'gate', fp });
+    telemetry(proj, input, 'stop-blocked', { reason: 'gate', fp, ...timing });
     return block(`${renderGate(res)}\n\nThe work is not done while the gate is red. Fix the failures (never by weakening tests or lints, H-12). ${escape}`);
   }
   if (requireReview && proj.config.review !== 'off') {
@@ -1157,23 +1163,40 @@ function completionGate(input, { requireReview }) {
     if (!v || v.verdict !== 'approved') {
       if (proj.config.review === 'advisory') return notice(`temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
       if (stuck('review')) {
-        telemetry(proj, input, 'stop-allowed-unreviewed', { fp });
+        telemetry(proj, input, 'stop-allowed-unreviewed', { fp, ...timing });
         return notice(`temper: stopped without an approving review for fingerprint ${fp}.`);
       }
       save({ fp, kind: 'review', at: Date.now() });
-      telemetry(proj, input, 'stop-blocked', { reason: v ? 'changes-requested' : 'no-review', fp });
+      telemetry(proj, input, 'stop-blocked', { reason: v ? 'changes-requested' : 'no-review', fp, ...timing });
       const why = v
         ? `The reviewer requested changes for this tree (fingerprint ${fp}):\n${summarizeFindings(v)}\nAddress each finding, or rebut it with evidence, then request a fresh review.`
         : `The gate is green, but the current tree (fingerprint ${fp}) has no approving independent review (PROC-08). Delegate to the temper:rust-reviewer subagent with the goal of the change and the plan path. It reviews the diff since ${base ?? 'the session start'} in a fresh context. Address its findings until it approves.`;
       return block(`${why}\n${escape}`);
     }
   }
-  telemetry(proj, input, 'stop-green', { fp });
+  telemetry(proj, input, 'stop-green', { fp, ...timing });
   return notice(`temper: gate green${requireReview && proj.config.review === 'required' ? ' and review approved' : ''} (fingerprint ${fp}).`);
 }
 
 export function stop(input) {
-  return completionGate(input, { requireReview: true });
+  const res = completionGate(input, { requireReview: true });
+  shipTelemetry(input);
+  return res;
+}
+
+/**
+ * With `telemetry.branch` set, hand this session's telemetry to `temper telemetry push` in a
+ * detached process (pushTelemetry), so the Stop hook never waits on the network and a failed push
+ * changes nothing in the session. The next Stop pushes again, so a missed push only delays the rows.
+ */
+function shipTelemetry(input) {
+  const proj = discover(input.cwd);
+  if (!proj?.config.telemetry?.branch || !proj.gitRoot || !input.session_id) return;
+  try {
+    spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'temper.mjs'), 'telemetry', 'push', '--session', String(input.session_id)], {
+      cwd: proj.root, detached: true, stdio: 'ignore', windowsHide: true,
+    }).unref();
+  } catch { /* best effort, like telemetry itself */ }
 }
 
 export function subagentStop(input) {
