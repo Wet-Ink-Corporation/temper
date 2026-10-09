@@ -13,7 +13,7 @@ Most refusals are aimed at the agent, which reads the message and changes its ap
 | `node .claude/temper/temper.mjs stats` | How often each denial, block and verdict fired, and which rules blocked the most escape hatches |
 | `.git/temper/logs/<fingerprint>-<step>.log` | The full output of each gate step. The gate shows only a summary. |
 
-temper keeps its state under `.git/temper/`: gate results and review verdicts per fingerprint, the logs, and telemetry. Never edit these files by hand. The hooks refuse `Write`, `Edit` and `MultiEdit` into `.git/`, but shell commands that write there are not checked, so the state is not a security boundary. `telemetry.jsonl` is never pruned and only `temper stats` reads it, so it is safe to delete; the README's [Local data and telemetry](../README.md#local-data-and-telemetry) says what it records.
+temper keeps its state under `.git/temper/`: gate results and review verdicts per fingerprint, the logs, and telemetry. Never edit these files by hand. The hooks refuse `Write`, `Edit` and `MultiEdit` into `.git/`, but shell commands that write there are not checked, so the state is not a security boundary. `telemetry.jsonl` is never pruned and only `temper stats` reads it, so it is safe to delete (in a cloud session it is lost with the container unless `telemetry.branch` is set); the README's [Local data and telemetry](../README.md#local-data-and-telemetry) says what it records.
 
 **`temper hook <event> failed: …`.** A hook threw an error, and temper let the action through rather than block your work. This is a temper bug. [Report it](#reporting-a-problem) with the message.
 

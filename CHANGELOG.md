@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Telemetry from cloud sessions is kept, opt-in (wi-641f99).** A Claude Code cloud session's container is discarded when the session ends, and `.git/temper/telemetry.jsonl` with it, so the pilots' telemetry never reached `temper stats`. With `"telemetry": { "branch": "temper-telemetry" }` in `.claude/temper.json`, each `Stop` now starts a detached `temper telemetry push` that pushes the session's lines to that branch on `origin` as `sessions/<date>-<session>.jsonl`, in a `[skip ci]` commit built with a private index, so the clone's working tree, index, `HEAD` and branches are untouched. It is off by default, and it is temper's only network call. `temper stats --branch [NAME]` summarizes every session on the branch.
+- **New telemetry fields.** `Stop` outcomes carry `ms` (the gate's wall time) and `cached`. A new `gate-start` event comes before the gate runs at `Stop`, so a hook killed by its timeout shows as a `gate-start` with no outcome. In a cloud session every line carries `ccr`, the cloud session ID that matches the `Claude-Session` link in the session's commits.
+- **`temper stats`** also reports the gate's latency at `Stop` (p50, p90, max), the gates cut short, and the review rounds per session.
+
 The `PreToolUse` `SubagentHandback` hook is removed (wi-103aa0). No supported Claude Code release ever called it (2.1.286, 2.1.288 and 2.1.289 were checked), and `SubagentStop` already validates and records the reviewer's verdict, blocking an invalid one. Nothing a session sees changes. `scripts/temper.mjs` no longer accepts `hook pre-handback`. `tests/hooks-registry.test.mjs` checks that every hook in `hooks/hooks.json` names a handler the CLI knows.
 
 Shell writes to protected configuration ask. The Bash hook's decision for a command that writes a file matching the `protected` globs in `.claude/temper.json` changes from pass to ask: such a command used to pass with no decision, and now asks the human, as an Edit or Write to the same file already did.
