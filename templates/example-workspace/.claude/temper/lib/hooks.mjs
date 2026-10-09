@@ -1078,18 +1078,61 @@ export function preBash(input) {
   return none();
 }
 
+/**
+ * PreToolUse SubagentHandback. Where subagents end with a SubagentHandback({ message }) call
+ * (Claude Code cloud sessions), the report is that message, and SubagentStop has no
+ * last_assistant_message. A reviewer's verdict is checked here, before delivery: an invalid one is
+ * denied with the problem list so the reviewer can fix it and hand back again (#97).
+ */
+export function preHandback(input) {
+  const proj = discover(input.cwd);
+  if (!proj) return none();
+  const type = input.agent_type ?? '';
+  telemetry(proj, input, 'handback', { type, reviewer: REVIEWER.test(type) });
+  if (!REVIEWER.test(type)) return none();
+  const v = extractVerdict(String(input.tool_input?.message ?? ''));
+  const problems = checkVerdict(proj, input, v);
+  if (problems.length) {
+    telemetry(proj, input, 'verdict-invalid', { via: 'handback', problems: problems.length });
+    return deny(`temper: the review verdict is invalid, so the report was not delivered:\n- ${problems.join('\n- ')}\nFix the verdict block and hand back again.`);
+  }
+  storeVerdict(proj, input, v, 'handback');
+  return none();
+}
+
+/**
+ * The subagent's final report from its transcript: the message of its last SubagentHandback call,
+ * else the text of its last assistant message. Null when the transcript is missing or unreadable.
+ */
+export function reportFromTranscript(file) {
+  const t = file ? readText(file) : null;
+  if (!t) return null;
+  const lines = t.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let rec;
+    try { rec = JSON.parse(lines[i]); } catch { continue; }
+    const content = rec?.message?.role === 'assistant' ? rec.message.content : null;
+    if (!Array.isArray(content)) continue;
+    const hb = content.filter((c) => c?.type === 'tool_use' && c.name === 'SubagentHandback').at(-1);
+    if (hb) return String(hb.input?.message ?? '');
+    const text = content.filter((c) => c?.type === 'text').map((c) => c.text).join('\n');
+    if (text.trim()) return text;
+  }
+  return null;
+}
+
 function checkVerdict(proj, input, v) {
   const base = baseRev(proj, input.session_id);
   const gate = v?.fingerprint ? cachedGate(proj, v.fingerprint) : null;
   return validateVerdict(v, { changedRust: rustChanges(proj, base).filter((f) => f.endsWith('.rs')), gate });
 }
 
-function storeVerdict(proj, input, v) {
+function storeVerdict(proj, input, v, via) {
   const base = baseRev(proj, input.session_id);
   const current = fingerprint(proj, base);
   recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
-  telemetry(proj, input, 'verdict', { verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
+  telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
 }
 
 // ----------------------------------------------------------------- PostToolUse
@@ -1201,21 +1244,30 @@ function shipTelemetry(input) {
 
 export function subagentStop(input) {
   const type = input.agent_type ?? '';
+  const proj = discover(input.cwd);
+  if (!proj) return none();
+  // Before any filtering, so a type the patterns miss still shows in telemetry (#97).
+  telemetry(proj, input, 'subagent-stop', { type, msg: typeof input.last_assistant_message === 'string', transcript: Boolean(input.agent_transcript_path) });
   if (REVIEWER.test(type)) {
-    const proj = discover(input.cwd);
-    if (!proj) return none();
     const already = readText(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`));
-    const v = extractVerdict(input.last_assistant_message);
-    if (!v && already) return none(); // recorded by an earlier SubagentStop for this agent
+    // A subagent that hands back (cloud sessions) has no last_assistant_message: read its report from the transcript.
+    const report = input.last_assistant_message ?? reportFromTranscript(input.agent_transcript_path);
+    const v = extractVerdict(report);
+    if (!v && already) return none(); // recorded by SubagentHandback or an earlier SubagentStop for this agent
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }
-      return block(`temper: your review verdict is invalid:\n- ${problems.join('\n- ')}\nEnd your final message with a corrected \`\`\`json verdict block.`);
+      telemetry(proj, input, 'verdict-invalid', { via: 'subagent-stop', problems: problems.length });
+      return block(`temper: your review verdict is invalid:\n- ${problems.join('\n- ')}\nEnd your final report with a corrected \`\`\`json verdict block.`);
     }
-    storeVerdict(proj, input, v);
+    storeVerdict(proj, input, v, 'subagent-stop');
     return none();
   }
-  if (IMPLEMENTER.test(type)) return completionGate(input, { requireReview: false });
+  if (IMPLEMENTER.test(type)) {
+    // Its "Status:" line is in the hand-back report when there is no last_assistant_message.
+    const report = input.last_assistant_message ?? reportFromTranscript(input.agent_transcript_path);
+    return completionGate({ ...input, last_assistant_message: report }, { requireReview: false });
+  }
   return none();
 }
 
@@ -1223,9 +1275,10 @@ export function subagentStop(input) {
 
 export function subagentStart(input) {
   const type = input.agent_type ?? '';
-  if (!PRELOADED.test(type)) return none();
   const proj = discover(input.cwd);
   if (!proj) return none();
+  telemetry(proj, input, 'subagent-start', { type }); // before filtering (#97)
+  if (!PRELOADED.test(type)) return none();
   const base = baseRev(proj, input.session_id);
   if (REVIEWER.test(type)) run('cargo', ['fmt', '--all'], { cwd: proj.root, timeoutMs: 120000 });
   const changes = rustChanges(proj, base);

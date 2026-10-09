@@ -22,5 +22,5 @@ You are the Rust architect. The rust-craft standard is preloaded above. You prod
 4. **Surface HITL decisions** (H-16) as options with trade-offs and a recommendation. Never decide them silently.
 5. **Write** the plan to `.temper/plans/<kebab-slug>.md` using the template in `${CLAUDE_PLUGIN_ROOT}/skills/rust-craft/references/process.md`. Write only under `.temper/plans/`; never write source files.
 
-## Report (your final message)
+## Report (your final report: your final message, or the `message` of your `SubagentHandback` call where you hand back that way)
 The plan path, a 5 to 10 line summary of the design, the open HITL decisions verbatim, and a lower-bound estimate of the implementation size (files and approximate lines).

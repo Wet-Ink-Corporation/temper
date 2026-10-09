@@ -78,7 +78,7 @@ test('validateVerdict: a well-formed approval has no problems', () => {
 test('validateVerdict: no verdict block', () => {
   const problems = validateVerdict(null);
   assert.equal(problems.length, 1);
-  assert.match(problems[0], /^no verdict block found: end the final message with a ```json block containing "temper_verdict": 1$/);
+  assert.match(problems[0], /^no verdict block found: end the final report with a ```json block containing "temper_verdict": 1$/);
 });
 
 test('validateVerdict: header fields', () => {

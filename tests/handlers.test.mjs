@@ -1,6 +1,7 @@
 // Hook orchestration handlers called directly on throwaway git workspaces:
 // SessionStart, UserPromptSubmit, the PostToolUse skill marker and the skill
-// gate in PreToolUse, the Stop completion gate, SubagentStart and SubagentStop.
+// gate in PreToolUse, the Stop completion gate, SubagentStart, SubagentStop and
+// the SubagentHandback check.
 //
 // The completion gate runs `cargo --version` and `cargo fmt --all` before it
 // reads the cached gate record for the tree fingerprint. These tests seed that
@@ -13,8 +14,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart } from '../scripts/lib/hooks.mjs';
-import { discover, fingerprint, loadConfig, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
+import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart, preHandback, reportFromTranscript } from '../scripts/lib/hooks.mjs';
+import { discover, fingerprint, loadConfig, readTelemetry, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
 const cargo = spawnSync('cargo', ['--version'], { encoding: 'utf8' }).status === 0
@@ -536,7 +537,7 @@ test('SubagentStop (reviewer): an invalid verdict blocks, and is let through on 
   const input = { cwd: r.dir, session_id: 's-rv', agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
   const none = blocked(subagentStop({ ...input, last_assistant_message: 'Looks fine to me.' }));
   assert.match(none, /^temper: your review verdict is invalid:\n- no verdict block found/);
-  assert.match(none, /End your final message with a corrected ```json verdict block\.$/);
+  assert.match(none, /End your final report with a corrected ```json verdict block\.$/);
   const fp = r.fp();
   const unread = blocked(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp, { evidence: { files_read: ['crates/core/Cargo.toml'], commands_run: ['gate'] } })) }));
   assert.match(unread, /- changed files not reviewed: crates\/core\/src\/lib\.rs/);
@@ -581,6 +582,9 @@ test('SubagentStop (implementer): the gate is enforced without requiring review'
   fp = r.gate(true);
   assert.equal(message(subagentStop(input)), `temper: gate green (fingerprint ${fp}).`);
   assert.equal(message(subagentStop({ ...input, last_assistant_message: 'Status: BLOCKED\nwhich type?' })), 'temper: Rust changes left blocked; the gate and review were not enforced for this turn.');
+  // a hand-back report (no last_assistant_message) carries the Status line too
+  r.gate(false);
+  assert.equal(message(subagentStop({ ...input, agent_transcript_path: transcript(r, 'Status: WIP\nhalfway') })), 'temper: Rust changes left in progress; the gate and review were not enforced for this turn.');
 });
 
 test('SubagentStop: other agent types are not checked', { skip: noGit }, (t) => {
@@ -589,4 +593,80 @@ test('SubagentStop: other agent types are not checked', { skip: noGit }, (t) => 
   for (const agent_type of ['general-purpose', 'temper:rust-architect', undefined]) {
     assert.deepEqual(subagentStop({ cwd: r.dir, session_id: 's-other', agent_type, agent_id: 'x1' }), {}, String(agent_type));
   }
+});
+
+test('SubagentStart and SubagentStop: every agent type is recorded in telemetry before filtering', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  assert.deepEqual(subagentStart({ cwd: r.dir, session_id: 's-tel', agent_type: 'general-purpose', agent_id: 'g1' }), {});
+  assert.deepEqual(subagentStop({ cwd: r.dir, session_id: 's-tel', agent_type: 'general-purpose', agent_id: 'g1', agent_transcript_path: '/nowhere.jsonl' }), {});
+  const rows = readTelemetry(r.proj()).filter((x) => x.sid === 's-tel');
+  assert.deepEqual(rows.map((x) => [x.event, x.type]), [['subagent-start', 'general-purpose'], ['subagent-stop', 'general-purpose']]);
+  assert.equal(rows[1].msg, false);
+  assert.equal(rows[1].transcript, true);
+});
+
+// ------------------------------------------- hand-back delivery (cloud sessions, #97)
+
+/** A subagent transcript that ends with a SubagentHandback call carrying `message`. */
+function transcript(r, message, { text = 'Working on it.' } = {}) {
+  const file = path.join(r.dir, '.temper', 'agent.jsonl');
+  const rows = [
+    { type: 'user', message: { role: 'user', content: 'review the change' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'SubagentHandback', input: { message } }] } },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Report delivered to your caller.' }] } },
+  ];
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, rows.map((x) => JSON.stringify(x)).join('\n') + '\n');
+  return file;
+}
+
+test('reportFromTranscript: the last hand-back message, else the last assistant text', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tx-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const r = { dir };
+  assert.equal(reportFromTranscript(transcript(r, 'the report')), 'the report');
+  const plain = path.join(dir, 'plain.jsonl');
+  fs.writeFileSync(plain, [
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'final words' }] } }),
+    'not json',
+    JSON.stringify({ message: { role: 'user', content: 'ignored' } }),
+  ].join('\n'));
+  assert.equal(reportFromTranscript(plain), 'final words');
+  assert.equal(reportFromTranscript(path.join(dir, 'missing.jsonl')), null);
+  assert.equal(reportFromTranscript(undefined), null);
+});
+
+test('SubagentStop (reviewer): without last_assistant_message the verdict is read from the hand-back in the transcript', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.fp();
+  const input = { cwd: r.dir, session_id: 's-rv-tx', agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
+  assert.match(blocked(subagentStop({ ...input, agent_transcript_path: transcript(r, 'Looks fine to me.') })), /- no verdict block found/);
+  assert.deepEqual(subagentStop({ ...input, agent_transcript_path: transcript(r, fenced(verdict(fp))) }), {});
+  assert.equal(verdictFor(r.proj(), fp).verdict, 'approved');
+  const row = readTelemetry(r.proj()).find((x) => x.sid === 's-rv-tx' && x.event === 'verdict');
+  assert.equal(row.via, 'subagent-stop');
+});
+
+test('SubagentHandback: only the reviewer is checked; an invalid verdict is denied with the problem list', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const input = { cwd: r.dir, session_id: 's-hb', tool_name: 'SubagentHandback', agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
+  assert.deepEqual(preHandback({ ...input, agent_type: 'temper:rust-implementer', tool_input: { message: 'done' } }), {});
+  const res = preHandback({ ...input, tool_input: { message: fenced(verdict('nothex')) } });
+  assert.equal(decision(res), 'deny');
+  assert.match(reason(res), /^temper: the review verdict is invalid, so the report was not delivered:\n- "fingerprint" must be the 16-hex fingerprint/);
+  assert.match(reason(res), /\nFix the verdict block and hand back again\.$/);
+  const fp = r.fp();
+  assert.deepEqual(preHandback({ ...input, tool_input: { message: fenced(verdict(fp)) } }), {});
+  assert.equal(verdictFor(r.proj(), fp).stale, false);
+  assert.equal(fs.readFileSync(path.join(sessionDir(r.proj(), 's-hb'), 'verdict-agent-rv1'), 'utf8'), fp);
+  // SubagentStop after the hand-back: no last_assistant_message, and the verdict is already recorded
+  assert.deepEqual(subagentStop({ ...input, tool_name: undefined }), {});
+  const rows = readTelemetry(r.proj()).filter((x) => x.sid === 's-hb');
+  assert.deepEqual(rows.filter((x) => x.event === 'handback').map((x) => x.reviewer), [false, true, true]);
+  assert.equal(rows.find((x) => x.event === 'verdict').via, 'handback');
+  assert.equal(rows.filter((x) => x.event === 'verdict-invalid').length, 1);
 });

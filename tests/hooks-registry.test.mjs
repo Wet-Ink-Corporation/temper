@@ -1,6 +1,6 @@
 // hooks/hooks.json against the CLI: every registered hook runs a handler that
-// scripts/temper.mjs knows, and the PreToolUse SubagentHandback hook, which no
-// supported Claude Code release ever called, stays removed (wi-103aa0).
+// scripts/temper.mjs knows, and the PreToolUse SubagentHandback hook, which cloud
+// sessions use to deliver a subagent's report, is registered (#97, amends wi-103aa0).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -36,6 +36,10 @@ test('every registered hook names a handler the CLI knows', () => {
   }
 });
 
-test('the never-firing PreToolUse SubagentHandback hook is not registered', () => {
-  assert.deepEqual(registered().filter((h) => h.matcher === 'SubagentHandback' || h.args.includes('pre-handback')), []);
+test('the PreToolUse SubagentHandback hook is registered: cloud subagents deliver their report through it (#97)', () => {
+  assert.deepEqual(registered().filter((h) => h.event === 'PreToolUse' && h.matcher === 'SubagentHandback').map((h) => h.args.at(-1)), ['pre-handback']);
+});
+
+test('SubagentStart and SubagentStop run for every agent type, so telemetry sees types the handlers skip', () => {
+  assert.deepEqual(registered().filter((h) => h.event.startsWith('Subagent')).map((h) => [h.event, h.matcher]), [['SubagentStart', undefined], ['SubagentStop', undefined]]);
 });

@@ -25,7 +25,7 @@ The delegation message gives you a goal and usually a plan path under `.temper/p
 - You cannot ask the human directly. When you reach an H-16 decision (new dependency, public API change or break, lint exception, crate-boundary change, migration, changing a test's expectation), stop and return `Status: BLOCKED` with the decision framed as options, their trade-offs and your recommendation.
 - Stay in scope. Unrelated improvements go under "Suggested follow-ups" in your report, not into the diff (CRF-08).
 
-## Report (your final message)
+## Report (your final report: your final message, or the `message` of your `SubagentHandback` call where you hand back that way)
 1. What changed and why, in 3 to 8 lines, citing rule IDs for the non-obvious design choices.
 2. Tests added (names) and the behavior each pins down.
 3. Clones, `Arc`s, `#[expect]`s or other judgment calls a reviewer should look at, each with its justification.

@@ -69,7 +69,7 @@ The fallback is needed only when no prebuilt binary resolves: an unsupported pla
   1. SessionStart builds **synchronously** when no binary exists (its timeout rises from 30 to 900 s, with a status message). The window is normally zero: the session starts after the build.
   2. If the binary is still missing (the build timed out or failed, or another session is building):
      - PreToolUse `pre-edit` on `.rs` and `Cargo.toml` **denies** with a retry message. This is cheap and recoverable, since the agent waits and retries. Other edits pass.
-     - `pre-bash` passes, with a once-per-session notice (`pre-handback` is removed in 1.x, wi-103aa0).
+     - `pre-bash` and `pre-handback` pass, with a once-per-session notice. (`pre-handback` was removed by wi-103aa0 and restored by #97: cloud sessions deliver a subagent's report through `SubagentHandback`. Its parity tests come back with it.)
      - `post-tool` and `user-prompt` pass silently. The skill-load marker is not written, so after the build the skill gate asks the agent to load the skill again, which heals itself.
      - Stop and SubagentStop wait up to 600 s for an in-flight build, then run the gate. Without a binary they emit `temper gate: UNAVAILABLE (...)`, the same semantics as today's "cargo is not usable here".
   3. A failed build records `${CLAUDE_PLUGIN_DATA}/engine/<key>/build.failed` with the log path. It is retried at the next SessionStart, never on every hook.
