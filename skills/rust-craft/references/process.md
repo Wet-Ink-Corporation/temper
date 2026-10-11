@@ -167,12 +167,15 @@ Gate: fmt ok | clippy ok | test ok (N passed) | doc ok   (or the failing step an
 Review: approved | changes-requested | not yet requested
 Changed: <crate/path> (+added/-removed), ...
 Decisions needed: <H-16 items, or "none">
+Declined: <each request you declined or did differently, with a one-sentence reason, or "none">
 Not verified: <anything you could not check, or "none">
 ```
 
 - `DONE` means the gate is green and review is approved for the current tree. The `Stop` hook verifies it.
 - `WIP` means you are pausing mid-task. List what remains.
 - `BLOCKED` means a human decision or missing information stops progress. Ask the question.
+
+"Declined" restates every request you refused or carried out differently, with the reason, even if you explained it earlier in the turn. A user who reads only the final message must still see it. Example: `Declined: #[ignore] on the failing test; the code was wrong, not the test (H-12)`.
 
 "Not verified" is where honesty lives. Put there anything you could not run (an integration test needing credentials, a platform you can't build for) and any assumption you made.
 
