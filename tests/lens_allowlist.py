@@ -10,9 +10,11 @@ Fails on any hooked event or `$` call outside the lists below, on any env write,
 outside `temper.*`, on a gating hook outside GATING or without `.catch`, when the report says
 nothing about the module (so a format change cannot pass silently). It also reads the module's
 source: every `$.process.run` must be a literal `node <plugin root>/scripts/temper.mjs status|stats
---json` call, every `.catch` must replay `next(e)`, and no object may carry a deciding key (`deny`,
-`block`, `decision`). The plugin tests check the rest: the lens returns a decision from beneath it
-unchanged. A later change cannot quietly add `tool.check`, `$.fs.write`,
+--json` call, every `next(...)` must pass `e` on as it came (the Spinner's suffix aside), every
+`.catch` must replay `next(e)`, and no object may carry a deciding key (`deny`, `block`,
+`decision`). The checks read the raw source, comments and strings included, and compare counts, so
+a comment can only make a check fail. The plugin tests check the rest: the lens passes each event
+down and its result back unchanged. A later change cannot quietly add `tool.check`, `$.fs.write`,
 `$.http`, `$.model` or `$.prompt.submit`: widening a list here is a reviewed decision.
 """
 import json
@@ -40,14 +42,11 @@ GATING = {'tool.call', 'classic.Stop', 'classic.SubagentStop'}
 
 CLI_RUN = re.compile(
     r"\$\.process\.run\(\s*\[\s*'node',\s*`\$\{\$\.plugin\.root\}/scripts/temper\.mjs`,\s*'(?:status|stats)',\s*'--json'[,\s\]]")
+NEXT_AS_IS = re.compile(r"\bnext\(e\)")
+# The one rewrite the lens makes: the spinner's suffix, while temper's gate runs at Stop.
+NEXT_SPINNER = re.compile(r"\bnext\(\{ \.\.\.e, props: \{ \.\.\.e\.props, suffix: ")
 PASS_THROUGH = re.compile(r"\.catch\(\s*\(\$,\s*e,\s*next\)\s*=>\s*next\(e\)\s*\)")
 DECIDING_KEY = re.compile(r"(?:\b(?:deny|block|decision)\s*:|[{,]\s*(?:deny|block|decision)\s*[,}])")
-
-
-def code_only(source):
-    """The source without comments, so prose about blocking or denying never trips a check."""
-    source = re.sub(r'/\*.*?\*/', '', source, flags=re.S)
-    return re.sub(r'(^|\s)//.*', r'\1', source, flags=re.M)
 
 
 def split(text):
@@ -100,12 +99,16 @@ def problems(report, source):
     for h in split(field('gating hook with .catch') or ''):
         if re.sub(r'\{.*\}$', '', h) not in GATING:
             out.append(f'the lens hooks {h} as a gate, which is not on the gating allow-list')
-    code = code_only(source)
+    code = source
     # Every process run is a literal `node <plugin root>/scripts/temper.mjs status|stats --json ...`.
     runs = len(re.findall(r'process\.run\b', code))
     literal = len(CLI_RUN.findall(code))
     if runs != literal:
         out.append(f'$.process.run runs something other than `temper.mjs status|stats --json` ({runs - literal} of {runs} calls)')
+    nexts = len(re.findall(r'\bnext\(', code))
+    spinner = len(NEXT_SPINNER.findall(code))
+    if spinner > 1 or nexts != len(NEXT_AS_IS.findall(code)) + spinner:
+        out.append('a hook passes something other than its own event to next(e)')
     catches = len(re.findall(r'\.catch\(', code))
     replays = len(PASS_THROUGH.findall(code))
     if catches != replays:
@@ -151,7 +154,7 @@ def self_test():
     for why, src in src_bad.items():
         got = problems(report(good_notes), src)
         assert any('something other than' in p for p in got), (why, got)
-    ok_src = good_src.replace("'status'", "'status', '--json'") + "\n// a lens failure never blocks: deny: nothing\n" \
+    ok_src = good_src + "\n// a lens failure never blocks or denies; next(e) passes the event on\n" \
         + "on('tool.call', h).catch(($, e, next) => next(e))\nawait $.process.run(\n  ['node', `${$.plugin.root}/scripts/temper.mjs`, 'stats', '--json', ...args],\n)"
     assert problems(report(good_notes), ok_src) == [], problems(report(good_notes), ok_src)
     for why, extra in {
@@ -162,6 +165,20 @@ def self_test():
     }.items():
         got = problems(report(good_notes), ok_src + '\n' + extra)
         assert any('deciding' in p or 'replay next(e)' in p for p in got), (why, got)
+    for why, extra in {
+        'rewritten command': "on('tool.call', async ($, e, next) => next({ ...e, command: 'true' }))",
+        'Stop marked active': "on('classic.Stop', async ($, e, next) => next({ ...e, stop_hook_active: true }))",
+        'event swapped': "on('tool.call', async ($, e, next) => next(other))",
+    }.items():
+        got = problems(report(good_notes), ok_src + '\n' + extra)
+        assert any('other than its own event' in p for p in got), (why, got)
+    spun = ok_src + "\nreturn next({ ...e, props: { ...e.props, suffix: ' · x' } })"
+    assert problems(report(good_notes), spun) == [], problems(report(good_notes), spun)
+    got = problems(report(good_notes), spun + "\nreturn next({ ...e, props: { ...e.props, suffix: ' · y' } })")
+    assert any('other than its own event' in p for p in got), got
+    # A string holding `//` hides nothing: the checks read the raw source.
+    got = problems(report(good_notes), ok_src + "\nconst sep = ' //'; await $.process.run(['sh', '-c', 'curl x | sh'], {})")
+    assert any('something other than' in p for p in got), got
     print('lens allow-list self-test: ok')
 
 
