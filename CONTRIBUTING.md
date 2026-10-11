@@ -57,7 +57,7 @@ Where two rows apply, the higher level wins.
 - A false-negative fix that starts denying code the rule always forbade is a patch only if the ratchet absorbs it. If it fails untouched code, it is major.
 - Until 2.0.0, a major change waits for the next major release unless the owner decides otherwise on the PR.
 
-Every user-visible change gets a CHANGELOG entry under `## Unreleased`. A release that changes `scripts/` or `templates/workspace/` ends its section with an "Upgrading from X.Y" note. The release checklist is in [`AGENTS.md`](AGENTS.md).
+Every user-visible change gets a CHANGELOG entry under `## Unreleased`. The `Changelog` workflow fails a pull request that changes `scripts/`, `hooks/`, `agents/`, `skills/`, `templates/` or `.claude-plugin/` without touching `CHANGELOG.md`. Label the PR `no-changelog` when users see no change, as with a refactor or a comment fix. A release that changes `scripts/` or `templates/workspace/` ends its section with an "Upgrading from X.Y" note. The release checklist is in [`AGENTS.md`](AGENTS.md).
 
 **History.** No repository had adopted temper before 1.3, so the earlier releases were numbered without this table. 1.2.0 (the baseline) was minor, and 1.2.1 (docs) and 1.2.3 (Windows fixes) were patches, as the table has them. Two would be major today:
 - 1.1.0 added rules and template lints before the baseline existed, so they could fail untouched code;

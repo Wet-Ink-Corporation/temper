@@ -59,6 +59,15 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 - **Scratch work** goes in `.temper/` (gitignored). A plan that others need goes in `docs/plans/`.
 - **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, and the Claude Code CLI version in `ci.yml`. Dependabot bumps the SHA-pinned actions.
 
+## Unattended sessions
+
+An agent working with no human watching (an AFK session, a scheduled run) follows the rules above plus these:
+- **Decide two-way calls; block on one-way ones.** Record every assumption, deferral or call through Weigh-In and list it in `docs/history/decisions.md`. A one-way or high-impact call waits for the owner. These include a release that the plan does not schedule, a behaviour change to the hooks or the gate during a pilot window (wi-b63bd6), a new dependency, and anything H-16 lists. While it waits, the session does independent work.
+- **Merge only when everything is green.** That means the required checks on the current head, no merge conflict, no unresolved review thread, and an approval from a reviewer with fresh context: `temper:rust-reviewer` for Rust, an independent review otherwise. Merge with a merge commit. Never merge a PR that waits on a one-way decision or has `[hold]` in its title.
+- **Never** run the paid model checks (`tests/e2e/smoke.sh`, `claude plugin eval`) without the owner's go-ahead. Never edit rulesets, environments, secrets, billing or repository settings. Never skip, disable or quarantine a test to get to green. Never push to `main` directly or rewrite a branch someone else owns.
+- **Releases follow the schedule.** The plan in `docs/plans/v1-readiness.md` sets the schedule, and the release checklist below sets the steps. An agent may prepare a scheduled release up to the PR. The owner approves the `release` environment and merges.
+- **Leave a trail.** End with a report of what merged, what was released, what was decided, and what waits on whom. Tick audit boxes with their PR citation (wi-ddfdfe).
+
 ## Release checklist
 
 A release goes through `.github/workflows/release.yml`, the flow the 2.0 port plan defines (§4):

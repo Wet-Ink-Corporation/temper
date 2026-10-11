@@ -1,0 +1,39 @@
+name: Changelog
+
+# A change users get (main ships to marketplace users) needs a CHANGELOG.md entry:
+# the release notes and the "Upgrading from" notes are built from it. A change that
+# users do not see, such as a refactor or a test, carries the no-changelog label.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  entry:
+    name: CHANGELOG entry
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: User-facing paths changed, so CHANGELOG.md must too
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE...HEAD")
+          shipped=$(grep -E '^(scripts|hooks|agents|skills|templates)/|^\.claude-plugin/' <<<"$changed" || true)
+          if [ -z "$shipped" ]; then echo "No user-facing path changed."; exit 0; fi
+          if grep -qx 'CHANGELOG.md' <<<"$changed"; then echo "CHANGELOG.md is updated."; exit 0; fi
+          echo "::error file=CHANGELOG.md::These paths ship to users but CHANGELOG.md has no entry. Add one under '## Unreleased', or label the PR no-changelog if users see no change."
+          printf '%s\n' "$shipped"
+          exit 1
