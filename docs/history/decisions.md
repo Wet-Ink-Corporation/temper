@@ -47,6 +47,8 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-ddfdfe](../../.kb/_intake/decisions/wi-ddfdfe-may-an-unattended-session-tick-the-fixed-boxes.md) | May an unattended session tick the fixed boxes in audit issues #57 to #70 and close the issues that end up fully ticked? | Yes: tick each with its PR citation and close fully ticked issues. Decided 2026-10-10. |
 | [wi-b63bd6](../../.kb/_intake/decisions/wi-b63bd6-should-the-behaviour-changing-prs-wi-2000a3-rm.md) | Should the behaviour-changing PRs (wi-2000a3's `rm` ask, #48's Declined: line) be opened now but held unmerged until the pilot window closes? | Yes: open them now, merge after the pilot report (due 2026-10-18). Decided 2026-10-10. |
 | [wi-880b66](../../.kb/_intake/decisions/wi-880b66-may-an-agent-merge-to-main-only-when-the-owner.md) | May an agent merge to `main` only when the owner asked for it in that session, rather than holding a standing grant or never merging? | Standing grant: any agent session may merge a PR that meets the bar in AGENTS.md, "Unattended sessions", without a per-session ask. Decided 2026-10-11. |
+| [wi-2dd2cf](../../.kb/_intake/decisions/wi-2dd2cf-should-the-temper-lens-issues-108-113-be-p2-and.md) | Should the temper lens issues (#108 to #113) be P2 and outside `v1-live`, so they ship after v1? | Yes: P2, after v1. Decided 2026-10-11. |
+| [wi-4aa7eb](../../.kb/_intake/decisions/wi-4aa7eb-should-temper-lens-be-strictly-read-only-never.md) | Should temper lens be strictly read-only (never deny, allow or rewrite a tool call, submit a prompt or call a model), held by a CI allow-list on its validate report? | Yes: read-only, held by CI. Decided 2026-10-11. |
 
 ## Defaults taken without the owner
 
