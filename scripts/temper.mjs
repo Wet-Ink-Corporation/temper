@@ -203,6 +203,9 @@ function temperVersion() {
   try { return JSON.parse(readText(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))).version ?? 'unknown'; } catch { return 'unknown'; }
 }
 
+const record = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : null);
+const list = (x) => (Array.isArray(x) ? x.filter(record) : []);
+
 const baselineTotal = (b) => Object.values(b.totals).reduce((s, l) => s + Object.values(l).reduce((x, y) => x + y, 0), 0);
 
 /**
@@ -217,8 +220,9 @@ function statusJson(sid) {
   if (!proj) { process.stdout.write(`${JSON.stringify({ ...doc, project: null })}\n`); return 0; }
   const base = sid ? baseRev(proj, sid) : sessionBase(proj);
   const fp = fingerprint(proj, base);
-  const g = cachedGate(proj, fp);
-  const v = verdictFor(proj, fp);
+  // A state file that parses to something other than a record (hand-edited, truncated) reads as none.
+  const g = record(cachedGate(proj, fp));
+  const v = record(verdictFor(proj, fp));
   let baseline = null;
   try {
     const b = readBaseline(proj.root);
@@ -232,11 +236,11 @@ function statusJson(sid) {
     changed: rustChanges(proj, base),
     gate: g ? {
       ok: g.ok, unavailable: Boolean(g.unavailable), at: g.at ?? null,
-      steps: (g.steps ?? []).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+      steps: list(g.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
     } : null,
     review: v ? {
       verdict: v.verdict, stale: Boolean(v.stale), fingerprint: v.fingerprint ?? fp, recorded_at: v.recorded_at ?? null, scores: v.scores ?? {},
-      findings: (Array.isArray(v.findings) ? v.findings : []).map((f) => ({ severity: f.severity, rule: f.rule, file: f.file, line: f.line ?? null, fix: f.fix })),
+      findings: list(v.findings).map((f) => ({ severity: f.severity, rule: f.rule, file: f.file, line: f.line ?? null, fix: f.fix })),
     } : null,
     baseline,
     config: { review: proj.config.review, skillGate: proj.config.skillGate },

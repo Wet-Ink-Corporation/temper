@@ -123,6 +123,23 @@ test('status --json: no gate and no review for the tree are null; an unreadable 
   assert.equal('disabled' in doc, false);
 });
 
+test('status --json: malformed gate and verdict files read as none, or lose their bad entries', { skip: noGit }, (t) => {
+  const { ws, proj } = workspace(t);
+  const fp = fingerprint(proj, headRev(proj));
+  put(proj, `gate/${fp}.json`, [1]);
+  put(proj, `verdicts/${fp}.json`, 7);
+  let doc = json(ws, ['status', '--json']);
+  assert.equal(doc.gate, null);
+  assert.equal(doc.review, null);
+  put(proj, `gate/${fp}.json`, { ok: false, steps: [null, { name: 'clippy', ok: false, ms: 1, summary: 'x' }] });
+  put(proj, `verdicts/${fp}.json`, { verdict: 'approved', findings: [null, 3] });
+  doc = json(ws, ['status', '--json']);
+  assert.deepEqual(doc.gate.steps, [{ name: 'clippy', ok: false, ms: 1, summary: 'x' }]);
+  assert.deepEqual(doc.review.findings, []);
+  put(proj, `gate/${fp}.json`, { ok: true, steps: {} });
+  assert.deepEqual(json(ws, ['status', '--json']).gate.steps, []);
+});
+
 test('status --json: outside a Rust project it says project: null and exits 0', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-norust-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
