@@ -4,10 +4,12 @@
 //   temper hook <event>        hook entry point (reads the hook JSON on stdin)
 //   temper gate [--check] [--no-cache]   fmt (--check: verify only) + scan + manifests + clippy -D warnings + tests + rustdoc
 //   temper scan [files..] [--all] [--json]
-//   temper status              fingerprint, changed files, gate and review state
+//   temper status [--json] [--session ID]   fingerprint, changed files, gate and review state
+//                              (--json: one versioned document; --session: that session's base)
 //   temper setup [--dry-run] [--force]   install repo templates (lints, rules, charters, CI) and vendor the CLI
 //   temper setup --vendor-only [--dry-run]   refresh only the vendored CLI (.claude/temper/)
-//   temper stats [--branch [NAME]]   enforcement telemetry summary (--branch: every session pushed to NAME)
+//   temper stats [--json] [--session ID] [--branch [NAME]]   enforcement telemetry summary
+//                              (--branch: every session pushed to NAME; --json --session: also that session's rows)
 //   temper telemetry push --session ID   push one session's telemetry to telemetry.branch (Stop runs it)
 //   temper baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]
 //                              lint baseline for legacy code: status, record, lower, or ratchet
@@ -160,9 +162,17 @@ function walk(root) {
   return out;
 }
 
-function status() {
+function statusArgs(args) {
+  const i = args.indexOf('--session');
+  return { json: args.includes('--json'), session: i >= 0, sid: i >= 0 ? args[i + 1] : null };
+}
+
+function status(args) {
+  const o = statusArgs(args);
+  if (o.session && (!o.sid || o.sid.startsWith('--'))) { process.stderr.write('usage: temper status [--json] [--session ID]\n'); return 2; }
+  if (o.json) return statusJson(o.sid);
   const proj = project();
-  const base = sessionBase(proj);
+  const base = o.sid ? baseRev(proj, o.sid) : sessionBase(proj);
   const changes = rustChanges(proj, base);
   const fp = fingerprint(proj, base);
   const g = cachedGate(proj, fp);
@@ -170,8 +180,7 @@ function status() {
   let bl;
   try {
     const b = readBaseline(proj.root);
-    const n = b ? Object.values(b.totals).reduce((s, l) => s + Object.values(l).reduce((x, y) => x + y, 0), 0) : 0;
-    bl = b ? `${BASELINE_PATH} (${n} finding(s), toolchain ${b.toolchain ?? '?'}): clippy and rustdoc ratchet` : 'none: the gate requires zero warnings';
+    bl = b ? `${BASELINE_PATH} (${baselineTotal(b)} finding(s), toolchain ${b.toolchain ?? '?'}): clippy and rustdoc ratchet` : 'none: the gate requires zero warnings';
   } catch (e) { bl = `unreadable: ${e.message}`; }
   process.stdout.write([
     `root:        ${proj.root}`,
@@ -184,6 +193,60 @@ function status() {
     `baseline:    ${bl}`,
     `config:      review=${proj.config.review} skillGate=${proj.config.skillGate}`,
   ].join('\n') + '\n');
+  return 0;
+}
+
+/** This copy's version, as vendor.mjs reads it (vendor.mjs itself is optional in a copy). */
+function temperVersion() {
+  const v = readText(path.join(here, 'VERSION'))?.trim();
+  if (v) return v;
+  try { return JSON.parse(readText(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))).version ?? 'unknown'; } catch { return 'unknown'; }
+}
+
+const record = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : null);
+const list = (x) => (Array.isArray(x) ? x.filter(record) : []);
+
+const baselineTotal = (b) => Object.values(b.totals).reduce((s, l) => s + Object.values(l).reduce((x, y) => x + y, 0), 0);
+
+/**
+ * `status --json`: the state of the current tree as one versioned document (`temper_status: 1`),
+ * so a reader such as temper lens never parses the state dir itself. Outside a Rust project it is
+ * `{ temper_status: 1, project: null }` with exit 0. With `--session ID` the base is the one that
+ * session's hooks use. Verdict findings omit `evidence` to keep the document small.
+ */
+function statusJson(sid) {
+  const proj = discover(process.cwd());
+  const doc = { temper_status: 1, version: temperVersion() };
+  if (!proj) { process.stdout.write(`${JSON.stringify({ ...doc, project: null })}\n`); return 0; }
+  const base = sid ? baseRev(proj, sid) : sessionBase(proj);
+  const fp = fingerprint(proj, base);
+  // A state file that parses to something other than a record (hand-edited, truncated) reads as none.
+  const g = record(cachedGate(proj, fp));
+  const v = record(verdictFor(proj, fp));
+  let baseline = null;
+  try {
+    const b = readBaseline(proj.root);
+    if (b) baseline = { path: BASELINE_PATH, total: baselineTotal(b), toolchain: b.toolchain ?? null };
+  } catch (e) { baseline = { error: e.message }; }
+  Object.assign(doc, {
+    root: proj.root,
+    stateDir: proj.stateDir,
+    base: base ?? null,
+    fingerprint: fp,
+    changed: rustChanges(proj, base),
+    gate: g ? {
+      ok: g.ok, unavailable: Boolean(g.unavailable), at: g.at ?? null,
+      steps: list(g.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+    } : null,
+    review: v ? {
+      verdict: v.verdict, stale: Boolean(v.stale), fingerprint: v.fingerprint ?? fp, recorded_at: v.recorded_at ?? null, scores: v.scores ?? {},
+      findings: list(v.findings).map((f) => ({ severity: f.severity, rule: f.rule, file: f.file, line: f.line ?? null, fix: f.fix })),
+    } : null,
+    baseline,
+    config: { review: proj.config.review, skillGate: proj.config.skillGate },
+  });
+  if (process.env.TEMPER_DISABLE === '1') doc.disabled = true;
+  process.stdout.write(`${JSON.stringify(doc)}\n`);
   return 0;
 }
 
@@ -493,6 +556,11 @@ const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
 const STOP_OUTCOMES = new Set(['stop-green', 'stop-blocked', 'stop-allowed-red', 'stop-allowed-unreviewed', 'gate-unavailable']);
 
 function stats(args) {
+  const json = args.includes('--json');
+  const si = args.indexOf('--session');
+  const sid = si >= 0 ? args[si + 1] : undefined;
+  if (si >= 0 && (!sid || sid.startsWith('--'))) { process.stderr.write('usage: temper stats [--json] [--session ID] [--branch [NAME]]\n'); return 2; }
+  if (json && !discover(process.cwd())) { process.stdout.write(`${JSON.stringify({ temper_stats: 1, project: null })}\n`); return 0; }
   const proj = project();
   const i = args.indexOf('--branch');
   let rows;
@@ -505,16 +573,48 @@ function stats(args) {
   } else {
     rows = readTelemetry(proj);
   }
+  const s = statsOf(rows);
+  if (json) {
+    const doc = { temper_stats: 1, ...s };
+    if (sid) {
+      doc.session = {
+        id: sid,
+        rows: rows.filter((r) => r.sid === sid).map((r) => ({
+          t: r.t, event: r.event, agent: r.agent ?? 'main', file: r.file ?? null, rules: r.rules ?? [], via: r.via ?? null,
+        })),
+      };
+    }
+    process.stdout.write(`${JSON.stringify(doc)}\n`);
+    return 0;
+  }
+  const out = [`sessions: ${s.sessions}`];
+  if (s.from) out.push(`from ${s.from} to ${s.to}`);
+  out.push(`events:\n${Object.entries(s.events).map(([k, v]) => `  ${k.padEnd(26)} ${v}`).join('\n')}`);
+  if (Object.keys(s.rules).length) out.push(`escape hatches blocked by rule:\n${Object.entries(s.rules).map(([k, v]) => `  ${k.padEnd(8)} ${v}`).join('\n')}`);
+  const g = s.gate;
+  if (g.runs || g.cached || g.cutShort) {
+    out.push(`gate at Stop: ${g.runs} run(s), ${g.cached} cached${g.runs ? `; p50 ${secs(g.p50Ms)}, p90 ${secs(g.p90Ms)}, max ${secs(g.maxMs)}` : ''}${g.cutShort ? `; ${g.cutShort} cut short (hook timeout?)` : ''}`);
+  }
+  const rv = s.review;
+  if (rv.sessions) {
+    out.push(`review loop: ${rv.sessions} session(s) with verdicts; rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved}`);
+  }
+  process.stdout.write(`${out.join('\n')}\n`);
+  return 0;
+}
+
+/**
+ * The counts `temper stats` reports, from telemetry rows. Events and rules are ordered by count,
+ * highest first. Gate latency covers fresh (uncached) Stop outcomes that carry `ms`.
+ */
+function statsOf(rows) {
   const count = {};
   for (const r of rows) count[r.event] = (count[r.event] ?? 0) + 1;
   const rules = {};
   for (const r of rows.filter((x) => x.event === 'deny-scan')) for (const id of r.rules ?? []) rules[id] = (rules[id] ?? 0) + 1;
   const bySession = new Map();
   for (const r of rows) bySession.set(r.sid, [...(bySession.get(r.sid) ?? []), r]);
-  const out = [`sessions: ${bySession.size}`];
-  if (rows.length) out.push(`from ${rows.map((r) => r.t).sort()[0]} to ${rows.map((r) => r.t).sort().at(-1)}`);
-  out.push(`events:\n${Object.entries(count).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(26)} ${v}`).join('\n')}`);
-  if (Object.keys(rules).length) out.push(`escape hatches blocked by rule:\n${Object.entries(rules).sort((a, b) => b[1] - a[1]).map(([k, v]) => `  ${k.padEnd(8)} ${v}`).join('\n')}`);
+  const times = rows.map((r) => r.t).sort();
   // Gate latency at Stop (older rows carry no ms). A gate-start that the same session and agent
   // never follows with an outcome was a hook killed mid-gate, most likely by its timeout.
   const fresh = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached).map((r) => r.ms).sort((a, b) => a - b);
@@ -529,18 +629,26 @@ function stats(args) {
     }
     killed += pending.size;
   }
-  if (fresh.length || cached || killed) {
-    out.push(`gate at Stop: ${fresh.length} run(s), ${cached} cached${fresh.length ? `; p50 ${secs(pct(fresh, 50))}, p90 ${secs(pct(fresh, 90))}, max ${secs(fresh.at(-1))}` : ''}${killed ? `; ${killed} cut short (hook timeout?)` : ''}`);
-  }
   // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
   const rounds = [...bySession.values()].map((list) => list.filter((r) => r.event === 'verdict')).filter((v) => v.length);
-  if (rounds.length) {
-    const n = rounds.map((v) => v.length).sort((a, b) => a - b);
-    const first = rounds.filter((v) => v[0].verdict === 'approved').length;
-    out.push(`review loop: ${rounds.length} session(s) with verdicts; rounds per session p50 ${pct(n, 50)}, max ${n.at(-1)}; approved on the first verdict in ${first}`);
-  }
-  process.stdout.write(`${out.join('\n')}\n`);
-  return 0;
+  const n = rounds.map((v) => v.length).sort((a, b) => a - b);
+  const byCount = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]));
+  return {
+    sessions: bySession.size,
+    from: times[0] ?? null,
+    to: times.at(-1) ?? null,
+    events: byCount(count),
+    rules: byCount(rules),
+    gate: {
+      runs: fresh.length, cached, cutShort: killed,
+      p50Ms: fresh.length ? pct(fresh, 50) : null, p90Ms: fresh.length ? pct(fresh, 90) : null, maxMs: fresh.at(-1) ?? null,
+    },
+    review: {
+      sessions: rounds.length,
+      roundsP50: n.length ? pct(n, 50) : null, roundsMax: n.at(-1) ?? null,
+      firstApproved: rounds.filter((v) => v[0].verdict === 'approved').length,
+    },
+  };
 }
 
 function telemetryCmd(args) {
@@ -561,14 +669,14 @@ const code = await (async () => {
     case 'hook': return hook(rest[0]);
     case 'gate': return gate(rest);
     case 'scan': return scan(rest);
-    case 'status': return status();
+    case 'status': return status(rest);
     case 'setup': return setup(rest);
     case 'stats': return stats(rest);
     case 'telemetry': return telemetryCmd(rest);
     case 'baseline': return baseline(rest);
     case 'report': return report(rest);
     default:
-      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status | setup [--dry-run] [--force | --vendor-only] | stats [--branch [NAME]] | telemetry push --session ID\n'
+      process.stdout.write('usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status [--json] [--session ID] | setup [--dry-run] [--force | --vendor-only] | stats [--json] [--session ID] [--branch [NAME]] | telemetry push --session ID\n'
         + '              | baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]\n'
         + '              | report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]>\n');
       return cmd ? 2 : 0;

@@ -490,6 +490,7 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
   - Output is compact JSON with no trailing newline, or nothing.
   - The output shapes are `ctx`, `deny`, `ask`, `block` and `notice`, with 1.x key order: `hookSpecificOutput{hookEventName, permissionDecision, permissionDecisionReason, additionalContext?}`, `{decision:"block",reason}`, `{systemMessage}`.
 - **Messages:** every string in `hooks.mjs`, `temper.mjs`, `gate.mjs`, `baseline.mjs`, `report.mjs` and `verdict.mjs`: the deny, ask and block texts, `BASELINE_USAGE`, the usage line, the `status` lines, the `stats` layout, `renderGate`, `renderRatchet`, `debtLine`, the session-start and subagent-start context, `IRON_RULES` (kept in step with SKILL.md).
+- **JSON documents** (#108): `status --json` is `{ temper_status: 1, version, root, stateDir, base, fingerprint, changed, gate: null | { ok, unavailable, at, steps: [{ name, ok, ms, summary }] }, review: null | { verdict, stale, fingerprint, recorded_at, scores, findings: [{ severity, rule, file, line, fix }] }, baseline: null | { path, total, toolchain } | { error }, config: { review, skillGate }, disabled? }`, or `{ temper_status: 1, version, project: null }` with exit 0 outside a Rust project. `stats --json` is `{ temper_stats: 1, sessions, from, to, events, rules, gate: { runs, cached, cutShort, p50Ms, p90Ms, maxMs }, review: { sessions, roundsP50, roundsMax, firstApproved }, session?: { id, rows: [{ t, event, agent, file, rules, via }] } }`, or `{ temper_stats: 1, project: null }`. Key order is part of the contract; temper lens reads them.
 - **Exit codes:**
   - `gate`: 0 green, 1 red.
   - `scan`: 1 when there are hard hits.
@@ -792,7 +793,7 @@ Phase 3: state, fingerprint, sessions, verdicts
 - [ ] `subagent-stop` (reviewer): non-reviewers pass, after a `subagent-stop` telemetry row; a verdict already recorded by `pre-handback` passes; without `last_assistant_message` the report is read from `agent_transcript_path` (the last `SubagentHandback` message, else the last assistant text); a valid verdict is recorded (stale flag) with session `verdict-<agent>` written; invalid blocks, or passes with telemetry when `stop_hook_active`.
 - [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line; the Node-minimum warning line, in the context and as a `systemMessage` (#89).
 - [ ] `subagent-start` context for implementer and reviewer (the reviewer runs `cargo fmt --all` first, gets the fingerprint instruction and the diff stat last 25 lines); the 5 newest plans by mtime.
-- [ ] `status` lines (root, state, base, fingerprint, changed, gate, review, baseline variants, config).
+- [ ] `status` lines (root, state, base, fingerprint, changed, gate, review, baseline variants, config); the `status --json` and `stats --json` documents, `--session` and the no-project form (#108).
 - [ ] state cross-read: Rust reads 1.x-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
 
 Phase 4: gate and completion hooks

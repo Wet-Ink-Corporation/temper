@@ -96,7 +96,7 @@ Then ask the agent for a small change. You will probably see some of these along
 | `scan [FILES..] [--all] [--json]` | the escape-hatch scanner |
 | `baseline [--init \| --update \| --tighten \| --check [--base REF] [--findings-out FILE]] [--json] [--locked] [--no-cache]` | record, lower or check the lint baseline (`--init` and `--update` are human decisions). Without a baseline, `--check` requires zero findings. |
 | `report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html] [--locked]` | the compliance scorecard: `report.json`, `report.md`, `report.html` (`--out` and `--findings-out` stay under `target/` or `.temper/`) |
-| `status`, `stats [--branch [NAME]]`, `setup [--dry-run] [--force \| --vendor-only]` | tree and gate state; enforcement telemetry ([what it records](#local-data-and-telemetry); `--branch`: every session pushed to that branch); install the templates (`--vendor-only`: refresh only the vendored CLI in `.claude/temper/`) |
+| `status [--json] [--session ID]`, `stats [--json] [--session ID] [--branch [NAME]]`, `setup [--dry-run] [--force \| --vendor-only]` | tree and gate state; enforcement telemetry ([what it records](#local-data-and-telemetry); `--branch`: every session pushed to that branch); install the templates (`--vendor-only`: refresh only the vendored CLI in `.claude/temper/`). `--json` prints one versioned document (`temper_status: 1`, `temper_stats: 1`) for scripts, and `{ "project": null }` with exit 0 outside a Rust project; `--session` uses that session's base for `status` and adds that session's rows to `stats --json` |
 | `telemetry push --session ID` | push one session's telemetry to `telemetry.branch`; the `Stop` hook runs it |
 
 ## New project
