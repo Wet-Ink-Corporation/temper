@@ -30,12 +30,12 @@ let pending: { cancel: () => void } | null = null
 async function refresh($: EngineInterface): Promise<void> {
   const surfaces = await $.session.surfaces()
   if (!surfaces.some(s => DRAWS.has(s))) return
-  const next = await statusView($)
-  if (next === 'no-project') {
+  const fresh = await statusView($)
+  if (fresh === 'no-project') {
     off = true
     return
   }
-  await update($, view, () => next)
+  await update($, view, () => fresh)
 }
 
 /** Refreshes once the current hook has returned. */

