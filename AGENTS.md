@@ -5,7 +5,7 @@ This repository is temper itself: the Claude Code plugin that ships the rust-cra
 ## `main` is what users get
 
 Marketplace users install whatever `main` holds, so every merge to `main` reaches them.
-- All changes go through a pull request with green CI. A ruleset protects `main`: the `Checks` and `Unit tests (Windows)` checks are required, and force-push is blocked.
+- All changes go through a pull request with green CI. A ruleset protects `main`: the `Checks`, `Unit tests (Windows)` and `CHANGELOG entry` checks are required, and force-push is blocked.
 - Keep `main` releasable. A change that is not ready for users waits on its branch.
 - Versions and releases follow the checklist below.
 
