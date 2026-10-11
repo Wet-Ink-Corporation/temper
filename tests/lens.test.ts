@@ -660,6 +660,60 @@ test('SubagentStops that overlap share one poll, and each one keeps polling unti
   expect(w.toasts).toContain('temper: gate green, review approved')
 })
 
+test('SubagentStops that start together share one poll, and it stops when both end', async ($, on) => {
+  const clock = mock.clock(on)
+  let polls = 0
+  stopWorld(on, () => {
+    polls += 1
+    return RUNNING('clippy', [])
+  })
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  on('classic.SubagentStop', async () => {
+    await held
+    return {}
+  })
+  await start($)
+  const a = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'x' } as any)
+  const b = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'b', agent_type: 'x' } as any)
+  await clock.advance(3000)
+  const during = polls
+  expect(during).toBeGreaterThanOrEqual(3)
+  expect(during).toBeLessThanOrEqual(5)
+  release()
+  await Promise.all([a, b])
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(5000)
+  expect(polls).toBe(after)
+})
+
+test('a terminal attaching during a Stop gets its progress from then on', async ($, on) => {
+  const clock = mock.clock(on)
+  let surfaces: RenderSurface[] = []
+  let polls = 0
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    runs.push([...e.argv])
+    polls += 1
+    return { value: { exitCode: 0, stdout: RUNNING('clippy', []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: surfaces }) as any)
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  on('classic.Stop', async () => {
+    await clock.advance(1000)
+    surfaces = ['terminal']
+    await $.session.attach({ surface: 'terminal', clientId: 'terminal:default' })
+    await clock.advance(4000)
+    return {}
+  })
+  await start($, null)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(polls).toBeGreaterThanOrEqual(4)
+})
+
 test('Stop where nothing draws: the lens runs nothing, and the block passes back unchanged', async ($, on) => {
   const clock = mock.clock(on, { now: 72000 })
   const runs = world(on, { surfaces: [] })

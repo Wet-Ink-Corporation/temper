@@ -145,8 +145,13 @@ function refreshSoon($: EngineInterface): void {
 async function watchStop($: EngineInterface): Promise<Watch> {
   const watch = { startedAt: await $.clock.now(), sawGate: false }
   watches.add(watch)
-  if (polling === null && (await draws($))) polling = $.clock.every(POLL_MS, () => poll($))
+  if (await draws($)) startPolling($)
   return watch
+}
+
+/** Starts the one poll timer, if none runs. No await between the check and the assignment. */
+function startPolling($: EngineInterface): void {
+  if (polling === null) polling = $.clock.every(POLL_MS, () => poll($))
 }
 
 /** Whether a terminal or the desktop app draws this session: elsewhere the lens runs nothing. */
@@ -324,7 +329,11 @@ export const register: Register = on => {
   // host, so session.start saw no surface): draw now rather than at the first turn end.
   on('session.attach', async ($, e, next) => {
     const result = await next(e)
-    if (!off && DRAWS.has(e.surface)) refreshNow($)
+    if (!off && DRAWS.has(e.surface)) {
+      refreshNow($)
+      // A Stop already running when the surface arrived: show its progress from now on.
+      if (watches.size > 0) startPolling($)
+    }
     return result
   })
 
