@@ -617,7 +617,8 @@ function statsOf(rows) {
   const times = rows.map((r) => r.t).sort();
   // Gate latency at Stop (older rows carry no ms). A gate-start that the same session and agent
   // never follows with an outcome was a hook killed mid-gate, most likely by its timeout.
-  const fresh = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached).map((r) => r.ms).sort((a, b) => a - b);
+  const timed = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached);
+  const fresh = timed.map((r) => r.ms).sort((a, b) => a - b);
   const cached = rows.filter((r) => STOP_OUTCOMES.has(r.event) && r.cached === true).length;
   let killed = 0;
   for (const list of bySession.values()) {
@@ -642,6 +643,8 @@ function statsOf(rows) {
     gate: {
       runs: fresh.length, cached, cutShort: killed,
       p50Ms: fresh.length ? pct(fresh, 50) : null, p90Ms: fresh.length ? pct(fresh, 90) : null, maxMs: fresh.at(-1) ?? null,
+      // The last 30 fresh runs' times, oldest first (rows are in file order), for a sparkline.
+      recentMs: timed.slice(-30).map((r) => r.ms),
     },
     review: {
       sessions: rounds.length,

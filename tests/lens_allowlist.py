@@ -33,6 +33,11 @@ CALLS = {
 CALL_PREFIXES = ('$.ui.', '$.clock.')
 
 
+def split(text):
+    """A report list: commas inside a matcher (`{a=1, b=2}`) or a via note (`(via f, g)`) do not split."""
+    return [x.strip() for x in re.split(r',\s*(?![^{(]*[})])', text) if x.strip()]
+
+
 def problems(report, source):
     notes = []
     gating = []
@@ -52,12 +57,11 @@ def problems(report, source):
     if hooks is None or calls is None:
         out.append(f'the report lists no "hooks:" or "calls:" line for {MODULE}: is the module registered in hooks/hooks.json?')
         return out
-    # A matcher can hold commas (`ui.render{component=Pane, requestId=x}`): split outside braces.
-    for h in [x.strip() for x in re.split(r',\s*(?![^{]*\})', hooks) if x.strip()]:
+    for h in split(hooks):
         name = re.sub(r'\{.*\}$', '', h)
         if name not in HOOKS:
             out.append(f'the lens hooks {h}, which is not on the read-only allow-list')
-    for c in [x.strip() for x in calls.split(',') if x.strip()]:
+    for c in split(calls):
         name = re.sub(r'\s*\(via .*\)$', '', c)
         if name not in CALLS and not name.startswith(CALL_PREFIXES):
             out.append(f'the lens calls {name}, which is not on the read-only allow-list')
@@ -85,7 +89,7 @@ def problems(report, source):
 def self_test():
     good_notes = [
         f'{MODULE} hooks: session.start, tool.call, ui.render{{component=AbovePrompt}}, ui.render{{component=Pane, requestId=p}}',
-        f'{MODULE} calls: $.process.run (via statusView), $.ui.resolve, $.state.get',
+        f'{MODULE} calls: $.process.run (via runStats, statusView), $.ui.resolve, $.state.get',
         f'{MODULE} env writes: nothing',
         f'{MODULE} state writes: temper.view',
     ]

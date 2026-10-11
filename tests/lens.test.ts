@@ -221,7 +221,8 @@ const VERDICT = {
 }
 
 /** The engine's ends the pane needs: command registration, the pane, the rules file, the prompt box. */
-function paneWorld(on: On) {
+function paneWorld(on: On, store: Record<string, unknown> = {}) {
+  mock.store(on, store)
   const seen = { commands: [] as string[], opened: [] as string[], reads: [] as string[], fills: [] as unknown[], submits: [] as unknown[] }
   on('command.register', async (_$, e: any) => { seen.commands.push(e.name); return { value: undefined } as any })
   on('ui.open', async (_$, e: any) => { seen.opened.push(e.id); return { value: { isPlaced: true } } as any })
@@ -293,4 +294,84 @@ test('the command is not registered outside a Rust project or under TEMPER_DISAB
   const seen = paneWorld(on)
   await start($)
   expect(seen.commands).toEqual([])
+})
+
+// The Activity and Stats tabs (#113), from `temper stats --json`. The branch fetch runs only on a press.
+const STATS = (over: Record<string, unknown> = {}) => JSON.stringify({
+  temper_stats: 1, sessions: 2, from: 't0', to: 't1',
+  events: { 'deny-scan': 2, ask: 1 }, rules: { 'H-02': 2, 'ERR-02': 1 },
+  gate: { runs: 3, cached: 1, cutShort: 1, p50Ms: 3000, p90Ms: 9000, maxMs: 9000, recentMs: [3000, 9000, 1000] },
+  review: { sessions: 1, roundsP50: 2, roundsMax: 2, firstApproved: 0 },
+  session: { id: 'test-session', rows: [
+    { t: '2026-10-11T10:00:01.000Z', event: 'session-start', agent: 'main', file: null, rules: [], via: null },
+    { t: '2026-10-11T10:00:02.000Z', event: 'deny-scan', agent: 'main', file: 'src/a.rs', rules: ['H-02'], via: null },
+    { t: '2026-10-11T10:00:03.000Z', event: 'ask', agent: 'temper:rust-implementer', file: 'Cargo.toml', rules: [], via: null },
+  ] },
+  ...over,
+})
+
+/** Like `world`, with `stats --json` answered from `stats` and every CLI run recorded. */
+function statsWorld(on: On, surface: RenderSurface, branch = STATS({ sessions: 9, session: undefined })) {
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    const argv = [...e.argv]
+    runs.push(argv)
+    const out = argv[2] === 'stats' ? (argv.includes('--branch') ? branch : STATS()) : doc({ gate: GREEN })
+    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: [surface] }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  return runs
+}
+
+for (const surface of SURFACES) {
+  test(`tabs on ${surface}: Activity lists this session's denials and asks, newest first, with the rule on a press`, async ($, on) => {
+    const runs = statsWorld(on, surface)
+    paneWorld(on)
+    await start($, surface)
+    await $.command.run({ command: 'temper-lens', args: '' } as any)
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(runs.some(r => r[2] === 'stats')).toBe(false)
+    await ui.press({ key: 'tab-activity' })
+    const stat = runs.find(r => r[2] === 'stats')
+    expect(stat?.slice(2)).toEqual(['stats', '--json', '--session', 'test-session'])
+    const askRow = await ui.find({ type: 'Text', text: '10:00:03  ask  Cargo.toml  temper:rust-implementer' })
+    expect(askRow).toBeDefined()
+    expect((await ui.find({ key: 'activity-1' }))?.text).toBe('10:00:02  deny-scan  H-02  src/a.rs')
+    expect(await ui.find({ type: 'Text', text: /session-start/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /deny-scan: Edits/ })).toBeDefined()
+    await ui.press({ key: 'activity-1' })
+    expect((await ui.find({ key: 'activity-1-rule' }))?.text).toContain('No `unwrap`')
+    await ui.unmount()
+  })
+
+  test(`tabs on ${surface}: Stats shows the counts; the branch is fetched only on a press`, async ($, on) => {
+    const runs = statsWorld(on, surface)
+    paneWorld(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.press({ key: 'tab-stats' })
+    const texts = (await ui.findAll({ type: 'Text' })).map((t: { text: string }) => t.text).join('\n')
+    expect(texts).toContain('gate at Stop: p50 3.0 s, p90 9.0 s, max 9.0 s over 3 run(s); 1 cut short')
+    expect(texts).toContain('approved on the first verdict in 0 of 1')
+    expect(texts).toContain('top rules blocked: H-02 2, ERR-02 1')
+    expect(runs.some(r => r.includes('--branch'))).toBe(false)
+    if (surface === 'terminal') expect(await ui.find({ key: 'gate-times' })).toBeDefined()
+    await ui.press({ key: 'branch' })
+    expect(runs.filter(r => r.includes('--branch'))).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: 'sessions: 9' })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('the pane opens on the tab it was left on', async ($, on) => {
+  const runs = statsWorld(on, 'terminal')
+  paneWorld(on, { tab: 'stats' })
+  await start($)
+  await $.command.run({ command: 'temper-lens', args: '' } as any)
+  expect(runs.some(r => r[2] === 'stats')).toBe(true)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /gate at Stop/ })).toBeDefined()
+  await ui.unmount()
 })

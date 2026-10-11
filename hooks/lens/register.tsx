@@ -8,10 +8,17 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { LensExpanded, LensFinding, LensStatus, LensView } from '../../types'
+import type { LensFinding, LensStats, LensStatus, LensView } from '../../types'
 
 const view = atom({ plugin: 'temper', key: 'view' } as const, null)
 const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
+const tab = atom({ plugin: 'temper', key: 'tab' } as const, 'review')
+const stats = atom({ plugin: 'temper', key: 'stats' } as const, null)
+const branchStats = atom({ plugin: 'temper', key: 'branchStats' } as const, null)
+
+type Tab = 'review' | 'activity' | 'stats'
+const TABS: readonly Tab[] = ['review', 'activity', 'stats']
+const TAB_LABEL: Record<Tab, string> = { review: 'Review', activity: 'Activity', stats: 'Stats' }
 
 const PANE = 'temper-lens'
 const RULES_MD = 'skills/rust-craft/references/rules.md'
@@ -115,78 +122,38 @@ export const register: Register = on => {
 
   on('command.run', { command: 'temper-lens' }, async $ => {
     await refresh($)
+    // The pane opens on the tab it was left on, in this session or an earlier one.
+    const last = await $.store.get('tab')
+    const t: Tab = last === 'activity' || last === 'stats' ? last : 'review'
+    await update($, tab, () => t)
+    if (t !== 'review') await refreshStats($)
     await $.ui.open({ id: PANE, title: 'temper' })
-    return { text: 'temper lens: the review pane is open.' }
+    return { text: 'temper lens: the pane is open.' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
-    const v = await read($, view)
-    const open = await read($, expanded)
-    if (v === null || v.kind === 'unavailable') {
-      return (
-        <Box>
-          <Text dimColor>temper: status unavailable</Text>
-        </Box>
-      )
-    }
-    const s = v.status
-    const r = s.review
-    if (r === null) {
-      return (
-        <Box flexDirection="column">
-          <Text bold>Review</Text>
-          <Text>{noReviewReason(s)}</Text>
-        </Box>
-      )
-    }
-    const findings = r.findings.map((f, i) => ({ f, key: `finding-${i}` }))
+    const els = $.ui.resolve(e)
+    const { Box, Button } = els
+    const current = await read($, tab)
+    const body = current === 'activity' ? await activityTab($, els) : current === 'stats' ? await statsTab($, els, e.surface) : await reviewTab($, els)
     return (
       <Box flexDirection="column">
-        <Text bold>Review</Text>
-        <Text>
-          <Text color={r.stale ? 'warning' : r.verdict === 'approved' ? 'success' : 'error'}>{r.verdict}</Text>
-          <Text dimColor> for {s.fingerprint}</Text>
-          {r.stale ? <Text color="warning"> (stale: recorded for another tree; a new review is needed)</Text> : ''}
-        </Text>
-        <Text>
-          {DIMENSIONS.map((d, i) => {
-            const score = r.scores[d] ?? 'n/a'
-            const low = typeof score === 'number' && score < 3
-            return <Text color={low ? 'error' : undefined} dimColor={score === 'n/a'}>{`${i ? '  ' : ''}${d} ${score}`}</Text>
-          })}
-        </Text>
-        {findings.length === 0 ? <Text dimColor>No findings.</Text> : ''}
-        {SEVERITIES.flatMap(sev => {
-          const group = findings.filter(x => x.f.severity === sev)
-          if (group.length === 0) return []
-          return [
-            <Text bold color={sev === 'blocker' || sev === 'major' ? 'error' : undefined}>{`${sev} (${group.length})`}</Text>,
-            ...group.flatMap(({ f, key }) => {
-              const row = (
-                <Button
-                  key={key}
-                  plain
-                  label={`${f.rule} ${f.line === null ? f.file : `${f.file}:${f.line}`}: ${f.fix}`}
-                  onPress={() => toggleFinding($, key, f.rule)}
-                />
-              )
-              if (open?.key !== key) return [row]
-              return [
-                row,
-                <Markdown key={`${key}-rule`} text={open.text} />,
-                <Button key={`${key}-draft`} label="Draft fix" onPress={() => draftFix($, f)} />,
-              ]
-            }),
-          ]
-        })}
+        <Box>
+          {TABS.map(t => (
+            <Button key={`tab-${t}`} label={TAB_LABEL[t]} variant={t === current ? 'primary' : undefined} onPress={() => showTab($, t)} />
+          ))}
+        </Box>
+        {body}
       </Box>
     )
   })
 
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (!off) await refresh($)
+    if (off) return result
+    await refresh($)
+    // The tabs refresh only while the pane is open, and only the tab on show needs stats.
+    if ((await read($, tab)) !== 'review' && (await $.ui.panes()).some(p => p.id === PANE)) await refreshStats($)
     return result
   })
 
@@ -220,6 +187,197 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+type Els = ReturnType<EngineInterface['ui']['resolve']>
+
+async function reviewTab($: EngineInterface, els: Els) {
+  const { Box, Button, Markdown, Text } = els
+  const v = await read($, view)
+  const open = await read($, expanded)
+  if (v === null || v.kind === 'unavailable') {
+    return (
+      <Box>
+        <Text dimColor>temper: status unavailable</Text>
+      </Box>
+    )
+  }
+  const s = v.status
+  const r = s.review
+  if (r === null) {
+    return (
+      <Box flexDirection="column">
+        <Text>{noReviewReason(s)}</Text>
+      </Box>
+    )
+  }
+  const findings = r.findings.map((f, i) => ({ f, key: `finding-${i}` }))
+  return (
+    <Box flexDirection="column">
+      <Text>
+        <Text color={r.stale ? 'warning' : r.verdict === 'approved' ? 'success' : 'error'}>{r.verdict}</Text>
+        <Text dimColor> for {s.fingerprint}</Text>
+        {r.stale ? <Text color="warning"> (stale: recorded for another tree; a new review is needed)</Text> : ''}
+      </Text>
+      <Text>
+        {DIMENSIONS.map((d, i) => {
+          const score = r.scores[d] ?? 'n/a'
+          const low = typeof score === 'number' && score < 3
+          return <Text color={low ? 'error' : undefined} dimColor={score === 'n/a'}>{`${i ? '  ' : ''}${d} ${score}`}</Text>
+        })}
+      </Text>
+      {findings.length === 0 ? <Text dimColor>No findings.</Text> : ''}
+      {SEVERITIES.flatMap(sev => {
+        const group = findings.filter(x => x.f.severity === sev)
+        if (group.length === 0) return []
+        return [
+          <Text bold color={sev === 'blocker' || sev === 'major' ? 'error' : undefined}>{`${sev} (${group.length})`}</Text>,
+          ...group.flatMap(({ f, key }) => {
+            const row = (
+              <Button
+                key={key}
+                plain
+                label={`${f.rule} ${f.line === null ? f.file : `${f.file}:${f.line}`}: ${f.fix}`}
+                onPress={() => toggleFinding($, key, f.rule)}
+              />
+            )
+            if (open?.key !== key) return [row]
+            return [
+              row,
+              <Markdown key={`${key}-rule`} text={open.text} />,
+              <Button key={`${key}-draft`} label="Draft fix" onPress={() => draftFix($, f)} />,
+            ]
+          }),
+        ]
+      })}
+    </Box>
+  )
+}
+
+/** Events the Activity tab lists: what temper denied, asked or blocked in this session. */
+const ACTIVITY = /^(?:deny-|ask$|stop-blocked$|verdict-invalid)/
+
+/** Where docs/troubleshooting.md explains each kind of event. */
+const LEGEND: [RegExp, string][] = [
+  [/^deny-(?:scan|skill-gate)$/, 'Edits (`Write`, `Edit`, `MultiEdit`)'],
+  [/^deny-/, 'Shell commands (`Bash`)'],
+  [/^ask$/, 'Edits, or Shell commands (`Bash`)'],
+  [/^stop-blocked$/, 'Finishing a turn (the `Stop` hook)'],
+  [/^verdict-invalid/, 'Review verdicts (the `rust-reviewer` subagent)'],
+]
+
+async function activityTab($: EngineInterface, els: Els) {
+  const { Box, Button, Markdown, Text } = els
+  const st = await read($, stats)
+  const open = await read($, expanded)
+  if (st === null) return <Text dimColor>Loading this session's activity.</Text>
+  if (st.kind === 'unavailable') return <Text dimColor>temper: stats unavailable</Text>
+  const rows = st.session.filter(r => ACTIVITY.test(r.event)).reverse()
+  if (rows.length === 0) return <Text dimColor>temper has denied or asked nothing in this session.</Text>
+  const seen = [...new Set(rows.map(r => r.event))]
+  return (
+    <Box flexDirection="column">
+      {rows.flatMap((r, i) => {
+        const key = `activity-${i}`
+        const label = [r.t.slice(11, 19), r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
+        const rule = r.rules[0]
+        if (!rule) return [<Text key={key}>{label}</Text>]
+        const row = <Button key={key} plain label={label} onPress={() => toggleFinding($, key, rule)} />
+        return open?.key === key ? [row, <Markdown key={`${key}-rule`} text={open.text} />] : [row]
+      })}
+      <Text dimColor>In docs/troubleshooting.md:</Text>
+      {seen.flatMap(ev => {
+        const hit = LEGEND.find(([re]) => re.test(ev))
+        return hit ? [<Text dimColor>{`  ${ev}: ${hit[1]}`}</Text>] : []
+      })}
+    </Box>
+  )
+}
+
+async function statsTab($: EngineInterface, els: Els, surface: string) {
+  const { Box, Button, Text } = els
+  const st = await read($, stats)
+  const br = await read($, branchStats)
+  if (st === null) return <Text dimColor>Loading stats.</Text>
+  if (st.kind === 'unavailable') return <Text dimColor>temper: stats unavailable</Text>
+  return (
+    <Box flexDirection="column">
+      <Text bold>This clone</Text>
+      {statsLines(st.totals).map(l => <Text>{l}</Text>)}
+      {surface === 'terminal' && st.totals.gate.recentMs.length > 1 ? sparkline(els, st.totals.gate.recentMs) : ''}
+      <Text bold>Telemetry branch</Text>
+      {br === null
+        ? <Button key="branch" label="Fetch every session pushed to the telemetry branch" onPress={() => fetchBranch($)} />
+        : br.kind === 'unavailable'
+          ? <Text dimColor>{br.why}</Text>
+          : <Box flexDirection="column">{statsLines(br.totals).map(l => <Text>{l}</Text>)}</Box>}
+    </Box>
+  )
+}
+
+/** The Stats tab's lines for one set of counts. */
+export function statsLines(t: LensStats): string[] {
+  const secs = (ms: number | null) => (ms === null ? 'n/a' : `${(ms / 1000).toFixed(1)} s`)
+  const g = t.gate
+  const rv = t.review
+  const top = Object.entries(t.rules).slice(0, 5).map(([id, n]) => `${id} ${n}`).join(', ')
+  return [
+    `sessions: ${t.sessions}`,
+    g.runs ? `gate at Stop: p50 ${secs(g.p50Ms)}, p90 ${secs(g.p90Ms)}, max ${secs(g.maxMs)} over ${g.runs} run(s); ${g.cutShort} cut short` : `gate at Stop: no timed runs; ${g.cutShort} cut short`,
+    rv.sessions ? `review: rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved} of ${rv.sessions}` : 'review: no verdicts yet',
+    `top rules blocked: ${top || 'none'}`,
+  ]
+}
+
+/** Gate times as one row of block glyphs, oldest first, on the terminal's Raster. */
+function sparkline(els: Els, ms: number[]) {
+  const { Raster } = els as any
+  const bars = '\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588'
+  const max = Math.max(...ms, 1)
+  const words = new Uint32Array(ms.length * 3)
+  ms.forEach((v, i) => {
+    words[i * 3] = bars.charCodeAt(Math.min(7, Math.floor((v / max) * 7.999)))
+    words[i * 3 + 1] = 0x01000000
+    words[i * 3 + 2] = 0x01000000
+  })
+  return <Raster key="gate-times" columns={ms.length} rows={1} cells={(new Uint8Array(words.buffer) as any).toBase64()} />
+}
+
+async function showTab($: EngineInterface, t: Tab): Promise<void> {
+  await update($, tab, () => t)
+  await $.store.set('tab', t)
+  if (t !== 'review') await refreshStats($)
+}
+
+/** Runs `temper stats --json` (and with `--branch`, the branch's), for the pane's tabs. */
+async function runStats($: EngineInterface, args: string[]): Promise<{ ok: true; doc: any } | { ok: false; why: string }> {
+  try {
+    const run = await $.process.run(['node', `${$.plugin.root}/scripts/temper.mjs`, 'stats', '--json', ...args], { timeoutMs: STATUS_TIMEOUT_MS * 4 })
+    if (run.exitCode !== 0) return { ok: false, why: run.stderr.trim().split('\n')[0] || 'temper: stats unavailable' }
+    const doc = JSON.parse(run.stdout)
+    if (!doc || doc.temper_stats !== 1 || doc.project === null) return { ok: false, why: 'temper: stats unavailable' }
+    return { ok: true, doc }
+  } catch {
+    return { ok: false, why: 'temper: stats unavailable' }
+  }
+}
+
+function totals(doc: any): LensStats {
+  return { sessions: doc.sessions, rules: doc.rules ?? {}, gate: { ...doc.gate, recentMs: doc.gate?.recentMs ?? [] }, review: doc.review }
+}
+
+async function refreshStats($: EngineInterface): Promise<void> {
+  const sid = await $.session.id()
+  const r = await runStats($, ['--session', sid])
+  await update($, stats, () => (r.ok
+    ? { kind: 'stats', totals: totals(r.doc), session: r.doc.session?.rows ?? [] }
+    : { kind: 'unavailable', why: r.why }))
+}
+
+/** The telemetry branch is fetched only when the person asks: it is a network call. */
+async function fetchBranch($: EngineInterface): Promise<void> {
+  const r = await runStats($, ['--branch'])
+  await update($, branchStats, () => (r.ok ? { kind: 'stats', totals: totals(r.doc), session: [] } : { kind: 'unavailable', why: r.why }))
 }
 
 /** Why the tree has no review, and what clears it. */
