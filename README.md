@@ -172,6 +172,20 @@ Move both to the new release together, in one pull request:
 
 A temper checkout serves as `<temper>` in step 3. The plugin's own copy, under Claude Code's plugin directory, works as well.
 
+## temper lens
+
+temper lens is a read-only view of temper's state that ships inside the plugin. In a Rust project, in the terminal or the desktop app, it draws one row above the prompt for the current tree:
+
+```
+temper  3 .rs changed · gate red (clippy) · review: changes-requested, 2 major · baseline 41
+```
+
+The row shows the Rust files changed since the session's base, the gate (green, red with the failing step, running with its step, or not run), the reviewer's verdict (approved, changes requested with the blocker and major counts, stale, or none) and the baseline's total. On a narrow window it drops the baseline, then the review's counts. It refreshes when the session starts, when a turn ends, and about 1.5 s after a `Write`, `Edit`, `MultiEdit` or `Bash` call, never on a timer while idle. It reads `temper status --json` from the plugin's own CLI and never the state dir.
+
+The lens is a view and never an enforcer. The hooks decide; the lens only shows what they decided, passes every tool call's result on unchanged, and makes no model or network calls. CI holds it to that with an allow-list of what it may hook and call (`tests/lens-check.sh`).
+
+It draws nothing in Claude Code cloud sessions, in VS Code's chat panel and under `claude -p`, where Claude Code draws no mods; there it runs nothing either. It is also off under `TEMPER_DISABLE=1` and outside a Rust project. To turn it off and keep the rest of temper, use `disableAllHooks` (which turns off every function hook, not only temper's) or disable temper in `/plugin`, which also turns off the hooks. It needs Claude Code 2.1.286 or later. An organization with `allowManagedModsOnly` loses the lens and keeps the rest of the plugin.
+
 ## Compliance reporting
 
 `temper report` turns the findings into a scorecard: findings by severity (MUST, SHOULD, CONSIDER, and lints the standard does not cite), iron-rule findings called out, and per crate a status (`clean`, `debt`, `regressed`), counts, new and fixed against the baseline, lint inheritance, charter presence and top rules; then the top rules and files. It writes JSON for tooling, Markdown for the step summary and pull-request comment, and a self-contained HTML page. Per-change evidence stays with the change: the gate result and the reviewer's scored verdict (12 rubric dimensions, findings by rule ID) are stored per tree fingerprint under `.git/temper/`.

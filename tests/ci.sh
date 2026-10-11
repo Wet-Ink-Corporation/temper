@@ -8,8 +8,8 @@
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
 # templates/workspace/rust-toolchain.toml with clippy and rustfmt (the example
 # workspace pins the same one in its own rust-toolchain.toml). The plugin
-# manifest check (`claude plugin validate`) needs the Claude Code CLI and runs
-# as its own CI step.
+# manifest check (`claude plugin validate`) and the temper lens checks
+# (tests/lens-check.sh) need the Claude Code CLI and run as their own CI steps.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -34,6 +34,9 @@ step "example workspace's vendored CLI matches scripts/"
 v=templates/example-workspace/.claude/temper
 diff -q scripts/temper.mjs "$v/temper.mjs"
 for f in scripts/lib/*; do diff -q "$f" "$v/lib/$(basename "$f")"; done
+
+step "temper lens allow-list checker"
+python3 tests/lens_allowlist.py --self-test
 
 step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
