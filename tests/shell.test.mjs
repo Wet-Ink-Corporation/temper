@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { parseCommands, writeTargets, landing, patchCommand, patchFiles, codeWriteTargets, resolvePath, pathspecPattern } from '../scripts/lib/shell.mjs';
+import { parseCommands, writeTargets, landing, patchCommand, patchFiles, codeWriteTargets, resolvePath, pathspecPattern, commandDeletes } from '../scripts/lib/shell.mjs';
 
 const root = path.resolve(os.tmpdir(), 'shell-test-root');
 const at = (...p) => path.join(root, ...p);
@@ -228,4 +228,22 @@ test('shell: only a bare -WhatIf or -WhatIf:$true is a PowerShell dry run; any o
     assert.deepEqual(targets(`Set-Content -Path s.txt -Value x -WhatIf:${v}`).map((t) => t[0]), ['set-content'], v);
   }
   for (const cmd of ['Copy-Item a.rs b.rs -whatif', 'Copy-Item a.rs b.rs -WHATIF:$TRUE', 'Set-Content -Path s.txt -Value x -WhatIf:$true']) assert.deepEqual(targets(cmd), [], cmd);
+});
+
+test('shell: commandDeletes reads rm, unlink, Remove-Item and its aliases, and git rm; dry runs and mentions delete nothing', () => {
+  const deletes = (cmd) => parseCommands(cmd, { cwd: root }).flatMap((c) => commandDeletes(c)).map((t) => [t.verb, t.path, t.recursive]);
+  assert.deepEqual(deletes('rm -f a -- -b && unlink c'), [['rm', at('a'), false], ['rm', at('-b'), false], ['unlink', at('c'), false]]);
+  assert.deepEqual(deletes('rm -rf d && rm --recursive e && rm -Recurse -Force f'), [['rm', at('d'), true], ['rm', at('e'), true], ['rm', at('f'), true]]);
+  assert.deepEqual(deletes('Remove-Item -Path g,h -Force; ri i -Recurse; del j/k; erase l; rd m'),
+    [['remove-item', at('g'), false], ['remove-item', at('h'), false], ['ri', at('i'), true], ['del', at('j', 'k'), false], ['erase', at('l'), false], ['rd', at('m'), false]]);
+  assert.deepEqual(deletes('del -r j && Remove-Item -Rec -Force k'), [['del', at('j'), true], ['remove-item', at('k'), true]]);
+  // The aliases are PowerShell, so a backslash stays a path separator.
+  assert.equal(parseCommands('del .claude\\settings.json', { cwd: root }).flatMap((c) => commandDeletes(c))[0].text, '.claude\\settings.json');
+  assert.deepEqual(deletes('git rm n && git rm --cached -r o && git -C sub rm -- p'), [['git rm', at('n'), false], ['git rm', at('o'), true], ['git rm', at('sub', 'p'), false]]);
+  assert.deepEqual(deletes('cd sub && bash -c "rm q"'), [['rm', at('sub', 'q'), false]]);
+  for (const cmd of ['git rm -n a', 'git rm --dry-run a', 'git rm --pathspec-from-file=list', 'Remove-Item a -WhatIf', 'git commit -m "rm a"', "echo 'rm a'", 'rmdir a', 'git status']) {
+    assert.deepEqual(deletes(cmd), [], cmd);
+  }
+  assert.equal(deletes('Remove-Item -Path a -Filter *.toml')[0][1], null);
+  assert.equal(parseCommands('rm *.toml', { cwd: root }).flatMap((c) => commandDeletes(c))[0].glob, true);
 });

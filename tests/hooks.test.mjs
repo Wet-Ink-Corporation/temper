@@ -1553,6 +1553,66 @@ test('Bash: a whole directory written over protected configuration asks; restori
   }
 });
 
+test('Bash: deleting protected configuration from the shell asks, like a write to it (wi-2000a3)', () => {
+  for (const [cmd, rel] of [
+    ['rm deny.toml', 'deny.toml'],
+    ['rm -f .claude/temper.json', '.claude/temper.json'],
+    ['rm -- rust-toolchain.toml', 'rust-toolchain.toml'],
+    ['sudo rm -f CLAUDE.md', 'CLAUDE.md'],
+    ['unlink clippy.toml', 'clippy.toml'],
+    ['Remove-Item -Path .claude/settings.json -Force', '.claude/settings.json'],
+    ['ri .github/workflows/ci.yml', '.github/workflows/ci.yml'],
+    ['del rustfmt.toml', 'rustfmt.toml'],
+    ['erase AGENTS.md', 'AGENTS.md'],
+    ['git rm deny.toml', 'deny.toml'],
+    ['git rm --cached .claude/settings.json', '.claude/settings.json'],
+    ['git -C crates/ledger-domain rm -q clippy.toml', 'crates/ledger-domain/clippy.toml'],
+    ['cd .claude && rm temper.json', '.claude/temper.json'],
+    ['bash -c "rm -f .cargo/config.toml"', '.cargo/config.toml'],
+    ['cargo build && rm .githooks/pre-commit', '.githooks/pre-commit'],
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'ask', cmd);
+    assert.ok(reason(res).includes(`this shell command deletes ${rel}. ${rel} is verification/agent configuration. Deleting it can weaken the checks (H-05, H-12)`), `${cmd}\n${reason(res)}`);
+    assert.match(reason(res), /Approve only if you asked for this change/, cmd);
+  }
+  // A recursive delete of a directory names the protected globs under it and the protected files it holds.
+  write('cfgdel/sub/clippy.toml', 'x\n');
+  try {
+    for (const [cmd, what] of [
+      ['rm -rf .claude', /deletes \.claude\/\*\*, \.claude\/temper\.json\. .* are verification\/agent configuration\. Deleting them/],
+      ['Remove-Item -Recurse -Force .github', /deletes \.github\/\*\*\. \.github\/\*\* is verification/],
+      ['git rm -r .cargo', /deletes \.cargo\/\*\*\. \.cargo\/\*\* is verification/],
+      ['rm -r cfgdel', /deletes cfgdel\/sub\/clippy\.toml\. cfgdel\/sub\/clippy\.toml is verification/],
+      ['rm -rf .', /deletes .*\.claude\/\*\*.*\.github\/\*\*/],
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'ask', cmd);
+      assert.match(reason(res), what, `${cmd}\n${reason(res)}`);
+    }
+  } finally {
+    fs.rmSync(file('cfgdel'), { recursive: true, force: true });
+  }
+  // A write and a delete in one command show both reasons in one ask.
+  const both = bash('echo x > clippy.toml && rm deny.toml');
+  assert.equal(decision(both), 'ask');
+  assert.match(reason(both), /writes clippy\.toml[^\n]*\n[^\n]*deletes deny\.toml/);
+  for (const cmd of [
+    'rm src/main.rs', 'rm -f crates/ledger-domain/src/lib.rs', 'rm -rf target', 'rm -rf crates/legacy', 'rm -f /tmp/clippy.toml',
+    'rm deny.toml.bak', 'cd /tmp && rm deny.toml', 'rmdir docs', 'git rm --cached notes.txt', 'git rm -r --cached docs',
+    'git rm -n deny.toml', 'git rm --dry-run .claude/temper.json', 'Remove-Item deny.toml -WhatIf',
+    'git commit -m "rm deny.toml and git rm .claude/temper.json"', "echo 'rm -rf .claude'", 'grep -rn "Remove-Item clippy.toml" docs',
+  ]) {
+    const res = bash(cmd);
+    assert.equal(decision(res), 'none', `${cmd}\n${reason(res)}`);
+  }
+  // The state-dir deny is unchanged: a write there is still denied, a delete there still passes.
+  const state = bash('rm deny.toml && echo x > .git/temper/verdicts/x.json');
+  assert.equal(decision(state), 'deny');
+  assert.match(reason(state), /state dir/);
+  assert.equal(decision(bash('rm -f .git/temper/telemetry.jsonl')), 'none');
+});
+
 test('Bash: a heredoc printed after a [ test is not code; PowerShell expressions still are', () => {
   for (const cmd of [
     "[ -d docs ] || mkdir docs; cat <<'EOF'\nPath(\".cargo/config.toml\").write_text(x)\nEOF",
