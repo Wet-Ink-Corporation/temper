@@ -162,7 +162,7 @@ jobs:
           name: temper-report
           path: temper-report
       - name: Comment the report on the PR
-        if: steps.download.outcome == 'success'
+        if: steps.download.outcome == 'success' || needs.gate.outputs.vendor-changed != ''
         continue-on-error: true  # a fork PR's token is read-only
         shell: bash
         env:
@@ -172,9 +172,13 @@ jobs:
           REPORT_URL: ${{ needs.gate.outputs.report-url }}
           VENDOR_CHANGED: ${{ needs.gate.outputs.vendor-changed }}
         run: |
-          body=temper-report/report.md
-          # From the gate's Vendored temper CLI step, which ran before any vendored code.
-          if [ -n "$VENDOR_CHANGED" ]; then printf '\n> **VENDORED CLI CHANGED.** %s\n' "$VENDOR_CHANGED" >> "$body"; fi
+          body=$RUNNER_TEMP/comment.md
+          printf '<!-- temper-report -->\n' > "$body"
+          # From the gate's Vendored temper CLI step, which ran before any vendored code. It goes
+          # first, so nothing the report contains can hide it, and it is posted without a report.
+          if [ -n "$VENDOR_CHANGED" ]; then printf '\n> **VENDORED CLI CHANGED.** %s\n\n' "$VENDOR_CHANGED" >> "$body"; fi
+          if [ -f temper-report/report.md ]; then sed '1{/^<!-- temper-report -->$/d;}' temper-report/report.md >> "$body"
+          else printf 'The gate stopped before the compliance report was written.\n' >> "$body"; fi
           if [ -n "$REPORT_URL" ]; then printf '\n[Full HTML report](%s): the temper-report artifact.\n' "$REPORT_URL" >> "$body"; fi
           # temper's previous comment, found by its marker (never another bot's comment): edit it, else post one.
           id=$(gh api --paginate "repos/$GH_REPO/issues/$PR/comments" \
