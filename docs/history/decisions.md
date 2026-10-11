@@ -46,6 +46,7 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-641f99](../../.kb/_intake/decisions/wi-641f99-the-proxy-refuses-hidden-refs-so-may-temper-s.md) | The cloud git proxy refuses hidden refs, so may temper's `Stop` hook push each session's telemetry to a dedicated `temper-telemetry` branch, opt-in per repository and with `[skip ci]`? | Yes: `telemetry.branch` in `.claude/temper.json`, set in weigh-in and redkiln-rs for the pilot. Decided 2026-10-09. |
 | [wi-ddfdfe](../../.kb/_intake/decisions/wi-ddfdfe-may-an-unattended-session-tick-the-fixed-boxes.md) | May an unattended session tick the fixed boxes in audit issues #57 to #70 and close the issues that end up fully ticked? | Yes: tick each with its PR citation and close fully ticked issues. Decided 2026-10-10. |
 | [wi-b63bd6](../../.kb/_intake/decisions/wi-b63bd6-should-the-behaviour-changing-prs-wi-2000a3-rm.md) | Should the behaviour-changing PRs (wi-2000a3's `rm` ask, #48's Declined: line) be opened now but held unmerged until the pilot window closes? | Yes: open them now, merge after the pilot report (due 2026-10-18). Decided 2026-10-10. |
+| [wi-880b66](../../.kb/_intake/decisions/wi-880b66-may-an-agent-merge-to-main-only-when-the-owner.md) | May an agent merge to `main` only when the owner asked for it in that session, rather than holding a standing grant or never merging? | Standing grant: any agent session may merge a PR that meets the bar in AGENTS.md, "Unattended sessions", without a per-session ask. Decided 2026-10-11. |
 
 ## Defaults taken without the owner
 
@@ -80,6 +81,10 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 |---|---|---|
 | wi-fd7154 | Is the new plugin and marketplace description wording acceptable? | Not useful: descriptive wording, and no behaviour depends on it. |
 | wi-a61c52 | Should the LICENSE name Wet Ink Corporation rather than "Ryan Britton / Wet Ink Corporation"? | Already answered: the owner wrote this LICENSE when creating the repository (initial commit 7429197). |
+| wi-bd1cde | Should adopter CI fail, or only flag, when the vendored `.claude/temper/` changes? | Flag only | Like a raised baseline (wi-d23383); the vendored copy of an unreleased `main` keeps the last release's `VERSION`, so a same-version change is not proof of a hand edit. | `templates/workspace/.github/workflows/rust.yml` (`Vendored temper CLI`) |
+| wi-864860 | Should #106's template change wait until the pilot window closes, like wi-b63bd6? | Not held | Pilots get it only if they re-run setup, and it changes no hook or gate decision. | CHANGELOG.md, `## Unreleased` |
+| wi-20594c | Write the #101 orchestration eval cases now, without running them? | Deferred | Keeps the 1.4.0 release-candidate suite stable; running new cases is paid and needs the owner. | #101 |
+| wi-73359c | Should the Changelog check cover the README, `docs/troubleshooting.md`, `SECURITY.md` and `LICENSE` as well as the plugin directories? | Included | CONTRIBUTING asks an entry for every user-visible change; 1.2.1 was a docs-only release. | `.github/workflows/changelog.yml` |
 
 ## Decided outside Weigh-In
 
