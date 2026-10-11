@@ -262,7 +262,7 @@ for (const [what, answer] of Object.entries(BENEATH)) {
       await start($)
       expect(await $.tool.call(call as any)).toEqual(answer)
       expect(seen).toHaveLength(1)
-      expect(seen[0]).toMatchObject(call)
+      expect(seen[0]).toEqual(call)
     })
   }
 }
