@@ -2,7 +2,7 @@
 
 How Rust changes are judged. The reviewer agent uses all of it. Implementers use the checklist for self-review (PROC-07) before asking for review. The verdict schema at the end is machine-validated: a hook refuses a verdict that is malformed or internally inconsistent.
 
-Rules covered: PROC-07, PROC-08 and the review side of every rule in `rules.md`.
+Rules covered: PROC-07, PROC-08 and the review side of the rules in `rules.md`. The dimensions and the checklist name 80 of its 182 rules by ID (72 one by one, the rest in ranges such as H-01..H-11). A finding may cite any rule in `rules.md`, named here or not.
 
 ## Principles
 

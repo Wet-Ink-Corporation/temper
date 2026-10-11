@@ -59,7 +59,7 @@ Follow these phases in order. Each has an exit criterion. The phases scale: a on
 8. **Self-review** (PROC-07). Read `git diff` as if a stranger wrote it and work through the checklist in `references/review-rubric.md`. Fix what you find rather than listing it.
 9. **Gate** (H-15). Run `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace --all-features`, and `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS="-D warnings"`. The temper gate command runs all of these and caches the result. In a repository with a committed lint baseline (`.claude/temper-baseline.json`), clippy and rustdoc fail only on findings in lines you changed or on a crate's count rising; legacy findings pass. Lower the baseline with `temper baseline --tighten` when you fix legacy debt, and never raise it (H-12).
 10. **Independent review** (PROC-08). A fresh-context reviewer reviews the diff. Address every finding, or rebut it with evidence.
-11. **Report** (PROC-10). End with the Status block (§5). Say plainly what was not done or not verified.
+11. **Report** (PROC-10). End with the Status block (§5). Say plainly what was not done or not verified, and what you declined.
 
 **When stuck** (PROC-09). After two failed attempts at the same borrow or lifetime error, stop editing. Write down who owns each value and how long each borrow lives, then pick a shape from `references/ownership.md` §Fighting the borrow checker. Adding annotations, clones or `'static` at random is not a strategy.
 
@@ -117,10 +117,11 @@ Style preferences are not findings unless they break a rule. Label them as nits.
   Review: approved | changes-requested | not yet requested
   Changed: <crate/path> (+added/-removed), ...
   Decisions needed: <H-16 items, or "none">
+  Declined: <each request you declined or did differently, with a one-sentence reason, or "none">
   Not verified: <anything you could not check, or "none">
   ```
 
-  `DONE` means the gate is green and review is approved. Use `WIP` when you are pausing mid-task, or `BLOCKED` with the question when you need the human. Never write `DONE` over a red gate.
+  `DONE` means the gate is green and review is approved. Use `WIP` when you are pausing mid-task, or `BLOCKED` with the question when you need the human. Never write `DONE` over a red gate. `Declined` restates what you refused or changed even if you said so earlier in the turn, because a reader may see only the final message (`Declined: #[ignore] on the failing test; the code was wrong, not the test (H-12)`).
 - **Review verdict.** A fenced `json` block with `"temper_verdict": 1` (schema in `references/review-rubric.md`).
 
 ## 6. Where to read more
