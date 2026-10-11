@@ -74,6 +74,10 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 | wi-2f31ee | D8: should the scanner use syn, rustc's lexer, or a port of the masking lexer? | Port `lexer.mjs` and the 56 rules faithfully | The scanner must handle code that does not parse, and a faithful port can be compared byte for byte with 1.x. `ra_ap_rustc_lexer` could follow in 2.x. | `docs/plans/temper-2-rust-port.md:84` |
 | wi-e9386f | D9: which regex engine? | `regex`, with explicit predicates for the ~10 look-around patterns | Linear time, so agent-written input cannot cause ReDoS (H-13). `fancy-regex` is the fallback. | `docs/plans/temper-2-rust-port.md:91` |
 | wi-292a7d | When should the unattended pilot report be compiled? | 2026-10-18 | The pilot's exit in `v1-readiness.md` Phase 2 is at least two weeks of use from the 2026-10-04 adoption; the scheduled run is one call to move. | `docs/plans/v1-readiness.md:110` |
+| wi-bd1cde | Should adopter CI fail, or only flag, when the vendored `.claude/temper/` changes? | Flag only | Like a raised baseline (wi-d23383); the vendored copy of an unreleased `main` keeps the last release's `VERSION`, so a same-version change is not proof of a hand edit. | `templates/workspace/.github/workflows/rust.yml` (`Vendored temper CLI`) |
+| wi-864860 | Should #106's template change wait until the pilot window closes, like wi-b63bd6? | Not held | Pilots get it only if they re-run setup, and it changes no hook or gate decision. | CHANGELOG.md, `## Unreleased` |
+| wi-20594c | Write the #101 orchestration eval cases now, without running them? | Deferred | Keeps the 1.4.0 release-candidate suite stable; running new cases is paid and needs the owner. | #101 |
+| wi-73359c | Should the Changelog check cover the README, `docs/troubleshooting.md`, `SECURITY.md` and `LICENSE` as well as the plugin directories? | Included | CONTRIBUTING asks an entry for every user-visible change; 1.2.1 was a docs-only release. | `.github/workflows/changelog.yml:36` |
 
 ## Dismissed
 
@@ -81,10 +85,6 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 |---|---|---|
 | wi-fd7154 | Is the new plugin and marketplace description wording acceptable? | Not useful: descriptive wording, and no behaviour depends on it. |
 | wi-a61c52 | Should the LICENSE name Wet Ink Corporation rather than "Ryan Britton / Wet Ink Corporation"? | Already answered: the owner wrote this LICENSE when creating the repository (initial commit 7429197). |
-| wi-bd1cde | Should adopter CI fail, or only flag, when the vendored `.claude/temper/` changes? | Flag only | Like a raised baseline (wi-d23383); the vendored copy of an unreleased `main` keeps the last release's `VERSION`, so a same-version change is not proof of a hand edit. | `templates/workspace/.github/workflows/rust.yml` (`Vendored temper CLI`) |
-| wi-864860 | Should #106's template change wait until the pilot window closes, like wi-b63bd6? | Not held | Pilots get it only if they re-run setup, and it changes no hook or gate decision. | CHANGELOG.md, `## Unreleased` |
-| wi-20594c | Write the #101 orchestration eval cases now, without running them? | Deferred | Keeps the 1.4.0 release-candidate suite stable; running new cases is paid and needs the owner. | #101 |
-| wi-73359c | Should the Changelog check cover the README, `docs/troubleshooting.md`, `SECURITY.md` and `LICENSE` as well as the plugin directories? | Included | CONTRIBUTING asks an entry for every user-visible change; 1.2.1 was a docs-only release. | `.github/workflows/changelog.yml` |
 
 ## Decided outside Weigh-In
 
