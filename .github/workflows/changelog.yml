@@ -25,15 +25,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: User-facing paths changed, so CHANGELOG.md must too
+      - name: CHANGELOG.md changes with shipped paths
         shell: bash
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          changed=$(git diff --name-only "$BASE...HEAD")
-          shipped=$(grep -E '^(scripts|hooks|agents|skills|templates)/|^\.claude-plugin/' <<<"$changed" || true)
+          # The PR's own commits, not the checked-out merge commit, which can include newer main.
+          changed=$(git diff --name-only "$BASE...$HEAD_SHA")
+          shipped=$(grep -E '^(scripts|hooks|agents|skills|templates|commands|bin)/|^\.claude-plugin/|^(README|SECURITY)\.md$|^docs/troubleshooting\.md$|^LICENSE$' <<<"$changed" || true)
           if [ -z "$shipped" ]; then echo "No user-facing path changed."; exit 0; fi
           if grep -qx 'CHANGELOG.md' <<<"$changed"; then echo "CHANGELOG.md is updated."; exit 0; fi
-          echo "::error file=CHANGELOG.md::These paths ship to users but CHANGELOG.md has no entry. Add one under '## Unreleased', or label the PR no-changelog if users see no change."
+          echo "::error file=CHANGELOG.md::These paths ship to users but CHANGELOG.md is unchanged. Add an entry under '## Unreleased', or label the PR no-changelog if users see no change."
           printf '%s\n' "$shipped"
           exit 1
