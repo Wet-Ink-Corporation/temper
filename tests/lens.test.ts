@@ -99,7 +99,7 @@ for (const surface of SURFACES) {
   test(`band on ${surface}: a gate running names its step`, async ($, on) => {
     world(on, { surfaces: [surface], stdout: doc({ gate: { ok: null, unavailable: false, at: null, steps: [], running: { startedAt: 't', steps: [], current: { name: 'clippy', startedAt: 't' } } } }) })
     await start($, surface)
-    expect(await bandText($, surface)).toContain('gate running (clippy)')
+    expect(await bandText($, surface)).toContain('gate running: 1 clippy')
   })
 
   test(`band on ${surface}: narrow, it drops the baseline and then the review detail`, async ($, on) => {
@@ -374,4 +374,121 @@ test('the pane opens on the tab it was left on', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /gate at Stop/ })).toBeDefined()
   await ui.unmount()
+})
+
+// Live gate progress at Stop (#111): the lens polls while the settings hooks' Stop runs, shows the
+// step in the spinner and the band, toasts once after, and passes the Stop's result on unchanged.
+const RUNNING = (current: string, done: { name: string; ms: number }[]) => doc({
+  gate: { ok: null, unavailable: false, at: null, steps: [], running: {
+    startedAt: new Date(0).toISOString(),
+    steps: done.map(d => ({ ...d, ok: true })),
+    current: { name: current, startedAt: new Date(0).toISOString() },
+  } },
+})
+
+const SPINNER = { plugin: 'temper', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
+
+/** A Stop world: the CLI's answer is `answer()` at each run; toasts and surfaces are recorded. */
+function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'terminal') {
+  const toasts: string[] = []
+  let surfacesFail = false
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: answer(), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.surfaces', async () => {
+    if (surfacesFail) throw new Error('surfaces broke')
+    return { value: [surface] } as any
+  })
+  on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
+  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`))
+  on('session.end', async () => ({}) as any)
+  on('command.register', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  return { toasts, breakSurfaces: () => { surfacesFail = true } }
+}
+
+const spinnerText = async ($: any, surface: RenderSurface) => {
+  const ui = await $.ui.mount({ ...SPINNER, surface })
+  const t = (await ui.find({ type: 'Text' }))?.text
+  await ui.unmount()
+  return t
+}
+
+for (const surface of SURFACES) {
+  test(`Stop on ${surface}: the spinner names the gate's step while it runs, then one toast`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    let answer = doc()
+    const w = stopWorld(on, () => answer, surface)
+    let during = ''
+    let band = ''
+    on('classic.Stop', async () => {
+      answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }, { name: 'scan', ms: 200 }])
+      await clock.advance(1000)
+      during = (await spinnerText($, surface)) ?? ''
+      band = await bandText($, surface)
+      answer = doc({ gate: GREEN, review: { verdict: 'approved', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [] } })
+      return {}
+    })
+    await start($, surface)
+    expect(await spinnerText($, surface)).toBe('Working…')
+    const result = await $.classic.Stop({ stop_hook_active: false } as any)
+    expect(result).toEqual({})
+    expect(during).toBe('Working · temper: gate 3 clippy · 1m 13s')
+    expect(band).toContain('gate running: 3 clippy · 1m 13s')
+    expect(band).toContain('done: fmt 1.0s, scan 0.2s')
+    expect(await spinnerText($, surface)).toBe('Working…')
+    expect(w.toasts).toEqual(['temper: gate green, review approved'])
+    await clock.advance(5000)
+    expect(w.toasts).toHaveLength(1)
+  })
+}
+
+test('Stop: a block passes through unchanged, and its first line is the toast', async ($, on) => {
+  mock.clock(on)
+  const w = stopWorld(on, () => doc({ gate: RED }))
+  const block = 'temper: the Rust gate is red (clippy).\nFix it before finishing.'
+  on('classic.Stop', async () => ({ block }))
+  await start($)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block })
+  expect(w.toasts).toEqual(['temper: the Rust gate is red (clippy).'])
+})
+
+test('SubagentStop is watched the same way', async ($, on) => {
+  mock.clock(on)
+  const w = stopWorld(on, () => doc())
+  on('classic.SubagentStop', async () => ({ block: 'review the change first' }))
+  await start($)
+  expect(await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' } as any)).toEqual({ block: 'review the change first' })
+  expect(w.toasts).toEqual(['temper: review the change first'])
+})
+
+test('Stop: a quiet Stop with no gate raises no toast', async ($, on) => {
+  mock.clock(on)
+  const w = stopWorld(on, () => doc({ gate: GREEN }))
+  on('classic.Stop', async () => ({}))
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(w.toasts).toEqual([])
+})
+
+test('Stop: a lens hook that throws leaves the result as the settings hooks decided', async ($, on) => {
+  mock.clock(on)
+  const w = stopWorld(on, () => doc())
+  on('classic.Stop', async () => {
+    w.breakSurfaces()
+    return { block: 'the settings hook said no' }
+  })
+  await start($)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block: 'the settings hook said no' })
+})
+
+test('Stop under TEMPER_DISABLE=1: nothing polls', async ($, on) => {
+  const clock = mock.clock(on)
+  const runs = world(on, { env: { TEMPER_DISABLE: '1' } })
+  on('classic.Stop', async () => {
+    await clock.advance(3000)
+    return {}
+  })
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(runs).toHaveLength(0)
 })

@@ -15,6 +15,8 @@ const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
 const tab = atom({ plugin: 'temper', key: 'tab' } as const, 'review')
 const stats = atom({ plugin: 'temper', key: 'stats' } as const, null)
 const branchStats = atom({ plugin: 'temper', key: 'branchStats' } as const, null)
+// The time of the last poll while a gate runs at Stop: the drawing's clock for the elapsed time.
+const polledAt = atom({ plugin: 'temper', key: 'polledAt' } as const, 0)
 
 type Tab = 'review' | 'activity' | 'stats'
 const TABS: readonly Tab[] = ['review', 'activity', 'stats']
@@ -41,6 +43,9 @@ const DRAWS = new Set(['terminal', 'desktop'])
 let off = true
 let pending: { cancel: () => void } | null = null
 let commandRegistered = false
+let polling: { cancel: () => void } | null = null
+let sawGate = false
+const POLL_MS = 1000
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
 
@@ -97,9 +102,71 @@ function refreshSoon($: EngineInterface): void {
   })
 }
 
+/** While a Stop runs, poll `status --json` each second so the band and spinner show the gate's step. */
+function startPolling($: EngineInterface): void {
+  stopPolling()
+  sawGate = false
+  polling = $.clock.every(POLL_MS, () => poll($))
+}
+
+async function poll($: EngineInterface): Promise<void> {
+  await refresh($)
+  const v = await read($, view)
+  if (v?.kind === 'status' && v.status.gate?.running) sawGate = true
+  const now = await $.clock.now()
+  await update($, polledAt, () => now)
+}
+
+function stopPolling(): void {
+  polling?.cancel()
+  polling = null
+}
+
+/**
+ * After a Stop: refresh once and, when a gate ran or the Stop was blocked, raise one toast with
+ * the outcome. The Stop's result itself is the settings hooks' and passes on untouched.
+ */
+async function afterStop($: EngineInterface, block: string | undefined): Promise<void> {
+  stopPolling()
+  await refresh($)
+  if (block !== undefined) {
+    $.ui.toast(`temper: ${block.split('\n')[0].replace(/^temper:\s*/, '')}`)
+    return
+  }
+  if (!sawGate) return
+  const v = await read($, view)
+  if (v?.kind === 'status') $.ui.toast(`temper: ${outcome(v.status)}`)
+}
+
+/** `gate green, review approved`, and the like, for the toast after a Stop. */
+export function outcome(s: LensStatus): string {
+  const g = s.gate
+  const gate = !g ? 'gate not run' : g.unavailable ? 'gate unavailable' : g.ok ? 'gate green' : g.ok === false ? 'gate red' : 'gate not run'
+  const r = s.review
+  const review = !r ? 'no review' : r.stale ? 'review stale' : r.verdict === 'approved' ? 'review approved' : 'review asks for changes'
+  return `${gate}, ${review}`
+}
+
+/** `1m 12s` or `8s`. */
+export function elapsed(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000))
+  return secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`
+}
+
+/** `gate 4 clippy · 1m 12s`: the step the gate is on, its place, and the time since the gate started. */
+export function runningLine(s: LensStatus, now: number): string | null {
+  const run = s.gate?.running
+  if (!run) return null
+  const since = Date.parse(run.startedAt)
+  const time = Number.isFinite(since) && now > since ? ` · ${elapsed(now - since)}` : ''
+  const step = run.current ? ` ${run.steps.length + 1} ${run.current.name}` : ''
+  return `gate${step}${time}`
+}
+
 export const register: Register = on => {
   off = true
   pending = null
+  stopPolling()
   commandRegistered = false
   rules = null
 
@@ -148,6 +215,39 @@ export const register: Register = on => {
     )
   })
 
+  // The gate runs inside temper's own Stop and SubagentStop settings hooks. The lens watches it
+  // from beside them: it polls while `next(e)` runs and returns that result unchanged. Its .catch
+  // replays `next`, so a lens failure can never decide a Stop.
+  on('classic.Stop', async ($, e, next) => {
+    if (off) return next(e)
+    startPolling($)
+    const result = await next(e)
+    await afterStop($, result.block)
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    if (off) return next(e)
+    startPolling($)
+    const result = await next(e)
+    await afterStop($, result.block)
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('session.end', async ($, e, next) => {
+    stopPolling()
+    return next(e)
+  })
+
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (off) return next(e)
+    const v = await read($, view)
+    if (v?.kind !== 'status') return next(e)
+    const line = runningLine(v.status, await read($, polledAt))
+    if (line === null) return next(e)
+    return next({ ...e, props: { ...e.props, suffix: ` · temper: ${line}` } })
+  })
+
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
     if (off) return result
@@ -175,7 +275,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const parts = bandParts(v.status, e.props.bodyColumns)
+    const parts = bandParts(v.status, e.props.bodyColumns, await read($, polledAt))
     return (
       <Box>
         <Text bold>temper </Text>
@@ -445,27 +545,31 @@ type Part = { text: string; color?: 'success' | 'error' | 'warning'; drop: numbe
  * The band's segments for `status`, fitted to `columns`: the baseline goes first when narrow,
  * then the review's detail. `drop` orders what goes (higher first; 0 never).
  */
-export function bandParts(status: LensStatus, columns: number): { text: string; color?: Part['color'] }[] {
+export function bandParts(status: LensStatus, columns: number, now = 0): { text: string; color?: Part['color'] }[] {
   const n = status.changed.length
   const parts: Part[] = [{ text: n ? `${n} .rs changed` : 'no .rs changes', drop: 0 }]
-  parts.push(gatePart(status))
+  parts.push(gatePart(status, now))
+  const done = status.gate?.running?.steps ?? []
+  if (done.length) {
+    const secs = (ms: number | null) => (ms === null ? '?' : `${(ms / 1000).toFixed(1)}s`)
+    parts.push({ text: `done: ${done.map(d => `${d.name} ${secs(d.ms)}`).join(', ')}`, drop: 4 })
+  }
   const review = reviewPart(status)
   if (review) parts.push(review)
   const b = status.baseline
   if (b) parts.push('error' in b ? { text: 'baseline unreadable', color: 'warning', drop: 3 } : { text: `baseline ${b.total}`, drop: 3 })
   const width = (ps: Part[]) => 'temper '.length + ps.reduce((w, p, i) => w + p.text.length + (i === 0 ? 1 : 3), 0)
   let fitted = parts
+  if (width(fitted) > columns) fitted = fitted.filter(p => p.drop < 4)
   if (width(fitted) > columns) fitted = fitted.filter(p => p.drop < 3)
   if (width(fitted) > columns) fitted = fitted.map(p => (p.drop === 2 ? { ...p, text: p.text.replace(/,.*$/, '') } : p))
   return fitted.map(({ text, color }) => (color ? { text, color } : { text }))
 }
 
-function gatePart(status: LensStatus): Part {
+function gatePart(status: LensStatus, now: number): Part {
   const g = status.gate
-  if (g?.running) {
-    const step = g.running.current?.name
-    return { text: step ? `gate running (${step})` : 'gate running', color: 'warning', drop: 0 }
-  }
+  const line = runningLine(status, now)
+  if (line !== null) return { text: line.replace(/^gate/, 'gate running:'), color: 'warning', drop: 0 }
   if (!g) return { text: 'gate not run', color: 'warning', drop: 0 }
   if (g.unavailable) return { text: 'gate unavailable', color: 'warning', drop: 0 }
   if (g.ok) return { text: 'gate green', color: 'success', drop: 0 }
