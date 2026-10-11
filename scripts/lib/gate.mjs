@@ -235,6 +235,7 @@ export function runGate(proj, opts = {}) {
 
   // While it runs, the gate keeps a progress file for this fingerprint (gate-progress-<fp>.json)
   // so readers such as `status --json` can show the step it is on; it goes when the gate ends.
+  // It starts here, after formatting, because the fingerprint is known only then.
   const prog = progress(proj, fp, steps);
   try {
     // 3. escape-hatch scan of changed files (cheap; catches code written around the edit hooks)
@@ -332,6 +333,8 @@ function ratchetStep(proj, step, rs, { base, prefix, fp }) {
   };
 }
 
+const STALE_MARGIN_SEC = 300;
+
 /**
  * The progress file of a gate running for `fp`: { fp, pid, startedAt, steps: [{ name, ok, ms }],
  * current: { name, startedAt } | null }. Each write replaces it whole (writeAtomic), from the
@@ -349,13 +352,17 @@ function progress(proj, fp, steps) {
   write();
   return {
     start(name) { current = { name, startedAt: new Date().toISOString() }; write(); },
-    done() { try { fs.rmSync(file, { force: true }); } catch { /* ignore */ } },
+    // Another gate on the same fingerprint (a second worktree at the same tree, `gate --no-cache`
+    // beside Stop) may have written the file since: leave it to that gate.
+    done() {
+      try { if (JSON.parse(fs.readFileSync(file, 'utf8')).pid === process.pid) fs.rmSync(file, { force: true }); } catch { /* gone, or not ours */ }
+    },
   };
 }
 
 /**
  * The progress of a gate running now for `fp`, or null. A file whose process is gone, or whose
- * current step (or start, between steps) is older than the step timeout, is stale: a hook killed
+ * current step (or start, between steps) is older than the step timeout plus a margin, is stale: a hook killed
  * mid-gate leaves it behind, and it says nothing about the tree.
  */
 export function gateProgress(proj, fp, now = Date.now()) {
@@ -365,7 +372,9 @@ export function gateProgress(proj, fp, now = Date.now()) {
   try { p = JSON.parse(t); } catch { return null; }
   if (!p || p.fp !== fp || !pidAlive(p.pid)) return null;
   const since = Date.parse(p.current?.startedAt ?? p.startedAt);
-  if (!Number.isFinite(since) || now - since > proj.config.gate.stepTimeoutSec * 1000) return null;
+  // A ratchet step runs `cargo metadata` before clippy, so allow a margin over the step timeout;
+  // the pid is the main signal, the age only guards against a reused pid.
+  if (!Number.isFinite(since) || now - since > (proj.config.gate.stepTimeoutSec + STALE_MARGIN_SEC) * 1000) return null;
   return { startedAt: p.startedAt, steps: Array.isArray(p.steps) ? p.steps : [], current: p.current ?? null };
 }
 

@@ -70,9 +70,13 @@ test('gate progress: the file names the current step while it runs, status --jso
   assert.equal(doc.gate.running.current.name, 'pause');
   assert.equal(doc.gate.running.steps.length, 4);
 
+  // Another gate on the same fingerprint wrote the file last: this gate leaves it to that one.
+  const other = { ...seen, pid: process.pid };
+  fs.writeFileSync(file, JSON.stringify(other));
   fs.writeFileSync(release, '');
   assert.equal(await exited, 0);
-  assert.equal(fs.existsSync(file), false, 'the file goes when the gate ends');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), other, 'a gate removes only its own file');
+  fs.rmSync(file);
   const after = JSON.parse(spawnSync(process.execPath, [CLI, 'status', '--json'], { cwd: ws, env: env(), encoding: 'utf8' }).stdout);
   assert.equal(after.gate.ok, true);
   assert.equal(after.gate.running, null);
@@ -88,10 +92,8 @@ function state(t) {
 const FP = '0123456789abcdef';
 const write = (proj, value, fp = FP) => fs.writeFileSync(gateProgressPath(proj, fp), JSON.stringify(value));
 
-/** A pid no process holds: a child that has already exited. */
-function deadPid() {
-  return spawnSync(process.execPath, ['-e', ''], {}).pid;
-}
+/** A pid no process holds: above every platform's pid range. */
+const deadPid = () => 2147483646;
 
 test('gate progress: a file whose process is gone, or whose step is older than the step timeout, is stale', (t) => {
   const proj = state(t);
@@ -100,8 +102,10 @@ test('gate progress: a file whose process is gone, or whose step is older than t
   write(proj, { fp: FP, pid: process.pid, startedAt: at(60000), steps: [{ name: 'fmt', ok: true, ms: 10 }], current: { name: 'clippy', startedAt: at(5000) } });
   assert.deepEqual(gateProgress(proj, FP, now), { startedAt: at(60000), steps: [{ name: 'fmt', ok: true, ms: 10 }], current: { name: 'clippy', startedAt: at(5000) } });
   assert.equal(gateProgress(proj, 'fedcba9876543210', now), null, 'another fingerprint has no gate running');
-  write(proj, { fp: FP, pid: process.pid, startedAt: at(2000000), steps: [], current: { name: 'test', startedAt: at(901000) } });
-  assert.equal(gateProgress(proj, FP, now), null, 'the current step outlived the step timeout');
+  write(proj, { fp: FP, pid: process.pid, startedAt: at(2000000), steps: [], current: { name: 'test', startedAt: at(1300000) } });
+  assert.equal(gateProgress(proj, FP, now), null, 'the current step outlived the step timeout and its margin');
+  write(proj, { fp: FP, pid: process.pid, startedAt: at(2000000), steps: [], current: { name: 'clippy', startedAt: at(1000000) } });
+  assert.notEqual(gateProgress(proj, FP, now), null, 'a ratchet step past the step timeout but within the margin is still running');
   write(proj, { fp: FP, pid: deadPid(), startedAt: at(1000), steps: [], current: { name: 'test', startedAt: at(1000) } });
   assert.equal(gateProgress(proj, FP, now), null, 'the gate process is gone');
   fs.writeFileSync(gateProgressPath(proj, FP), '{ not json');

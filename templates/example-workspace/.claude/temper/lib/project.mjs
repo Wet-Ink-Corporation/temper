@@ -392,7 +392,8 @@ export function pidAlive(pid) {
 
 /**
  * Remove gate progress files left behind by a gate that is gone: its process has ended (a hook
- * killed by its timeout), or the file is over a day old (its pid since reused).
+ * killed by its timeout), or the file is over a day old (its pid since reused). A gate in another
+ * PID namespace sharing this .git (a dev container) reads as gone too.
  */
 function pruneGateProgress(proj) {
   let names;
