@@ -59,6 +59,16 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 - **Scratch work** goes in `.temper/` (gitignored). A plan that others need goes in `docs/plans/`.
 - **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, and the Claude Code CLI version in `ci.yml`. Dependabot bumps the SHA-pinned actions.
 
+## Unattended sessions
+
+An agent working with no human watching (an AFK session, a scheduled run) follows the rules above plus these:
+- **Decide two-way calls; block on one-way ones.** A one-way or high-impact call waits for the owner. Such calls include a release that the plan does not schedule, a new dependency, anything H-16 lists, and a behaviour change to the hooks or the gate while a pilot runs on `main` (as wi-b63bd6 decided for the 2026-10 pilot). While it waits, the session does independent work.
+- **Record every call.** Each assumption, deferral or call goes through Weigh-In and is listed in `docs/history/decisions.md`.
+- **Merge only when everything is green.** Any agent session may merge a PR that meets this bar, without a per-session ask (wi-880b66). Only the owner can merge to `main`, through the ruleset's bypass, so an agent's merge acts with the owner's authority. The bar is every check on the current head green or skipped, not only the required ones, plus no merge conflict, no unresolved review thread, and an APPROVED verdict from a fresh-context reviewer, cited on the PR: `temper:rust-reviewer` for Rust, an independent review otherwise. Merge with a merge commit. Never merge a PR that waits on a one-way decision or has `[hold]` in its title, and never a release PR: the owner merges those (release checklist, step 6).
+- **Hard limits.** Never run the paid model checks (`tests/e2e/smoke.sh`, `claude plugin eval`) without the owner's go-ahead. Never edit rulesets, environments, secrets, billing or repository settings. Never skip, disable or quarantine a test to get to green. Never push to `main` directly or rewrite a branch someone else owns.
+- **Releases follow the schedule.** The plan in `docs/plans/v1-readiness.md` sets the schedule, and the release checklist below sets the steps. For a scheduled release, an agent may do steps 1 to 4 and start the Release workflow (step 5): its `check` job is free, and `publish` waits for the owner's approval. A minor or major release also needs step 3's smoke test and evals. Those are paid, so the agent asks for the go-ahead first or leaves them to the owner. The owner approves the `release` environment and merges.
+- **Leave a trail.** End with a report of what merged, what was released, what was decided, and what waits on whom. Tick audit boxes in #57 to #70 with their PR citation, as wi-ddfdfe allows.
+
 ## Release checklist
 
 A release goes through `.github/workflows/release.yml`, the flow the 2.0 port plan defines (§4):
