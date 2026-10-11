@@ -52,7 +52,8 @@ def problems(report, source):
     if hooks is None or calls is None:
         out.append(f'the report lists no "hooks:" or "calls:" line for {MODULE}: is the module registered in hooks/hooks.json?')
         return out
-    for h in [x.strip() for x in hooks.split(',') if x.strip()]:
+    # A matcher can hold commas (`ui.render{component=Pane, requestId=x}`): split outside braces.
+    for h in [x.strip() for x in re.split(r',\s*(?![^{]*\})', hooks) if x.strip()]:
         name = re.sub(r'\{.*\}$', '', h)
         if name not in HOOKS:
             out.append(f'the lens hooks {h}, which is not on the read-only allow-list')
@@ -83,7 +84,7 @@ def problems(report, source):
 
 def self_test():
     good_notes = [
-        f'{MODULE} hooks: session.start, tool.call, ui.render{{component=AbovePrompt}}',
+        f'{MODULE} hooks: session.start, tool.call, ui.render{{component=AbovePrompt}}, ui.render{{component=Pane, requestId=p}}',
         f'{MODULE} calls: $.process.run (via statusView), $.ui.resolve, $.state.get',
         f'{MODULE} env writes: nothing',
         f'{MODULE} state writes: temper.view',

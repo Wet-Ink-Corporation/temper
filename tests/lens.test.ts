@@ -191,3 +191,106 @@ test('the lens passes a tool call\'s result on unchanged', async ($, on) => {
   const result = await $.tool.call({ tool: 'Edit', tool_use_id: 'u1', file_path: '/w/src/a.rs', old_string: 'a', new_string: 'b' } as any)
   expect(result).toEqual({ result: { text: 'the result', isError: true } })
 })
+
+// The /temper-lens pane (#112): the reviewer's verdict, findings by severity, the rule's text on a
+// press, and a Draft fix button that fills the prompt box and never submits.
+const PANE = {
+  plugin: 'temper',
+  component: 'Pane',
+  requestId: 'temper-lens',
+  props: { title: 'temper', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+} as const
+
+const RULES = [
+  '| ID | Level | Rule | Enforced by | Detail |',
+  '|---|---|---|---|---|',
+  '| ERR-02 | SHOULD | Scope error types to an operation or module. | review | errors.md |',
+  '| H-02 | MUST | No `unwrap` in production code. | lint `clippy::unwrap_used`, scan | escape-hatches.md |',
+].join('\n')
+
+const SCORES = {
+  correctness: 4, escape_hatches: 2, ownership: 3, errors: 2, api: 3, architecture: 'n/a',
+  tests: 3, performance: 'n/a', concurrency: 'n/a', observability: 'n/a', craft: 3, docs: 3,
+}
+const VERDICT = {
+  verdict: 'changes-requested', stale: false, fingerprint: '0123456789abcdef', recorded_at: 't', scores: SCORES,
+  findings: [
+    { severity: 'nit', rule: 'ERR-02', file: 'src/b.rs', line: null, fix: 'name the error after the operation' },
+    { severity: 'blocker', rule: 'H-02', file: 'src/a.rs', line: 7, fix: 'return the error instead of unwrapping' },
+  ],
+}
+
+/** The engine's ends the pane needs: command registration, the pane, the rules file, the prompt box. */
+function paneWorld(on: On) {
+  const seen = { commands: [] as string[], opened: [] as string[], reads: [] as string[], fills: [] as unknown[], submits: [] as unknown[] }
+  on('command.register', async (_$, e: any) => { seen.commands.push(e.name); return { value: undefined } as any })
+  on('ui.open', async (_$, e: any) => { seen.opened.push(e.id); return { value: { isPlaced: true } } as any })
+  on('fs.read', async (_$, e: any) => { seen.reads.push(String(e.path)); return { value: RULES } as any })
+  on('prompt.fill', async (_$, e: any) => { seen.fills.push(e); return { isFilled: true } as any })
+  on('prompt.submit', async (_$, e: any) => { seen.submits.push(e); return { value: {} } as any })
+  on('ui.render', { component: 'Pane' }, async () => h('Box', {}))
+  return seen
+}
+
+for (const surface of SURFACES) {
+  test(`pane on ${surface}: /temper-lens opens it with the verdict, scores and findings by severity`, async ($, on) => {
+    world(on, { surfaces: [surface], stdout: doc({ gate: GREEN, review: VERDICT }) })
+    const seen = paneWorld(on)
+    await start($, surface)
+    expect(seen.commands).toEqual(['temper-lens'])
+    expect(seen.opened).toEqual([])
+    await $.command.run({ command: 'temper-lens', args: '' } as any)
+    expect(seen.opened).toEqual(['temper-lens'])
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = (await ui.findAll({ type: 'Text' })).map((t: { text: string }) => t.text)
+    expect(texts).toContain('changes-requested')
+    expect(texts.join('|')).toContain('escape_hatches 2')
+    expect(texts).toContain('blocker (1)')
+    expect(texts).toContain('nit (1)')
+    expect(texts.indexOf('blocker (1)')).toBeLessThan(texts.indexOf('nit (1)'))
+    expect((await ui.find({ key: 'finding-1' }))?.text).toContain('H-02 src/a.rs:7')
+    expect(await ui.find({ key: 'finding-1-rule' })).toBeUndefined()
+
+    await ui.press({ key: 'finding-1' })
+    expect((await ui.find({ key: 'finding-1-rule' }))?.text).toContain('No `unwrap` in production code.')
+    expect(seen.reads).toHaveLength(1)
+    expect(seen.reads[0]).toMatch(/skills\/rust-craft\/references\/rules\.md$/)
+
+    await ui.press({ key: 'finding-1-draft' })
+    expect(seen.fills).toHaveLength(1)
+    expect(seen.fills[0]).toMatchObject({ text: "Address the reviewer's blocker finding H-02 in src/a.rs:7: return the error instead of unwrapping", mode: 'insert' })
+    expect(seen.submits).toEqual([])
+
+    await ui.press({ key: 'finding-1' })
+    expect(await ui.find({ key: 'finding-1-rule' })).toBeUndefined()
+    await ui.press({ key: 'finding-0' })
+    expect((await ui.find({ key: 'finding-0-rule' }))?.text).toContain('Scope error types')
+    expect(seen.reads).toHaveLength(1)
+    await ui.unmount()
+  })
+
+  test(`pane on ${surface}: without a verdict it says why`, async ($, on) => {
+    world(on, { surfaces: [surface], stdout: doc({ gate: RED }) })
+    paneWorld(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /the gate is red/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test(`pane on ${surface}: a stale verdict says a new review is needed`, async ($, on) => {
+    world(on, { surfaces: [surface], stdout: doc({ gate: GREEN, review: { ...VERDICT, stale: true } }) })
+    paneWorld(on)
+    await start($, surface)
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /a new review is needed/ })).toBeDefined()
+    await ui.unmount()
+  })
+}
+
+test('the command is not registered outside a Rust project or under TEMPER_DISABLE=1', async ($, on) => {
+  world(on, { stdout: JSON.stringify({ temper_status: 1, version: '1.3.0', project: null }) })
+  const seen = paneWorld(on)
+  await start($)
+  expect(seen.commands).toEqual([])
+})
