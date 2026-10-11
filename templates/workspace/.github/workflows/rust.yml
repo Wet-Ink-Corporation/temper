@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       report-url: ${{ steps.upload-report.outputs.artifact-url }}
+      vendor-changed: ${{ steps.vendor.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,8 +54,10 @@ jobs:
           [ -n "$base" ] || echo "No base commit: a baseline is compared by its totals only."
           echo "ref=$base" >> "$GITHUB_OUTPUT"
       # CI runs the vendored CLI from the commit under test, so a change to .claude/temper/ can
-      # change what Lint (temper) and the report say. Review it like CI configuration: this step
-      # flags it here and in the report, and the README's CODEOWNERS recipe can require sign-off.
+      # change what Lint (temper) and the report say. Review it like CI configuration. This step
+      # runs before any vendored code, and flags the change in an annotation, the step summary and
+      # (through report-comment, which runs no repository code) the PR comment. The README's
+      # CODEOWNERS recipe can require sign-off.
       - name: Vendored temper CLI
         id: vendor
         if: steps.base.outputs.ref != ''
@@ -70,6 +73,7 @@ jobs:
           files=$(git diff --name-only "$BASE" HEAD -- .claude/temper | wc -l | tr -d ' ')
           msg="$files file(s) in .claude/temper/ changed (VERSION ${from:-none} to ${to:-none}), and CI ran the changed copy. Check that /temper:setup wrote them, not a hand edit."
           echo "::warning file=.claude/temper/VERSION::$msg"
+          printf '> **VENDORED CLI CHANGED.** %s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
           echo "changed=$msg" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
         with:
@@ -126,15 +130,11 @@ jobs:
         shell: bash
         env:
           BASE: ${{ steps.base.outputs.ref }}
-          VENDOR_CHANGED: ${{ steps.vendor.outputs.changed }}
         run: |
           args=(--out target/temper-report)
           if [ -f target/temper/findings.json ]; then args+=(--findings target/temper/findings.json)
           elif [ -n "$BASE" ]; then args+=(--base "$BASE"); fi
           node .claude/temper/temper.mjs report --locked "${args[@]}"
-          if [ -n "$VENDOR_CHANGED" ]; then
-            printf '\n> **VENDORED CLI CHANGED.** %s\n' "$VENDOR_CHANGED" >> target/temper-report/report.md
-          fi
           cat target/temper-report/report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the compliance report
         id: upload-report
@@ -170,8 +170,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           REPORT_URL: ${{ needs.gate.outputs.report-url }}
+          VENDOR_CHANGED: ${{ needs.gate.outputs.vendor-changed }}
         run: |
           body=temper-report/report.md
+          # From the gate's Vendored temper CLI step, which ran before any vendored code.
+          if [ -n "$VENDOR_CHANGED" ]; then printf '\n> **VENDORED CLI CHANGED.** %s\n' "$VENDOR_CHANGED" >> "$body"; fi
           if [ -n "$REPORT_URL" ]; then printf '\n[Full HTML report](%s): the temper-report artifact.\n' "$REPORT_URL" >> "$body"; fi
           # temper's previous comment, found by its marker (never another bot's comment): edit it, else post one.
           id=$(gh api --paginate "repos/$GH_REPO/issues/$PR/comments" \
