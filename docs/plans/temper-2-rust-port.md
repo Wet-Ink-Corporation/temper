@@ -230,15 +230,16 @@ No collisions:
 | `toml.mjs` | replaced by `toml`; `temper-domain::manifest::parse` |
 | `manifest.mjs` | `temper-domain::manifest::{problems, watched, deps, requirement, sections}`. `workspaceRootFor` and `membersFromToml` (fs walks) go to `temper-app::workspace`. |
 | `verdict.mjs` | `temper-domain::verdict` (extract, validate, summarise); `temper-app::state::verdicts` (record, read) |
-| `project.mjs` | `temper-domain::{glob, config, fingerprint, paths, time}`; `temper-app::{project, session, telemetry, changes, output_path}` |
+| `project.mjs` | `temper-domain::{glob, config, fingerprint, paths, time}`; `temper-app::{project, session, retention, telemetry, changes, output_path}`. `telemetry` appends and rotates `telemetry.jsonl`, pushes a session's rows to `telemetry.branch` (`push`, #96) and fetches that branch for `stats --branch`. |
 | `gate.mjs` | `temper-domain::gate` (step model, summarize, tail, render); `temper-app::gate` (run, scan_changed, manifests step) |
 | `findings.mjs` | `temper-domain::findings` (Finding, Collection, cargo-message parser, rule map, dedupe and sort, crate attribution, forbidden-lint table, mod-decl roots); `temper-app::findings` (collect, cache, scan source over files) |
 | `baseline.mjs` | `temper-domain::baseline` (Baseline, render, from_collection, tighten, diff_totals, crate_aliases, parse_diff, ratchet core, render_ratchet, debt_line); `temper-app::baseline` (temporary-index diff, renamed_since, merge_base, raised_since, commands) |
 | `report.mjs` | `temper-domain::report` (build, markdown, html); `temper-app::report` (argument handling, input selection, output dir, writes) |
 | `vendor.mjs` | retired; replaced by `temper-app::setup::{pin, migrate}` |
-| `hooks.mjs` | `temper-domain::hooks` (outcomes, all message texts, IRON_RULES, bash policy, edit policy, manifest checks, status parsing); `temper-app::hooks` (the nine handlers) |
+| `hooks.mjs` | `temper-domain::hooks` (outcomes, all message texts, IRON_RULES, bash policy, edit policy, manifest checks, status parsing); `temper-app::hooks` (the nine handlers, `pre-handback` among them, and `report_from_transcript`, the `SubagentStop` fallback that reads `agent_transcript_path`) |
 | `shell.mjs` | `temper-domain::hooks::shell` (the one shell reader behind the Bash write rules: lexer, command walk with `cd` and variables, write targets, patch commands; pure, no I/O) |
-| `temper.mjs` | `temper-cli::{args, main, io}`; `temper-app::commands::{scan, status, stats, setup}` |
+| `requirements.mjs` | stays in JS, in the launcher (§5.1): the Node minimum (`MINIMUM_VERSIONS`) is about the Node that runs the launcher. Its warning text is a message contract, and SessionStart's warning line must reach the Rust context (#89). |
+| `temper.mjs` | `temper-cli::{args, main, io}`; `temper-app::commands::{scan, status, stats, setup, telemetry}` (`stats --branch [NAME]` and `telemetry push --session ID`, #96) |
 | `rulemap.json` | moved to `crates/temper-domain/data/rulemap.json`, embedded with `include_str!`. `gen_rulemap.py` `OUT_REL` updated. |
 
 **`temper-domain` public surface** (re-exported from `lib.rs`; everything else is `pub(crate)`):
@@ -336,7 +337,7 @@ pub struct Report { .. }  pub fn build_report(input: &ReportInput<'_>) -> Report
 pub struct GateResult { .. }  pub fn render_gate(r: &GateResult) -> String;  pub fn default_steps(cfg: &Config, nextest: Nextest) -> Vec<StepSpec>;  pub fn ratchet_steps(..) -> Vec<StepSpec>;
 
 // hooks: pure policies and the output protocol
-pub enum HookEvent { SessionStart, UserPrompt, PreEdit, PreBash, PostTool, Stop, SubagentStop, SubagentStart }   // FromStr from the 1.x CLI names
+pub enum HookEvent { SessionStart, UserPrompt, PreEdit, PreBash, PreHandback, PostTool, Stop, SubagentStop, SubagentStart }   // FromStr from the 1.x CLI names
 pub enum HookOutcome { Pass, Context { event: &'static str, text: String }, Deny { reason: String, context: Option<String> },
                        Ask { reason: String, context: Option<String> }, Block { reason: String }, Notice { message: String } }
 impl HookOutcome { pub fn to_json(&self) -> Option<String>; }   // compact, key order as 1.x; Pass -> None (no output)
@@ -346,7 +347,7 @@ pub fn edit_policy(facts: &EditFacts<'_>, scanner: &Scanner) -> Verdict<..>;    
 pub fn apply_edit(before: &str, edit: &EditOp<'_>) -> Option<String>;            // JS replace semantics incl. empty old_string
 pub fn parse_status(last_message: &str) -> Option<DeclaredStatus>;               // Done | Wip | Blocked
 pub const IRON_RULES: [&str; 16];
-pub enum TelemetryEvent { .. }   // typed payloads for the 19 1.x event names (gate-start added after 1.3.0); serialised as {"t","sid"?,"agent","event",..detail}
+pub enum TelemetryEvent { .. }   // typed payloads for the 23 1.x event names (after 1.3.0: gate-start, #96; handback, verdict-invalid, subagent-start, subagent-stop, #98); serialised as {"t","sid"?,"ccr"?,"agent","event",..detail}
 ```
 
 **`temper-app` (ports and use cases)**:
@@ -432,6 +433,7 @@ Where 1.x swallows a failure (for example, `untracked()` returns `[]` when git f
 #### 1.5 Concurrency and resources (H-13, H-14, ASY)
 
 - Synchronous throughout; no async runtime.
+- The one network call is opt-in (#96, wi-641f99): with `telemetry.branch` set, Stop starts `temper telemetry push --session <id>` as a detached child (stdio ignored, never awaited), so the hook never waits on the network. The push builds its commit with a private `GIT_INDEX_FILE` and the private ref `refs/temper/telemetry-tip`, touches no working tree, index, `HEAD` or branch, gives each git call a 60 s timeout, and tries a rejected push up to 3 times.
 - `StdProcess::run`:
   - `stdin(Stdio::null())`, as 1.x does: cargo's rustc probes read stdin.
   - Two named threads inside `thread::scope` drain stdout (to a capped buffer, or streamed to the file sink) and stderr (cap 64 MiB; 1.x used 256 MiB for `run` and 64 MiB for `runToFile`, kept per call site). Both are joined.
@@ -441,7 +443,7 @@ Where 1.x swallows a failure (for example, `untracked()` returns `[]` when git f
   - The 1.x values: fmt 120 s, metadata 120 s, `rustc -vV` 60 s, probe 60 s, `nextest --version` 20 s, steps `gate.stepTimeoutSec`.
   - git calls, which had **no** timeout in 1.x, get 120 s (D16(f)).
 - State writes are `write_atomic` to a unique `<file>.<pid>.<nanos>.tmp` then `rename`, which replaces existing files on Windows too. Telemetry is a single `write_all` with `O_APPEND`.
-- The findings cache keeps 20 entries, and markers and sessions are pruned at 7 and 14 days, as in 1.x.
+- Retention, as in 1.x (`RETENTION` in `project.mjs`, #88). The findings cache keeps 20 entries. SessionStart on `startup` prunes markers at 7 days and sessions at 14, then verdicts at 60 days (newest 300 kept) and gate runs at 30 days (newest 300 kept, 64 MiB in all, the newest run always kept). A gate run is `gate/<fp>.json` with its `logs/<fp>-*` files, pruned as one group. The records of the start fingerprint are never pruned and count toward no limit, and a group written in the last 60 minutes is never pruned either (another worktree's gate may be running). Resume, clear and compaction prune nothing. `telemetry.jsonl` is renamed to `telemetry.1.jsonl` at 1 MiB, replacing the previous one, and `stats` reads both. Every delete ignores errors.
 
 #### 1.6 Scanner engine port (D8, D9)
 
@@ -496,22 +498,29 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
   - No command: usage and 0. An unknown command: usage and 2.
   - "Not inside a Rust project": 2.
 - **Files:**
-  - Under `.git/temper/`: `gate/<fp>.json`, `verdicts/<fp>.json`, `findings-<fp>.json`, `logs/<fp>-<step>.log`, `sessions/<sid>/{base, started, start-fp, verdict-<agentKey>, stop-<agentKey>.json}`, `telemetry.jsonl`.
+  - Under `.git/temper/`: `gate/<fp>.json`, `verdicts/<fp>.json`, `findings-<fp>.json`, `logs/<fp>-<step>.log`, `sessions/<sid>/{base, started, start-fp, verdict-<agentKey>, stop-<agentKey>.json, telemetry-pushed}`, `telemetry.jsonl`, `telemetry.1.jsonl`. With `telemetry.branch` set: the ref `refs/temper/telemetry-tip`, and `sessions/<date>-<session>.jsonl` on that branch of `origin`.
   - Under `${CLAUDE_PLUGIN_DATA}`: `sessions/<sid>/skill-<agentKey>`.
   - `.claude/temper-baseline.json`, written by `renderBaseline`.
   - The report files `report.{json,md,html}`.
-- **Environment:** `TEMPER_DISABLE`, `TEMPER_BASE`, `TEMPER_ALLOW_RAISE`, `CLAUDECODE`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`, `CLAUDE_ENV_FILE` (exports `TEMPER_CLI` and `TEMPER_BASE`; D17 adds `TEMPER_BIN` and `PATH`).
+- **Environment:** `TEMPER_DISABLE`, `TEMPER_BASE`, `TEMPER_ALLOW_RAISE`, `CLAUDECODE`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`, `CLAUDE_CODE_REMOTE_SESSION_ID` (the `ccr` telemetry field), `CLAUDE_ENV_FILE` (exports `TEMPER_CLI` and `TEMPER_BASE`; D17 adds `TEMPER_BIN` and `PATH`).
 
 #### 2.2 How parity is established
 
-1. **Port each Node test as a Rust test** at the narrowest real seam (TST-02). Keep its inputs and expected values verbatim and its name in snake_case. There are 143 engine tests at 1.3.0 (recounted when Phase 0a starts); `tests/release-check.test.mjs` (13 tests) checks the bash script `tests/release-check.sh`, not the engine, and is covered in §7:
+1. **Port each Node test as a Rust test** at the narrowest real seam (TST-02). Keep its inputs and expected values verbatim and its name in snake_case. There were 143 engine tests at 1.3.0 and 339 on `main` on 2026-10-11, counted as `node --test` reports them (recounted when Phase 0a starts); `tests/release-check.test.mjs` (13 tests) checks the bash script `tests/release-check.sh`, not the engine, and is covered in §7:
 
    | Node file | Tests | Rust destination |
    |---|---|---|
-   | `scan.test.mjs` | 32 | `temper-domain` unit tests |
+   | `scan.test.mjs` | 69 (35 written out, 34 generated from `KEY_CASES`) | `temper-domain` unit tests |
    | `toml.test.mjs` | 7 | `temper-domain` manifest tests; the template-manifest test goes to `temper-cli/tests/it` |
    | `findings.test.mjs` | 15 | parser and model tests in domain; collection, cache and the `rulemap` check in `cli/tests/it` |
-   | `hooks.test.mjs` | 33 | bash and edit policy in domain; manifest-on-disk, gate-manifest and git cases in `cli/tests/it` |
+   | `hooks.test.mjs` | 83 | bash and edit policy in domain; manifest-on-disk, gate-manifest and git cases in `cli/tests/it` |
+   | `handlers.test.mjs` | 34 | the handlers (session-start, skill gate, change detection, stop, subagent-start, subagent-stop, pre-handback, `report_from_transcript`) in `temper-app` with fakes; the git and gate cases in `cli/tests/it` |
+   | `shell.test.mjs` | 21 | `temper-domain::hooks::shell` unit tests (wi-6e0cc2) |
+   | `verdict.test.mjs` | 17 | extract and validate in domain; record and read in `temper-app` |
+   | `state-retention.test.mjs` | 13 | pruning and rotation in `temper-app` with a fake clock and files; the `stats` cases in `cli/tests/it` |
+   | `messages.test.mjs` | 12 | message texts in domain or `cli/tests/it`; the Node-minimum cases go to the launcher tests (§5.1) |
+   | `telemetry-push.test.mjs` | 9 | `cli/tests/it`, with real git and a bare `origin` |
+   | `hooks-registry.test.mjs` | 3 | `cli/tests/it`: every registered hook names a `HookEvent`; the `SubagentHandback` matcher is registered; `SubagentStart` and `SubagentStop` have no matcher |
    | `baseline.test.mjs` | 31 | ratchet, parse_diff, tighten and render in domain; git, temp index, 8.3 names, symlinked ancestors, symlinks and CLI (including setup's strict-lint report) in `cli/tests/it`; "CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else" is not in the D16(i) list: pending owner decision |
    | `report.test.mjs` | 19 | build and render in domain (insta snapshots seeded from 1.x output); CLI in `cli/tests/it` |
    | `vendor.test.mjs` | 6 | **retired** (D16(i)), replaced by pin and migrate tests |
@@ -519,16 +528,16 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
    `tests/parity/test-map.json` maps every 1.x test name to a Rust `path::test_name` or to `"retired: D16(i)"`. `tests/parity/check_test_map.py` (run in CI) fails if any 1.x test is unmapped or any mapped Rust test function does not exist. This is the H-12 evidence that no test was silently dropped.
 2. **Differential harness** (`tests/parity/`, node:test; deleted at cutover with the Node code):
    - Every case runs in two fresh copies of its fixture, one per engine. It compares exit code, stdout, stderr and written files after normalisation: temp roots become `<TMP>`; `at`, `recorded_at`, `created`, `updated` and `ms` fields are masked; log paths are masked. Each normaliser that encodes a D16 divergence cites the decision in a comment.
-   - **Hook cases** (`cases/hooks/*.json`, at least 120): every message branch of the nine handlers, built from the 1.x test inputs plus extra negative cases.
-   - **CLI cases**: `scan`, `gate --json`, `status`, `stats`, `baseline` (every branch of `BASELINE_USAGE`), `report` and `setup --dry-run`, on the fixture workspaces.
+   - **Hook cases** (`cases/hooks/*.json`, at least 120): every message branch of the nine handlers, built from the 1.x test inputs plus extra negative cases. They include a `SubagentStop` with `agent_transcript_path` and no `last_assistant_message`. The Bash write rules hold `shell.mjs`'s decisions exactly (wi-6e0cc2): every `shell.test.mjs` and Bash `hooks.test.mjs` command is a `pre-bash` case, so a bypass 1.x closes stays closed in 2.0.
+   - **CLI cases**: `scan`, `gate --json`, `status`, `stats`, `stats --branch` and `telemetry push` (against a local bare `origin`), `baseline` (every branch of `BASELINE_USAGE`), `report` and `setup --dry-run`, on the fixture workspaces.
    - **Scanner corpus**: `scan --all --json` over (1) `templates/example-workspace`, (2) every code block that `doc_examples.py` extracts from the skill, and (3) the whole cargo registry source tree on the CI runner (`~/.cargo/registry/src`, tens of thousands of real-world files) on Linux and Windows. The corpus is compared hit by hit (key, id, severity, line, text, exception); tests, ignores and clone counts are compared through `hook pre-edit` ask cases.
    - **Fingerprint corpus**: a git fixture with staged, unstaged and untracked files, a non-UTF-8 file, a binary file, a rename and the baseline file. `status` must print the same fingerprint from both engines.
-   - **State cross-read**: Node writes (session-start, gate, a reviewer verdict through subagent-stop), then Rust reads (status, stop), and the reverse.
+   - **State cross-read**: Node writes (session-start, gate, a reviewer verdict through pre-handback and another through subagent-stop), then Rust reads (status, stop), and the reverse.
 3. **Golden files:** `docs/examples/sample-report.{md,html,json}` are regenerated by the Rust renderer from `tests/fixtures/report-sample.mjs`'s data (moved to a JSON fixture). They must come out byte-identical; a diff means a renderer bug.
 
 #### 2.3 State compatibility
 
-- The fingerprint stays `sha256(...)[..16 hex]` over the same byte stream: `head:<sha>\nrev:<sha>\n`, then `git diff --no-color --binary --no-ext-diff <rev> -- <pathspecs> :(exclude).temper :(exclude)target`, hashed as lossy UTF-8 (1.x hashes the decoded string), then for each untracked file in the fingerprint, sorted, `\n?<path>\n` and its raw bytes.
+- The fingerprint stays `sha256(...)[..16 hex]` over the same byte stream: `head:<sha>\nrev:<sha>\n`, then `git diff --no-color --binary --no-ext-diff <rev> -- <pathspecs> :(exclude).temper :(exclude)target`, hashed as lossy UTF-8 (1.x hashes the decoded string), then for each untracked file in the fingerprint, sorted, `\n?<path>\n` and its raw bytes. The pathspecs include `.cargo/config` and `.cargo/config.toml` in any directory (#87). Last, when the gate settings of `.claude/temper.json` (`gate`, `scanner`, `manifests`, merged with the defaults, cut to the properties the defaults list, as canonical JSON) differ from those at the base, `\n.claude/temper.json\n<that JSON>`. A git-ignored `.cargo/config.toml`, `include_str!` files and build-script inputs are not hashed.
 - The gate cache, verdict records, findings cache, session files and telemetry use serde DTOs with 1.x field names and order. Unknown fields are preserved on read and rewrite (`#[serde(flatten)] extra`) so a 1.x reader of a 2.0 file and the reverse both work.
 - `temper_baseline: 1` and `temper_findings: 1` are unchanged.
 
@@ -562,18 +571,19 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 | 0c | Fallback build in the launcher: lock, `cargo build --release --locked`, atomic install, `build.failed` marker; D6 behaviours tested with the binary absent | none |
 | 1 | Domain: lexer, regions, rules, finders, `Scanner`, `new_hits`, `classify_path`; scanner differential corpus job. App: minimal `discover`, `crate_of`, `rel_to` (verbatim, 8.3 and symlinked-ancestor cases). `temper scan` | `scan` |
 | 2 | Manifest, config, glob; hook I/O; telemetry; skill markers. Handlers `pre-bash`, `pre-edit`, `post-tool`, `user-prompt` (the hot path) | `hook pre-bash`, `hook pre-edit`, `hook post-tool`, `hook user-prompt` |
-| 3 | Fingerprint (parity corpus), sessions (base, start-fp, prune), gate-cache read, verdict extract, validate and record. Handlers `session-start`, `subagent-start`, `subagent-stop` (reviewer branch); `status` | those hooks, `status` |
+| 3 | Fingerprint (parity corpus), sessions (base, start-fp, prune), gate-cache read, verdict extract, validate and record. Handlers `session-start`, `subagent-start`, `pre-handback`, `subagent-stop` (reviewer branch); `status` | those hooks, `status` |
 | 4 | `StdProcess` with timeouts; gate steps, manifests step, scan step, cache, render; `stop` and `subagent-stop` (implementer branch); `temper gate` | `gate`, `hook stop`, `hook subagent-stop` |
 | 5 | Cargo message parser (fixtures `clippy-*.jsonl`, `rustdoc-capped.jsonl`), collection and cache, temporary-index diff, renames, crate aliases, ratchet, tighten, init, update, check; `tests/e2e/brownfield.sh` against Rust (`TEMPER_ENGINE=rust`) | `baseline` |
 | 6 | Report model, Markdown and HTML (golden sample), CLI | `report` |
-| 7 | `setup` (templates from `TEMPER_PLUGIN_ROOT`, `.claude/temper-version` pin, `--migrate` with the known-template hash table), `stats`; template changes (§6) prepared on a branch | `setup`, `stats` |
+| 7 | `setup` (templates from `TEMPER_PLUGIN_ROOT`, `.claude/temper-version` pin, `--migrate` with the known-template hash table), `stats` (with `--branch`), `telemetry push`; template changes (§6) prepared on a branch | `setup`, `stats`, `telemetry` |
 | 8 | **Cutover (2.0.0)**: `launch.mjs` replaces `scripts/temper.mjs`; delete `scripts/lib/`, the Node tests, `tests/parity/` and the vendored copy in `templates/example-workspace/.claude/temper/`; `package.json` and `package-lock.json` land; `hooks.json` SessionStart timeout and status message; docs, CHANGELOG, Python checks, `tests/ci.sh`; release 2.0.0 (§4) | everything |
 
 Strangler mechanics during phases 1 to 7:
 - `hooks/hooks.json` is unchanged, so users run 1.x exactly.
 - Maintainers dogfood with `node scripts/launch.mjs` by setting `TEMPER_ENGINE=rust` and `TEMPER_BIN=target/release/temper`. They can point `hooks.json` at `launch.mjs` in a local `--plugin-dir` checkout.
 - `launch.mjs` delegates a graduated subcommand to Rust; anything else runs the 1.x CLI **in-process** (`await import('./temper.mjs')`, so argv and stdin are unchanged).
-- Mixed engines within one session are safe because of §2.3, which the cross-read parity cases verify.
+- Mixed engines within one session are safe because of §2.3, which the cross-read parity cases verify. A Rust `stop` that starts `temper telemetry push` reaches the Node subcommand through the launcher until `telemetry` graduates.
+- **1.x releases during the port** (#22). A 1.x patch or minor release still ships from `main` through the release checklist in `AGENTS.md`. Until the cutover `hooks.json` calls `scripts/temper.mjs` and `package.json` is not on `main`, so the release carries the Rust workspace and `launch.mjs` in the plugin directory unused: Claude Code runs no npm install, and users run only the Node engine. A 1.x fix that changes behaviour breaks the parity cases that cover it, so it lands in both engines in the same PR, or the Rust subcommand it touches waits to graduate. The vendored copy and its `VERSION` stay in step as today.
 
 ---
 
@@ -624,7 +634,7 @@ Triggered by `workflow_dispatch` with the input `version` on branch `release/<ve
 #### 5.1 `scripts/temper.mjs` (the launcher after cutover, about 120 lines plus node:test tests in `tests/launcher.test.mjs`)
 
 1. `pluginRoot` is `dirname(dirname(fileURLToPath(import.meta.url)))`; `version` is read from `${pluginRoot}/.claude-plugin/plugin.json`.
-2. If `TEMPER_DISABLE === '1'` and `argv[2] === 'hook'`: drain stdin and exit 0. The human's escape works with no binary.
+2. If `TEMPER_DISABLE === '1'` and `argv[2] === 'hook'`: drain stdin and exit 0. The human's escape works with no binary. Then 1.x's Node check (`requirements.mjs`, #89): on Node 15 or 16, `hook session-start` in a Rust workspace prints only the warning, and a CLI command prints it on stderr; on Node 17 SessionStart runs and adds the warning line.
 3. Resolve the binary, first hit wins:
    - (a) `TEMPER_BIN` (dev, CI, eval sandboxes).
    - (b) `createRequire(import.meta.url).resolve('@wet-ink/temper-${process.platform}-${process.arch}/package.json')`, then `bin/temper` (`.exe` on win32).
@@ -722,7 +732,7 @@ The commands and args are unchanged (`node ${CLAUDE_PLUGIN_ROOT}/scripts/temper.
 Phase 0
 - [ ] `temper --version` prints `temper <CARGO_PKG_VERSION>` and exits 0 (cli/it).
 - [ ] An unknown subcommand prints the 1.x usage text and exits 2; no subcommand prints it and exits 0 (cli/it; expected text copied from `temper.mjs`).
-- [ ] Launcher: `TEMPER_DISABLE=1 hook X` exits 0 without resolving a binary (launcher.test).
+- [ ] Launcher: `TEMPER_DISABLE=1 hook X` exits 0 without resolving a binary; below the Node minimum it keeps 1.x's early warning (ported from the Node-minimum cases in `messages.test.mjs`, #89) (launcher.test).
 - [ ] Launcher: `TEMPER_BIN` wins; stdin, argv and the exit code pass through; a signal-killed child gives exit 1 (launcher.test with a stub binary script compiled per OS, or `node` as the stub).
 - [ ] Launcher: resolves `node_modules/@wet-ink/temper-<platform>-<arch>/bin/temper[.exe]` (fake package dir).
 - [ ] Launcher: without a binary, `hook pre-edit` on a `.rs` file prints the D6 deny JSON; `hook pre-bash` prints the once-per-session notice; `hook stop` prints `temper gate: UNAVAILABLE (...)`.
@@ -766,20 +776,21 @@ Phase 2: manifests, config, hooks hot path
 - [ ] `edit_policy` (pure) and `pre-edit` (app plus cli/it on disk), each 1.x case: a new member without inheritance is denied (MOD-09); a new member with inheritance asks as a crate boundary; an excluded crate; gaining inheritance passes; legacy problems advise; `ownLints`; a member overriding lints; `[profile]` in member vs root; `test = false`; `[patch]`; rust-version bump; non-caret advisory; Cargo.lock denied; CRLF; `lintConfigChanged` ignores plain inheritance; `[[bench]]` after dev-deps; major bump asks; `[lib] bench = false`; `#[ignore]` added asks, Miri form not; new `mod.rs` denied; removed tests ask; `.git/` and state-dir edits denied; skill gate denies when the marker is absent and the agent is not preloaded.
 - [ ] hook I/O (cli/it): invalid stdin JSON exits 0 with no output; an unknown event writes stderr and exits 0; `TEMPER_DISABLE=1`; a handler error becomes the `systemMessage` JSON (forced with a fake `Files` returning `FsError` in an app test plus a cli/it case with an unreadable state dir); stdin over the 256 MiB cap fails open with a `systemMessage`.
 - [ ] `post-tool` marks the skill for Skill(`temper:rust-craft`) and Read(`.../rust-craft/SKILL.md`), per agent key; `user-prompt` context only when not loaded.
-- [ ] telemetry line shape and `stats` aggregation (sessions, events by count, blocked-by-rule).
+- [ ] telemetry line shape (with `ccr` in a cloud session) and `stats` aggregation (sessions, events by count, blocked-by-rule, gate latency at Stop, gates cut short, review rounds); rotation to `telemetry.1.jsonl` at 1 MiB, and `stats` reading both files.
 
 Phase 3: state, fingerprint, sessions, verdicts
 - [ ] `FingerprintHasher` equals a SHA-256 known-answer vector for a fixed byte stream (domain).
-- [ ] fingerprint equals 1.x's on the git parity fixture: staged, unstaged, untracked, non-UTF-8, binary, rename, and the baseline tracked and untracked ("the baseline is part of the fingerprint", ported).
+- [ ] fingerprint equals 1.x's on the git parity fixture: staged, unstaged, untracked, non-UTF-8, binary, rename, and the baseline tracked and untracked ("the baseline is part of the fingerprint", ported); `.cargo/config(.toml)` in any directory and the gate keys of `.claude/temper.json` move it, while hooks-only keys, a reformat or a git-ignored config do not (#87).
 - [ ] no-git fingerprint walks Rust-relevant files, sorted, excluding `target`, `.git`, `node_modules` and `.temper`.
 - [ ] `discover`: git top-level; no git means the outermost Cargo workspace; not Rust means `None`; the state dir uses `--git-common-dir` (worktrees).
 - [ ] session base: set on startup, clear and fork (forced), kept on resume; an unresolvable recorded base falls back to HEAD; start-fp recorded.
 - [ ] `TEMPER_BASE` from another repository falls back to HEAD with a single stderr note (CLI).
-- [ ] prune sessions (14 d) and markers (7 d) by mtime (fake clock and files).
+- [ ] prune sessions (14 d) and markers (7 d) by mtime, and verdicts and gate runs by age, count and bytes with the start fingerprint and the 60-minute grace kept; startup only (fake clock and files; ported from `state-retention.test.mjs`).
 - [ ] `extract_verdict`: the last fenced json block containing `temper_verdict`; an unparseable one reports the parse problem.
-- [ ] `validate_verdict`: one test per problem message (schema, verdict, fingerprint, findings fields, scores, evidence, unread changed files, approved-with-majors, approved-with-low-scores, approved-with-red-gate, gate entries).
-- [ ] `subagent-stop` (reviewer): non-reviewers pass; a valid verdict is recorded (stale flag) with session `verdict-<agent>` written; invalid blocks, or passes with telemetry when `stop_hook_active`.
-- [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line.
+- [ ] `validate_verdict`: one test per problem message (schema, verdict, fingerprint, findings fields, scores, `correctness`, `escape_hatches` and `craft` always rated, evidence, unread changed files, approved-with-majors, approved-with-low-scores, approved-with-red-gate, gate entries); a `files_read` entry covers a changed file only as its repo-relative path or an absolute path ending in `/` plus that path, never a bare suffix (#86).
+- [ ] `pre-handback`: non-reviewers pass (a `handback` telemetry row either way); an invalid verdict is denied with the problem list; a valid one is recorded (stale flag) with session `verdict-<agent>` written.
+- [ ] `subagent-stop` (reviewer): non-reviewers pass, after a `subagent-stop` telemetry row; a verdict already recorded by `pre-handback` passes; without `last_assistant_message` the report is read from `agent_transcript_path` (the last `SubagentHandback` message, else the last assistant text); a valid verdict is recorded (stale flag) with session `verdict-<agent>` written; invalid blocks, or passes with telemetry when `stop_hook_active`.
+- [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line; the Node-minimum warning line, in the context and as a `systemMessage` (#89).
 - [ ] `subagent-start` context for implementer and reviewer (the reviewer runs `cargo fmt --all` first, gets the fingerprint instruction and the diff stat last 25 lines); the 5 newest plans by mtime.
 - [ ] `status` lines (root, state, base, fingerprint, changed, gate, review, baseline variants, config).
 - [ ] state cross-read: Rust reads 1.x-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
@@ -792,7 +803,7 @@ Phase 4: gate and completion hooks
 - [ ] gate manifests step: without git every problem counts; with git only new problems fail (ported, cli/it with real cargo and git).
 - [ ] gate: fmt check mode vs apply; cache hit on the same fingerprint; `--no-cache`; scan step red on new hard hits with exceptions listed; fail-fast order; `gate.steps` override; logs written to `logs/<fp>-<step>.log`.
 - [ ] `render_gate` for green, red, cached, unavailable, exceptions, debt line (snapshot).
-- [ ] `stop`: no Rust changes pass; plan mode passes; unchanged since session start passes; `Status: WIP/BLOCKED` gives a notice; red blocks, then is allowed after a stuck repeat (`stop_hook_active` plus the same fp); review missing or changes-requested blocks (advisory gives a notice; off skips); green and approved gives the green notice; implementer `subagent-stop` without the review requirement.
+- [ ] `stop`: with `telemetry.branch` set, it starts a detached `telemetry push` for the session; no Rust changes pass; plan mode passes; unchanged since session start passes; `Status: WIP/BLOCKED` gives a notice; red blocks, then is allowed after a stuck repeat (`stop_hook_active` plus the same fp); review missing or changes-requested blocks (advisory gives a notice; off skips); green and approved gives the green notice; implementer `subagent-stop` without the review requirement.
 - [ ] `parse_status`: the last `Status:` line wins; markdown decorations.
 
 Phase 5: findings, baseline, ratchet (ported from `findings.test.mjs` then `baseline.test.mjs`)
@@ -833,6 +844,7 @@ Phase 7: setup, migration, stats
 - [ ] `--migrate` on a customised `rust.yml` (the case for both 1.x pilots, see Risks): the manual line's N equals the number of lines in the file that contain `node .claude/temper/temper.mjs`, and it names the template path of the "Install temper" step.
 - [ ] `LEGACY_TEMPLATES` covers every historic version of the three files (an xtask test regenerates from git history and compares; the xtask derives the tag list from git, so a later 1.x release is covered without a code change).
 - [ ] the example workspace's `.claude/temper-version` equals the plugin version (replaces "the example workspace carries an up-to-date copy").
+- [ ] `telemetry push` (cli/it, ported from `telemetry-push.test.mjs`): off without `telemetry.branch`; creates the branch with only this session's file in a `[skip ci]` commit and leaves the clone untouched; unchanged rows are not pushed again; two clones push side by side; an unreachable `origin` reports why; `stats --branch` with a named branch, the config's branch, and a missing one.
 
 Phase 8: cutover
 - [ ] `tests/parity/check_test_map.py`: all 1.x engine tests (143 at 1.3.0) mapped or retired (D16(i)), every mapped Rust test exists. Run once before deleting the Node tests, and its output is recorded in Progress.
@@ -854,7 +866,9 @@ Phase 8: cutover
 - **Scope creep in the port** (rewriting rules "while we are here"): forbidden by the constraints. Any rule change is a separate 2.x change.
 - **Install paths that may skip npm.** Cloud sessions are a primary way this organization works, and they get temper in two ways that §5.3 does not cover as verified: claude.ai's organization sync into `~/.claude/plugins/synced/`, and `claude plugin marketplace add` plus `claude plugin install` in the cloud environment's setup script (`docs/troubleshooting.md`, "Cloud sessions and claude.ai"). Nothing establishes yet whether either runs `npm ci --ignore-scripts`. If one does not, its sessions take the fallback build, which needs Rust ≥ MSRV in the image (the setup script must install it) and costs the first SessionStart 1 to 3 min, or else D6 degraded mode. The Phase 0b manual verify-install step settles both. Decided by the owner (wi-48fb44, 2026-10-07): a passing verify-install on both paths is a Phase 0b exit criterion, and a path that does not run `npm ci` installs the npm package from the environment's setup script. Prebuilt binaries in the plugin and the fallback build with Rust in the image were not chosen.
 - **Customised CI files in the 1.x adopters.** The audit (`docs/history/2026-10-audit/findings.json`, port-2.0-1-13) found that both pilots (weigh-in, redkiln-rs) have a customised `rust.yml`, and weigh-in a customised `.claude/settings.json`, so their SHA-256 is not in `LEGACY_TEMPLATES`. `--migrate` will print manual steps for their `rust.yml` (and settings.json falls to the line-exact allow-entry replacement). The manual lines must be exact and complete, and the CHANGELOG 2.0.0 migration guide (§7) walks through a customised `rust.yml`. Decided (wi-5fbb56): `--migrate` stays hash-guarded as D15 says, with no line-level `rust.yml` rewrite; the manual lines carry the migration.
-- **Missing upstream facts**: the npm org's existence and the availability of `windows-11-arm` and `ubuntu-24.04-arm` runners to this repository (both confirmed 2026-10-02, `docs/plans/v1-readiness.md` steps 0.8 and 0.9; the arm64 runners by `runner-probe.yml` [run 2](https://github.com/Wet-Ink-Corporation/temper/actions/runs/37043545399), on a branch, while #23 still lists them as open), `(?-u:\b)` acceptance in `regex` 1.13, and the `sha2` 0.11 default features. Each is verified in the phase that first uses it (PROC-01), and a failure is reported as BLOCKED.
+- **Missing upstream facts**: the npm org's existence and the availability of `windows-11-arm` and `ubuntu-24.04-arm` runners to this repository (both confirmed 2026-10-02, `docs/plans/v1-readiness.md` steps 0.8 and 0.9; the arm64 runners by `runner-probe.yml` [run 2](https://github.com/Wet-Ink-Corporation/temper/actions/runs/37043545399), on a branch; #23's arm64 box is ticked), `(?-u:\b)` acceptance in `regex` 1.13, and the `sha2` 0.11 default features. Each is verified in the phase that first uses it (PROC-01), and a failure is reported as BLOCKED.
+
+- **Owner bandwidth and owner-only setup** (audit `port-2.0-1-17`, #64). Every phase ends with an approved review and the owner merges each PR, so one owner's review time paces the port. Some steps only the owner can take: npm and crates.io trusted publishing, revoking the one-off crates.io token (#23), and the Actions budget alerts (#7). Phase 0b cannot publish `2.0.0-alpha.1` until #23 is done. The Actions budget (v1-readiness 0.9 estimates 120 to 180 included minutes per full-matrix PR and 300 to 500 per release) is spent fastest by the Windows jobs, which count 2×. The plan gives no dates; the pilot report (2026-10-18) and v1 live come first.
 
 ## Size estimate (lower bound)
 
@@ -894,5 +908,12 @@ Phase 8: cutover
 - 2026-10-02: Owner decided D3 (four crates), D4 (MSRV 1.96), D10 (regex, toml, sha2, wait-timeout) and D17 (PATH export) as recommended.
 - 2026-10-02: Owner decided D13 (install-action), D14 (`.claude/temper-version`) and D15 (hash-guarded `--migrate`) as recommended. All D1..D17 and the licence are decided.
 - 2026-10-02 (owner, via `docs/plans/v1-readiness.md` steps 0.8 and 0.9): the `@wet-ink` npm org exists. The four crate names are reserved as `0.0.0` placeholders. Arm64 targets use GitHub's standard arm64 runners, confirmed by `runner-probe.yml` on 2026-10-02 (all five labels run, v1-readiness 0.9; [run 2](https://github.com/Wet-Ink-Corporation/temper/actions/runs/37043545399), on a branch, not rerun on `main`). The port's CI is tiered: Linux on every PR; Windows and macOS on code-touching PRs and `main`; the corpus scan weekly and on `release/*`; the release matrix on `release/*` only.
-- 2026-10-07: Facts refreshed after the 2026-10 audit: engine size and test counts rebased to 1.3.0 (5,649 lines in `scripts/temper.mjs` and 12 `scripts/lib/` modules; 143 engine tests, `baseline.test.mjs` 31), the 1.3.0 setup and `rel_to` tests added to the test list, `LEGACY_TEMPLATES` tags derived from git, `tests/release-check.sh` in §7, and risks for the cloud install paths and the pilots' customised CI files. Open for the owner: the `setup --vendor-only` test and `tests/release-check.sh` against D16(i), and a line-level `rust.yml` rewrite against D15.
-- Next: Phase 0a (adds `LICENSE-APACHE`), after v1 goes live and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the `release` environment and the npm and crates.io trusted publishers (D12); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9); tick the arm64 box in #23, which still shows it open.
+- 2026-10-07: Facts refreshed after the 2026-10 audit: engine size and test counts rebased to 1.3.0 (5,649 lines in `scripts/temper.mjs` and 12 `scripts/lib/` modules; 143 engine tests, `baseline.test.mjs` 31), the 1.3.0 setup and `rel_to` tests added to the test list, `LEGACY_TEMPLATES` tags derived from git, `tests/release-check.sh` in §7, and risks for the cloud install paths and the pilots' customised CI files. Open for the owner at the time: the `setup --vendor-only` test and `tests/release-check.sh` against D16(i), and a line-level `rust.yml` rewrite against D15. The last two were settled on 2026-10-08 (wi-5fbb56, below); the `setup --vendor-only` test is still pending (§2.2).
+- 2026-10-07: Owner decided wi-48fb44: a passing verify-install on the claude.ai organization-sync and cloud setup-script install paths is a Phase 0b exit criterion, and a path that skips `npm ci` installs the npm package from the environment's setup script (Phase 0b, the verify-install test item, Risks).
+- 2026-10-08: Owner decided wi-5fbb56: `tests/release-check.sh` folds into `cargo xtask versions --check` with its three jobs (amends D16(i)); `--migrate` stays hash-guarded with exact manual lines (D15); macOS parity runs on demand through `runner-probe.yml` until the repository is public. Applied in #93.
+- 2026-10-08: Owner decided wi-6e0cc2: the port reproduces `scripts/lib/shell.mjs`'s decisions (#82 to #84) exactly, rather than re-implementing the shell-write guards as a divergence. The parity line is in §2.2 (hook cases), with `shell.test.mjs` in the test table.
+- 2026-10-08: wi-103aa0 (owner): the never-firing `PreToolUse` `SubagentHandback` hook was removed in 1.x (#92), and `pre-handback` left this plan (#93).
+- 2026-10-09: Owner decided wi-641f99: with `telemetry.branch` set (opt-in), Stop pushes each session's telemetry to that branch with `[skip ci]`, because cloud containers discard `.git/temper/` and the git proxy refuses hidden refs. Built in #96: `temper telemetry push`, `stats --branch`, and new telemetry fields. Added here: the module map, the network push in §1.5, the contract files, the CLI cases, the tests and Phase 7.
+- 2026-10-09: #98 (fixing #97) reversed wi-103aa0 on the owner's decision. In cloud sessions a subagent's report goes only through `SubagentHandback`, and `SubagentStop` gets no `last_assistant_message`, so 1.x restored the hook and `SubagentStop` reads the report from `agent_transcript_path`. Restored here: `PreHandback` in `HookEvent`, the Phase 3 handler, the cross-read case and the test item; the transcript fallback is added.
+- 2026-10-11: Facts refreshed for #82 to #89 (merged 2026-10-07), #96 and #98. The test table is recounted (339 engine tests, seven new files); §1.5 has #88's retention rules; §2.3 and the fingerprint test have #87's inputs; `validate_verdict` has #86's evidence and score rules; the launcher and SessionStart tests have #89's Node warning; §3 says how 1.x releases ship during the port (#22); a risk covers owner bandwidth and owner-only setup (`port-2.0-1-17`). #23's arm64 box is ticked.
+- Next: Phase 0a (adds `LICENSE-APACHE`), after v1 goes live and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).

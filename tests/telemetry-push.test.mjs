@@ -30,7 +30,8 @@ const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8',
 /** A bare origin and a clone of it holding a Cargo workspace with `config` as .claude/temper.json. */
 function workspace(t, config = { telemetry: { branch: 'temper-telemetry' } }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tpush-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  // The detached push from a Stop hook can still hold the clone open on Windows (EBUSY), so retry the cleanup.
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
   const origin = path.join(dir, 'origin.git');
   const ws = path.join(dir, 'ws');
   git(dir, 'init', '-q', '--bare', origin);

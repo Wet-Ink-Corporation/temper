@@ -33,7 +33,7 @@ Amend D16(i) to adapt tests/release-check.sh into the port's xtask, keep D15 wit
 
 Three port-plan points question settled decisions: release-check.sh under D16(i), a line-level rust.yml rewrite under D15, and macOS parity wording vs parked macOS CI.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-5fbb56`. Anchor: `docs/plans/temper-2-rust-port.md:702`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-5fbb56`. Anchor: `docs/plans/temper-2-rust-port.md:712`.
 
 ## Decision drivers
 
@@ -57,7 +57,7 @@ Keep all three pending in the plan.
 
 ## Evidence
 
-- `docs/plans/temper-2-rust-port.md:703`: Whether the script is adapted ... or retired: pending owner decision.
+- `docs/plans/temper-2-rust-port.md:713`: Whether the script is adapted ... or retired: pending owner decision.
 - `docs/history/decisions.md`: 0.9: macOS CI parked until the repository goes public.
 
 ## Decision outcome
