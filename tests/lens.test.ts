@@ -51,7 +51,7 @@ function bottoms(on: On) {
   on('session.attach', async (_$, e) => ({ clientId: e.clientId }) as any)
   on('session.id', async () => ({ value: 'test-session' }) as any)
   // The engine draws nothing in the band: an empty Box stands for that here.
-  on('ui.render', { component: 'AbovePrompt' }, async () => h('Box', {}))
+  on('ui.render', { component: 'AbovePrompt' }, async () => h('Box', {}) as any)
 }
 
 /** A turn ends; the lens refreshes once its hook has returned, so the clock moves on by 0 ms. */
@@ -78,9 +78,10 @@ for (const surface of SURFACES) {
     await start($, surface)
     expect(await bandText($, surface)).toBe('temper  3 .rs changed · gate red (clippy) · review: changes-requested, 2 major · baseline 41')
     expect(runs).toHaveLength(1)
-    expect(runs[0].slice(0, 1)).toEqual(['node'])
-    expect(runs[0][1]).toMatch(/\/scripts\/temper\.mjs$/)
-    expect(runs[0].slice(2, 5)).toEqual(['status', '--json', '--session'])
+    const [run = []] = runs
+    expect(run.slice(0, 1)).toEqual(['node'])
+    expect(run[1]).toMatch(/\/scripts\/temper\.mjs$/)
+    expect(run.slice(2, 5)).toEqual(['status', '--json', '--session'])
   })
 
   test(`band on ${surface}: a green gate and an approved review`, async ($, on) => {
@@ -132,8 +133,11 @@ for (const surface of SURFACES) {
   })
 }
 
-for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
-  test(`${Object.entries(env)[0].join('=')}: the lens runs nothing and draws nothing`, async ($, on) => {
+const OFF_ENVS: Record<string, string>[] = [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]
+const envName = (env: Record<string, string>) => Object.entries(env).map(kv => kv.join('=')).join(' ')
+
+for (const env of OFF_ENVS) {
+  test(`${envName(env)}: the lens runs nothing and draws nothing`, async ($, on) => {
     const clock = mock.clock(on)
     const runs = world(on, { env })
     await start($)
@@ -247,12 +251,18 @@ const CALLS = {
 }
 for (const [what, answer] of Object.entries(BENEATH)) {
   for (const [tool, call] of Object.entries(CALLS)) {
-    test(`the lens passes ${what} for ${tool} on unchanged`, async ($, on) => {
+    test(`the lens passes ${tool} down as it came, and ${what} back unchanged`, async ($, on) => {
       mock.clock(on)
       world(on)
-      on('tool.call', async () => answer as any)
+      const seen: unknown[] = []
+      on('tool.call', async (_$, e) => {
+        seen.push(e)
+        return answer as any
+      })
       await start($)
       expect(await $.tool.call(call as any)).toEqual(answer)
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject(call)
     })
   }
 }
@@ -294,7 +304,7 @@ function paneWorld(on: On, store: Record<string, unknown> = {}) {
   on('fs.read', async (_$, e: any) => { seen.reads.push(String(e.path)); return { value: RULES } as any })
   on('prompt.fill', async (_$, e: any) => { seen.fills.push(e); return { isFilled: true } as any })
   on('prompt.submit', async (_$, e: any) => { seen.submits.push(e); return { value: {} } as any })
-  on('ui.render', { component: 'Pane' }, async () => h('Box', {}))
+  on('ui.render', { component: 'Pane' }, async () => h('Box', {}) as any)
   return seen
 }
 
@@ -401,9 +411,9 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'tab-activity' })
     const stat = runs.find(r => r[2] === 'stats')
     expect(stat?.slice(2)).toEqual(['stats', '--json', '--session', 'test-session'])
-    const askRow = await ui.find({ type: 'Text', text: '10:00:03  ask  Cargo.toml  temper:rust-implementer' })
+    const askRow = await ui.find({ type: 'Text', text: '10:00:03Z  ask  Cargo.toml  temper:rust-implementer' })
     expect(askRow).toBeDefined()
-    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' }))?.text).toBe('10:00:02  deny-scan  H-02  src/a.rs')
+    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' }))?.text).toBe('10:00:02Z  deny-scan  H-02  src/a.rs')
     expect(await ui.find({ type: 'Text', text: /session-start/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /deny-scan: Edits/ })).toBeDefined()
     await ui.press({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' })
@@ -458,8 +468,8 @@ test('the pane opens on the tab it was left on', async ($, on) => {
   await ui.unmount()
 })
 
-for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
-  test(`the command is not registered under ${Object.entries(env)[0].join('=')}`, async ($, on) => {
+for (const env of OFF_ENVS) {
+  test(`the command is not registered under ${envName(env)}`, async ($, on) => {
     world(on, { stdout: doc({ review: VERDICT }), env })
     const seen = paneWorld(on)
     await start($)

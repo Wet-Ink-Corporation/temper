@@ -9,7 +9,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { LensFinding, LensStats, LensStatus, LensView } from '../../types'
+import type { LensFinding, LensStats, LensStatsView, LensStatus, LensView } from '../../types'
 
 const view = atom({ plugin: 'temper', key: 'view' } as const, null)
 const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
@@ -322,7 +322,7 @@ async function activityTab($: EngineInterface, els: Els) {
         const n = keys.get(base) ?? 0
         keys.set(base, n + 1)
         const key = n ? `${base}#${n}` : base
-        const label = [r.t.slice(11, 19), r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
+        const label = [`${r.t.slice(11, 19)}Z`, r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
         const rule = r.rules[0]
         if (!rule) return [<Text key={key}>{label}</Text>]
         const row = <Button key={key} plain label={label} onPress={() => toggleFinding($, key, rule)} />
@@ -412,7 +412,7 @@ function totals(doc: any): LensStats {
 async function refreshStats($: EngineInterface): Promise<void> {
   const sid = await $.session.id()
   const r = await runStats($, ['--session', sid])
-  await update($, stats, () => (r.ok
+  await update($, stats, (): LensStatsView => (r.ok
     ? { kind: 'stats', totals: totals(r.doc), session: r.doc.session?.rows ?? [] }
     : { kind: 'unavailable', why: r.why }))
 }
@@ -420,7 +420,7 @@ async function refreshStats($: EngineInterface): Promise<void> {
 /** The telemetry branch is fetched only when the person asks: it is a network call. */
 async function fetchBranch($: EngineInterface): Promise<void> {
   const r = await runStats($, ['--branch'])
-  await update($, branchStats, () => (r.ok ? { kind: 'stats', totals: totals(r.doc), session: [] } : { kind: 'unavailable', why: r.why }))
+  await update($, branchStats, (): LensStatsView => (r.ok ? { kind: 'stats', totals: totals(r.doc), session: [] } : { kind: 'unavailable', why: r.why }))
 }
 
 /** Why the tree has no review, and what clears it. */
@@ -435,7 +435,9 @@ export function parseRules(text: string): Map<string, string> {
   const out = new Map<string, string>()
   for (const line of text.split('\n')) {
     const m = /^\| ([A-Z]{1,4}-\d{2}) \| (MUST|SHOULD|CONSIDER) \| (.*) \| (.*) \| (.*) \|\s*$/.exec(line)
-    if (m) out.set(m[1], `**${m[1]}** (${m[2]}): ${m[3]}\n\nEnforced by: ${m[4]}. Detail: ${m[5]}.`)
+    if (!m) continue
+    const [, id = '', level, rule, by, detail] = m
+    out.set(id, `**${id}** (${level}): ${rule}\n\nEnforced by: ${by}. Detail: ${detail}.`)
   }
   return out
 }
