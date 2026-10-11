@@ -47,6 +47,7 @@ Each decision has a full record (context, options, criteria, recommendation) in 
 | [wi-ddfdfe](../../.kb/_intake/decisions/wi-ddfdfe-may-an-unattended-session-tick-the-fixed-boxes.md) | May an unattended session tick the fixed boxes in audit issues #57 to #70 and close the issues that end up fully ticked? | Yes: tick each with its PR citation and close fully ticked issues. Decided 2026-10-10. |
 | [wi-b63bd6](../../.kb/_intake/decisions/wi-b63bd6-should-the-behaviour-changing-prs-wi-2000a3-rm.md) | Should the behaviour-changing PRs (wi-2000a3's `rm` ask, #48's Declined: line) be opened now but held unmerged until the pilot window closes? | Yes: open them now, merge after the pilot report (due 2026-10-18). Decided 2026-10-10. |
 | [wi-880b66](../../.kb/_intake/decisions/wi-880b66-may-an-agent-merge-to-main-only-when-the-owner.md) | May an agent merge to `main` only when the owner asked for it in that session, rather than holding a standing grant or never merging? | Standing grant: any agent session may merge a PR that meets the bar in AGENTS.md, "Unattended sessions", without a per-session ask. Decided 2026-10-11. |
+| [wi-78d987](../../.kb/_intake/decisions/wi-78d987-should-ci-type-check-the-lens-with-tsc-which.md) | Should CI type-check the lens with tsc, which adds a TypeScript (npx) dependency to the CI lens step? | Yes: a pinned `typescript@7.0.2` through npx in the lens step, against the plugin API types vendored in `tests/lens-types/`. Decided 2026-10-11. |
 
 ## Defaults taken without the owner
 
@@ -78,6 +79,9 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 | wi-864860 | Should #106's template change wait until the pilot window closes, like wi-b63bd6? | Not held | Pilots get it only if they re-run setup, and it changes no hook or gate decision. | CHANGELOG.md, `## Unreleased` |
 | wi-20594c | Write the #101 orchestration eval cases now, without running them? | Deferred | Keeps the 1.4.0 release-candidate suite stable; running new cases is paid and needs the owner. | #101 |
 | wi-73359c | Should the Changelog check cover the README, `docs/troubleshooting.md`, `SECURITY.md` and `LICENSE` as well as the plugin directories? | Included | CONTRIBUTING asks an entry for every user-visible change; 1.2.1 was a docs-only release. | `.github/workflows/changelog.yml:36` |
+| wi-dc7770 | How is the temper lens turned off on its own, given `disableAllHooks` turns off every hook? | `TEMPER_LENS=0` | One env switch, read when the lens loads; `TEMPER_DISABLE=1` and `disableAllHooks` still turn it off with the rest. | `hooks/lens/register.tsx` |
+| wi-2e8bbc | When does the lens toast a Stop as blocked? | Only when temper's telemetry recorded the block | A block by another plugin's hook is not temper's to report. | `hooks/lens/register.tsx`, `temperBlocked` |
+| wi-2beadb | Fix #118's two review nits (the docstring on what binds `e`, `field()` reading the first gating note)? | Left as they are | Neither changes what the allow-list accepts. | `tests/lens_allowlist.py` |
 
 ## Dismissed
 

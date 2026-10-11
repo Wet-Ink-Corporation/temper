@@ -57,7 +57,7 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
 - **Decisions.** Questions that need the owner go through Weigh-In. The records in `.kb/_intake/decisions/` are generated, so do not hand-edit them, except to repoint an anchor. Each decision is also listed in `docs/history/decisions.md`.
 - **No `CLAUDE.md` at the repository root.** The repository root is the plugin root, and `claude plugin validate --strict` rejects a root `CLAUDE.md`, because a plugin never loads it. Project memory for working here is `.claude/CLAUDE.md`, which imports this file.
 - **Scratch work** goes in `.temper/` (gitignored). A plan that others need goes in `docs/plans/`.
-- **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, and the Claude Code CLI version in `ci.yml`. Dependabot bumps the SHA-pinned actions.
+- **Pinned versions are bumped by hand, in their own PR.** That covers the Rust toolchain in `ci.yml` and `templates/*/rust-toolchain.toml`, the Claude Code CLI and TypeScript versions in `ci.yml`, and the plugin API types in `tests/lens-types/` (see its README). Dependabot bumps the SHA-pinned actions.
 
 ## Unattended sessions
 
