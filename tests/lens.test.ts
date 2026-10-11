@@ -48,12 +48,17 @@ function world(on: On, opts: { stdout?: string; exitCode?: number; surfaces?: Re
 function bottoms(on: On) {
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', async () => ({ text: '' }))
+  on('session.attach', async (_$, e) => ({ clientId: e.clientId }) as any)
   on('session.id', async () => ({ value: 'test-session' }) as any)
   // The engine draws nothing in the band: an empty Box stands for that here.
   on('ui.render', { component: 'AbovePrompt' }, async () => h('Box', {}))
 }
 
-const turnEnd = ($: any) => $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+/** A turn ends; the lens refreshes once its hook has returned, so the clock moves on by 0 ms. */
+async function turnEnd($: any, clock: { advance: (ms: number) => Promise<void> }) {
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  await clock.advance(0)
+}
 
 const start = ($: any, surface: RenderSurface | null = 'terminal') => $.session.start({ cwd: '/w', surface, isInteractive: true })
 
@@ -102,14 +107,16 @@ for (const surface of SURFACES) {
     expect(await bandText($, surface)).toContain('gate running (clippy)')
   })
 
-  test(`band on ${surface}: narrow, it drops the baseline and then the review detail`, async ($, on) => {
+  test(`band on ${surface}: narrow, it drops the baseline, the review's counts, the gate's step, then whole segments`, async ($, on) => {
     world(on, {
       surfaces: [surface],
       stdout: doc({ gate: RED, review: { verdict: 'changes-requested', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [finding('blocker')] }, baseline: { path: 'b', total: 41, toolchain: '1' } }),
     })
     await start($, surface)
     expect(await bandText($, surface, 90)).toBe('temper  3 .rs changed · gate red (clippy) · review: changes-requested, 1 blocker')
-    expect(await bandText($, surface, 60)).toBe('temper  3 .rs changed · gate red (clippy) · review: changes-requested')
+    expect(await bandText($, surface, 70)).toBe('temper  3 .rs changed · gate red (clippy) · review: changes-requested')
+    expect(await bandText($, surface, 60)).toBe('temper  3 .rs changed · gate red · review: changes-requested')
+    expect(await bandText($, surface, 35)).toBe('temper  3 .rs changed · gate red')
   })
 
   test(`band on ${surface}: a failing CLI draws the fallback row`, async ($, on) => {
@@ -125,27 +132,71 @@ for (const surface of SURFACES) {
   })
 }
 
-test('TEMPER_DISABLE=1: the lens runs nothing and draws nothing', async ($, on) => {
-  const runs = world(on, { env: { TEMPER_DISABLE: '1' } })
-  await start($)
-  await turnEnd($)
-  expect(runs).toHaveLength(0)
-  expect(await bandText($, 'terminal')).toBe('')
-})
+for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
+  test(`${Object.entries(env)[0].join('=')}: the lens runs nothing and draws nothing`, async ($, on) => {
+    const clock = mock.clock(on)
+    const runs = world(on, { env })
+    await start($)
+    await turnEnd($, clock)
+    expect(runs).toHaveLength(0)
+    expect(await bandText($, 'terminal')).toBe('')
+  })
+}
 
 test('outside a Rust project: one CLI run at start, then nothing', async ($, on) => {
+  const clock = mock.clock(on)
   const runs = world(on, { stdout: JSON.stringify({ temper_status: 1, version: '1.3.0', project: null }) })
   await start($)
-  await turnEnd($)
+  await turnEnd($, clock)
   expect(runs).toHaveLength(1)
   expect(await bandText($, 'terminal')).toBe('')
 })
 
 test('where no terminal or desktop draws, the lens runs nothing', async ($, on) => {
+  const clock = mock.clock(on)
   const runs = world(on, { surfaces: [] })
   await start($, null)
-  await turnEnd($)
+  await turnEnd($, clock)
   expect(runs).toHaveLength(0)
+})
+
+test('a desktop client attaching after the start draws the band at once', async ($, on) => {
+  const clock = mock.clock(on)
+  let surfaces: RenderSurface[] = []
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: doc({ gate: GREEN }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: surfaces }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  await start($, null)
+  expect(runs).toHaveLength(0)
+  surfaces = ['desktop']
+  await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  await clock.advance(0)
+  expect(runs).toHaveLength(1)
+  expect(await bandText($, 'desktop')).toContain('gate green')
+})
+
+test('outside a Rust project, found only at a later refresh: the lens switches off', async ($, on) => {
+  const clock = mock.clock(on)
+  let surfaces: RenderSurface[] = []
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    runs.push([...e.argv])
+    return { value: { exitCode: 0, stdout: JSON.stringify({ temper_status: 1, version: '1.3.0', project: null }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: surfaces }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  await start($, null)
+  surfaces = ['terminal']
+  await turnEnd($, clock)
+  expect(runs).toHaveLength(1)
+  await turnEnd($, clock)
+  expect(runs).toHaveLength(1)
 })
 
 test('a turn ending refreshes the band', async ($, on) => {
@@ -158,15 +209,16 @@ test('a turn ending refreshes the band', async ($, on) => {
   on('session.surfaces', async () => ({ value: ['terminal'] }) as any)
   bottoms(on)
   mock.env(on, {})
+  const clock = mock.clock(on)
   await start($)
   expect(await bandText($, 'terminal')).toContain('gate not run')
   stdout = doc({ gate: GREEN })
-  await turnEnd($)
+  await turnEnd($, clock)
   expect(runs).toHaveLength(2)
   expect(await bandText($, 'terminal')).toContain('gate green')
 })
 
-test('edits refresh the band once, after a 1.5 s quiet spell; a Read does not', async ($, on) => {
+test('edits refresh the band once, 1.5 s after the first edit; a Read does not', async ($, on) => {
   const clock = mock.clock(on)
   const runs = world(on)
   on('tool.call', async () => ({ result: { text: 'ok' } }) as any)
@@ -183,14 +235,27 @@ test('edits refresh the band once, after a 1.5 s quiet spell; a Read does not', 
   expect(runs).toHaveLength(2)
 })
 
-test('the lens passes a tool call\'s result on unchanged', async ($, on) => {
-  mock.clock(on)
-  world(on)
-  on('tool.call', async () => ({ result: { text: 'the result', isError: true } }) as any)
-  await start($)
-  const result = await $.tool.call({ tool: 'Edit', tool_use_id: 'u1', file_path: '/w/src/a.rs', old_string: 'a', new_string: 'b' } as any)
-  expect(result).toEqual({ result: { text: 'the result', isError: true } })
-})
+// What the layer beneath answers, the lens returns as is: a result, a rewritten result, a denial.
+const BENEATH = {
+  'a result': { result: { text: 'the result', isError: true } },
+  'a rewritten result': { result: { text: 'rewritten by a hook beneath' }, context: ['temper: note'] },
+  'a denial': { deny: 'temper: blocked by the scan' },
+}
+const CALLS = {
+  Edit: { tool: 'Edit', tool_use_id: 'u1', file_path: '/w/src/a.rs', old_string: 'a', new_string: 'b' },
+  Bash: { tool: 'Bash', tool_use_id: 'u2', command: 'cargo build' },
+}
+for (const [what, answer] of Object.entries(BENEATH)) {
+  for (const [tool, call] of Object.entries(CALLS)) {
+    test(`the lens passes ${what} for ${tool} on unchanged`, async ($, on) => {
+      mock.clock(on)
+      world(on)
+      on('tool.call', async () => answer as any)
+      await start($)
+      expect(await $.tool.call(call as any)).toEqual(answer)
+    })
+  }
+}
 
 // The /temper-lens pane (#112): the reviewer's verdict, findings by severity, the rule's text on a
 // press, and a Draft fix button that fills the prompt box and never submits.
@@ -249,23 +314,23 @@ for (const surface of SURFACES) {
     expect(texts).toContain('blocker (1)')
     expect(texts).toContain('nit (1)')
     expect(texts.indexOf('blocker (1)')).toBeLessThan(texts.indexOf('nit (1)'))
-    expect((await ui.find({ key: 'finding-1' }))?.text).toContain('H-02 src/a.rs:7')
-    expect(await ui.find({ key: 'finding-1-rule' })).toBeUndefined()
+    expect((await ui.find({ key: 'finding:H-02:src/a.rs:7' }))?.text).toContain('H-02 src/a.rs:7')
+    expect(await ui.find({ key: 'finding:H-02:src/a.rs:7-rule' })).toBeUndefined()
 
-    await ui.press({ key: 'finding-1' })
-    expect((await ui.find({ key: 'finding-1-rule' }))?.text).toContain('No `unwrap` in production code.')
+    await ui.press({ key: 'finding:H-02:src/a.rs:7' })
+    expect((await ui.find({ key: 'finding:H-02:src/a.rs:7-rule' }))?.text).toContain('No `unwrap` in production code.')
     expect(seen.reads).toHaveLength(1)
     expect(seen.reads[0]).toMatch(/skills\/rust-craft\/references\/rules\.md$/)
 
-    await ui.press({ key: 'finding-1-draft' })
+    await ui.press({ key: 'finding:H-02:src/a.rs:7-draft' })
     expect(seen.fills).toHaveLength(1)
     expect(seen.fills[0]).toMatchObject({ text: "Address the reviewer's blocker finding H-02 in src/a.rs:7: return the error instead of unwrapping", mode: 'insert' })
     expect(seen.submits).toEqual([])
 
-    await ui.press({ key: 'finding-1' })
-    expect(await ui.find({ key: 'finding-1-rule' })).toBeUndefined()
-    await ui.press({ key: 'finding-0' })
-    expect((await ui.find({ key: 'finding-0-rule' }))?.text).toContain('Scope error types')
+    await ui.press({ key: 'finding:H-02:src/a.rs:7' })
+    expect(await ui.find({ key: 'finding:H-02:src/a.rs:7-rule' })).toBeUndefined()
+    await ui.press({ key: 'finding:ERR-02:src/b.rs:-' })
+    expect((await ui.find({ key: 'finding:ERR-02:src/b.rs:--rule' }))?.text).toContain('Scope error types')
     expect(seen.reads).toHaveLength(1)
     await ui.unmount()
   })
@@ -289,7 +354,7 @@ for (const surface of SURFACES) {
   })
 }
 
-test('the command is not registered outside a Rust project or under TEMPER_DISABLE=1', async ($, on) => {
+test('the command is not registered outside a Rust project', async ($, on) => {
   world(on, { stdout: JSON.stringify({ temper_status: 1, version: '1.3.0', project: null }) })
   const seen = paneWorld(on)
   await start($)
@@ -338,11 +403,11 @@ for (const surface of SURFACES) {
     expect(stat?.slice(2)).toEqual(['stats', '--json', '--session', 'test-session'])
     const askRow = await ui.find({ type: 'Text', text: '10:00:03  ask  Cargo.toml  temper:rust-implementer' })
     expect(askRow).toBeDefined()
-    expect((await ui.find({ key: 'activity-1' }))?.text).toBe('10:00:02  deny-scan  H-02  src/a.rs')
+    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' }))?.text).toBe('10:00:02  deny-scan  H-02  src/a.rs')
     expect(await ui.find({ type: 'Text', text: /session-start/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /deny-scan: Edits/ })).toBeDefined()
-    await ui.press({ key: 'activity-1' })
-    expect((await ui.find({ key: 'activity-1-rule' }))?.text).toContain('No `unwrap`')
+    await ui.press({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' })
+    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan-rule' }))?.text).toContain('No `unwrap`')
     await ui.unmount()
   })
 
@@ -365,6 +430,23 @@ for (const surface of SURFACES) {
   })
 }
 
+test('a turn end refreshes the tab on show only while the pane is open', async ($, on) => {
+  const clock = mock.clock(on)
+  const runs = statsWorld(on, 'terminal')
+  paneWorld(on, { tab: 'stats' })
+  let open = false
+  on('ui.panes', async () => ({ value: open ? [{ id: 'temper-lens', title: 'temper', isPlaced: true }] : [] }) as any)
+  await start($)
+  await $.command.run({ command: 'temper-lens', args: '' } as any)
+  const stats = () => runs.filter(r => r[2] === 'stats').length
+  const before = stats()
+  await turnEnd($, clock)
+  expect(stats()).toBe(before)
+  open = true
+  await turnEnd($, clock)
+  expect(stats()).toBe(before + 1)
+})
+
 test('the pane opens on the tab it was left on', async ($, on) => {
   const runs = statsWorld(on, 'terminal')
   paneWorld(on, { tab: 'stats' })
@@ -373,5 +455,33 @@ test('the pane opens on the tab it was left on', async ($, on) => {
   expect(runs.some(r => r[2] === 'stats')).toBe(true)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /gate at Stop/ })).toBeDefined()
+  await ui.unmount()
+})
+
+for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
+  test(`the command is not registered under ${Object.entries(env)[0].join('=')}`, async ($, on) => {
+    world(on, { stdout: doc({ review: VERDICT }), env })
+    const seen = paneWorld(on)
+    await start($)
+    expect(seen.commands).toEqual([])
+  })
+}
+
+test('an open finding stays with its finding when a refresh adds another before it', async ($, on) => {
+  const clock = mock.clock(on)
+  let stdout = doc({ gate: GREEN, review: VERDICT })
+  on('process.run', async () => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.surfaces', async () => ({ value: ['terminal'] }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  paneWorld(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'finding:H-02:src/a.rs:7' })
+  const added = { severity: 'blocker', rule: 'ERR-02', file: 'src/c.rs', line: 1, fix: 'scope it' }
+  stdout = doc({ gate: GREEN, review: { ...VERDICT, findings: [added, ...VERDICT.findings] } })
+  await turnEnd($, clock)
+  expect((await ui.find({ key: 'finding:H-02:src/a.rs:7-rule' }))?.text).toContain('No `unwrap` in production code.')
+  expect(await ui.find({ key: 'finding:ERR-02:src/c.rs:1-rule' })).toBeUndefined()
   await ui.unmount()
 })

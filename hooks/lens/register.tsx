@@ -4,7 +4,8 @@
 // `temper status --json`, from the CLI of this same plugin, and never parses the state dir. It
 // hooks only events it observes and returns every `next(e)` result unchanged, so a lens bug can
 // never allow or block anything. Where no terminal or desktop draws (cloud sessions, `claude -p`,
-// the VS Code chat panel), under TEMPER_DISABLE=1, and outside a Rust project it runs nothing.
+// the VS Code chat panel), under TEMPER_DISABLE=1 or TEMPER_LENS=0, and outside a Rust project it
+// runs nothing.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
@@ -36,8 +37,9 @@ const STATUS_TIMEOUT_MS = 15000
 /** A surface that draws the band. */
 const DRAWS = new Set(['terminal', 'desktop'])
 
-// Off for this load: TEMPER_DISABLE=1 or not a Rust project. Decided at session.start; a reload
-// runs register and session.start again, so module variables are enough here.
+// Off for this load: TEMPER_DISABLE=1, TEMPER_LENS=0 or not a Rust project. Decided at session.start
+// (or at the first refresh, when no surface drew at start); a reload runs register and session.start
+// again, so module variables are enough here.
 let off = true
 let pending: { cancel: () => void } | null = null
 let commandRegistered = false
@@ -48,7 +50,10 @@ async function refresh($: EngineInterface): Promise<void> {
   const surfaces = await $.session.surfaces()
   if (!surfaces.some(s => DRAWS.has(s))) return
   const next = await statusView($)
-  if (next === 'no-project') return
+  if (next === 'no-project') {
+    off = true
+    return
+  }
   await update($, view, () => next)
   await registerCommand($)
 }
@@ -83,12 +88,38 @@ async function toggleFinding($: EngineInterface, key: string, rule: string): Pro
   await update($, expanded, () => ({ key, text }))
 }
 
+/**
+ * Each finding with a key from what it says, so an open finding stays open under the same finding
+ * when a refresh adds or removes others. The nth repeat of the same rule, file and line gets `#n`.
+ */
+function findingKeys(findings: LensFinding[]): { f: LensFinding; key: string }[] {
+  const seen = new Map<string, number>()
+  return findings.map(f => {
+    const base = `finding:${f.rule}:${f.file}:${f.line ?? '-'}`
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    return { f, key: n ? `${base}#${n}` : base }
+  })
+}
+
 /** Fills the prompt box with a request to address the finding; never submits it. */
 async function draftFix($: EngineInterface, f: LensFinding): Promise<void> {
   const at = f.line === null ? f.file : `${f.file}:${f.line}`
   await $.prompt.fill({ text: `Address the reviewer's ${f.severity} finding ${f.rule} in ${at}: ${f.fix}`, mode: 'insert' })
 }
 
+/** After a turn: the band, and the tab on show when the pane is open (the Review tab needs no stats). */
+async function afterTurn($: EngineInterface): Promise<void> {
+  await refresh($)
+  if ((await read($, tab)) !== 'review' && (await $.ui.panes()).some(p => p.id === PANE)) await refreshStats($)
+}
+
+/** Refreshes once the current hook has returned. */
+function refreshNow($: EngineInterface): void {
+  $.clock.after(0, () => refresh($))
+}
+
+/** Refreshes once, DEBOUNCE_MS after the first change: later changes in that spell ride along. */
 function refreshSoon($: EngineInterface): void {
   if (pending) return
   pending = $.clock.after(DEBOUNCE_MS, () => {
@@ -105,7 +136,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    off = (await $.env.get('TEMPER_DISABLE')) === '1'
+    off = (await $.env.get('TEMPER_DISABLE')) === '1' || (await $.env.get('TEMPER_LENS')) === '0'
     if (off) return result
     const surfaces = await $.session.surfaces()
     // No surface draws yet: stay on, and draw once one attaches and a turn ends.
@@ -148,12 +179,18 @@ export const register: Register = on => {
     )
   })
 
+  // A client that draws attached after the session started (the desktop app connects as an SDK
+  // host, so session.start saw no surface): draw now rather than at the first turn end.
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    if (!off && DRAWS.has(e.surface)) refreshNow($)
+    return result
+  })
+
+  // The refresh runs after the hook returns, so a slow CLI never holds the end of the turn.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
-    if (off) return result
-    await refresh($)
-    // The tabs refresh only while the pane is open, and only the tab on show needs stats.
-    if ((await read($, tab)) !== 'review' && (await $.ui.panes()).some(p => p.id === PANE)) await refreshStats($)
+    if (!off) $.clock.after(0, () => afterTurn($))
     return result
   })
 
@@ -211,7 +248,7 @@ async function reviewTab($: EngineInterface, els: Els) {
       </Box>
     )
   }
-  const findings = r.findings.map((f, i) => ({ f, key: `finding-${i}` }))
+  const findings = findingKeys(r.findings)
   return (
     <Box flexDirection="column">
       <Text>
@@ -259,7 +296,8 @@ const ACTIVITY = /^(?:deny-|ask$|stop-blocked$|verdict-invalid)/
 
 /** Where docs/troubleshooting.md explains each kind of event. */
 const LEGEND: [RegExp, string][] = [
-  [/^deny-(?:scan|skill-gate)$/, 'Edits (`Write`, `Edit`, `MultiEdit`)'],
+  [/^deny-(?:scan|skill-gate|manifest)$/, 'Edits (`Write`, `Edit`, `MultiEdit`)'],
+  [/^deny-lockfile$/, 'Edits, or Shell commands (`Bash`)'],
   [/^deny-/, 'Shell commands (`Bash`)'],
   [/^ask$/, 'Edits, or Shell commands (`Bash`)'],
   [/^stop-blocked$/, 'Finishing a turn (the `Stop` hook)'],
@@ -275,10 +313,15 @@ async function activityTab($: EngineInterface, els: Els) {
   const rows = st.session.filter(r => ACTIVITY.test(r.event)).reverse()
   if (rows.length === 0) return <Text dimColor>temper has denied or asked nothing in this session.</Text>
   const seen = [...new Set(rows.map(r => r.event))]
+  // Keyed by time and event, so an open row stays open when newer rows arrive above it.
+  const keys = new Map<string, number>()
   return (
     <Box flexDirection="column">
-      {rows.flatMap((r, i) => {
-        const key = `activity-${i}`
+      {rows.flatMap(r => {
+        const base = `activity:${r.t}:${r.event}`
+        const n = keys.get(base) ?? 0
+        keys.set(base, n + 1)
+        const key = n ? `${base}#${n}` : base
         const label = [r.t.slice(11, 19), r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
         const rule = r.rules[0]
         if (!rule) return [<Text key={key}>{label}</Text>]
@@ -442,8 +485,9 @@ function slim(doc: Record<string, any>): LensStatus {
 type Part = { text: string; color?: 'success' | 'error' | 'warning'; drop: number }
 
 /**
- * The band's segments for `status`, fitted to `columns`: the baseline goes first when narrow,
- * then the review's detail. `drop` orders what goes (higher first; 0 never).
+ * The band's segments for `status`, fitted to `columns`: when narrow the baseline goes first,
+ * then the review's counts, then the gate's step name, and last whole segments from the end, so
+ * the band never wraps to a second row. `drop` orders the shortening (higher first; 0 is never shortened).
  */
 export function bandParts(status: LensStatus, columns: number): { text: string; color?: Part['color'] }[] {
   const n = status.changed.length
@@ -457,6 +501,8 @@ export function bandParts(status: LensStatus, columns: number): { text: string; 
   let fitted = parts
   if (width(fitted) > columns) fitted = fitted.filter(p => p.drop < 3)
   if (width(fitted) > columns) fitted = fitted.map(p => (p.drop === 2 ? { ...p, text: p.text.replace(/,.*$/, '') } : p))
+  if (width(fitted) > columns) fitted = fitted.map(p => (p.drop === 1 ? { ...p, text: p.text.replace(/ \(.*\)$/, '') } : p))
+  while (width(fitted) > columns && fitted.length > 1) fitted = fitted.slice(0, -1)
   return fitted.map(({ text, color }) => (color ? { text, color } : { text }))
 }
 
@@ -464,13 +510,13 @@ function gatePart(status: LensStatus): Part {
   const g = status.gate
   if (g?.running) {
     const step = g.running.current?.name
-    return { text: step ? `gate running (${step})` : 'gate running', color: 'warning', drop: 0 }
+    return { text: step ? `gate running (${step})` : 'gate running', color: 'warning', drop: 1 }
   }
   if (!g) return { text: 'gate not run', color: 'warning', drop: 0 }
   if (g.unavailable) return { text: 'gate unavailable', color: 'warning', drop: 0 }
   if (g.ok) return { text: 'gate green', color: 'success', drop: 0 }
   const failed = g.steps.find(s => s.ok === false)?.name
-  return { text: failed ? `gate red (${failed})` : 'gate red', color: 'error', drop: 0 }
+  return { text: failed ? `gate red (${failed})` : 'gate red', color: 'error', drop: 1 }
 }
 
 function reviewPart(status: LensStatus): Part | null {
