@@ -29,4 +29,4 @@ The delegation message gives you a goal and usually a plan path under `.temper/p
 1. What changed and why, in 3 to 8 lines, citing rule IDs for the non-obvious design choices.
 2. Tests added (names) and the behavior each pins down.
 3. Clones, `Arc`s, `#[expect]`s or other judgment calls a reviewer should look at, each with its justification.
-4. The Status block from §5 of the standard. `DONE` requires a GREEN gate. Otherwise use `WIP` or `BLOCKED`.
+4. The Status block from §5 of the standard, including its `Declined:` line for anything in the request you refused or did differently, and why. `DONE` requires a GREEN gate. Otherwise use `WIP` or `BLOCKED`.
