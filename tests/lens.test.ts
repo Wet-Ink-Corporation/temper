@@ -808,3 +808,80 @@ test('a surfaces call failing as a Stop starts leaves no watch behind: a later S
   await clock.advance(10000)
   expect(polls).toBe(after)
 })
+
+/**
+ * A world where `status --json` is slow: a run that answers a running gate takes `delay(answer)`
+ * ms of the mock clock. `tick` moves the clock in 100 ms steps and lets due runs answer.
+ */
+function slowWorld(on: On, clock: any, answer: () => string, delay: (snap: string) => number) {
+  const held: { due: number; go: () => void }[] = []
+  const toasts: string[] = []
+  const st = { inflight: 0, max: 0 }
+  on('process.run', async (_$, e) => {
+    const isStatus = e.argv[2] === 'status'
+    const snap = isStatus ? answer() : STATS({ session: { id: 'test-session', rows: [] } })
+    if (isStatus) {
+      st.inflight += 1
+      st.max = Math.max(st.max, st.inflight)
+      const d = delay(snap)
+      if (d > 0) await new Promise<void>(r => held.push({ due: clock.now() + d, go: r }))
+      st.inflight -= 1
+    }
+    return { value: { exitCode: 0, stdout: snap, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: ['terminal'] }) as any)
+  on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
+  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`) as any)
+  on('command.register', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  const tick = async (ms: number) => {
+    for (let t = 0; t < ms; t += 100) {
+      await clock.advance(100)
+      for (const h of held.filter(x => x.due <= clock.now())) {
+        held.splice(held.indexOf(h), 1)
+        h.go()
+      }
+      await clock.advance(0)
+    }
+  }
+  return { toasts, st, tick }
+}
+
+test('a slow status run is not stacked: one poll at a time', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = slowWorld(on, clock, () => RUNNING('clippy', []), () => 3500)
+  on('classic.Stop', async () => {
+    await w.tick(10000)
+    return {}
+  })
+  const s = start($)
+  await w.tick(4000)
+  await s
+  w.st.max = 0
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await w.tick(6000)
+  // The poll, and at most the refresh after the Stop beside it.
+  expect(w.st.max).toBeLessThanOrEqual(2)
+})
+
+for (const [kind, ms, gate] of [['Stop', 900, 1500], ['SubagentStop', 400, 3000]] as const) {
+  test(`${kind}: a poll still running when the gate ends neither paints over the final state nor loses the toast`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    let answer = doc()
+    const w = slowWorld(on, clock, () => answer, snap => (snap.includes('"running":{') ? ms : 0))
+    on(`classic.${kind}` as 'classic.Stop', async () => {
+      answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }])
+      await w.tick(gate)
+      answer = doc({ gate: GREEN, review: APPROVED })
+      return {}
+    })
+    await start($)
+    const input = kind === 'Stop' ? { stop_hook_active: false } : { stop_hook_active: false, agent_id: 'a', agent_type: 'x' }
+    await (kind === 'Stop' ? $.classic.Stop(input as any) : $.classic.SubagentStop(input as any))
+    await w.tick(5000)
+    expect(w.toasts).toEqual(['temper: gate green, review approved'])
+    expect(await bandText($, 'terminal')).toContain('gate green')
+    expect(await spinnerText($, 'terminal')).toBe('Working…')
+  })
+}

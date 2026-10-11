@@ -53,10 +53,15 @@ const watches = new Set<Watch>()
 /** The telemetry rows temper writes when its own Stop or SubagentStop hook blocks. */
 const TEMPER_BLOCKS = new Set(['stop-blocked', 'verdict-invalid'])
 const POLL_MS = 1000
+// Refreshes started and the newest one written to the view; one poll at a time.
+let refreshes = 0
+let written = 0
+let pollRunning: Promise<void> | null = null
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
 
 async function refresh($: EngineInterface): Promise<void> {
+  const seq = ++refreshes
   const surfaces = await $.session.surfaces()
   if (!surfaces.some(s => DRAWS.has(s))) return
   const fresh = await statusView($)
@@ -64,6 +69,10 @@ async function refresh($: EngineInterface): Promise<void> {
     off = true
     return
   }
+  // Refreshes overlap (a slow poll, the refresh after a Stop): only a newer one may write, so a
+  // late answer from while the gate ran never paints over the final state.
+  if (seq < written) return
+  written = seq
   await update($, view, () => fresh)
   await registerCommand($)
 }
@@ -167,10 +176,23 @@ function unwatchStop(watch: Watch): void {
   if (watches.size === 0) stopPolling()
 }
 
+/**
+ * One tick: skipped while the last is still running, so slow `status` runs never pile up. The
+ * Stops watching when it starts are the ones credited if it sees the gate run.
+ */
 async function poll($: EngineInterface): Promise<void> {
+  if (pollRunning) return
+  pollRunning = pollOnce($, [...watches]).finally(() => {
+    pollRunning = null
+  })
+  await pollRunning
+}
+
+async function pollOnce($: EngineInterface, mine: Watch[]): Promise<void> {
+  if (!(await draws($))) return
   await refresh($)
   const v = await read($, view)
-  if (v?.kind === 'status' && v.status.gate?.running) for (const w of watches) w.sawGate = true
+  if (v?.kind === 'status' && v.status.gate?.running) for (const w of mine) w.sawGate = true
   const now = await $.clock.now()
   await update($, polledAt, () => now)
 }
@@ -188,6 +210,12 @@ function stopPolling(): void {
  */
 async function afterStop($: EngineInterface, watch: Watch, reason: string | undefined): Promise<void> {
   if (!(await draws($))) return
+  // A poll still running saw the gate before this Stop ended: let it finish and credit the watch.
+  try {
+    if (pollRunning) await pollRunning
+  } catch {
+    // A failed poll changes nothing here: the refresh below reads the state afresh.
+  }
   await refresh($)
   if (reason !== undefined && (await temperBlocked($, watch.startedAt))) {
     const line = reason.split('\n')[0] ?? ''
@@ -236,6 +264,7 @@ export const register: Register = on => {
   off = true
   pending = null
   stopPolling()
+  pollRunning = null
   commandRegistered = false
   rules = null
 
