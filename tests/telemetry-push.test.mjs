@@ -27,11 +27,24 @@ after(() => {
 
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
+/**
+ * Removes `dir`, waiting up to 30 s for the detached push a Stop hook starts to let go of it. On Windows
+ * a process's working directory cannot be removed while it runs (EBUSY), and `rmSync`'s own retries do
+ * not cover the nested directories its recursive removal fails on.
+ */
+async function removeWhenFree(dir) {
+  for (let i = 0; ; i += 1) {
+    try { fs.rmSync(dir, { recursive: true, force: true }); return; } catch (err) {
+      if (i >= 150 || !['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(err.code)) throw err;
+      await new Promise((done) => { setTimeout(done, 200); });
+    }
+  }
+}
+
 /** A bare origin and a clone of it holding a Cargo workspace with `config` as .claude/temper.json. */
 function workspace(t, config = { telemetry: { branch: 'temper-telemetry' } }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tpush-'));
-  // The detached push from a Stop hook can still hold the clone open on Windows (EBUSY), so retry the cleanup.
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }));
+  t.after(() => removeWhenFree(dir));
   const origin = path.join(dir, 'origin.git');
   const ws = path.join(dir, 'ws');
   git(dir, 'init', '-q', '--bare', origin);
