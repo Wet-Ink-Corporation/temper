@@ -268,7 +268,9 @@ export function parseRules(text: string): Map<string, string> {
   const out = new Map<string, string>()
   for (const line of text.split('\n')) {
     const m = /^\| ([A-Z]{1,4}-\d{2}) \| (MUST|SHOULD|CONSIDER) \| (.*) \| (.*) \| (.*) \|\s*$/.exec(line)
-    if (m) out.set(m[1], `**${m[1]}** (${m[2]}): ${m[3]}\n\nEnforced by: ${m[4]}. Detail: ${m[5]}.`)
+    if (!m) continue
+    const [, id = '', level, rule, by, detail] = m
+    out.set(id, `**${id}** (${level}): ${rule}\n\nEnforced by: ${by}. Detail: ${detail}.`)
   }
   return out
 }

@@ -303,7 +303,7 @@ function paneWorld(on: On) {
   on('fs.read', async (_$, e: any) => { seen.reads.push(String(e.path)); return { value: RULES } as any })
   on('prompt.fill', async (_$, e: any) => { seen.fills.push(e); return { isFilled: true } as any })
   on('prompt.submit', async (_$, e: any) => { seen.submits.push(e); return { value: {} } as any })
-  on('ui.render', { component: 'Pane' }, async () => h('Box', {}))
+  on('ui.render', { component: 'Pane' }, async () => h('Box', {}) as any)
   return seen
 }
 
@@ -370,8 +370,8 @@ test('the command is not registered outside a Rust project', async ($, on) => {
   expect(seen.commands).toEqual([])
 })
 
-for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
-  test(`the command is not registered under ${Object.entries(env)[0].join('=')}`, async ($, on) => {
+for (const env of OFF_ENVS) {
+  test(`the command is not registered under ${envName(env)}`, async ($, on) => {
     world(on, { stdout: doc({ review: VERDICT }), env })
     const seen = paneWorld(on)
     await start($)
