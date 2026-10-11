@@ -9,7 +9,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { LensFinding, LensStats, LensStatus, LensView } from '../../types'
+import type { LensFinding, LensStats, LensStatsView, LensStatus, LensView } from '../../types'
 
 const view = atom({ plugin: 'temper', key: 'view' } as const, null)
 const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
@@ -46,7 +46,9 @@ let off = true
 let pending: { cancel: () => void } | null = null
 let commandRegistered = false
 let polling: { cancel: () => void } | null = null
-let sawGate = false
+// The Stops and SubagentStops running now: parallel subagents stop at the same time. One timer
+// polls for all of them, and each watch notes whether it saw temper's gate run.
+const watches = new Set<{ sawGate: boolean }>()
 const POLL_MS = 1000
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
@@ -133,17 +135,26 @@ function refreshSoon($: EngineInterface): void {
   })
 }
 
-/** While a Stop runs, poll `status --json` each second so the band and spinner show the gate's step. */
-function startPolling($: EngineInterface): void {
-  stopPolling()
-  sawGate = false
-  polling = $.clock.every(POLL_MS, () => poll($))
+/**
+ * A Stop starts: poll `status --json` each second, so the band and spinner show the gate's step,
+ * until the last running Stop ends.
+ */
+function watchStop($: EngineInterface): { sawGate: boolean } {
+  const watch = { sawGate: false }
+  watches.add(watch)
+  if (polling === null) polling = $.clock.every(POLL_MS, () => poll($))
+  return watch
+}
+
+function unwatchStop(watch: { sawGate: boolean }): void {
+  watches.delete(watch)
+  if (watches.size === 0) stopPolling()
 }
 
 async function poll($: EngineInterface): Promise<void> {
   await refresh($)
   const v = await read($, view)
-  if (v?.kind === 'status' && v.status.gate?.running) sawGate = true
+  if (v?.kind === 'status' && v.status.gate?.running) for (const w of watches) w.sawGate = true
   const now = await $.clock.now()
   await update($, polledAt, () => now)
 }
@@ -151,22 +162,29 @@ async function poll($: EngineInterface): Promise<void> {
 function stopPolling(): void {
   polling?.cancel()
   polling = null
+  watches.clear()
 }
 
 /**
- * After a Stop: refresh once and, when a gate ran or the Stop was blocked, raise one toast with
- * the outcome. The Stop's result itself is the settings hooks' and passes on untouched.
+ * After a Stop has returned: refresh once and raise at most one toast. A blocked Stop gets the
+ * reason's first line, when temper's state says the tree is not done (another hook's block is not
+ * temper's to report); otherwise, when this Stop saw temper's gate run, the outcome.
  */
-async function afterStop($: EngineInterface, reason: string | undefined): Promise<void> {
-  stopPolling()
+async function afterStop($: EngineInterface, sawGate: boolean, reason: string | undefined): Promise<void> {
   await refresh($)
-  if (reason !== undefined) {
-    $.ui.toast(`temper: ${reason.split('\n')[0].replace(/^temper:\s*/, '')}`)
+  const v = await read($, view)
+  if (v?.kind !== 'status') return
+  if (reason !== undefined && !done(v.status)) {
+    $.ui.toast(`temper: ${(reason.split('\n')[0] ?? '').replace(/^temper:\s*/, '')}`)
     return
   }
-  if (!sawGate) return
-  const v = await read($, view)
-  if (v?.kind === 'status') $.ui.toast(`temper: ${outcome(v.status)}`)
+  if (sawGate) $.ui.toast(`temper: ${outcome(v.status)}`)
+}
+
+/** Whether temper would let this tree finish: a green gate, and an approval when Rust changed. */
+function done(s: LensStatus): boolean {
+  if (s.changed.length === 0) return true
+  return s.gate?.ok === true && s.review?.verdict === 'approved' && !s.review.stale
 }
 
 /** `gate green, review approved`, and the like, for the toast after a Stop. */
@@ -247,21 +265,32 @@ export const register: Register = on => {
   })
 
   // The gate runs inside temper's own Stop and SubagentStop settings hooks. The lens watches it
-  // from beside them: it polls while `next(e)` runs and returns that result unchanged. Its .catch
-  // replays `next`, so a lens failure can never decide a Stop.
+  // from beside them: it polls while `next(e)` runs and returns that result unchanged, and reports
+  // after the Stop has returned, so it never holds the block message. Its .catch replays `next`, so
+  // a lens failure can never decide a Stop.
   on('classic.Stop', async ($, e, next) => {
     if (off) return next(e)
-    startPolling($)
-    const result = await next(e)
-    await afterStop($, result.block)
+    const watch = watchStop($)
+    let result
+    try {
+      result = await next(e)
+    } finally {
+      unwatchStop(watch)
+    }
+    $.clock.after(0, () => afterStop($, watch.sawGate, result.block))
     return result
   }).catch(($, e, next) => next(e))
 
   on('classic.SubagentStop', async ($, e, next) => {
     if (off) return next(e)
-    startPolling($)
-    const result = await next(e)
-    await afterStop($, result.block)
+    const watch = watchStop($)
+    let result
+    try {
+      result = await next(e)
+    } finally {
+      unwatchStop(watch)
+    }
+    $.clock.after(0, () => afterStop($, watch.sawGate, result.block))
     return result
   }).catch(($, e, next) => next(e))
 
@@ -422,7 +451,7 @@ async function activityTab($: EngineInterface, els: Els) {
         const n = keys.get(base) ?? 0
         keys.set(base, n + 1)
         const key = n ? `${base}#${n}` : base
-        const label = [r.t.slice(11, 19), r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
+        const label = [`${r.t.slice(11, 19)}Z`, r.event, r.rules.join(' '), r.file ?? '', r.agent === 'main' ? '' : r.agent].filter(Boolean).join('  ')
         const rule = r.rules[0]
         if (!rule) return [<Text key={key}>{label}</Text>]
         const row = <Button key={key} plain label={label} onPress={() => toggleFinding($, key, rule)} />
@@ -512,7 +541,7 @@ function totals(doc: any): LensStats {
 async function refreshStats($: EngineInterface): Promise<void> {
   const sid = await $.session.id()
   const r = await runStats($, ['--session', sid])
-  await update($, stats, () => (r.ok
+  await update($, stats, (): LensStatsView => (r.ok
     ? { kind: 'stats', totals: totals(r.doc), session: r.doc.session?.rows ?? [] }
     : { kind: 'unavailable', why: r.why }))
 }
@@ -520,7 +549,7 @@ async function refreshStats($: EngineInterface): Promise<void> {
 /** The telemetry branch is fetched only when the person asks: it is a network call. */
 async function fetchBranch($: EngineInterface): Promise<void> {
   const r = await runStats($, ['--branch'])
-  await update($, branchStats, () => (r.ok ? { kind: 'stats', totals: totals(r.doc), session: [] } : { kind: 'unavailable', why: r.why }))
+  await update($, branchStats, (): LensStatsView => (r.ok ? { kind: 'stats', totals: totals(r.doc), session: [] } : { kind: 'unavailable', why: r.why }))
 }
 
 /** Why the tree has no review, and what clears it. */
@@ -535,7 +564,9 @@ export function parseRules(text: string): Map<string, string> {
   const out = new Map<string, string>()
   for (const line of text.split('\n')) {
     const m = /^\| ([A-Z]{1,4}-\d{2}) \| (MUST|SHOULD|CONSIDER) \| (.*) \| (.*) \| (.*) \|\s*$/.exec(line)
-    if (m) out.set(m[1], `**${m[1]}** (${m[2]}): ${m[3]}\n\nEnforced by: ${m[4]}. Detail: ${m[5]}.`)
+    if (!m) continue
+    const [, id = '', level, rule, by, detail] = m
+    out.set(id, `**${id}** (${level}): ${rule}\n\nEnforced by: ${by}. Detail: ${detail}.`)
   }
   return out
 }

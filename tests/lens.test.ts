@@ -51,7 +51,7 @@ function bottoms(on: On) {
   on('session.attach', async (_$, e) => ({ clientId: e.clientId }) as any)
   on('session.id', async () => ({ value: 'test-session' }) as any)
   // The engine draws nothing in the band: an empty Box stands for that here.
-  on('ui.render', { component: 'AbovePrompt' }, async () => h('Box', {}))
+  on('ui.render', { component: 'AbovePrompt' }, async () => h('Box', {}) as any)
 }
 
 /** A turn ends; the lens refreshes once its hook has returned, so the clock moves on by 0 ms. */
@@ -78,9 +78,10 @@ for (const surface of SURFACES) {
     await start($, surface)
     expect(await bandText($, surface)).toBe('temper  3 .rs changed · gate red (clippy) · review: changes-requested, 2 major · baseline 41')
     expect(runs).toHaveLength(1)
-    expect(runs[0].slice(0, 1)).toEqual(['node'])
-    expect(runs[0][1]).toMatch(/\/scripts\/temper\.mjs$/)
-    expect(runs[0].slice(2, 5)).toEqual(['status', '--json', '--session'])
+    const [run = []] = runs
+    expect(run.slice(0, 1)).toEqual(['node'])
+    expect(run[1]).toMatch(/\/scripts\/temper\.mjs$/)
+    expect(run.slice(2, 5)).toEqual(['status', '--json', '--session'])
   })
 
   test(`band on ${surface}: a green gate and an approved review`, async ($, on) => {
@@ -132,8 +133,11 @@ for (const surface of SURFACES) {
   })
 }
 
-for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
-  test(`${Object.entries(env)[0].join('=')}: the lens runs nothing and draws nothing`, async ($, on) => {
+const OFF_ENVS: Record<string, string>[] = [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]
+const envName = (env: Record<string, string>) => Object.entries(env).map(kv => kv.join('=')).join(' ')
+
+for (const env of OFF_ENVS) {
+  test(`${envName(env)}: the lens runs nothing and draws nothing`, async ($, on) => {
     const clock = mock.clock(on)
     const runs = world(on, { env })
     await start($)
@@ -247,12 +251,18 @@ const CALLS = {
 }
 for (const [what, answer] of Object.entries(BENEATH)) {
   for (const [tool, call] of Object.entries(CALLS)) {
-    test(`the lens passes ${what} for ${tool} on unchanged`, async ($, on) => {
+    test(`the lens passes ${tool} down as it came, and ${what} back unchanged`, async ($, on) => {
       mock.clock(on)
       world(on)
-      on('tool.call', async () => answer as any)
+      const seen: unknown[] = []
+      on('tool.call', async (_$, e) => {
+        seen.push(e)
+        return answer as any
+      })
       await start($)
       expect(await $.tool.call(call as any)).toEqual(answer)
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject(call)
     })
   }
 }
@@ -294,7 +304,7 @@ function paneWorld(on: On, store: Record<string, unknown> = {}) {
   on('fs.read', async (_$, e: any) => { seen.reads.push(String(e.path)); return { value: RULES } as any })
   on('prompt.fill', async (_$, e: any) => { seen.fills.push(e); return { isFilled: true } as any })
   on('prompt.submit', async (_$, e: any) => { seen.submits.push(e); return { value: {} } as any })
-  on('ui.render', { component: 'Pane' }, async () => h('Box', {}))
+  on('ui.render', { component: 'Pane' }, async () => h('Box', {}) as any)
   return seen
 }
 
@@ -401,9 +411,9 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'tab-activity' })
     const stat = runs.find(r => r[2] === 'stats')
     expect(stat?.slice(2)).toEqual(['stats', '--json', '--session', 'test-session'])
-    const askRow = await ui.find({ type: 'Text', text: '10:00:03  ask  Cargo.toml  temper:rust-implementer' })
+    const askRow = await ui.find({ type: 'Text', text: '10:00:03Z  ask  Cargo.toml  temper:rust-implementer' })
     expect(askRow).toBeDefined()
-    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' }))?.text).toBe('10:00:02  deny-scan  H-02  src/a.rs')
+    expect((await ui.find({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' }))?.text).toBe('10:00:02Z  deny-scan  H-02  src/a.rs')
     expect(await ui.find({ type: 'Text', text: /session-start/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /deny-scan: Edits/ })).toBeDefined()
     await ui.press({ key: 'activity:2026-10-11T10:00:02.000Z:deny-scan' })
@@ -480,7 +490,7 @@ function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'termi
     return { value: [surface] } as any
   })
   on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
-  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`))
+  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`) as any)
   on('session.end', async () => ({}) as any)
   on('command.register', async () => ({ value: undefined }) as any)
   bottoms(on)
@@ -514,6 +524,7 @@ for (const surface of SURFACES) {
     expect(await spinnerText($, surface)).toBe('Working…')
     const result = await $.classic.Stop({ stop_hook_active: false } as any)
     expect(result).toEqual({})
+    await clock.advance(0)
     expect(during).toBe('Working · temper: gate 3 clippy · 1m 13s')
     expect(band).toContain('gate running: 3 clippy · 1m 13s')
     expect(band).toContain('done: fmt 1.0s, scan 0.2s')
@@ -524,32 +535,93 @@ for (const surface of SURFACES) {
   })
 }
 
-test('Stop: a block passes through unchanged, and its first line is the toast', async ($, on) => {
-  mock.clock(on)
+const APPROVED = { verdict: 'approved', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [] }
+
+test('Stop: a block passes down and back unchanged, and its first line is the toast after', async ($, on) => {
+  const clock = mock.clock(on)
   const w = stopWorld(on, () => doc({ gate: RED }))
   const block = 'temper: the Rust gate is red (clippy).\nFix it before finishing.'
-  on('classic.Stop', async () => ({ block }))
+  const input = { stop_hook_active: false }
+  const seen: unknown[] = []
+  on('classic.Stop', async (_$, e) => {
+    seen.push(e)
+    return { block }
+  })
   await start($)
-  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block })
+  expect(await $.classic.Stop(input as any)).toEqual({ block })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toMatchObject(input)
+  expect(w.toasts).toEqual([])
+  await clock.advance(0)
   expect(w.toasts).toEqual(['temper: the Rust gate is red (clippy).'])
 })
 
 test('SubagentStop is watched the same way', async ($, on) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   const w = stopWorld(on, () => doc())
-  on('classic.SubagentStop', async () => ({ block: 'review the change first' }))
+  const input = { stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' }
+  const seen: unknown[] = []
+  on('classic.SubagentStop', async (_$, e) => {
+    seen.push(e)
+    return { block: 'review the change first' }
+  })
   await start($)
-  expect(await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' } as any)).toEqual({ block: 'review the change first' })
+  expect(await $.classic.SubagentStop(input as any)).toEqual({ block: 'review the change first' })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toMatchObject(input)
+  await clock.advance(0)
   expect(w.toasts).toEqual(['temper: review the change first'])
 })
 
+test("Stop: another hook's block, on a tree temper would let finish, is not toasted as temper's", async ($, on) => {
+  const clock = mock.clock(on)
+  const w = stopWorld(on, () => doc({ gate: GREEN, review: APPROVED }))
+  on('classic.Stop', async () => ({ block: 'lint-bot: run the formatter first' }))
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(0)
+  expect(w.toasts).toEqual([])
+})
+
 test('Stop: a quiet Stop with no gate raises no toast', async ($, on) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   const w = stopWorld(on, () => doc({ gate: GREEN }))
   on('classic.Stop', async () => ({}))
   await start($)
   await $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(0)
   expect(w.toasts).toEqual([])
+})
+
+test('SubagentStops that overlap share one poll, and each one keeps polling until it ends', async ($, on) => {
+  const clock = mock.clock(on)
+  let answer = RUNNING('clippy', [])
+  let polls = 0
+  const w = stopWorld(on, () => {
+    polls += 1
+    return answer
+  })
+  let releaseB = () => {}
+  const bHeld = new Promise<void>(r => { releaseB = r })
+  on('classic.SubagentStop', async (_$, e: any) => {
+    if (e.agent_id === 'b') await bHeld
+    return {}
+  })
+  await start($)
+  const b = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'b', agent_type: 'x' } as any)
+  await clock.advance(1000)
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'x' } as any)
+  const before = polls
+  await clock.advance(3000)
+  expect(polls - before).toBeGreaterThanOrEqual(3)
+  answer = doc({ gate: GREEN, review: APPROVED })
+  releaseB()
+  await b
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(3000)
+  expect(polls).toBe(after)
+  expect(w.toasts).toContain('temper: gate green, review approved')
 })
 
 test('Stop: a lens hook that throws leaves the result as the settings hooks decided', async ($, on) => {
@@ -575,8 +647,8 @@ test('Stop under TEMPER_DISABLE=1: nothing polls', async ($, on) => {
   expect(runs).toHaveLength(0)
 })
 
-for (const env of [{ TEMPER_DISABLE: '1' }, { TEMPER_LENS: '0' }]) {
-  test(`the command is not registered under ${Object.entries(env)[0].join('=')}`, async ($, on) => {
+for (const env of OFF_ENVS) {
+  test(`the command is not registered under ${envName(env)}`, async ($, on) => {
     world(on, { stdout: doc({ review: VERDICT }), env })
     const seen = paneWorld(on)
     await start($)
