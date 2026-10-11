@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  run, readText, writeAtomic, fingerprint, rustChanges, changedFiles, showAt, crateOf, relTo, globMatch, norm,
+  run, readText, writeAtomic, fingerprint, gateProgressPath, pidAlive, rustChanges, changedFiles, showAt, crateOf, relTo, globMatch, norm,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
 import { parseToml } from './toml.mjs';
@@ -233,49 +233,59 @@ export function runGate(proj, opts = {}) {
     }
   }
 
-  // 3. escape-hatch scan of changed files (cheap; catches code written around the edit hooks)
-  if (cfg.gate.scan) {
-    const t = Date.now();
-    const s = scanChanged(proj, opts.base);
-    const ok = s.hard.length === 0;
-    steps.push({
-      name: 'scan', ok, ms: Date.now() - t,
-      summary: ok ? `${s.soft.length} advisory, ${s.ask.length} exception request(s)` : s.hard.slice(0, 12).map((h) => formatHit(h, h.file)).join('\n'),
-      exceptions: s.ask.map((h) => `${h.file}:${h.line} ${h.exception ?? h.id}`),
-    });
-    if (!ok) return finish(proj, fp, steps, true, cachePath);
-  }
-
-  // 4. member manifests (cargo metadata --no-deps: fast, no resolution), before clippy
-  {
-    const t = Date.now();
-    const m = checkManifests(proj, opts.base);
-    steps.push({ name: 'manifests', ok: m.ok, ms: Date.now() - t, summary: m.summary });
-    if (!m.ok) return finish(proj, fp, steps, true, cachePath);
-  }
-
-  // 5. cargo steps, fail fast. With a baseline, clippy and rustdoc ratchet
-  // against it; a gate.steps override in temper.json always wins.
-  const ratcheting = !cfg.gate.steps && baselineExists(proj.root);
-  const rs = { collection: null, baseline: null, changed: undefined };
-  for (const step of cfg.gate.steps ?? (ratcheting ? ratchetSteps(cfg) : defaultSteps(cfg))) {
-    if (step.ratchet) {
-      const s = ratchetStep(proj, step, rs, { base: opts.base, prefix: path.join(logs, fp), fp });
-      steps.push(s);
-      if (!s.ok) break;
-      continue;
+  // While it runs, the gate keeps a progress file for this fingerprint (gate-progress-<fp>.json)
+  // so readers such as `status --json` can show the step it is on; it goes when the gate ends.
+  const prog = progress(proj, fp, steps);
+  try {
+    // 3. escape-hatch scan of changed files (cheap; catches code written around the edit hooks)
+    if (cfg.gate.scan) {
+      prog.start('scan');
+      const t = Date.now();
+      const s = scanChanged(proj, opts.base);
+      const ok = s.hard.length === 0;
+      steps.push({
+        name: 'scan', ok, ms: Date.now() - t,
+        summary: ok ? `${s.soft.length} advisory, ${s.ask.length} exception request(s)` : s.hard.slice(0, 12).map((h) => formatHit(h, h.file)).join('\n'),
+        exceptions: s.ask.map((h) => `${h.file}:${h.line} ${h.exception ?? h.id}`),
+      });
+      if (!ok) return finish(proj, fp, steps, true, cachePath);
     }
-    const t = Date.now();
-    const [cmd, ...args] = step.cmd;
-    const r = run(cmd, args, { cwd, env: { ...env, ...(step.env ?? {}) }, timeoutMs: cfg.gate.stepTimeoutSec * 1000 });
-    const out = `${r.stdout}\n${r.stderr}`;
-    const log = path.join(logs, `${fp}-${step.name}.log`);
-    try { fs.writeFileSync(log, `$ ${step.cmd.join(' ')}\n${out}`); } catch { /* ignore */ }
-    const ok = r.code === 0;
-    steps.push({ name: step.name, ok, ms: Date.now() - t, summary: ok ? tail(step.name, out) : (r.error ? `could not run: ${r.error.message}` : summarize(step.name, out)), log });
-    if (!ok) break;
+
+    // 4. member manifests (cargo metadata --no-deps: fast, no resolution), before clippy
+    {
+      prog.start('manifests');
+      const t = Date.now();
+      const m = checkManifests(proj, opts.base);
+      steps.push({ name: 'manifests', ok: m.ok, ms: Date.now() - t, summary: m.summary });
+      if (!m.ok) return finish(proj, fp, steps, true, cachePath);
+    }
+
+    // 5. cargo steps, fail fast. With a baseline, clippy and rustdoc ratchet
+    // against it; a gate.steps override in temper.json always wins.
+    const ratcheting = !cfg.gate.steps && baselineExists(proj.root);
+    const rs = { collection: null, baseline: null, changed: undefined };
+    for (const step of cfg.gate.steps ?? (ratcheting ? ratchetSteps(cfg) : defaultSteps(cfg))) {
+      prog.start(step.name);
+      if (step.ratchet) {
+        const s = ratchetStep(proj, step, rs, { base: opts.base, prefix: path.join(logs, fp), fp });
+        steps.push(s);
+        if (!s.ok) break;
+        continue;
+      }
+      const t = Date.now();
+      const [cmd, ...args] = step.cmd;
+      const r = run(cmd, args, { cwd, env: { ...env, ...(step.env ?? {}) }, timeoutMs: cfg.gate.stepTimeoutSec * 1000 });
+      const out = `${r.stdout}\n${r.stderr}`;
+      const log = path.join(logs, `${fp}-${step.name}.log`);
+      try { fs.writeFileSync(log, `$ ${step.cmd.join(' ')}\n${out}`); } catch { /* ignore */ }
+      const ok = r.code === 0;
+      steps.push({ name: step.name, ok, ms: Date.now() - t, summary: ok ? tail(step.name, out) : (r.error ? `could not run: ${r.error.message}` : summarize(step.name, out)), log });
+      if (!ok) break;
+    }
+    return finish(proj, fp, steps, true, cachePath);
+  } finally {
+    prog.done();
   }
-  return finish(proj, fp, steps, true, cachePath);
 }
 
 /**
@@ -320,6 +330,43 @@ function ratchetStep(proj, step, rs, { base, prefix, fp }) {
     counts: { new_code: res.new_code.length, increases: res.increases.length, fixed: all.fixed_count, legacy: all.legacy_total, baseline: all.baseline_total, errors: res.errors.length },
     ...(log ? { log } : {}),
   };
+}
+
+/**
+ * The progress file of a gate running for `fp`: { fp, pid, startedAt, steps: [{ name, ok, ms }],
+ * current: { name, startedAt } | null }. Each write replaces it whole (writeAtomic), from the
+ * gate's own `steps` list; any failure to write is ignored, since progress is only a view.
+ */
+function progress(proj, fp, steps) {
+  const file = gateProgressPath(proj, fp);
+  const startedAt = new Date().toISOString();
+  let current = null;
+  const write = () => {
+    try {
+      writeAtomic(file, JSON.stringify({ fp, pid: process.pid, startedAt, steps: steps.map((s) => ({ name: s.name, ok: s.ok, ms: s.ms })), current }));
+    } catch { /* progress is best effort */ }
+  };
+  write();
+  return {
+    start(name) { current = { name, startedAt: new Date().toISOString() }; write(); },
+    done() { try { fs.rmSync(file, { force: true }); } catch { /* ignore */ } },
+  };
+}
+
+/**
+ * The progress of a gate running now for `fp`, or null. A file whose process is gone, or whose
+ * current step (or start, between steps) is older than the step timeout, is stale: a hook killed
+ * mid-gate leaves it behind, and it says nothing about the tree.
+ */
+export function gateProgress(proj, fp, now = Date.now()) {
+  const t = readText(gateProgressPath(proj, fp));
+  if (!t) return null;
+  let p;
+  try { p = JSON.parse(t); } catch { return null; }
+  if (!p || p.fp !== fp || !pidAlive(p.pid)) return null;
+  const since = Date.parse(p.current?.startedAt ?? p.startedAt);
+  if (!Number.isFinite(since) || now - since > proj.config.gate.stepTimeoutSec * 1000) return null;
+  return { startedAt: p.startedAt, steps: Array.isArray(p.steps) ? p.steps : [], current: p.current ?? null };
 }
 
 function tail(name, out) {
