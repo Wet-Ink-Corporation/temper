@@ -33,7 +33,7 @@ How do cloud and claude.ai-synced installs get the 2.0 engine, and does install 
 
 Cloud sessions install temper via org sync or a setup script; neither is verified to run npm ci, which 2.0's binary relies on.
 
-Raised by an agent (marker) as a question and captured by Weigh-In as `wi-48fb44`. Anchor: `docs/plans/temper-2-rust-port.md:855`.
+Raised by an agent (marker) as a question and captured by Weigh-In as `wi-48fb44`. Anchor: `docs/plans/temper-2-rust-port.md:867`.
 
 ## Decision drivers
 
@@ -65,7 +65,7 @@ Rely on D6 cargo build; image must have Rust.
 
 ## Evidence
 
-- `docs/plans/temper-2-rust-port.md:855`: Install paths that may skip npm ... The Phase 0b manual verify-install step settles both.
+- `docs/plans/temper-2-rust-port.md:867`: Install paths that may skip npm ... The Phase 0b manual verify-install step settles both.
 - `PR #79 thread`: Greptile's 'Cowork probe' claim has no source in the repo; Greptile agreed
 
 ## Decision outcome
