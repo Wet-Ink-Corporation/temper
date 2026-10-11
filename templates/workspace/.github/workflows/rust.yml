@@ -52,6 +52,25 @@ jobs:
           fi
           [ -n "$base" ] || echo "No base commit: a baseline is compared by its totals only."
           echo "ref=$base" >> "$GITHUB_OUTPUT"
+      # CI runs the vendored CLI from the commit under test, so a change to .claude/temper/ can
+      # change what Lint (temper) and the report say. Review it like CI configuration: this step
+      # flags it here and in the report, and the README's CODEOWNERS recipe can require sign-off.
+      - name: Vendored temper CLI
+        id: vendor
+        if: steps.base.outputs.ref != ''
+        shell: bash
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          if git diff --quiet "$BASE" HEAD -- .claude/temper; then exit 0; fi
+          # VERSION is the PR's own text: keep only version characters before echoing it.
+          ver() { tr -cd '0-9A-Za-z.+-' | head -c 40; }
+          from=$(git show "$BASE:.claude/temper/VERSION" 2>/dev/null | ver || true)
+          to=$(cat .claude/temper/VERSION 2>/dev/null | ver || true)
+          files=$(git diff --name-only "$BASE" HEAD -- .claude/temper | wc -l | tr -d ' ')
+          msg="$files file(s) in .claude/temper/ changed (VERSION ${from:-none} to ${to:-none}), and CI ran the changed copy. Check that /temper:setup wrote them, not a hand edit."
+          echo "::warning file=.claude/temper/VERSION::$msg"
+          echo "changed=$msg" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
         with:
           toolchain: "1.98.1"  # keep in sync with rust-toolchain.toml
@@ -77,7 +96,7 @@ jobs:
           node .claude/temper/temper.mjs baseline --check --locked "${args[@]}" --findings-out target/temper/findings.json
       - name: Lint
         if: hashFiles('.claude/temper/temper.mjs') == ''
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets --all-features -- -D warnings
       - name: Each crate builds on its own (ARC-16)
         shell: bash            # pipefail: a failing cargo metadata must fail the step
         run: >-
@@ -107,11 +126,15 @@ jobs:
         shell: bash
         env:
           BASE: ${{ steps.base.outputs.ref }}
+          VENDOR_CHANGED: ${{ steps.vendor.outputs.changed }}
         run: |
           args=(--out target/temper-report)
           if [ -f target/temper/findings.json ]; then args+=(--findings target/temper/findings.json)
           elif [ -n "$BASE" ]; then args+=(--base "$BASE"); fi
           node .claude/temper/temper.mjs report --locked "${args[@]}"
+          if [ -n "$VENDOR_CHANGED" ]; then
+            printf '\n> **VENDORED CLI CHANGED.** %s\n' "$VENDOR_CHANGED" >> target/temper-report/report.md
+          fi
           cat target/temper-report/report.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the compliance report
         id: upload-report
@@ -186,7 +209,7 @@ jobs:
       # `+$MSRV` overrides rust-toolchain.toml, which would otherwise select the pinned toolchain.
       # Cargo < 1.97 silently ignores build.warnings, so deny warnings the old way here too.
       # With a baseline, legacy warnings are the gate job's Lint (temper) step's business.
-      - run: cargo "+$MSRV" check --locked --workspace --all-targets --all-features
+      - run: cargo "+$MSRV" check --locked --keep-going --workspace --all-targets --all-features
         env:
           MSRV: ${{ steps.msrv.outputs.version }}
           RUSTFLAGS: ${{ hashFiles('.claude/temper-baseline.json') == '' && '-D warnings' || '' }}
@@ -216,7 +239,7 @@ jobs:
         run: node .claude/temper/temper.mjs baseline --check --locked
       - name: Lint
         if: hashFiles('.claude/temper/temper.mjs') == ''
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
 
   aarch64:
