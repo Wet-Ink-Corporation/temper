@@ -865,8 +865,10 @@ test('a slow status run is not stacked: one poll at a time', async ($, on) => {
   expect(w.st.max).toBeLessThanOrEqual(2)
 })
 
-for (const [kind, ms, gate] of [['Stop', 900, 1500], ['SubagentStop', 400, 3000]] as const) {
-  test(`${kind}: a poll still running when the gate ends neither paints over the final state nor loses the toast`, async ($, on) => {
+for (const [kind, ms, gate, turnEnds] of [
+  ['Stop', 900, 1500, false], ['SubagentStop', 400, 3000, false], ['Stop', 900, 1500, true], ['SubagentStop', 400, 3000, true],
+] as const) {
+  test(`${kind}${turnEnds ? ', then a turn end' : ''}: a poll still running when the gate ends neither paints over the final state nor loses the toast`, async ($, on) => {
     const clock = mock.clock(on, { now: 72000 })
     let answer = doc()
     const w = slowWorld(on, clock, () => answer, snap => (snap.includes('"running":{') ? ms : 0))
@@ -879,6 +881,8 @@ for (const [kind, ms, gate] of [['Stop', 900, 1500], ['SubagentStop', 400, 3000]
     await start($)
     const input = kind === 'Stop' ? { stop_hook_active: false } : { stop_hook_active: false, agent_id: 'a', agent_type: 'x' }
     await (kind === 'Stop' ? $.classic.Stop(input as any) : $.classic.SubagentStop(input as any))
+    // A newer refresh (the turn end's) writes first; the slow poll's sighting must still count.
+    if (turnEnds) await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
     await w.tick(5000)
     expect(w.toasts).toEqual(['temper: gate green, review approved'])
     expect(await bandText($, 'terminal')).toContain('gate green')

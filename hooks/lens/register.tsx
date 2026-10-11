@@ -60,21 +60,23 @@ let pollRunning: Promise<void> | null = null
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
 
-async function refresh($: EngineInterface): Promise<void> {
+/** Refreshes the view; resolves to what `status --json` said (null where nothing draws). */
+async function refresh($: EngineInterface): Promise<LensView | null> {
   const seq = ++refreshes
   const surfaces = await $.session.surfaces()
-  if (!surfaces.some(s => DRAWS.has(s))) return
+  if (!surfaces.some(s => DRAWS.has(s))) return null
   const fresh = await statusView($)
   if (fresh === 'no-project') {
     off = true
-    return
+    return null
   }
   // Refreshes overlap (a slow poll, the refresh after a Stop): only a newer one may write, so a
   // late answer from while the gate ran never paints over the final state.
-  if (seq < written) return
+  if (seq < written) return fresh
   written = seq
   await update($, view, () => fresh)
   await registerCommand($)
+  return fresh
 }
 
 /** `/temper-lens` opens the pane; registered once the lens knows it is in a Rust project. */
@@ -135,15 +137,17 @@ async function afterTurn($: EngineInterface): Promise<void> {
 
 /** Refreshes once the current hook has returned. */
 function refreshNow($: EngineInterface): void {
-  $.clock.after(0, () => refresh($))
+  $.clock.after(0, async () => {
+    await refresh($)
+  })
 }
 
 /** Refreshes once, DEBOUNCE_MS after the first change: later changes in that spell ride along. */
 function refreshSoon($: EngineInterface): void {
   if (pending) return
-  pending = $.clock.after(DEBOUNCE_MS, () => {
+  pending = $.clock.after(DEBOUNCE_MS, async () => {
     pending = null
-    return refresh($)
+    await refresh($)
   })
 }
 
@@ -190,8 +194,8 @@ async function poll($: EngineInterface): Promise<void> {
 
 async function pollOnce($: EngineInterface, mine: Watch[]): Promise<void> {
   if (!(await draws($))) return
-  await refresh($)
-  const v = await read($, view)
+  // Credit from this poll's own answer: a newer refresh may have written the view since.
+  const v = await refresh($)
   if (v?.kind === 'status' && v.status.gate?.running) for (const w of mine) w.sawGate = true
   const now = await $.clock.now()
   await update($, polledAt, () => now)
