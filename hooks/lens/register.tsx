@@ -145,8 +145,13 @@ function refreshSoon($: EngineInterface): void {
 async function watchStop($: EngineInterface): Promise<Watch> {
   const watch = { startedAt: await $.clock.now(), sawGate: false }
   watches.add(watch)
-  if (polling === null) polling = $.clock.every(POLL_MS, () => poll($))
+  if (polling === null && (await draws($))) polling = $.clock.every(POLL_MS, () => poll($))
   return watch
+}
+
+/** Whether a terminal or the desktop app draws this session: elsewhere the lens runs nothing. */
+async function draws($: EngineInterface): Promise<boolean> {
+  return (await $.session.surfaces()).some(s => DRAWS.has(s))
 }
 
 function unwatchStop(watch: Watch): void {
@@ -174,6 +179,7 @@ function stopPolling(): void {
  * temper's to report); otherwise, when this Stop saw temper's gate run, the outcome.
  */
 async function afterStop($: EngineInterface, watch: Watch, reason: string | undefined): Promise<void> {
+  if (!(await draws($))) return
   await refresh($)
   if (reason !== undefined && (await temperBlocked($, watch.startedAt))) {
     const line = reason.split('\n')[0] ?? ''

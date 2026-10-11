@@ -660,7 +660,21 @@ test('SubagentStops that overlap share one poll, and each one keeps polling unti
   expect(w.toasts).toContain('temper: gate green, review approved')
 })
 
-test('Stop: a lens hook that throws leaves the result as the settings hooks decided', async ($, on) => {
+test('Stop where nothing draws: the lens runs nothing, and the block passes back unchanged', async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  const runs = world(on, { surfaces: [] })
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  on('classic.Stop', async () => {
+    await clock.advance(3000)
+    return { block: 'temper: the gate is red' }
+  })
+  await start($, null)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block: 'temper: the gate is red' })
+  await clock.advance(3000)
+  expect(runs).toEqual([])
+})
+
+test('Stop: a failing surfaces call during the Stop leaves the result as the settings hooks decided', async ($, on) => {
   mock.clock(on)
   const w = stopWorld(on, () => doc())
   on('classic.Stop', async () => {
