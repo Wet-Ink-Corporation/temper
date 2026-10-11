@@ -1,5 +1,5 @@
 // One reader of shell command lines for the preBash rules that look at what a command
-// writes: the state-dir deny, the protected-config ask and the scan of copies and patches
+// writes or deletes: the state-dir deny, the protected-config ask and the scan of copies and patches
 // onto Rust sources. It reads quotes, escapes, expansions, heredocs, operators, subshells,
 // compound-command keywords, wrappers (sudo, env, xargs, ...) and `cd`, and reports the
 // files each simple command writes. It never runs anything and reads no files: a rule that
@@ -429,8 +429,8 @@ function run(src, env, out, depth, via) {
   }
 }
 
-// PowerShell cmdlets (Verb-Noun with a common verb) and the aliases the write rules read.
-const PS_NAME = /^(?:(?:get|set|new|remove|copy|move|add|clear|out|write|read|invoke|start|stop|test|import|export|select|where|foreach|rename|join|split|resolve|convert|convertto|convertfrom|format|measure|tee|push|pop|expand|compress|update|enter|sort|group|compare)-[a-z]+|cpi|mi|sc|ac|ni|sl|copy|move)$/;
+// PowerShell cmdlets (Verb-Noun with a common verb) and the aliases the write and delete rules read.
+const PS_NAME = /^(?:(?:get|set|new|remove|copy|move|add|clear|out|write|read|invoke|start|stop|test|import|export|select|where|foreach|rename|join|split|resolve|convert|convertto|convertfrom|format|measure|tee|push|pop|expand|compress|update|enter|sort|group|compare)-[a-z]+|cpi|mi|sc|ac|ni|sl|copy|move|ri|del|erase|rd)$/;
 
 /** Whether a simple command is PowerShell: a cmdlet name, `$x = ...` or a `[Type]::Method(...)` expression. */
 function psCommand(words, env) {
@@ -938,6 +938,65 @@ export function commandWrites(c) {
 
 /** Every file `cmd` writes (see parseCommands for the options and commandWrites for the targets). */
 export const writeTargets = (cmd, opts = {}) => parseCommands(cmd, opts).flatMap((c) => commandWrites(c).map((t) => ({ ...t, command: c })));
+
+// ---------- what a command deletes ----------
+
+const PS_REMOVE = /^(?:remove-item|ri|del|erase|rd)$/;
+
+/**
+ * The files a simple command deletes, as `{ verb, raw, text, value, glob, path, cwd, recursive }`:
+ * the operands of `rm` and `unlink`, the paths of `Remove-Item` (and its `ri`, `del`, `erase`
+ * and `rd` aliases; PowerShell's `rm` reads as rm) and the pathspecs of `git rm`, which
+ * counts with `--cached` too, since the file leaves the repository. `recursive` marks a delete
+ * that takes a whole directory (`rm -r`, `-Recurse`, `git rm -r`). Dry runs (`git rm -n`,
+ * `-WhatIf`) delete nothing. Kept apart from commandWrites: the state-dir rule lets `rm` through.
+ */
+export function commandDeletes(c) {
+  const out = [];
+  const add = (verb, w, recursive, cwd = c.cwd) => {
+    if (!w || w === true) return;
+    out.push({ verb, raw: w.raw, text: w.text, value: w.value, glob: w.glob, path: wordPath(w, cwd), cwd, recursive });
+  };
+  const name = c.name;
+  if (name === 'rm' || name === 'unlink') {
+    let recursive = false;
+    let opts = true;
+    const pos = [];
+    for (const a of c.args) {
+      if (opts && a.raw === '--') { opts = false; continue; }
+      if (opts && /^-./.test(a.raw)) { if (/^-[a-zA-Z]*[rR]|^--recursive$/.test(a.raw)) recursive = true; continue; }
+      pos.push(a);
+    }
+    for (const a of pos) add(name, a, recursive);
+  } else if (PS_REMOVE.test(name ?? '')) {
+    // `-Recurse` may be shortened to any prefix (`-r`, `-rec`), and takes no value.
+    const { pos, get, named } = psParams(c.args, /^(?:force|whatif|confirm|r(?:e(?:c(?:u(?:r(?:se?)?)?)?)?)?)$/);
+    if (psDryRun(named)) return out;
+    const paths = [get('path'), get('literalpath'), named.get('lp')].filter((x) => x && x !== true);
+    if (!paths.length && pos.length) paths.push(pos[0]);
+    const filtered = ['filter', 'include', 'exclude'].some((k) => named.has(k));
+    const recursive = [...named.keys()].some((k) => k.startsWith('r') && 'recurse'.startsWith(k));
+    const words = paths.flatMap((p) => (p.value === null ? [p] : p.value.split(',').map((t) => (filtered ? unknownWord(t) : { ...p, raw: t, text: t, value: t }))));
+    for (const w of words) add(name, w, recursive);
+  } else if (name === 'git') {
+    const g = gitCommand(c);
+    if (g.sub !== 'rm') return out;
+    let recursive = false;
+    let opts = true;
+    const pos = [];
+    for (const a of g.args) {
+      if (opts && a.raw === '--') { opts = false; continue; }
+      if (opts && /^-./.test(a.raw)) {
+        if (/^-[a-zA-Z]*n|^--dry-run$|^--pathspec-from-file/.test(a.raw)) return out;
+        if (/^-[a-zA-Z]*r/.test(a.raw)) recursive = true;
+        continue;
+      }
+      pos.push(a);
+    }
+    for (const a of pos) add('git rm', a, recursive, g.cwd);
+  }
+  return out;
+}
 
 /**
  * Where one source of a copy target lands: the destination, or the source's name inside it

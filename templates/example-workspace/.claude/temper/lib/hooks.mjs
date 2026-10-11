@@ -23,7 +23,7 @@ import { writeTargets, msysPath } from './shell.mjs';
 import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 import {
   parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
-  landing as protectedLanding, patchFiles as protectedPatchFiles,
+  landing as protectedLanding, patchFiles as protectedPatchFiles, commandDeletes as protectedDeletes,
 } from './shell.mjs';
 
 const REVIEWER = /(^|:)rust-reviewer$/;
@@ -798,24 +798,30 @@ function configPatchTouches(p, c) {
  * `git checkout <rev> -- .github`, `git restore --source=<rev> .`) reports the protected
  * globs it replaces. `git checkout`/`git restore` from HEAD or the index pass; for a
  * wildcard pathspec from another revision, git lists the files it would change. A patch
- * (git apply, git am, patch) writes the files it names. Returns `{ files, unreadPatch }`:
+ * (git apply, git am, patch) writes the files it names. Returns `{ files, deleted, unreadPatch }`:
  * `unreadPatch` is the first patch command whose patch temper cannot read (a pipe, a variable,
  * a missing file, `git am --continue`), or null.
+ *
+ * `deleted` lists the protected configuration `cmd` deletes (`rm`, `unlink`, `Remove-Item` and
+ * its aliases, `git rm`, `--cached` included), read the same way: a recursive delete of a
+ * directory (`rm -rf .claude`) reports the protected globs under it and each protected file it
+ * holds. A glob operand (`rm *.toml`) is not expanded, as for writes.
  */
 function protectedShellWrites(proj, cmd, cwd) {
   const start = cwd && fs.existsSync(cwd) ? path.resolve(cwd) : proj.root;
   const rels = [];
+  const deleted = [];
   let unreadPatch = null;
   const owners = new Map();
   const stat = (p) => { try { return fs.statSync(p); } catch { return null; } };
-  const check = (abs, tree) => {
+  const check = (abs, tree, into = rels) => {
     const rel = relTo(proj.root, abs);
     if (rel.startsWith('..') || path.isAbsolute(rel) || (!rel && !tree)) return;
     const owner = rel ? ownerOf(proj, rel, owners) : proj;
     const own = owner === proj ? rel : relTo(owner.root, abs);
     const hits = own && owner.config.protected.some((p) => globMatch(p, own)) ? [rel] : [];
     if (tree) hits.push(...protectedUnder(owner.config.protected, own).map((g) => (owner === proj ? g : `${relTo(proj.root, owner.root)}/${g}`)));
-    for (const h of hits) if (!rels.includes(h)) rels.push(h);
+    for (const h of hits) if (!into.includes(h)) into.push(h);
   };
   // A wildcard or magic pathspec (`git checkout main -- '*.toml'`), or a directory: the files it would change, as git lists them.
   const pathspec = (t, base, fallback = true) => {
@@ -864,8 +870,17 @@ function protectedShellWrites(proj, cmd, cwd) {
         }
       }
     }
+    // A delete takes the file, or with -r a whole directory and the protected files inside it.
+    for (const t of protectedDeletes(c)) {
+      for (const base of t.cwd ? [t.cwd] : [start, proj.root]) {
+        const abs = t.glob ? null : resolvePath(t.value, base);
+        if (!abs) continue;
+        check(abs, t.recursive, deleted);
+        if (t.recursive && stat(abs)?.isDirectory()) for (const f of configFilesUnder(abs) ?? []) check(path.join(abs, f), false, deleted);
+      }
+    }
   }
-  return { files: rels, unreadPatch };
+  return { files: rels, deleted, unreadPatch };
 }
 
 /** Shell segments of a command with quotes removed (`"--update"` and `'x'` read as `--update` and `x`). */
@@ -1051,15 +1066,19 @@ export function preBash(input) {
   // Protected configuration written from the shell asks, as an Edit/Write to it does.
   // After every deny above, so a command that also does something denied stays denied.
   // Its ask is shown together with the dependency and snapshot asks below, as preEdit collects asks.
-  const { files: configWrites, unreadPatch } = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), { files: [], unreadPatch: null });
+  const { files: configWrites, deleted: configDeletes, unreadPatch } = readerRule(() => protectedShellWrites(proj, cmd, input.cwd), { files: [], deleted: [], unreadPatch: null });
   const what = configWrites.join(', ');
+  const gone = configDeletes.join(', ');
   const configAsks = [
     ...(configWrites.length ? [`temper: this shell command writes ${what}. ${what} ${configWrites.length > 1 ? 'are' : 'is'} verification/agent configuration. Changing ${configWrites.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`] : []),
+    // Deleting protected configuration weakens the checks as much as rewriting it (wi-2000a3).
+    ...(configDeletes.length ? [`temper: this shell command deletes ${gone}. ${gone} ${configDeletes.length > 1 ? 'are' : 'is'} verification/agent configuration. Deleting ${configDeletes.length > 1 ? 'them' : 'it'} can weaken the checks (H-05, H-12). Approve only if you asked for this change.`] : []),
     // A patch from a pipe, a variable or a missing file may change protected configuration too.
     ...(unreadPatch !== null ? [`temper: \`${unreadPatch.slice(0, 120)}\`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes.`] : []),
   ];
   const configAsk = configAsks.length ? configAsks.join('\n') : null;
   if (configWrites.length) telemetry(proj, input, 'ask', { via: 'shell-write-protected', file: configWrites[0] });
+  else if (configDeletes.length) telemetry(proj, input, 'ask', { via: 'shell-delete-protected', file: configDeletes[0] });
   else if (configAsk) telemetry(proj, input, 'ask', { via: 'shell-patch-unread' });
   const withConfig = (reason) => ask(configAsk ? `${configAsk}\n${reason}` : reason);
   if (proj.config.askOnNewDependency) {
