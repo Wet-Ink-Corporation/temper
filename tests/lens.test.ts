@@ -262,7 +262,7 @@ for (const [what, answer] of Object.entries(BENEATH)) {
       await start($)
       expect(await $.tool.call(call as any)).toEqual(answer)
       expect(seen).toHaveLength(1)
-      expect(seen[0]).toMatchObject(call)
+      expect(seen[0]).toEqual(call)
     })
   }
 }
@@ -480,11 +480,20 @@ const RUNNING = (current: string, done: { name: string; ms: number }[]) => doc({
 
 const SPINNER = { plugin: 'temper', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
 
-/** A Stop world: the CLI's answer is `answer()` at each run; toasts and surfaces are recorded. */
-function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'terminal') {
+/** Telemetry rows for `stats --json --session`: temper's own record of a block, at `ms`. */
+const temperBlock = (event: string, ms: number) => ({ t: new Date(ms).toISOString(), event, agent: 'main', file: null, rules: [], via: null })
+
+/**
+ * A Stop world: `status --json` answers `answer()` at each run, `stats --json` lists `rows()` as
+ * this session's telemetry; toasts and surfaces are recorded.
+ */
+function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'terminal', rows: () => unknown[] = () => []) {
   const toasts: string[] = []
   let surfacesFail = false
-  on('process.run', async () => ({ value: { exitCode: 0, stdout: answer(), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', async (_$, e) => {
+    const stdout = e.argv[2] === 'stats' ? STATS({ session: { id: 'test-session', rows: rows() } }) : answer()
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('session.surfaces', async () => {
     if (surfacesFail) throw new Error('surfaces broke')
     return { value: [surface] } as any
@@ -537,9 +546,12 @@ for (const surface of SURFACES) {
 
 const APPROVED = { verdict: 'approved', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [] }
 
+// What the engine adds to a Stop's input on its way down; the lens adds nothing.
+const ENGINE_KEYS = ['session_id', 'transcript_path', 'cwd', 'hook_event_name']
+
 test('Stop: a block passes down and back unchanged, and its first line is the toast after', async ($, on) => {
-  const clock = mock.clock(on)
-  const w = stopWorld(on, () => doc({ gate: RED }))
+  const clock = mock.clock(on, { now: 72000 })
+  const w = stopWorld(on, () => doc({ gate: RED }), 'terminal', () => [temperBlock('stop-blocked', 72000)])
   const block = 'temper: the Rust gate is red (clippy).\nFix it before finishing.'
   const input = { stop_hook_active: false }
   const seen: unknown[] = []
@@ -551,14 +563,15 @@ test('Stop: a block passes down and back unchanged, and its first line is the to
   expect(await $.classic.Stop(input as any)).toEqual({ block })
   expect(seen).toHaveLength(1)
   expect(seen[0]).toMatchObject(input)
+  expect(Object.keys(seen[0] as object).sort()).toEqual([...Object.keys(input), ...ENGINE_KEYS].sort())
   expect(w.toasts).toEqual([])
   await clock.advance(0)
   expect(w.toasts).toEqual(['temper: the Rust gate is red (clippy).'])
 })
 
 test('SubagentStop is watched the same way', async ($, on) => {
-  const clock = mock.clock(on)
-  const w = stopWorld(on, () => doc())
+  const clock = mock.clock(on, { now: 72000 })
+  const w = stopWorld(on, () => doc(), 'terminal', () => [temperBlock('verdict-invalid', 72500)])
   const input = { stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' }
   const seen: unknown[] = []
   on('classic.SubagentStop', async (_$, e) => {
@@ -569,18 +582,41 @@ test('SubagentStop is watched the same way', async ($, on) => {
   expect(await $.classic.SubagentStop(input as any)).toEqual({ block: 'review the change first' })
   expect(seen).toHaveLength(1)
   expect(seen[0]).toMatchObject(input)
+  expect(Object.keys(seen[0] as object).sort()).toEqual([...Object.keys(input), ...ENGINE_KEYS].sort())
   await clock.advance(0)
   expect(w.toasts).toEqual(['temper: review the change first'])
 })
 
-test("Stop: another hook's block, on a tree temper would let finish, is not toasted as temper's", async ($, on) => {
-  const clock = mock.clock(on)
-  const w = stopWorld(on, () => doc({ gate: GREEN, review: APPROVED }))
-  on('classic.Stop', async () => ({ block: 'lint-bot: run the formatter first' }))
+for (const [what, tree] of [['an approved tree', doc({ gate: GREEN, review: APPROVED })], ['an unreviewed tree', doc({ gate: GREEN })]] as const) {
+  test(`Stop and SubagentStop: another hook's block on ${what} is not toasted as temper's`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    // temper blocked an earlier Stop, before this one began: that row is not this block.
+    const w = stopWorld(on, () => tree, 'terminal', () => [temperBlock('stop-blocked', 60000)])
+    on('classic.Stop', async () => ({ block: 'lint-bot: run the formatter first' }))
+    on('classic.SubagentStop', async () => ({ block: 'lint-bot: run the formatter first' }))
+    await start($)
+    await $.classic.Stop({ stop_hook_active: false } as any)
+    await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' } as any)
+    await clock.advance(0)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test("Stop: a block after the gate ran passes back unchanged, and the toast is the block's", async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  let answer = doc()
+  const w = stopWorld(on, () => answer, 'terminal', () => [temperBlock('stop-blocked', 74000)])
+  const block = 'temper gate: fmt ok | clippy FAILED\nThe work is not done while the gate is red.'
+  on('classic.Stop', async () => {
+    answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }])
+    await clock.advance(2000)
+    answer = doc({ gate: RED })
+    return { block }
+  })
   await start($)
-  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block })
   await clock.advance(0)
-  expect(w.toasts).toEqual([])
+  expect(w.toasts).toEqual(['temper gate: fmt ok | clippy FAILED'])
 })
 
 test('Stop: a quiet Stop with no gate raises no toast', async ($, on) => {

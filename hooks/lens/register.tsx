@@ -48,7 +48,10 @@ let commandRegistered = false
 let polling: { cancel: () => void } | null = null
 // The Stops and SubagentStops running now: parallel subagents stop at the same time. One timer
 // polls for all of them, and each watch notes whether it saw temper's gate run.
-const watches = new Set<{ sawGate: boolean }>()
+type Watch = { startedAt: number; sawGate: boolean }
+const watches = new Set<Watch>()
+/** The telemetry rows temper writes when its own Stop or SubagentStop hook blocks. */
+const TEMPER_BLOCKS = new Set(['stop-blocked', 'verdict-invalid'])
 const POLL_MS = 1000
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
@@ -56,12 +59,12 @@ let rules: Map<string, string> | null = null
 async function refresh($: EngineInterface): Promise<void> {
   const surfaces = await $.session.surfaces()
   if (!surfaces.some(s => DRAWS.has(s))) return
-  const next = await statusView($)
-  if (next === 'no-project') {
+  const fresh = await statusView($)
+  if (fresh === 'no-project') {
     off = true
     return
   }
-  await update($, view, () => next)
+  await update($, view, () => fresh)
   await registerCommand($)
 }
 
@@ -139,14 +142,14 @@ function refreshSoon($: EngineInterface): void {
  * A Stop starts: poll `status --json` each second, so the band and spinner show the gate's step,
  * until the last running Stop ends.
  */
-function watchStop($: EngineInterface): { sawGate: boolean } {
-  const watch = { sawGate: false }
+async function watchStop($: EngineInterface): Promise<Watch> {
+  const watch = { startedAt: await $.clock.now(), sawGate: false }
   watches.add(watch)
   if (polling === null) polling = $.clock.every(POLL_MS, () => poll($))
   return watch
 }
 
-function unwatchStop(watch: { sawGate: boolean }): void {
+function unwatchStop(watch: Watch): void {
   watches.delete(watch)
   if (watches.size === 0) stopPolling()
 }
@@ -167,24 +170,27 @@ function stopPolling(): void {
 
 /**
  * After a Stop has returned: refresh once and raise at most one toast. A blocked Stop gets the
- * reason's first line, when temper's state says the tree is not done (another hook's block is not
+ * reason's first line when temper's own telemetry recorded the block (another hook's block is not
  * temper's to report); otherwise, when this Stop saw temper's gate run, the outcome.
  */
-async function afterStop($: EngineInterface, sawGate: boolean, reason: string | undefined): Promise<void> {
+async function afterStop($: EngineInterface, watch: Watch, reason: string | undefined): Promise<void> {
   await refresh($)
-  const v = await read($, view)
-  if (v?.kind !== 'status') return
-  if (reason !== undefined && !done(v.status)) {
-    $.ui.toast(`temper: ${(reason.split('\n')[0] ?? '').replace(/^temper:\s*/, '')}`)
+  if (reason !== undefined && (await temperBlocked($, watch.startedAt))) {
+    const line = reason.split('\n')[0] ?? ''
+    $.ui.toast(line.startsWith('temper') ? line : `temper: ${line}`)
     return
   }
-  if (sawGate) $.ui.toast(`temper: ${outcome(v.status)}`)
+  const v = await read($, view)
+  if (watch.sawGate && v?.kind === 'status') $.ui.toast(`temper: ${outcome(v.status)}`)
 }
 
-/** Whether temper would let this tree finish: a green gate, and an approval when Rust changed. */
-function done(s: LensStatus): boolean {
-  if (s.changed.length === 0) return true
-  return s.gate?.ok === true && s.review?.verdict === 'approved' && !s.review.stale
+/** Whether temper's telemetry has a block of its own in this session since `since` (ms). */
+async function temperBlocked($: EngineInterface, since: number): Promise<boolean> {
+  const r = await runStats($, ['--session', await $.session.id()])
+  if (!r.ok) return false
+  const rows: { t?: unknown; event?: unknown }[] = r.doc.session?.rows ?? []
+  // A second of slack for the hook process's clock against this one.
+  return rows.some(row => TEMPER_BLOCKS.has(String(row.event)) && Date.parse(String(row.t)) >= since - 1000)
 }
 
 /** `gate green, review approved`, and the like, for the toast after a Stop. */
@@ -270,27 +276,27 @@ export const register: Register = on => {
   // a lens failure can never decide a Stop.
   on('classic.Stop', async ($, e, next) => {
     if (off) return next(e)
-    const watch = watchStop($)
+    const watch = await watchStop($)
     let result
     try {
       result = await next(e)
     } finally {
       unwatchStop(watch)
     }
-    $.clock.after(0, () => afterStop($, watch.sawGate, result.block))
+    $.clock.after(0, () => afterStop($, watch, result.block))
     return result
   }).catch(($, e, next) => next(e))
 
   on('classic.SubagentStop', async ($, e, next) => {
     if (off) return next(e)
-    const watch = watchStop($)
+    const watch = await watchStop($)
     let result
     try {
       result = await next(e)
     } finally {
       unwatchStop(watch)
     }
-    $.clock.after(0, () => afterStop($, watch.sawGate, result.block))
+    $.clock.after(0, () => afterStop($, watch, result.block))
     return result
   }).catch(($, e, next) => next(e))
 
