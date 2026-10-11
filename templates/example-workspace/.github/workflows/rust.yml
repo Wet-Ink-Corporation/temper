@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       report-url: ${{ steps.upload-report.outputs.artifact-url }}
+      vendor-changed: ${{ steps.vendor.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,6 +53,28 @@ jobs:
           fi
           [ -n "$base" ] || echo "No base commit: a baseline is compared by its totals only."
           echo "ref=$base" >> "$GITHUB_OUTPUT"
+      # CI runs the vendored CLI from the commit under test, so a change to .claude/temper/ can
+      # change what Lint (temper) and the report say. Review it like CI configuration. This step
+      # runs before any vendored code, and flags the change in an annotation, the step summary and
+      # (through report-comment, which runs no repository code) the PR comment. The README's
+      # CODEOWNERS recipe can require sign-off.
+      - name: Vendored temper CLI
+        id: vendor
+        if: steps.base.outputs.ref != ''
+        shell: bash
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          if git diff --quiet "$BASE" HEAD -- .claude/temper; then exit 0; fi
+          # VERSION is the PR's own text: keep only version characters before echoing it.
+          ver() { tr -cd '0-9A-Za-z.+-' | head -c 40; }
+          from=$(git show "$BASE:.claude/temper/VERSION" 2>/dev/null | ver || true)
+          to=$(cat .claude/temper/VERSION 2>/dev/null | ver || true)
+          files=$(git diff --name-only "$BASE" HEAD -- .claude/temper | wc -l | tr -d ' ')
+          msg="$files file(s) in .claude/temper/ changed (VERSION ${from:-none} to ${to:-none}), and CI ran the changed copy. Check that /temper:setup wrote them, not a hand edit."
+          echo "::warning file=.claude/temper/VERSION::$msg"
+          printf '> **VENDORED CLI CHANGED.** %s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+          echo "changed=$msg" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master, 2026-09-28
         with:
           toolchain: "1.98.1"  # keep in sync with rust-toolchain.toml
@@ -77,7 +100,7 @@ jobs:
           node .claude/temper/temper.mjs baseline --check --locked "${args[@]}" --findings-out target/temper/findings.json
       - name: Lint
         if: hashFiles('.claude/temper/temper.mjs') == ''
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets --all-features -- -D warnings
       - name: Each crate builds on its own (ARC-16)
         shell: bash            # pipefail: a failing cargo metadata must fail the step
         run: >-
@@ -139,7 +162,7 @@ jobs:
           name: temper-report
           path: temper-report
       - name: Comment the report on the PR
-        if: steps.download.outcome == 'success'
+        if: steps.download.outcome == 'success' || needs.gate.outputs.vendor-changed != ''
         continue-on-error: true  # a fork PR's token is read-only
         shell: bash
         env:
@@ -147,8 +170,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           REPORT_URL: ${{ needs.gate.outputs.report-url }}
+          VENDOR_CHANGED: ${{ needs.gate.outputs.vendor-changed }}
         run: |
-          body=temper-report/report.md
+          body=$RUNNER_TEMP/comment.md
+          printf '<!-- temper-report -->\n' > "$body"
+          # From the gate's Vendored temper CLI step, which ran before any vendored code. It goes
+          # first, so nothing the report contains can hide it, and it is posted without a report.
+          if [ -n "$VENDOR_CHANGED" ]; then printf '\n> **VENDORED CLI CHANGED.** %s\n\n' "$VENDOR_CHANGED" >> "$body"; fi
+          if [ -f temper-report/report.md ]; then sed '1{/^<!-- temper-report -->$/d;}' temper-report/report.md >> "$body"
+          else printf 'The gate stopped before the compliance report was written.\n' >> "$body"; fi
           if [ -n "$REPORT_URL" ]; then printf '\n[Full HTML report](%s): the temper-report artifact.\n' "$REPORT_URL" >> "$body"; fi
           # temper's previous comment, found by its marker (never another bot's comment): edit it, else post one.
           id=$(gh api --paginate "repos/$GH_REPO/issues/$PR/comments" \
@@ -186,7 +216,7 @@ jobs:
       # `+$MSRV` overrides rust-toolchain.toml, which would otherwise select the pinned toolchain.
       # Cargo < 1.97 silently ignores build.warnings, so deny warnings the old way here too.
       # With a baseline, legacy warnings are the gate job's Lint (temper) step's business.
-      - run: cargo "+$MSRV" check --locked --workspace --all-targets --all-features
+      - run: cargo "+$MSRV" check --locked --keep-going --workspace --all-targets --all-features
         env:
           MSRV: ${{ steps.msrv.outputs.version }}
           RUSTFLAGS: ${{ hashFiles('.claude/temper-baseline.json') == '' && '-D warnings' || '' }}
@@ -216,7 +246,7 @@ jobs:
         run: node .claude/temper/temper.mjs baseline --check --locked
       - name: Lint
         if: hashFiles('.claude/temper/temper.mjs') == ''
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --keep-going --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
 
   aarch64:
