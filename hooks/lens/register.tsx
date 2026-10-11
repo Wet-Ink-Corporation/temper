@@ -144,8 +144,11 @@ function refreshSoon($: EngineInterface): void {
  */
 async function watchStop($: EngineInterface): Promise<Watch> {
   const watch = { startedAt: await $.clock.now(), sawGate: false }
+  // Every await comes before the add: a call that throws must not leave a watch behind, or the
+  // poll would never stop.
+  const drawing = await draws($)
   watches.add(watch)
-  if (await draws($)) startPolling($)
+  if (drawing) startPolling($)
   return watch
 }
 

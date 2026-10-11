@@ -778,3 +778,33 @@ test('an open finding stays with its finding when a refresh adds another before 
   expect(await ui.find({ key: 'finding:ERR-02:src/c.rs:1-rule' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a surfaces call failing as a Stop starts leaves no watch behind: a later Stop stops its poll', async ($, on) => {
+  const clock = mock.clock(on)
+  let fail = false
+  let polls = 0
+  on('process.run', async () => {
+    polls += 1
+    return { value: { exitCode: 0, stdout: RUNNING('clippy', []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => {
+    if (fail) throw new Error('surfaces broke')
+    return { value: ['terminal'] } as any
+  })
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  on('classic.Stop', async () => {
+    await clock.advance(2000)
+    return {}
+  })
+  await start($)
+  fail = true
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  fail = false
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(10000)
+  expect(polls).toBe(after)
+})
