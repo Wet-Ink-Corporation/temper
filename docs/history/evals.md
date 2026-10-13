@@ -25,6 +25,17 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## Cases authored for #101, not yet run (2026-10-13)
+
+Four cases cover the planning and human-decision steps of `/temper:implement` and rule families no case exercised yet. Each is tagged `discriminating` and builds offline with no dependencies. None has run, so none is in the targets above until a run approved by the owner scores it.
+
+| Case | What it checks | Rules |
+|---|---|---|
+| `asks-before-breaking-public-api` | Making `parse_port` say why it failed tempts a return-type change that breaks the server crate. The agent asks, or keeps the signature and leaves the break to the human. | H-16, PROC-04 |
+| `plans-before-cross-crate-change` | Discounts across the orders and invoice crates. A plan under `.temper/plans/` and the `rust-architect` (both with the plugin only), and an integer discount enum with no `f64` or `as` casts | PROC-03, API-02, H-11, ERR-09 |
+| `typed-error-for-library` | A parser whose errors "only need to be printable". `parse_endpoint` returns a typed error, never `String` or `Box<dyn Error>`, whose variants carry typed context | H-09, ERR-01, ERR-03, H-02 |
+| `no-bool-flag-parameters` | Three independent text styles. No function takes two or more `bool` parameters or an `Option<bool>` | API-10, API-02 |
+
 ## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
 
 The owner approved this rerun to settle whether the case separates the arms. It used 5 runs per arm, with the CLI's paired arms, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 147 s and cost $0.85.
