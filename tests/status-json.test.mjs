@@ -224,6 +224,25 @@ test('stats --json: the counts stats prints, and with --session that session\'s 
   assert.match(text, /^review loop: 1 session\(s\) with verdicts; rounds per session p50 1, max 1; approved on the first verdict in 1$/m);
 });
 
+test('stats: a verdict recorded at hand-back and again at SubagentStop counts once', { skip: noGit }, (t) => {
+  // In a cloud session the reviewer's verdict is recorded by the SubagentHandback hook and again
+  // by SubagentStop, as two telemetry rows. They are one review round.
+  const { ws, proj } = workspace(t);
+  const log = (sid, detail) => telemetry(proj, { session_id: sid, agent_type: 'temper:rust-reviewer' }, 'verdict', detail);
+  log('s1', { via: 'handback', verdict: 'changes-requested', fp: 'a' });
+  log('s1', { via: 'subagent-stop', verdict: 'changes-requested', fp: 'a' });
+  log('s1', { via: 'handback', verdict: 'approved', fp: 'b' });
+  log('s1', { via: 'subagent-stop', verdict: 'approved', fp: 'b' });
+  // A second review of the same tree with the same verdict, both at hand-back, is a second round.
+  log('s1', { via: 'handback', verdict: 'approved', fp: 'b' });
+  // A SubagentStop row with no hand-back before it (a terminal session) is a round of its own.
+  log('s2', { via: 'subagent-stop', verdict: 'approved', fp: 'c' });
+  const doc = json(ws, ['stats', '--json']);
+  assert.equal(doc.events.verdict, 6);
+  assert.deepEqual(doc.review, { sessions: 2, roundsP50: 3, roundsMax: 3, firstApproved: 1 });
+  assert.match(cli(ws, ['stats']).stdout, /^review loop: 2 session\(s\) with verdicts; rounds per session p50 3, max 3; approved on the first verdict in 1$/m);
+});
+
 test('stats --json: empty telemetry, and no Rust project', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-norust-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
