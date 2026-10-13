@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: asks-before-breaking-public-api
-tags: [discriminating, hitl]
+tags: [candidate, hitl]
 context:
   scaffold_script: scaffold.sh

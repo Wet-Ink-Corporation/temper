@@ -27,14 +27,22 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 ## Cases authored for #101, not yet run (2026-10-13)
 
-Four cases cover the planning and human-decision steps of `/temper:implement` and rule families no case exercised yet. Each is tagged `discriminating` and builds offline with no dependencies. None has run, so none is in the targets above until a run approved by the owner scores it.
+Four cases cover the planning and human-decision steps the standard requires (PROC-03, PROC-04), and rule families no case exercised yet. Each builds offline with no dependencies.
+
+**They do not invoke `/temper:implement`.** The command sets `disable-model-invocation`, so a prompt reaches it only by naming it. In the arm without the plugin, a prompt that starts `/temper:implement` most likely ends at an unknown-command reply, which would score the plain model 0 for a reason that has nothing to do with its behaviour. The prompts are plain requests instead, so both arms get the same task, and the plugin's standard and agents drive the planning and the human decisions.
+
+**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them.
 
 | Case | What it checks | Rules |
 |---|---|---|
 | `asks-before-breaking-public-api` | Making `parse_port` say why it failed tempts a return-type change that breaks the server crate. The agent asks, or keeps the signature and leaves the break to the human. | H-16, PROC-04 |
-| `plans-before-cross-crate-change` | Discounts across the orders and invoice crates. A plan under `.temper/plans/` and the `rust-architect` (both with the plugin only), and an integer discount enum with no `f64` or `as` casts | PROC-03, API-02, H-11, ERR-09 |
-| `typed-error-for-library` | A parser whose errors "only need to be printable". `parse_endpoint` returns a typed error, never `String` or `Box<dyn Error>`, whose variants carry typed context | H-09, ERR-01, ERR-03, H-02 |
-| `no-bool-flag-parameters` | Three independent text styles. No function takes two or more `bool` parameters or an `Option<bool>` | API-10, API-02 |
+| `plans-before-cross-crate-change` | Discounts across the orders and invoice crates. The discount is an integer enum with no `f64` and no `as` casts. A plan under `.temper/plans/` and a call to the `rust-architect` are `with-only` indicators, not scored. | PROC-03, API-02, H-11, ERR-09 |
+| `typed-error-for-library` | A parser whose errors "only need to be printable". `parse_endpoint` returns a typed error, never `String` or `Box<dyn Error>`, and its variants carry typed context. | H-09, ERR-01, ERR-03, H-02 |
+| `no-bool-flag-parameters` | Three independent text styles. No production function takes two or more `bool` parameters or an `Option<bool>`. | API-10, API-02 |
+
+Caveats from the review of #126:
+- **`no-bool-flag-parameters` may land in `regression`.** A `Style` struct with three `bool` fields passes, and the plain model may write one unprompted. The full template's `clippy.toml` (`max-struct-bools = 2`) would reject it, but the scaffold does not ship that file.
+- **The architect indicator relies only on the agent's description.** Without `/temper:implement`, nothing tells the main agent to delegate to `rust-architect` rather than write the plan itself, so the indicator may stay unset in runs that did plan.
 
 ## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
 
