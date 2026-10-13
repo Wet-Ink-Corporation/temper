@@ -632,9 +632,11 @@ function statsOf(rows) {
   // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
   // A verdict delivered by SubagentHandback is recorded again at SubagentStop; that second row is
   // the same review, so it is not another round.
-  const rounds = [...bySession.values()].map((list) => list.filter((r) => r.event === 'verdict')
-    .filter((r, k, v) => !(r.via === 'subagent-stop' && k > 0 && v[k - 1].via === 'handback'
-      && v[k - 1].fp === r.fp && v[k - 1].verdict === r.verdict && v[k - 1].agent === r.agent))).filter((v) => v.length);
+  const handbackEcho = (r, prev) => r.via === 'subagent-stop' && prev?.via === 'handback'
+    && prev.agent === r.agent && prev.fp === r.fp && prev.verdict === r.verdict;
+  const rounds = [...bySession.values()]
+    .map((list) => list.filter((r) => r.event === 'verdict').filter((r, k, v) => !handbackEcho(r, v[k - 1])))
+    .filter((v) => v.length);
   const n = rounds.map((v) => v.length).sort((a, b) => a - b);
   const byCount = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]));
   return {

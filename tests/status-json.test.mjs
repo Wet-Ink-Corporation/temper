@@ -237,10 +237,15 @@ test('stats: a verdict recorded at hand-back and again at SubagentStop counts on
   log('s1', { via: 'handback', verdict: 'approved', fp: 'b' });
   // A SubagentStop row with no hand-back before it (a terminal session) is a round of its own.
   log('s2', { via: 'subagent-stop', verdict: 'approved', fp: 'c' });
+  // A SubagentStop row that differs from the hand-back before it in tree or verdict is kept.
+  log('s3', { via: 'handback', verdict: 'approved', fp: 'd' });
+  log('s3', { via: 'subagent-stop', verdict: 'approved', fp: 'e' });
+  log('s3', { via: 'handback', verdict: 'approved', fp: 'e' });
+  log('s3', { via: 'subagent-stop', verdict: 'changes-requested', fp: 'e' });
   const doc = json(ws, ['stats', '--json']);
-  assert.equal(doc.events.verdict, 6);
-  assert.deepEqual(doc.review, { sessions: 2, roundsP50: 3, roundsMax: 3, firstApproved: 1 });
-  assert.match(cli(ws, ['stats']).stdout, /^review loop: 2 session\(s\) with verdicts; rounds per session p50 3, max 3; approved on the first verdict in 1$/m);
+  assert.equal(doc.events.verdict, 10);
+  assert.deepEqual(doc.review, { sessions: 3, roundsP50: 3, roundsMax: 4, firstApproved: 2 });
+  assert.match(cli(ws, ['stats']).stdout, /^review loop: 3 session\(s\) with verdicts; rounds per session p50 3, max 4; approved on the first verdict in 2$/m);
 });
 
 test('stats --json: empty telemetry, and no Rust project', (t) => {
