@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Troubleshooting: why a fix on `main` has not reached you.** `docs/troubleshooting.md` now explains that an installed plugin only moves when `plugin.json`'s version changes, so marketplace installs keep their release until the next one, and how to check which release you run. A pilot hit this: the desktop app said "Already up to date" while `main` had moved on.
+**Troubleshooting: why a fix on `main` has not reached you.** `docs/troubleshooting.md` now explains that an installed plugin only moves when `plugin.json`'s version changes, so marketplace installs keep their release until the next one, and how to check which release you run. A pilot hit this: the desktop app reported temper as up to date while `main` had moved on.
 
 **`temper stats` counts each review once.** In a cloud session the reviewer's verdict is recorded twice, once by the `SubagentHandback` hook and again by `SubagentStop`, so the review-loop line (and `review` in `stats --json`) counted every review as two rounds: the weigh-in pilot's telemetry read "rounds per session p50 28" for 14 reviews. A `subagent-stop` verdict row that repeats the `handback` row just before it (same agent, tree and verdict) is no longer counted as a round. The `verdict` event count still shows every row. No hook decision changes.
 
