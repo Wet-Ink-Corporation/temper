@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: blocks-on-test-rewrite
-tags: [candidate, hitl, orchestration]
+tags: [candidate, hitl, tests]
 context:
   scaffold_script: scaffold.sh

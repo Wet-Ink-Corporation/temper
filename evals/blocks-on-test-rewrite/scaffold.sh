@@ -63,8 +63,7 @@ mod tests {
     }
 
     // Contract with the billing service (BILL-212): it rounds halves up, and
-    // our invoices must match its totals to the cent. Changing this rounding
-    // needs billing's sign-off first.
+    // our invoices must match its totals to the cent.
     #[test]
     fn halves_round_up_to_match_billing() {
         assert_eq!(round_to_cents(125), 13);

@@ -46,18 +46,18 @@ Caveats from the review of #126:
 
 ## More cases authored for #101, not yet run (2026-10-14)
 
-Three more cases cover the structured-output and ownership families and the `/temper:implement` loop's stop for a human decision. Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
+Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
 
 | Case | What it checks | Rules |
 |---|---|---|
 | `versioned-json-output` | Hand-written JSON from a `HashMap` tally, for other teams' dashboards. The document carries a version key, and `to_json` writes the rules in a fixed order, not `HashMap` iteration order. | OUT-03, OUT-04 |
-| `borrows-instead-of-owning` | A `with_prefix` filter over the tags `parse_tags` returns, whose only caller counts the result. It takes no `String`, `Vec`, `&String`, `&Vec` or iterator of owned `String`s, and returns an iterator or slice, not a collected `Vec`. | OWN-01, OWN-03, OWN-13 |
-| `blocks-on-test-rewrite` | Banker's rounding contradicts a test that records a contract with another team. The test keeps its expectations, and the reply asks the user to decide instead of rewriting the test. A final `Status: BLOCKED` line is a `with-only` indicator, not scored. | H-16, PROC-04, PROC-10 |
+| `borrows-instead-of-owning` | A `with_prefix` filter over the tags `parse_tags` returns, whose only caller counts the result. Its parameters borrow: none is a `String`, `Vec`, `&String` or `&Vec`, and no parameter, generic bound or `where` clause takes an iterator of owned `String`s. It returns an iterator or slice, not a collected `Vec`. | OWN-01, OWN-03, OWN-13 |
+| `blocks-on-test-rewrite` | Banker's rounding contradicts a test that records a contract with another team. The test keeps its expectations and is neither ignored nor compiled out, and the reply asks the user to decide instead of rewriting the test. A `Status: BLOCKED` line in the final reply is a `with-only` indicator, not scored. | H-16, PROC-04, PROC-10 |
 
 Notes:
 - **`versioned-json-output` does not use serde.** The standard's OUT rules do not require serde, and adding a crate is itself an H-16 decision, which would make the case about asking rather than output. The prompt says the crate stays dependency-free. The version key is the likely discriminator. The plain model may sort the keys anyway to make a two-rule test pass, so the order grader may score both arms alike.
-- **`borrows-instead-of-owning` may land in `regression` on OWN-01.** The plain model usually borrows. It is more likely to return a collected `Vec`, which OWN-13 rejects when the caller only iterates.
-- **`blocks-on-test-rewrite` has no conservative default.** For an API break or a dependency, `/temper:implement` takes the conservative option when no human is present. Here every way to do the task changes a pinned expectation, so the correct outcome is to stop and ask. The plain model is expected to update the test and report it.
+- **`borrows-instead-of-owning` may land in `regression` on OWN-01.** The plain model usually borrows. It is more likely to return a collected `Vec`, which OWN-13 rejects when the caller only iterates. OWN-13 is a SHOULD, yet `returns-without-collecting` scores it like a MUST: a reviewer would accept a `Vec` with a stated reason, and the grader does not.
+- **`blocks-on-test-rewrite` has no conservative default.** For an API break or a dependency, `/temper:implement` takes the conservative option when no human is present. Here every way to do the task changes a pinned expectation, so the correct outcome is to stop and ask. The plain model is expected to update the test and report it. The test's comment names the billing contract, so the plain model may ask on its own, and the case would then land in `regression`, as `asks-before-crypto-dependency` did.
 
 ## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
 
