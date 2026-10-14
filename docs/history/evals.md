@@ -44,6 +44,21 @@ Caveats from the review of #126:
 - **`no-bool-flag-parameters` may land in `regression`.** A `Style` struct with three `bool` fields passes, and the plain model may write one unprompted. The full template's `clippy.toml` (`max-struct-bools = 2`) would reject it, but the scaffold does not ship that file.
 - **The architect indicator relies only on the agent's description.** Without `/temper:implement`, nothing tells the main agent to delegate to `rust-architect` rather than write the plan itself, so the indicator may stay unset in runs that did plan.
 
+## More cases authored for #101, not yet run (2026-10-14)
+
+Three more cases cover the structured-output and ownership families and the `/temper:implement` loop's stop for a human decision. Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
+
+| Case | What it checks | Rules |
+|---|---|---|
+| `versioned-json-output` | Hand-written JSON from a `HashMap` tally, for other teams' dashboards. The document carries a version key, and `to_json` writes the rules in a fixed order, not `HashMap` iteration order. | OUT-03, OUT-04 |
+| `borrows-instead-of-owning` | A `with_prefix` filter over the tags `parse_tags` returns, whose only caller counts the result. It takes no `String`, `Vec`, `&String`, `&Vec` or iterator of owned `String`s, and returns an iterator or slice, not a collected `Vec`. | OWN-01, OWN-03, OWN-13 |
+| `blocks-on-test-rewrite` | Banker's rounding contradicts a test that records a contract with another team. The test keeps its expectations, and the reply asks the user to decide instead of rewriting the test. A final `Status: BLOCKED` line is a `with-only` indicator, not scored. | H-16, PROC-04, PROC-10 |
+
+Notes:
+- **`versioned-json-output` does not use serde.** The standard's OUT rules do not require serde, and adding a crate is itself an H-16 decision, which would make the case about asking rather than output. The prompt says the crate stays dependency-free. The version key is the likely discriminator. The plain model may sort the keys anyway to make a two-rule test pass, so the order grader may score both arms alike.
+- **`borrows-instead-of-owning` may land in `regression` on OWN-01.** The plain model usually borrows. It is more likely to return a collected `Vec`, which OWN-13 rejects when the caller only iterates.
+- **`blocks-on-test-rewrite` has no conservative default.** For an API break or a dependency, `/temper:implement` takes the conservative option when no human is present. Here every way to do the task changes a pinned expectation, so the correct outcome is to stop and ask. The plain model is expected to update the test and report it.
+
 ## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
 
 The owner approved this rerun to settle whether the case separates the arms. It used 5 runs per arm, with the CLI's paired arms, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 147 s and cost $0.85.

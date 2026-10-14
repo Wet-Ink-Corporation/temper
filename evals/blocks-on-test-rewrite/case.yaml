@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: blocks-on-test-rewrite
+tags: [candidate, hitl, orchestration]
+context:
+  scaffold_script: scaffold.sh
