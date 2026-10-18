@@ -26,3 +26,5 @@ Thumbs.db
 .temper/
 # Bytecode from the Python checks in tests/
 __pycache__/
+# Claude Code agent worktrees (Agent tool, isolation: worktree)
+.claude/worktrees/

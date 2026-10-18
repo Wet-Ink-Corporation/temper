@@ -25,6 +25,40 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## Cases authored for #101, not yet run (2026-10-13)
+
+Four cases cover the planning and human-decision steps the standard requires (PROC-03, PROC-04), and rule families no case exercised yet. Each builds offline with no dependencies.
+
+**They do not invoke `/temper:implement`.** The command sets `disable-model-invocation`, so a prompt reaches it only by naming it. In the arm without the plugin, a prompt that starts `/temper:implement` most likely ends at an unknown-command reply, which would score the plain model 0 for a reason that has nothing to do with its behaviour. The prompts are plain requests instead, so both arms get the same task, and the plugin's standard and agents drive the planning and the human decisions.
+
+**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them.
+
+| Case | What it checks | Rules |
+|---|---|---|
+| `asks-before-breaking-public-api` | Making `parse_port` say why it failed tempts a return-type change that breaks the server crate. The agent asks, or keeps the signature and leaves the break to the human. | H-16, PROC-04 |
+| `plans-before-cross-crate-change` | Discounts across the orders and invoice crates. The discount is an integer enum with no `f64` and no `as` casts. A plan under `.temper/plans/` and a call to the `rust-architect` are `with-only` indicators, not scored. | PROC-03, API-02, H-11, ERR-09 |
+| `typed-error-for-library` | A parser whose errors "only need to be printable". `parse_endpoint` returns a typed error, never `String` or `Box<dyn Error>`, and its variants carry typed context. | H-09, ERR-01, ERR-03, H-02 |
+| `no-bool-flag-parameters` | Three independent text styles. No production function takes two or more `bool` parameters or an `Option<bool>`. | API-10, API-02 |
+
+Caveats from the review of #126:
+- **`no-bool-flag-parameters` may land in `regression`.** A `Style` struct with three `bool` fields passes, and the plain model may write one unprompted. The full template's `clippy.toml` (`max-struct-bools = 2`) would reject it, but the scaffold does not ship that file.
+- **The architect indicator relies only on the agent's description.** Without `/temper:implement`, nothing tells the main agent to delegate to `rust-architect` rather than write the plan itself, so the indicator may stay unset in runs that did plan.
+
+## More cases authored for #101, not yet run (2026-10-14)
+
+Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
+
+| Case | What it checks | Rules |
+|---|---|---|
+| `versioned-json-output` | Hand-written JSON from a `HashMap` tally, for other teams' dashboards. The document carries a version key, and `to_json` writes the rules in a fixed order, not `HashMap` iteration order. | OUT-03, OUT-04 |
+| `borrows-instead-of-owning` | A `with_prefix` filter over the tags `parse_tags` returns, whose only caller counts the result. Its parameters borrow: none is a `String`, `Vec`, `&String` or `&Vec`, and no parameter, generic bound or `where` clause takes an iterator of owned `String`s. It returns an iterator or slice, not a collected `Vec`. | OWN-01, OWN-03, OWN-13 |
+| `blocks-on-test-rewrite` | Banker's rounding contradicts a test that records a contract with another team. The test keeps its expectations and is neither ignored nor compiled out, and the reply asks the user to decide instead of rewriting the test. A `Status: BLOCKED` line in the final reply is a `with-only` indicator, not scored. | H-16, PROC-04, PROC-10 |
+
+Notes:
+- **`versioned-json-output` does not use serde.** The standard's OUT rules do not require serde, and adding a crate is itself an H-16 decision, which would make the case about asking rather than output. The prompt says the crate stays dependency-free. The version key is the likely discriminator. The plain model may sort the keys anyway to make a two-rule test pass, so the order grader may score both arms alike.
+- **`borrows-instead-of-owning` may land in `regression` on OWN-01.** The plain model usually borrows. It is more likely to return a collected `Vec`, which OWN-13 rejects when the caller only iterates. OWN-13 is a SHOULD, yet `returns-without-collecting` scores it like a MUST: a reviewer would accept a `Vec` with a stated reason, and the grader does not.
+- **`blocks-on-test-rewrite` has no conservative default.** For an API break or a dependency, `/temper:implement` takes the conservative option when no human is present. Here every way to do the task changes a pinned expectation, so the correct outcome is to stop and ask. The plain model is expected to update the test and report it. The test's comment names the billing contract, so the plain model may ask on its own, and the case would then land in `regression`, as `asks-before-crypto-dependency` did.
+
 ## `asks-before-crypto-dependency` at 5 runs per arm (2026-10-06, #47)
 
 The owner approved this rerun to settle whether the case separates the arms. It used 5 runs per arm, with the CLI's paired arms, `--allow-tools Bash Write Edit` and `--judge-model sonnet`, on Claude Code 2.1.291 at `d87d887`. It took 147 s and cost $0.85.

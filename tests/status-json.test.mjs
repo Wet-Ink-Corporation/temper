@@ -82,6 +82,7 @@ test('status --json: a green gate and an approved verdict for the current tree',
     gate: {
       ok: true, unavailable: false, at: '2026-10-11T10:00:00.000Z',
       steps: [{ name: 'fmt', ok: true, ms: 120, summary: 'applied' }, { name: 'clippy', ok: true, ms: 9000, summary: 'clean' }],
+      running: null,
     },
     review: {
       verdict: 'approved', stale: false, fingerprint: fp, recorded_at: '2026-10-11T10:05:00.000Z', scores: SCORES,
@@ -222,6 +223,30 @@ test('stats --json: the counts stats prints, and with --session that session\'s 
   assert.match(text, /^ {2}ERR-01 {3}2$/m);
   assert.match(text, /^gate at Stop: 1 run\(s\), 0 cached; p50 3\.0 s, p90 3\.0 s, max 3\.0 s; 1 cut short \(hook timeout\?\)$/m);
   assert.match(text, /^review loop: 1 session\(s\) with verdicts; rounds per session p50 1, max 1; approved on the first verdict in 1$/m);
+});
+
+test('stats: a verdict recorded at hand-back and again at SubagentStop counts once', { skip: noGit }, (t) => {
+  // In a cloud session the reviewer's verdict is recorded by the SubagentHandback hook and again
+  // by SubagentStop, as two telemetry rows. They are one review round.
+  const { ws, proj } = workspace(t);
+  const log = (sid, detail) => telemetry(proj, { session_id: sid, agent_type: 'temper:rust-reviewer' }, 'verdict', detail);
+  log('s1', { via: 'handback', verdict: 'changes-requested', fp: 'a' });
+  log('s1', { via: 'subagent-stop', verdict: 'changes-requested', fp: 'a' });
+  log('s1', { via: 'handback', verdict: 'approved', fp: 'b' });
+  log('s1', { via: 'subagent-stop', verdict: 'approved', fp: 'b' });
+  // A second review of the same tree with the same verdict, both at hand-back, is a second round.
+  log('s1', { via: 'handback', verdict: 'approved', fp: 'b' });
+  // A SubagentStop row with no hand-back before it (a terminal session) is a round of its own.
+  log('s2', { via: 'subagent-stop', verdict: 'approved', fp: 'c' });
+  // A SubagentStop row that differs from the hand-back before it in tree or verdict is kept.
+  log('s3', { via: 'handback', verdict: 'approved', fp: 'd' });
+  log('s3', { via: 'subagent-stop', verdict: 'approved', fp: 'e' });
+  log('s3', { via: 'handback', verdict: 'approved', fp: 'e' });
+  log('s3', { via: 'subagent-stop', verdict: 'changes-requested', fp: 'e' });
+  const doc = json(ws, ['stats', '--json']);
+  assert.equal(doc.events.verdict, 10);
+  assert.deepEqual(doc.review, { sessions: 3, roundsP50: 3, roundsMax: 4, firstApproved: 2 });
+  assert.match(cli(ws, ['stats']).stdout, /^review loop: 3 session\(s\) with verdicts; rounds per session p50 3, max 4; approved on the first verdict in 2$/m);
 });
 
 test('stats --json: empty telemetry, and no Rust project', (t) => {
