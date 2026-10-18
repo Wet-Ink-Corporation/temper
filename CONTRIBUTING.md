@@ -7,7 +7,7 @@ temper is developed by Wet Ink Corporation and is internal for now. [`AGENTS.md`
 1. Open an issue, or pick one labelled `v1-live` or `2.0` (tracked in #6 and #21). Use the templates: bug, false positive or negative, or rule proposal.
 2. Work on a branch. Run `bash tests/ci.sh` before pushing; it is what CI runs.
 3. Open a pull request. The template's checklist covers the vendored copy, the rule map, the CHANGELOG and decisions.
-4. CI must be green: `Checks` and `Unit tests (Windows)` are required on `main`.
+4. CI must be green: `Checks`, `Unit tests (Windows)` and `CHANGELOG entry` are required on `main`. `CHANGELOG entry` is skipped, which counts as passing, on a PR labelled `no-changelog`.
 5. Merging to `main` ships to marketplace users, so merge only what is ready for them.
 
 ## Priority

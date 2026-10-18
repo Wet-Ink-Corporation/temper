@@ -707,7 +707,7 @@ export function stateDirWrite(proj, cmd, cwd = proj.root) {
   const isState = (text, value, base) => isStateAs(text, value, base)
     || (/\\[\w-]/.test(`${text}${value ?? ''}`) && isStateAs(bashReading(text), bashReading(value), base));
   const isStateAs = (text, value, base) => {
-    const v =/^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-)/.exec(slash(text));
+    const v =/^\$\{?(\w+)\}?\/temper\/(?:(?:verdicts|gate|logs|sessions)(?:\/|$)|telemetry\.jsonl$|findings-|gate-progress-)/.exec(slash(text));
     if (v && !OUTSIDE_VARS.test(v[1])) return true;
     let p = slash(msysPath(value ?? text));
     if (!/^(?:\/|[a-z]:\/|\$|~)/i.test(p)) p = `${slash(base)}/${p}`;

@@ -378,6 +378,33 @@ function pruneGroups(dirs, { maxAgeDays, keep, maxBytes = Infinity }, protect) {
 export function pruneFingerprintState(proj, currentFp) {
   pruneGroups([path.join(proj.stateDir, 'verdicts')], RETENTION.verdicts, currentFp);
   pruneGroups([path.join(proj.stateDir, 'gate'), path.join(proj.stateDir, 'logs')], RETENTION.gate, currentFp);
+  pruneGateProgress(proj);
+}
+
+/** The progress file a running gate keeps for fingerprint `fp` (gate.mjs writes it). */
+export const gateProgressPath = (proj, fp) => path.join(proj.stateDir, `gate-progress-${fp}.json`);
+
+/** Whether process `pid` is running (EPERM: it runs as another user). */
+export function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+
+/**
+ * Remove gate progress files left behind by a gate that is gone: its process has ended (a hook
+ * killed by its timeout), or the file is over a day old (its pid since reused). A gate in another
+ * PID namespace sharing this .git (a dev container) reads as gone too.
+ */
+function pruneGateProgress(proj) {
+  let names;
+  try { names = fs.readdirSync(proj.stateDir); } catch { return; }
+  for (const n of names.filter((x) => /^gate-progress-[0-9a-f]+\.json$/.test(x))) {
+    const p = path.join(proj.stateDir, n);
+    try {
+      const pid = JSON.parse(fs.readFileSync(p, 'utf8')).pid;
+      if (!pidAlive(pid) || fs.statSync(p).mtimeMs < Date.now() - 86400000) fs.rmSync(p, { force: true });
+    } catch { try { fs.rmSync(p, { force: true }); } catch { /* ignore */ } }
+  }
 }
 
 const TELEMETRY = 'telemetry.jsonl';
