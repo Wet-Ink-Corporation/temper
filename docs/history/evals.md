@@ -25,6 +25,13 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## Lens hand check: a lens that throws at load (2026-10-18, #110)
+
+This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It used `tests/e2e/smoke.sh` on Claude Code 2.1.302, against a copy of #118's tree (with `main` merged in) whose `hooks/lens/register.tsx` starts with `throw new Error(...)`. It took 11 turns, plus a 1-turn follow-up when the reviewer finished, and cost $0.25.
+- **The lens failed to load as intended.** The debug log shows `hooks module temper@inline failed to load: Error: temper smoke: lens throws at load` twice at session start (the first load, and again when the plugins were refreshed), before the first prompt.
+- **Every settings hook kept running.** SessionStart, UserPromptSubmit, PreToolUse (Edit and Bash), PostToolUse (Read and Skill), SubagentStart, SubagentStop and Stop all fired. The first Stop reported `Status: WIP` while the reviewer ran, and the last reported `gate green and review approved` (fingerprint `2b69587dffe8911f`).
+- `PreToolUse[SubagentHandback]` did not fire, as in earlier headless runs; the verdict was recorded at SubagentStop.
+
 ## Cases authored for #101, not yet run (2026-10-13)
 
 Four cases cover the planning and human-decision steps the standard requires (PROC-03, PROC-04), and rule families no case exercised yet. Each builds offline with no dependencies.
