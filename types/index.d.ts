@@ -43,8 +43,28 @@ export type LensView = { kind: 'status'; status: LensStatus } | { kind: 'unavail
 /** The finding the pane shows open: its key, and its rule's text as Markdown. */
 export type LensExpanded = { key: string; text: string }
 
+/** The counts of `temper stats --json` the Stats tab shows. */
+export type LensStats = {
+  sessions: number
+  rules: Record<string, number>
+  gate: { runs: number; cached: number; cutShort: number; p50Ms: number | null; p90Ms: number | null; maxMs: number | null; recentMs: number[] }
+  review: { sessions: number; roundsP50: number | null; roundsMax: number | null; firstApproved: number }
+}
+
+/** One telemetry row of this session, as `stats --json --session` gives it. */
+export type LensActivityRow = { t: string; event: string; agent: string; file: string | null; rules: string[]; via: string | null }
+
+/** What the Activity and Stats tabs draw: counts and this session's rows, or why they are missing. */
+export type LensStatsView = { kind: 'stats'; totals: LensStats; session: LensActivityRow[] } | { kind: 'unavailable'; why: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    temper: { view: LensView | null; expanded: LensExpanded | null }
+    temper: {
+      view: LensView | null
+      expanded: LensExpanded | null
+      tab: 'review' | 'activity' | 'stats'
+      stats: LensStatsView | null
+      branchStats: LensStatsView | null
+    }
   }
 }

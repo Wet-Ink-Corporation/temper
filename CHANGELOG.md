@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+**temper lens: Activity and Stats tabs (#113).** The `/temper-lens` pane gains two tabs:
+- **Activity** lists this session's denials and asks, newest first, from `temper stats --json --session <id>`. Each row has its event, rule IDs, file and agent, and pressing a row shows the rule. A legend points each kind of event to its section of the troubleshooting guide.
+- **Stats** shows the clone's gate latency at `Stop`, gates cut short, review rounds, first-verdict approvals and the rules blocked most, with a sparkline of recent gate times in the terminal. A button fetches the telemetry branch (`stats --json --branch`), and only when pressed.
+
+The pane remembers its last tab across sessions (`$.store`), and the tabs refresh only while it is open. `stats --json` gains `gate.recentMs`: the wall times of the last 30 uncached gate runs, oldest first.
+
 **temper lens: the `/temper-lens` review pane (#112).** `/temper-lens` opens a pane with the reviewer's verdict for the current tree, so it can be read without opening `.git/temper/verdicts/`. The pane shows:
 - the verdict, and whether it is stale;
 - the 12 rubric scores, any below 3 highlighted;
