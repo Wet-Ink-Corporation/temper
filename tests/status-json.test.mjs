@@ -82,6 +82,7 @@ test('status --json: a green gate and an approved verdict for the current tree',
     gate: {
       ok: true, unavailable: false, at: '2026-10-11T10:00:00.000Z',
       steps: [{ name: 'fmt', ok: true, ms: 120, summary: 'applied' }, { name: 'clippy', ok: true, ms: 9000, summary: 'clean' }],
+      running: null,
     },
     review: {
       verdict: 'approved', stale: false, fingerprint: fp, recorded_at: '2026-10-11T10:05:00.000Z', scores: SCORES,
