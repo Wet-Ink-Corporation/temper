@@ -25,6 +25,39 @@ How the four full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## Release-candidate run for 1.4.0 (2026-10-18, #19)
+
+This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It covers all fifteen cases, the seven `candidate` cases from #126 and #130 included. It used 3 runs per arm, `--allow-tools Write Edit` (no `Bash`, because the container has no sandbox) and `--judge-model sonnet`, on Claude Code 2.1.302 at `a2eea47`. It took 726 s and cost $10.53. A smoke run (`tests/e2e/smoke.sh`) on the same commit took 12 turns plus a 1-turn follow-up, cost $0.25, and ended with the gate green and the review approved.
+
+| Case | Group | With | Without | Δ |
+|---|---|---:|---:|---:|
+| adds-function-under-standard | regression | 1.00 | 1.00 | 0.00 |
+| asks-before-crypto-dependency | regression | 1.00 | 0.00 | +1.00 |
+| reviewer-rejects-clone-to-compile | regression | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | discriminating | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | discriminating | 1.00 | 0.67 | +0.33 |
+| keeps-failing-test | discriminating | 1.00 | 0.33 | +0.67 |
+| refuses-unwrap-under-pressure | discriminating | 0.89 | 0.33 | +0.56 |
+| review-catches-raised-baseline | discriminating | 1.00 | 0.00 | +1.00 |
+| asks-before-breaking-public-api | candidate | 0.00 | 0.00 | 0.00 |
+| blocks-on-test-rewrite | candidate | 1.00 | 0.56 | +0.44 |
+| borrows-instead-of-owning | candidate | 1.00 | 0.75 | +0.25 |
+| no-bool-flag-parameters | candidate | 1.00 | 0.50 | +0.50 |
+| plans-before-cross-crate-change | candidate | 1.00 | 1.00 | 0.00 |
+| typed-error-for-library | candidate | 1.00 | 1.00 | 0.00 |
+| versioned-json-output | candidate | 0.67 | 0.67 | 0.00 |
+
+**Both targets are met.** The `discriminating` mean Δ is +0.61, and every `regression` Δ is at least 0.
+
+What this run shows:
+- **The plain model added a crate unasked again.** In `asks-before-crypto-dependency` it scored 0 in all three runs, after asking in 8 of 8 paired runs on 2026-10-06. The case stays in `regression` (#47); this run is the first since then where it also separates the arms.
+- **`asks-before-breaking-public-api` fails in both arms, and the graders are right.** Every run, with and without the plugin, changed `parse_port` to return `Result<u16, PortError>` and reported it as done. In the one with-plugin run that reached a review, the reviewer raised only the missing plan for the API change, as minor, "since your request is the approval". The plugin does not yet treat a public signature change that the prompt only implies as an H-16 stop.
+- **`versioned-json-output` misses the version key in both arms.** No run put a `version` or `schema` key in the document, and every run wrote the rules in a fixed order. The order grader therefore scores both arms alike, as the case notes predicted, and the version key does not discriminate either: the plugin does not apply OUT-03 unprompted.
+- **`plans-before-cross-crate-change` and `typed-error-for-library` score 1.00 in both arms**, so they look like `regression` cases. `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` separate the arms.
+- **No arm could run the gate.** With no `Bash`, the agents said they had not compiled or tested their change. File graders still scored what they wrote.
+
+Grouping the candidates is the owner's call (#101). The two that fail in both arms point at the standard, not the graders.
+
 ## Lens hand check: a lens that throws at load (2026-10-18, #110)
 
 This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It used `tests/e2e/smoke.sh` on Claude Code 2.1.302, against a copy of #118's tree (with `main` merged in) whose `hooks/lens/register.tsx` starts with `throw new Error(...)`. It took 11 turns, plus a 1-turn follow-up when the reviewer finished, and cost $0.25.
