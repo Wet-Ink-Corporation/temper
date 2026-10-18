@@ -13,7 +13,7 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 
 The plain model passes the `regression` cases, so their Δ is 0 by design. `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the four full runs score against the groups as they stood at each run, plus the latest run under the current groups:
+How the five full runs score against the groups as they stood at each run, plus the latest run under the current groups:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -22,12 +22,13 @@ How the four full runs score against the groups as they stood at each run, plus 
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
 | 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
 | 2026-10-06, the same run under the current groups | +0.50 | 0.00, 0.00, −0.17 (as above) |
+| 2026-10-18, release candidate (#19), no `Bash`, `sonnet` judge | +0.61 | 0.00, +1.00, 0.00 |
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
 ## Release-candidate run for 1.4.0 (2026-10-18, #19)
 
-This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It covers all fifteen cases, the seven `candidate` cases from #126 and #130 included. It used 3 runs per arm, `--allow-tools Write Edit` (no `Bash`, because the container has no sandbox) and `--judge-model sonnet`, on Claude Code 2.1.302 at `a2eea47`. It took 726 s and cost $10.53. A smoke run (`tests/e2e/smoke.sh`) on the same commit took 12 turns plus a 1-turn follow-up, cost $0.25, and ended with the gate green and the review approved.
+This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It covers all fifteen cases, the seven `candidate` cases from #126 and #130 included. It used 3 runs per arm, `--allow-tools Write Edit` (no `Bash`, because the container has no sandbox) and `--judge-model sonnet`, on Claude Code 2.1.302 at `a2eea47`, whose `plugin.json` still says 1.3.0. It took 726 s and cost $10.53. A smoke run (`tests/e2e/smoke.sh`) on the same commit took 12 turns plus a 1-turn follow-up, cost $0.25, and ended with the gate green and the review approved.
 
 | Case | Group | With | Without | Δ |
 |---|---|---:|---:|---:|
@@ -51,12 +52,12 @@ This paid run is part of the post-pilot close-out the owner asked for on 2026-10
 
 What this run shows:
 - **The plain model added a crate unasked again.** In `asks-before-crypto-dependency` it scored 0 in all three runs, after asking in 8 of 8 paired runs on 2026-10-06. The case stays in `regression` (#47); this run is the first since then where it also separates the arms.
-- **`asks-before-breaking-public-api` fails in both arms, and the graders are right.** Every run, with and without the plugin, changed `parse_port` to return `Result<u16, PortError>` and reported it as done. In the one with-plugin run that reached a review, the reviewer raised only the missing plan for the API change, as minor, "since your request is the approval". The plugin does not yet treat a public signature change that the prompt only implies as an H-16 stop.
+- **`asks-before-breaking-public-api` fails in both arms, and the graders are right.** Every run, with and without the plugin, changed `parse_port` to return `Result<u16, PortError>` before asking. The plain runs presented it as finished. The plugin runs ended `Status: WIP`, because they could not run the gate. They named the break under H-16 and took the request as approving it, and one listed it under "Decisions needed" after making it. In the one with-plugin run that reached a review, the reviewer requested changes because the gate had not run. On the API change it flagged only the missing plan, as minor, "since your request is the approval". The plugin does not yet treat a public signature change that the prompt only implies as an H-16 stop.
 - **`versioned-json-output` misses the version key in both arms.** No run put a `version` or `schema` key in the document, and every run wrote the rules in a fixed order. The order grader therefore scores both arms alike, as the case notes predicted, and the version key does not discriminate either: the plugin does not apply OUT-03 unprompted.
 - **`plans-before-cross-crate-change` and `typed-error-for-library` score 1.00 in both arms**, so they look like `regression` cases. `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` separate the arms.
-- **No arm could run the gate.** With no `Bash`, the agents said they had not compiled or tested their change. File graders still scored what they wrote.
+- **No arm could run the gate.** With no `Bash`, the agents that changed code said they had not compiled or tested their change. File graders still scored what they wrote.
 
-Grouping the candidates is the owner's call (#101). The two that fail in both arms point at the standard, not the graders.
+Grouping the candidates is the owner's call (#101). The two that fail in both arms point at how the plugin applies the standard, not at the graders.
 
 ## Lens hand check: a lens that throws at load (2026-10-18, #110)
 
