@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
 import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry, pushTelemetry, fetchTelemetryBranch,
 } from './lib/project.mjs';
-import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
+import { runGate, renderGate, cachedGate, gateProgress, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
 import { collectFindings, cachedFindings, isComplete } from './lib/findings.mjs';
@@ -212,7 +212,9 @@ const baselineTotal = (b) => Object.values(b.totals).reduce((s, l) => s + Object
  * `status --json`: the state of the current tree as one versioned document (`temper_status: 1`),
  * so a reader such as temper lens never parses the state dir itself. Outside a Rust project it is
  * `{ temper_status: 1, project: null }` with exit 0. With `--session ID` the base is the one that
- * session's hooks use. Verdict findings omit `evidence` to keep the document small.
+ * session's hooks use. Verdict findings omit `evidence` to keep the document small. `gate.running`
+ * is the progress of a gate running now for this fingerprint (null when none), so `gate` is
+ * `{ ok: null, steps: [], running }` while a first gate for the tree runs.
  */
 function statusJson(sid) {
   const proj = discover(process.cwd());
@@ -222,6 +224,7 @@ function statusJson(sid) {
   const fp = fingerprint(proj, base);
   // A state file that parses to something other than a record (hand-edited, truncated) reads as none.
   const g = record(cachedGate(proj, fp));
+  const running = gateProgress(proj, fp);
   const v = record(verdictFor(proj, fp));
   let baseline = null;
   try {
@@ -234,9 +237,10 @@ function statusJson(sid) {
     base: base ?? null,
     fingerprint: fp,
     changed: rustChanges(proj, base),
-    gate: g ? {
-      ok: g.ok, unavailable: Boolean(g.unavailable), at: g.at ?? null,
-      steps: list(g.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+    gate: g || running ? {
+      ok: g ? g.ok : null, unavailable: Boolean(g?.unavailable), at: g?.at ?? null,
+      steps: list(g?.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+      running,
     } : null,
     review: v ? {
       verdict: v.verdict, stale: Boolean(v.stale), fingerprint: v.fingerprint ?? fp, recorded_at: v.recorded_at ?? null, scores: v.scores ?? {},
@@ -630,7 +634,13 @@ function statsOf(rows) {
     killed += pending.size;
   }
   // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
-  const rounds = [...bySession.values()].map((list) => list.filter((r) => r.event === 'verdict')).filter((v) => v.length);
+  // A verdict delivered by SubagentHandback is recorded again at SubagentStop; that second row is
+  // the same review, so it is not another round.
+  const handbackEcho = (r, prev) => r.via === 'subagent-stop' && prev?.via === 'handback'
+    && prev.agent === r.agent && prev.fp === r.fp && prev.verdict === r.verdict;
+  const rounds = [...bySession.values()]
+    .map((list) => list.filter((r) => r.event === 'verdict').filter((r, k, v) => !handbackEcho(r, v[k - 1])))
+    .filter((v) => v.length);
   const n = rounds.map((v) => v.length).sort((a, b) => a - b);
   const byCount = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]));
   return {
