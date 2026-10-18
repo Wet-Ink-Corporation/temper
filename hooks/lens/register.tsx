@@ -9,9 +9,18 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { LensStatus, LensView } from '../../types'
+import type { LensExpanded, LensFinding, LensStatus, LensView } from '../../types'
 
 const view = atom({ plugin: 'temper', key: 'view' } as const, null)
+const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
+
+const PANE = 'temper-lens'
+const RULES_MD = 'skills/rust-craft/references/rules.md'
+const SEVERITIES = ['blocker', 'major', 'minor', 'nit'] as const
+const DIMENSIONS = [
+  'correctness', 'escape_hatches', 'ownership', 'errors', 'api', 'architecture',
+  'tests', 'performance', 'concurrency', 'observability', 'craft', 'docs',
+] as const
 
 /** Tools whose completion can change the tree, or the gate and review state. */
 const CHANGING_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'Bash'])
@@ -26,6 +35,9 @@ const DRAWS = new Set(['terminal', 'desktop'])
 // again, so module variables are enough here.
 let off = true
 let pending: { cancel: () => void } | null = null
+let commandRegistered = false
+// The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
+let rules: Map<string, string> | null = null
 
 async function refresh($: EngineInterface): Promise<void> {
   const surfaces = await $.session.surfaces()
@@ -36,6 +48,57 @@ async function refresh($: EngineInterface): Promise<void> {
     return
   }
   await update($, view, () => fresh)
+  await registerCommand($)
+}
+
+/** `/temper-lens` opens the pane; registered once the lens knows it is in a Rust project. */
+async function registerCommand($: EngineInterface): Promise<void> {
+  if (commandRegistered) return
+  commandRegistered = true
+  await $.command.register({ name: 'temper-lens', description: "Show temper's review verdict for the current tree in a pane" })
+}
+
+/** The rule's text as Markdown, from the plugin's rules.md; a short note when it is not there. */
+async function ruleText($: EngineInterface, id: string): Promise<string> {
+  if (rules === null) {
+    try {
+      rules = parseRules(await $.fs.read(`${$.plugin.root}/${RULES_MD}`))
+    } catch {
+      return `**${id}**: the rule registry could not be read.`
+    }
+  }
+  return rules.get(id) ?? `**${id}**: not in the rule registry.`
+}
+
+/** Toggles a finding's detail: the rule's text under it, and the Draft fix button. */
+async function toggleFinding($: EngineInterface, key: string, rule: string): Promise<void> {
+  const open = await read($, expanded)
+  if (open?.key === key) {
+    await update($, expanded, () => null)
+    return
+  }
+  const text = await ruleText($, rule)
+  await update($, expanded, () => ({ key, text }))
+}
+
+/**
+ * Each finding with a key from what it says, so an open finding stays open under the same finding
+ * when a refresh adds or removes others. The nth repeat of the same rule, file and line gets `#n`.
+ */
+function findingKeys(findings: LensFinding[]): { f: LensFinding; key: string }[] {
+  const seen = new Map<string, number>()
+  return findings.map(f => {
+    const base = `finding:${f.rule}:${f.file}:${f.line ?? '-'}`
+    const n = seen.get(base) ?? 0
+    seen.set(base, n + 1)
+    return { f, key: n ? `${base}#${n}` : base }
+  })
+}
+
+/** Fills the prompt box with a request to address the finding; never submits it. */
+async function draftFix($: EngineInterface, f: LensFinding): Promise<void> {
+  const at = f.line === null ? f.file : `${f.file}:${f.line}`
+  await $.prompt.fill({ text: `Address the reviewer's ${f.severity} finding ${f.rule} in ${at}: ${f.fix}`, mode: 'insert' })
 }
 
 /** Refreshes once the current hook has returned. */
@@ -55,6 +118,8 @@ function refreshSoon($: EngineInterface): void {
 export const register: Register = on => {
   off = true
   pending = null
+  commandRegistered = false
+  rules = null
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -69,7 +134,79 @@ export const register: Register = on => {
       return result
     }
     await update($, view, () => first)
+    await registerCommand($)
     return result
+  })
+
+  on('command.run', { command: 'temper-lens' }, async $ => {
+    await refresh($)
+    await $.ui.open({ id: PANE, title: 'temper' })
+    return { text: 'temper lens: the review pane is open.' }
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Button, Markdown, Text } = $.ui.resolve(e)
+    const v = await read($, view)
+    const open = await read($, expanded)
+    if (v === null || v.kind === 'unavailable') {
+      return (
+        <Box>
+          <Text dimColor>temper: status unavailable</Text>
+        </Box>
+      )
+    }
+    const s = v.status
+    const r = s.review
+    if (r === null) {
+      return (
+        <Box flexDirection="column">
+          <Text bold>Review</Text>
+          <Text>{noReviewReason(s)}</Text>
+        </Box>
+      )
+    }
+    const findings = findingKeys(r.findings)
+    return (
+      <Box flexDirection="column">
+        <Text bold>Review</Text>
+        <Text>
+          <Text color={r.stale ? 'warning' : r.verdict === 'approved' ? 'success' : 'error'}>{r.verdict}</Text>
+          <Text dimColor> for {s.fingerprint}</Text>
+          {r.stale ? <Text color="warning"> (stale: recorded for another tree; a new review is needed)</Text> : ''}
+        </Text>
+        <Text>
+          {DIMENSIONS.map((d, i) => {
+            const score = r.scores[d] ?? 'n/a'
+            const low = typeof score === 'number' && score < 3
+            return <Text color={low ? 'error' : undefined} dimColor={score === 'n/a'}>{`${i ? '  ' : ''}${d} ${score}`}</Text>
+          })}
+        </Text>
+        {findings.length === 0 ? <Text dimColor>No findings.</Text> : ''}
+        {SEVERITIES.flatMap(sev => {
+          const group = findings.filter(x => x.f.severity === sev)
+          if (group.length === 0) return []
+          return [
+            <Text bold color={sev === 'blocker' || sev === 'major' ? 'error' : undefined}>{`${sev} (${group.length})`}</Text>,
+            ...group.flatMap(({ f, key }) => {
+              const row = (
+                <Button
+                  key={key}
+                  plain
+                  label={`${f.rule} ${f.line === null ? f.file : `${f.file}:${f.line}`}: ${f.fix}`}
+                  onPress={() => toggleFinding($, key, f.rule)}
+                />
+              )
+              if (open?.key !== key) return [row]
+              return [
+                row,
+                <Markdown key={`${key}-rule`} text={open.text} />,
+                <Button key={`${key}-draft`} label="Draft fix" onPress={() => draftFix($, f)} />,
+              ]
+            }),
+          ]
+        })}
+      </Box>
+    )
   })
 
   // A client that draws attached after the session started (the desktop app connects as an SDK
@@ -117,6 +254,25 @@ export const register: Register = on => {
       </Box>
     )
   })
+}
+
+/** Why the tree has no review, and what clears it. */
+function noReviewReason(s: LensStatus): string {
+  if (s.changed.length === 0) return 'No Rust changes since the session base, so there is nothing to review.'
+  if (s.gate?.ok === false) return 'No review for this tree yet: the gate is red. Fix it, then the temper:rust-reviewer subagent can review the change.'
+  return 'No review for this tree yet. The temper:rust-reviewer subagent reviews the change once the gate is green.'
+}
+
+/** rules.md's registry rows, `| ID | Level | Rule | Enforced by | Detail |`, by ID, as Markdown. */
+export function parseRules(text: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const line of text.split('\n')) {
+    const m = /^\| ([A-Z]{1,4}-\d{2}) \| (MUST|SHOULD|CONSIDER) \| (.*) \| (.*) \| (.*) \|\s*$/.exec(line)
+    if (!m) continue
+    const [, id = '', level, rule, by, detail] = m
+    out.set(id, `**${id}** (${level}): ${rule}\n\nEnforced by: ${by}. Detail: ${detail}.`)
+  }
+  return out
 }
 
 /** Runs `temper status --json` for this session: its view, or `no-project` outside a Rust project. */

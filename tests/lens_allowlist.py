@@ -144,7 +144,7 @@ def problems(report, source, pin=None):
 
 def self_test():
     good_notes = [
-        f'{MODULE} hooks: session.start, tool.call, ui.render{{component=AbovePrompt}}',
+        f'{MODULE} hooks: session.start, tool.call, ui.render{{component=AbovePrompt}}, ui.render{{component=Pane, requestId=p}}',
         f'{MODULE} gating hook with .catch: tool.call',
         f'{MODULE} calls: $.process.run (via refreshNow, statusView), $.ui.resolve, $.state.get',
         f'{MODULE} env writes: nothing',

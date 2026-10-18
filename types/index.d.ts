@@ -40,8 +40,11 @@ export type LensStatus = {
  */
 export type LensView = { kind: 'status'; status: LensStatus } | { kind: 'unavailable' }
 
+/** The finding the pane shows open: its key, and its rule's text as Markdown. */
+export type LensExpanded = { key: string; text: string }
+
 declare module 'claude-code' {
   interface PluginState {
-    temper: { view: LensView | null }
+    temper: { view: LensView | null; expanded: LensExpanded | null }
   }
 }
