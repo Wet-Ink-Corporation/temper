@@ -189,7 +189,7 @@ export function manifestChecks(file, rel, before, after, proj) {
   for (const p of fresh) out.denies.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
   for (const p of legacy) out.advice.push(`${p.id} ${rel} (already the case before this edit): ${p.msg}.\n    fix: ${p.fix}`);
   if (before === '' && a.package && root && !root.self) {
-    out.asks.push(`${rel}: new crate \`${a.package.name ?? rel}\` in the workspace. Crate boundaries are a human decision (H-16, ARC-07).`);
+    out.asks.push(`${rel}: new crate \`${a.package.name ?? rel}\` in the workspace. Crate boundaries are a human decision (H-16, ARC-07), and the gate fails until the crate has its charter (\`AGENTS.md\`, ARC-08).`);
   }
   if (b) {
     const wa = watchedKeys(a);

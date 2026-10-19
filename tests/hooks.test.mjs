@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { preEdit, preBash, lintConfigChanged } from '../scripts/lib/hooks.mjs';
-import { checkManifests, checkManifestsToml, runGate, renderGate } from '../scripts/lib/gate.mjs';
+import { checkManifests, checkManifestsToml, runGate, renderGate, scanChanged } from '../scripts/lib/gate.mjs';
 import { discover } from '../scripts/lib/project.mjs';
 
 const ROOT = `# Workspace manifest (from the temper template).
@@ -1199,6 +1199,16 @@ test('a dependency major-version bump asks (H-16); a minor bump does not', () =>
   assert.equal(decision(editIn('Cargo.toml', 'thiserror = "2"', 'thiserror = { version = "2.1", default-features = false }')), 'none');
 });
 
+test('a mocking crate added to [dependencies] is denied (TST-09); in [dev-dependencies] it only asks as a new dependency', () => {
+  const rel = 'crates/ledger-domain/Cargo.toml';
+  const prod = editIn(rel, 'thiserror = { workspace = true }\n', 'thiserror = { workspace = true }\nmockall = "0.13"\n');
+  assert.equal(decision(prod), 'deny', reason(prod));
+  assert.match(reason(prod), /TST-09 crates\/ledger-domain\/Cargo\.toml: the mocking crate `mockall` is a normal dependency[\s\S]*\[dev-dependencies\]/);
+  const dev = editIn(rel, 'thiserror = { workspace = true }\n', 'thiserror = { workspace = true }\n\n[dev-dependencies]\nmockall = "0.13"\n');
+  assert.equal(decision(dev), 'ask', reason(dev));
+  assert.doesNotMatch(reason(dev), /TST-09/);
+});
+
 test('[lib] bench = false does not ask; package.build has its own reason', () => {
   const bench = editIn('crates/ledger-domain/Cargo.toml', '[dependencies]\n', '[lib]\nbench = false\n\n[dependencies]\n');
   assert.equal(decision(bench), 'none', reason(bench));
@@ -1229,7 +1239,7 @@ test('gate manifests step without git: every problem counts', { skip: !cargo && 
   assert.equal(res.ok, false);
   assert.match(res.summary, /MOD-09 crates\/legacy\/Cargo\.toml/);
   assert.match(res.summary, /PERF-09 crates\/profiled\/Cargo\.toml/);
-  assert.doesNotMatch(res.summary, /ledger-domain/);
+  assert.doesNotMatch(res.summary, /(?:MOD|PERF)-09 crates\/ledger-domain/);
   const toml = checkManifestsToml(proj);
   assert.equal(toml.ok, false);
   assert.match(toml.summary, /MOD-09 crates\/legacy\/Cargo\.toml/);
@@ -1271,6 +1281,7 @@ test('gate manifests step with git: only problems new since the base fail', { sk
     put('crates/good/src/lib.rs', '//! Good.\n');
     put('crates/legacy/Cargo.toml', NO_LINTS.replace('ledger-domain', 'legacy'));
     put('crates/legacy/src/lib.rs', '//! Legacy.\n');
+    for (const c of ['good', 'legacy']) put(`crates/${c}/AGENTS.md`, `# ${c}\n`);
     g('init', '-q');
     g('add', '-A');
     g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
@@ -1300,6 +1311,84 @@ test('gate manifests step with git: only problems new since the base fail', { sk
     put('crates/good/Cargo.toml', OWN_LINTS.replace('ledger-domain', 'good'));
     const own = checkManifests(discover(repo), base);
     assert.equal(own.ok, true, own.summary);
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('gate scan: without a base, a new-code-only rule (test-branch) advises instead of failing untouched code', { skip: !git && 'git not installed' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-newonly-'));
+  const put = (rel, text) => { const p = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const g = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  try {
+    put('Cargo.toml', '[package]\nname = "x"\nedition = "2024"\n');
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\n');
+    const keys = (s) => ({ hard: s.hard.map((h) => h.key), soft: s.soft.filter((h) => h.key === 'test-branch').map((h) => h.key) });
+    // no git: every file counts as changed, so the rule only advises
+    assert.deepEqual(keys(scanChanged(discover(dir), null)), { hard: [], soft: ['test-branch'] });
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const base = g('rev-parse', 'HEAD').stdout.trim();
+    // git without a base revision: also advisory
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\npub fn u() {}\n');
+    assert.deepEqual(keys(scanChanged(discover(dir), null)), { hard: [], soft: ['test-branch'] });
+    // with a base: the legacy hit is not new, a new one fails
+    assert.deepEqual(keys(scanChanged(discover(dir), base)), { hard: [], soft: [] });
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\npub fn u() -> bool {\n    cfg!(not(test))\n}\n');
+    assert.deepEqual(keys(scanChanged(discover(dir), base)), { hard: ['test-branch'], soft: [] });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('gate manifests step: a new crate without a charter (ARC-08) and a new mocking dependency (TST-09) fail; old ones advise', { skip: (!cargo || !git) && 'cargo or git not installed' }, () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-charter-'));
+  const put = (rel, text) => { const p = path.join(repo, ...rel.split('/')); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const g = (...args) => spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  const member = (name, extra = '') => MEMBER.replace('ledger-domain', name).replace('[dependencies]\n', `[dependencies]\n${extra}`);
+  try {
+    put('Cargo.toml', ROOT.replace('[profile.release]\nlto = "thin"\n', ''));
+    put('crates/old/Cargo.toml', member('old', 'mockall = "0.13"\n'));
+    put('crates/old/src/lib.rs', '//! Old.\n');
+    put('crates/kept/Cargo.toml', member('kept'));
+    put('crates/kept/src/lib.rs', '//! Kept.\n');
+    put('crates/kept/AGENTS.md', '# kept\n');
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const base = g('rev-parse', 'HEAD').stdout.trim();
+    const proj = discover(repo);
+    // Legacy: a crate without a charter and a mocking dependency it already had are advisory.
+    const legacy = checkManifests(proj, base);
+    assert.equal(legacy.ok, true, legacy.summary);
+    assert.match(legacy.summary, /advisory\): .*TST-09 crates\/old\/Cargo\.toml.*ARC-08 crates\/old\/Cargo\.toml/);
+    // Without a base revision these new checks advise too, so an untouched workspace stays green.
+    const noBase = checkManifests(proj);
+    assert.equal(noBase.ok, true, noBase.summary);
+    // A second mocking crate in the old member is new.
+    put('crates/old/Cargo.toml', member('old', 'mockall = "0.13"\nfaux = "0.1"\n'));
+    const mock = checkManifests(proj, base);
+    assert.equal(mock.ok, false);
+    assert.match(mock.summary, /^TST-09 crates\/old\/Cargo\.toml: the mocking crate `faux`/);
+    put('crates/old/Cargo.toml', member('old', 'mockall = "0.13"\n'));
+    // A new crate without AGENTS.md fails; with one it passes.
+    put('crates/fresh/Cargo.toml', member('fresh'));
+    put('crates/fresh/src/lib.rs', '//! Fresh.\n');
+    const fresh = checkManifests(proj, base);
+    assert.equal(fresh.ok, false);
+    assert.match(fresh.summary, /^ARC-08 crates\/fresh\/Cargo\.toml: the crate has no charter[\s\S]*fix: .*AGENTS\.md/);
+    put('crates/fresh/AGENTS.md', '# fresh\n');
+    assert.equal(checkManifests(proj, base).ok, true);
+    // Deleting a charter the base had fails.
+    fs.rmSync(path.join(repo, 'crates', 'kept', 'AGENTS.md'));
+    assert.match(checkManifests(proj, base).summary, /^ARC-08 crates\/kept\/Cargo\.toml/);
+    put('crates/kept/AGENTS.md', '# kept\n');
+    // A crate moved with its directory (unstaged) keeps what it had at its old path.
+    fs.renameSync(path.join(repo, 'crates', 'old'), path.join(repo, 'crates', 'moved'));
+    const moved = checkManifests(proj, base);
+    assert.equal(moved.ok, true, moved.summary);
+    assert.match(moved.summary, /advisory\): .*TST-09 crates\/moved\/Cargo\.toml.*ARC-08 crates\/moved\/Cargo\.toml/);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
