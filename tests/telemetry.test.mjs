@@ -95,6 +95,8 @@ test('redactCommand: the forms a secret takes on a command line', () => {
     // Names that end in a short secret word, or are one.
     ['OPENAI_KEY=s3 DB_PASS=s3 MYSQL_PWD=s3 X_PASSWD=s3 FOO_PW=s3 KEY=s3 MONKEY=ok BYPASS=ok KEY_ID=ok', 'OPENAI_KEY=*** DB_PASS=*** MYSQL_PWD=*** X_PASSWD=*** FOO_PW=*** KEY=*** MONKEY=ok BYPASS=ok KEY_ID=ok'],
     ['$env:OPENAI_KEY = "s3cret"', '$env:OPENAI_KEY = ***'],
+    // A bare value ends where the shell ends a word, as in the assignment rule.
+    ['$env:GH_TOKEN = s3cret; echo', '$env:GH_TOKEN = ***; echo'],
     ['curl "https://x/?db_pass=s3&X-Amz-Signature=s3&user.pwd=s3&x=1"', 'curl "…"'],
     // A secret-named name=value inside a quoted or =-joined word.
     ["curl -d 'password=s3cret' x", "curl -d '…' x"],
@@ -139,6 +141,13 @@ test('redactCommand: the contents of quoted strings are dropped, so file content
     ["echo 's3cret >> src/lib.rs", "echo '…"],
     ['echo "a \\"s3cret\\" b >> f', 'echo "…'],
     ['echo \\"s3cret >> f', 'echo \\"…'],
+    // A command substitution inside "…" can hold quotes of its own, so it drops the rest of the line.
+    ['echo "$(printf "%s" "s3cret")" >> src/main.rs', 'echo "…'],
+    ['echo "pub const K: &str = `echo "s3cret"`;" >> src/lib.rs', 'echo "…'],
+    ['echo "a \\$(b) \\`c\\`" s3cret=ok', 'echo "…" s3cret=ok'],
+    // A quote before the closing \" of a \"…\" drops the rest of the line too.
+    ['echo \\"x "let k=\\"s3cret\\";" >> src/lib.rs', 'echo \\"…'],
+    ["echo \\\"x 'let k=\\\"s3cret\\\";' >> src/lib.rs", 'echo \\"…'],
     // A quote inside another kind of quote does not open one.
     [`echo "it's" s3cret=ok`, 'echo "…" s3cret=ok'],
   ];
