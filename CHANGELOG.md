@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+**`temper stats` counts review rounds per change (#139).** The pilot had to tally by hand how many review rounds each change took to reach approval. `stats` now prints a `review rounds per change` line, and `review.changes` in `stats --json` holds the same: the number of changes, how many were approved, how many on the first round, how many were never approved, and the median and maximum rounds to approval. A change is a session's run of reviewer verdicts up to and including the first approval of the current tree; the next verdict starts another change. A stale approval does not close a change, and approving the same tree again is not a new one. Rounds left open when the telemetry ends count as never approved, which includes a session still under way. The temper lens's Stats tab shows this line in place of rounds per session. The `stats --json` keys already there are unchanged, and no hook decision changes.
+
 **A lint baseline holds on more than one platform (#141).** A baseline recorded on Linux was always red on Windows, because code under `cfg(windows)` adds clippy counts that Linux never compiles. In the redkiln-rs pilot, `baseline --check` and the Stop gate failed on Windows whatever the change, with 7 counts over in two crates, and `--tighten` refused there. The baseline now keeps counts per host triple:
 - **The recorded host** (`host`) keeps its counts in `totals`, as before, so CI on that platform is exactly as strict.
 - **Another host** gets its own section under `targets`, keyed by its triple (`x86_64-pc-windows-msvc`), with its own `totals`, toolchain, commit and dates. `temper baseline --init` on a host the baseline has no counts for adds that section instead of refusing, and leaves every other count alone. It records debt, so it refuses inside Claude Code without `TEMPER_ALLOW_RAISE=1`, like the first `--init`. `--update` and `--tighten` change only the counts of the host they run on.
@@ -10,7 +12,7 @@
 
 A baseline without `targets` reads and ratchets as before, and so does one with no `host`, whose counts hold on every host. The README's "Counts per platform" item and the troubleshooting guide's Windows section describe the flow.
 
-Upgrading from 1.4.x: files under `scripts/` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. The baseline file keeps `"temper_baseline": 1`: temper 1.4 reads a baseline with `targets`, ignores the sections and holds every host to the recorded counts, and its `--tighten` keeps the sections. Its `--update` rewrites the file without them, so refresh the vendored CLI everywhere, CI included, before you record a second platform.
+Upgrading from 1.4: files under `scripts/` changed (`temper.mjs` and `lib/`), so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. The baseline file keeps `"temper_baseline": 1`: temper 1.4 reads a baseline with `targets`, ignores the sections and holds every host to the recorded counts, and its `--tighten` keeps the sections. Its `--update` rewrites the file without them, so refresh the vendored CLI everywhere, CI included, before you record a second platform.
 
 ## 1.4.0 (2026-10-19)
 
