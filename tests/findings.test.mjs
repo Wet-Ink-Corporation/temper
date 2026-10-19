@@ -234,6 +234,17 @@ test('scanner scope: member files only, not nested non-member packages or exclud
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('scanFindings leaves out new-code-only rules: a baseline recorded before them holds no count (decisions.md 3.2)', () => {
+  const { dir, put } = tempWorkspace();
+  try {
+    put('Cargo.toml', '[package]\nname = "root"\n\n[workspace]\n');
+    put('src/lib.rs', 'pub fn f(x: Option<u8>) -> u8 {\n    if cfg!(test) { return 0; }\n    x.unwrap()\n}\n');
+    const proj = discover(dir);
+    assert.ok(RULES.find((r) => r.key === 'test-branch').newCodeOnly);
+    assert.deepEqual(scanFindings(proj, [{ name: 'root', dir: '.' }]).map(key), ['src/lib.rs:3 scan:unwrap']);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('toolOf, severities and completeness', () => {
   assert.equal(toolOf('scan:unwrap'), 'scan');
   assert.equal(toolOf('rustdoc::broken_intra_doc_links'), 'rustdoc');

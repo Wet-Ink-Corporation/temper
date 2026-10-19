@@ -383,14 +383,14 @@ ledger-app = { workspace = true, features = ["test-util"] }
 ```
 A shared test-support crate that depends on crate X is used only from X's `tests/`, never from X's own unit tests: as a dev-dependency of X it links a second copy of X into the unit-test build, and the compiler then rejects `X::Id` where it expects `X::Id`.
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:test-branch
 pub fn now() -> UnixSeconds {
     if cfg!(test) { return UnixSeconds(0); }       // test-only branch: shipped code is untested
     UnixSeconds(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
 }
 mock.expect_find().times(1).returning(|_| Ok(None)); // asserts call count, not outcome
 ```
-**Detect.** `cfg!(test)` or `#[cfg(test)]` inside function bodies of production code; `mockall` or similar outside external seams (HTTP clients, cloud SDKs).
+**Detect.** `cfg!(test)` or `#[cfg(test)]` inside function bodies of production code: the scanner's `test-branch` rule refuses a new one at Write and Edit, and the gate fails on one in a changed file. A mocking crate (`mockall`, `mockall_double`, `faux`, `mry`, `unimock`, `mockito`, `wiremock`, `httpmock`) added to `[dependencies]` is refused by the manifest hook and the gate; under `[dev-dependencies]`, or optional behind `test-util` and not turned on by `default`, it is not. Review: `mockall` or similar outside external seams (HTTP clients, cloud SDKs).
 
 ## Test data builders
 
