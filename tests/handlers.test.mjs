@@ -614,6 +614,28 @@ test('SubagentStop (reviewer): changes requested without a blocker or major find
   assert.deepEqual(rows.map((x) => [x.verdict, x.kept]), [['approved', undefined], ['changes-requested', 'approved'], ['changes-requested', undefined]]);
 });
 
+test('SubagentStop (reviewer): a resumed reviewer\'s new verdict on the same tree is checked and recorded (#136)', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.fp();
+  const proj = r.proj();
+  const input = { cwd: r.dir, session_id: 's-rv-resume', agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
+  const blocker = { rule: 'H-02', severity: 'blocker', file: LIB, line: 10, evidence: 'x.unwrap()', fix: 'propagate with ?' };
+  assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp)) }), {});
+  // resumed, the same agent ends again on the same tree with changes requested
+  assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp, { verdict: 'changes-requested', findings: [blocker] })) }), {});
+  assert.equal(verdictFor(proj, fp).verdict, 'changes-requested');
+  // ... and an invalid new verdict is still refused
+  assert.match(blocked(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp, { findings: [blocker] })) })), /"approved" is inconsistent/);
+  // and the reverse: approved again after changes requested
+  assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp)) }), {});
+  assert.equal(verdictFor(proj, fp).verdict, 'approved');
+  // the same report delivered again is not a new verdict
+  assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp)) }), {});
+  const rows = readTelemetry(proj).filter((x) => x.sid === 's-rv-resume' && x.event === 'verdict');
+  assert.deepEqual(rows.map((x) => x.verdict), ['approved', 'changes-requested', 'approved']);
+});
+
 test('SubagentStop (reviewer): a verdict the hand-back recorded is not recorded again from the transcript (#136)', { skip: noGit }, (t) => {
   const r = repo(t);
   r.put(LIB, LIB_RS_2);
@@ -629,6 +651,8 @@ test('SubagentStop (reviewer): a verdict the hand-back recorded is not recorded 
   assert.equal(history.length, 1);
   const rows = readTelemetry(proj).filter((x) => x.sid === 's-rv-once' && x.event === 'verdict');
   assert.deepEqual(rows.map((x) => [x.via, x.kept]), [['handback', 'approved']]);
+  // the reviewer's context counts the verdict kept as history
+  assert.match(context(subagentStart({ ...input, agent_id: 'rv2' })), /1 later changes-requested verdict\(s\) gave no reason to overturn it/);
   // a verdict for another fingerprint from the same agent is still checked and recorded
   const other = 'fedcba9876543210';
   assert.deepEqual(subagentStop({ ...input, agent_id: 'rv1', last_assistant_message: fenced(verdict(other, { verdict: 'changes-requested' })) }), {});

@@ -20,7 +20,7 @@ import {
 import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
-import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings, earlierReview } from './verdict.mjs';
+import { extractVerdict, validateVerdict, recordVerdict, verdictFor, historyFor, verdictHash, summarizeFindings, earlierReview } from './verdict.mjs';
 import {
   parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
   landing as protectedLanding, patchFiles as protectedPatchFiles, commandDeletes as protectedDeletes,
@@ -1151,6 +1151,7 @@ function storeVerdict(proj, input, v, via) {
   const current = fingerprint(proj, base);
   const rec = recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
+  writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`), verdictHash(v));
   telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length, ...(rec.kept ? { kept: rec.kept } : {}) });
 }
 
@@ -1273,8 +1274,10 @@ export function subagentStop(input) {
     const report = input.last_assistant_message ?? reportFromTranscript(input.agent_transcript_path);
     const v = extractVerdict(report);
     // Recorded by SubagentHandback or an earlier SubagentStop for this agent: a hand-back's report
-    // read back from the transcript is not recorded twice (#136).
-    if (already && (!v || v.fingerprint === already.trim())) return none();
+    // read back from the transcript is not recorded twice (#136), while a resumed reviewer's new
+    // verdict, even on the same tree, is checked and recorded.
+    const seen = already && v && readText(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`));
+    if (already && (!v || seen === verdictHash(v))) return none();
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }
@@ -1318,7 +1321,7 @@ export function subagentStart(input) {
   if (REVIEWER.test(type)) {
     lines.push(`- Your verdict's "fingerprint" field must be ${fp}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.`);
     const prior = verdictFor(proj, fp);
-    if (prior && !prior.stale) lines.push(earlierReview(prior));
+    if (prior && !prior.stale) lines.push(earlierReview(prior, historyFor(proj, fp, prior.recorded_at).length));
     const stat = diffStat(proj, base);
     if (stat) lines.push(`- Diff stat:\n${stat.split('\n').slice(-25).join('\n')}`);
   }

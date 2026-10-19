@@ -281,6 +281,17 @@ test('stats: review rounds per change, from the first verdict to the approval th
   assert.match(cli(ws, ['stats']).stdout, /^review rounds per change: p50 2, max 3 \(4 approved, 1 on the first round\); 1 never approved$/m);
 });
 
+test('stats: a changes-requested verdict kept beside the approval of its tree is not a new change (#136)', { skip: noGit }, (t) => {
+  const { ws, proj } = workspace(t);
+  const log = (verdict, fp, extra = {}) => telemetry(proj, { session_id: 's1', agent_type: 'temper:rust-reviewer' }, 'verdict', { via: 'handback', verdict, fp, ...extra });
+  log('approved', 'a'); // change 1: 1 round
+  log('changes-requested', 'a', { kept: 'approved' }); // the approved tree reviewed again: not a new change
+  log('changes-requested', 'b', { kept: 'approved' }); // kept beside an approval from elsewhere: a round of change 2
+  log('approved', 'c'); // change 2: 2 rounds
+  const doc = json(ws, ['stats', '--json']);
+  assert.deepEqual(doc.review.changes, { count: 2, approved: 2, neverApproved: 0, firstRound: 1, roundsP50: 2, roundsMax: 2 });
+});
+
 test('stats: review rounds per change when no change was approved', { skip: noGit }, (t) => {
   const { ws, proj } = workspace(t);
   telemetry(proj, { session_id: 's1', agent_type: 'temper:rust-reviewer' }, 'verdict', { via: 'handback', verdict: 'changes-requested', fp: 'a' });

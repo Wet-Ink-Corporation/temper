@@ -1,4 +1,5 @@
 // Review verdicts: parsing, validation and storage keyed by tree fingerprint.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readText, writeAtomic } from './project.mjs';
@@ -116,7 +117,7 @@ const failedGate = (v) => Object.entries(v.gate ?? {}).filter(([, x]) => x !== '
 const overturns = (v) => (v.findings ?? []).some(serious) || lowScores(v).length > 0 || failedGate(v).length > 0;
 
 /** `s` on one line, so a multi-line field cannot add lines to a hook's message. */
-const oneLine = (s) => String(s ?? '').replace(/\s*[\r\n]+\s*/g, ' ');
+const oneLine = (s) => String(s ?? '').replace(/\s*[\r\n\u2028\u2029\u0085]+\s*/g, ' ');
 
 /**
  * Record `v` as the verdict for its fingerprint, the one Stop reads. A
@@ -140,6 +141,20 @@ export function recordVerdict(proj, v, meta = {}) {
   return rec;
 }
 
+/** The verdicts kept as history beside an approval of `fp` and recorded after `since` (an ISO time), oldest first. */
+export function historyFor(proj, fp, since = '') {
+  const t = readText(path.join(proj.stateDir, 'verdicts', `${fp}.history.jsonl`)) ?? '';
+  return t.split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } })
+    .filter((h) => String(h.recorded_at ?? '') > since);
+}
+
+/** `x` with its object keys sorted, at every depth. */
+const canonical = (x) => (Array.isArray(x) ? x.map(canonical)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x);
+
+/** A short hash of verdict `v`'s canonical JSON: the same report read twice hashes the same. */
+export const verdictHash = (v) => createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex').slice(0, 16);
+
 export function verdictFor(proj, fp) {
   const t = readText(path.join(proj.stateDir, 'verdicts', `${fp}.json`));
   if (!t) return null;
@@ -157,9 +172,9 @@ export function summarizeFindings(v, max = 10) {
  * The reviewer's SubagentStart lines for a tree that already has verdict `v` (#136): the earlier
  * verdict, when it was recorded, its blocker and major findings, low scores and failing gate
  * entries, so a repeat review re-checks them, and an approval of the unchanged tree is overturned
- * only for one of those reasons.
+ * only for one of those reasons. `kept` is the number of later verdicts kept as history beside it.
  */
-export function earlierReview(v) {
+export function earlierReview(v, kept = 0) {
   const list = summarizeFindings(v).trim();
   const head = `- An earlier review of this same tree is recorded: ${v.verdict} at ${oneLine(v.recorded_at ?? 'an unknown time')}`;
   const lines = [(v.findings ?? []).some(serious) ? `${head}.\n${list}` : `${head}${overturns(v) ? '.' : ', with no blocker or major finding.'}${list ? `\n${list}` : ''}`];
@@ -167,6 +182,7 @@ export function earlierReview(v) {
   if (low.length) lines.push(`  Scores below 3: ${low.join(', ')}.`);
   const gate = failedGate(v);
   if (gate.length) lines.push(`  Gate entries not "pass": ${gate.map(oneLine).join(', ')}.`);
+  if (v.verdict === 'approved' && kept > 0) lines.push(`  ${kept} later changes-requested verdict(s) gave no reason to overturn it and are kept as history beside it.`);
   lines.push('  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.');
   if (v.verdict === 'approved') lines.push('  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not "pass", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval.');
   return lines.join('\n');
