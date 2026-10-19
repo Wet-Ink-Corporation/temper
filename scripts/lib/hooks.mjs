@@ -436,7 +436,7 @@ const REVIEWER_OPAQUE_HINT = {
 };
 // A command name temper cannot read (#151 review 6): the command may be fine, written so temper can read it.
 const REVIEWER_NAME_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so a command whose name temper cannot read was not run.';
-const REVIEWER_NAME_HINT = 'Write the command name out (`~/.cargo/bin/cargo test`, not `"$CARGO" test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
+const REVIEWER_NAME_HINT = 'Write the command name out, or as a quoted path that ends in it (`~/.cargo/bin/cargo test`, `"$HOME/.cargo/bin/cargo" test`, not `"$CARGO" test`, `$HOME/.cargo/bin/cargo test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
 const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**
@@ -1036,7 +1036,7 @@ export function preBash(input) {
     if (opaque) {
       telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
       if (opaque.kind === 'name') return deny(`${REVIEWER_NAME_DENY} This command holds ${opaque.why}. ${REVIEWER_NAME_HINT}`);
-      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque.why}, so temper cannot tell that it applies no patch. ${REVIEWER_OPAQUE_HINT[opaque.kind]}`);
+      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque.why}, so temper cannot tell that it applies no patch. ${opaque.hint ?? REVIEWER_OPAQUE_HINT[opaque.kind]}`);
     }
   }
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {

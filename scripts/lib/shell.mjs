@@ -385,7 +385,7 @@ const KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'whi
 // Wrappers that run the command after them, with their options that take a separate value.
 const WRAPPERS = new Map([
   ['sudo', ['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U', '-T', '--user', '--group', '--chdir', '--prompt']],
-  ['doas', ['-u', '-C']], ['env', ['-u', '-C', '-S', '--unset', '--chdir', '--split-string']], ['command', []], ['builtin', []],
+  ['doas', ['-u', '-C']], ['env', []], ['command', []], ['builtin', []],
   ['exec', ['-a']], ['nohup', []], ['time', ['-f', '-o', '--format', '--output']], ['nice', ['-n', '--adjustment']],
   ['ionice', ['-c', '-n', '-p']], ['stdbuf', ['-i', '-o', '-e']], ['timeout', ['-s', '-k', '--signal', '--kill-after']],
   ['xargs', ['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--replace']],
@@ -425,13 +425,14 @@ const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().
  * `untracked`, under which a variable the command assigns is unknown rather than its model's value
  * (#151 review 7: `read`, `printf -v`, arrays and assignments that never run are not modelled), and
  * a command whose name or wrapper words temper does not read exactly is reported as one with
- * `opaque: 'name'` and no name, whatever the model makes of it (`cd`, `export`, `timeout $T`).
+ * `opaque: 'name'` and no name, whatever the model makes of it (`cd`, `export`, `timeout $T`), and
+ * `env -S`, whose string is not shell syntax, as one with `opaque: 'split'` (#151 review 8).
  */
 export function parseCommands(cmd, opts = {}) {
   const env = {
     cwd: opts.cwd ? path.resolve(opts.cwd) : null, prev: null, home: opts.home ?? os.homedir(),
     top: opts.top ?? null, gitDir: opts.gitDir ?? '.git', tmp: opts.tmp ?? os.tmpdir(), vars: new Map(), dirs: [],
-    untracked: Boolean(opts.untracked), whole: String(cmd),
+    untracked: Boolean(opts.untracked),
   };
   const out = [];
   run(String(cmd), env, out, 0, undefined);
@@ -471,7 +472,8 @@ function run(src, env, out, depth, via) {
       else if (r.op === '<<<' && r.word) stdin = { kind: 'string', word: r.word, body: r.word.text, literal: r.word.literal ? r.word.text : null };
     }
     prevBody = stdin && stdin.kind !== 'pipe' && stdin.kind !== 'file' ? stdin.body : null;
-    const words = it.words.map((w) => makeWord(w.parts, wenv));
+    // An unquoted expansion that is empty is no word at all (`X=; $X git apply x`).
+    const words = it.words.map((w) => makeWord(w.parts, wenv)).filter((w) => !(w.value === '' && !w.quoted && w.parts.some((p) => p.t !== 'lit')));
     // A body piped on is the next stage's script exactly only when it is literal and `cat` passes it through unchanged.
     prevExact = prevBody !== null && stdin.literal !== null && stdin.literal !== undefined && catsStdin(words);
     simple(words, { redirects, stdin, piped, isolated, raw: it.raw, line, via }, env, out, depth);
@@ -501,7 +503,7 @@ function catsStdin(words) {
 /** The command that stands for what is nested deeper than temper reads, or (`opaque: 'name'`) a command name it does not read. */
 const depthMarker = (src, env, via, opaque = 'depth', argv0 = unknownWord('')) => ({
   name: null, argv0, args: [], redirects: [], stdin: null, piped: false, cwd: null,
-  raw: String(src).trim(), line: String(src), via, envNames: [], opaque, named: false, whole: env.whole,
+  raw: String(src).trim(), line: String(src), via, envNames: [], opaque, named: false,
 });
 
 function sub(src, env, out, depth, via) {
@@ -542,6 +544,26 @@ function shellScript(args) {
   return cmd ? { from: 'arg', word: undefined } : { from: 'stdin' };
 }
 
+// env's long options, by the short option of those that take a value. getopt takes any unambiguous prefix.
+const ENV_LONG = { 'ignore-environment': '', null: '', unset: 'u', chdir: 'C', 'split-string': 'S', 'block-signal': '', 'default-signal': '',
+  'ignore-signal': '', 'list-signal-handling': '', debug: '', argv0: 'a', help: '', version: '' };
+/**
+ * An env option word that takes a value, as env reads it (#151 review 8): `{ opt, value }`, `opt`
+ * its short letter (`u`, `C`, `S`, `a`) and `value` attached (`-iS'...'`, `--sp=...`) or undefined
+ * when it is the next word; null for a flag. In a cluster (`-iS`), the first letter that takes a value takes the rest.
+ */
+function envOption(a) {
+  if (a.startsWith('--')) {
+    const eq = a.indexOf('=');
+    const key = a.slice(2, eq === -1 ? undefined : eq);
+    const hits = Object.keys(ENV_LONG).filter((n) => n.startsWith(key));
+    const full = hits.includes(key) ? key : hits.length === 1 ? hits[0] : null;
+    return full && ENV_LONG[full] ? { opt: ENV_LONG[full], value: eq === -1 ? undefined : a.slice(eq + 1) } : null;
+  }
+  for (let j = 1; j < a.length; j++) if ('uCSa'.includes(a[j])) return { opt: a[j], value: j + 1 < a.length ? a.slice(j + 1) : undefined };
+  return null;
+}
+
 const isAssign = (w) => Boolean(w.assign);
 // A variable's new value; unknown (null) when nothing is known, or when the parse is `untracked`.
 const setVar = (env, name, value) => {
@@ -572,13 +594,16 @@ function simple(words, meta, env, out, depth) {
     name, argv0: rest[0], args: rest.slice(1), redirects: meta.redirects, stdin: meta.stdin, piped: meta.piped,
     cwd: extra.cwd !== undefined ? extra.cwd : env.cwd, raw: meta.raw, line: meta.line, via: meta.via,
     envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))], xargs: Boolean(xargs),
-    named: readName(rest[0], env.whole), whole: env.whole,
+    named: readName(rest[0]) !== null,
   });
   // Under `untracked`, a wrapper word (w[from..to)) or command name (w[name]) temper does not read
   // exactly is reported before the model acts on it: `timeout $T apply x` runs `git apply x` when $T is `5 git`.
-  const unread = (from, to, name = -1) => {
+  // The first word is a name (see readName); a later one a wrapper may read as its option, so it
+  // also starts with literal text (see fixedWord), and so does the name while `opts` (see plainStart).
+  const unread = (from, to, name = -1, opts = false) => {
     if (!env.untracked) return;
-    const x = w.slice(from, to).find((y) => !readName(y, env.whole) && !fixedWord(y)) ?? (name < w.length && name !== -1 && !readName(w[name], env.whole) ? w[name] : undefined);
+    const x = w.slice(from, to).find((y, j) => (from + j === k ? readName(y) === null : !y.literal && !fixedWord(y)))
+      ?? (name < w.length && name !== -1 && (readName(w[name]) === null || (opts && name > k && !plainStart(w[name]))) ? w[name] : undefined);
     if (x) out.push(depthMarker(meta.raw, env, meta.via, 'name', x));
   };
   w = w.slice(skipKeywords(w, 0));
@@ -608,19 +633,36 @@ function simple(words, meta, env, out, depth) {
   let cwd = env.cwd;
   // Wrappers are walked with an index, so a long chain (`busybox busybox ...`) stays linear.
   let i = k;
+  let opts = false; // whether the word at i is one a wrapper may still read as its option
   for (;;) {
-    if (i >= w.length || w[i].value === null) break;
-    const name = commandName(w[i].value);
-    const valued = WRAPPERS.get(name);
+    if (i >= w.length) break;
+    const name = nameOf(w[i]);
+    const valued = name === null ? undefined : WRAPPERS.get(name);
     if (!valued) break;
     i++;
+    opts = true;
     if (name === 'command' && w[i] && /^-[vV]+$/.test(w[i].raw)) return; // a lookup, not a run
     if (name === 'xargs') xargs = { replace: null };
     let watchExec = false;
-    while (i < w.length && ((w[i].raw.startsWith('-') && w[i].raw !== '-') || (name === 'env' && isAssign(w[i])))) {
+    // A lone `-` is env's -i.
+    while (i < w.length && ((w[i].raw.startsWith('-') && (w[i].raw !== '-' || name === 'env')) || (name === 'env' && isAssign(w[i])))) {
       const a = w[i].raw;
-      if (name === 'env' && isAssign(w[i])) envNames.push(w[i].assign);
+      if (name === 'env' && isAssign(w[i])) { envNames.push(w[i].assign); i++; continue; }
       i++;
+      if (name === 'env') {
+        const o = envOption(a);
+        if (!o) continue;
+        let v = o.value;
+        if (v === undefined) v = o.opt === 'S' ? (w[i++]?.text ?? '') : (w[i++]?.value ?? null);
+        if (o.opt === 'C') cwd = resolvePath(v, cwd);
+        if (o.opt === 'S') { // env -S splits its string into the command and runs it
+          // Its quoting and escapes are not the shell's, so the fail-closed parse does not read it.
+          if (env.untracked) { out.push(depthMarker(meta.raw, env, meta.via, 'split')); return; }
+          sub([v.replace(/\\_/g, ' '), ...w.slice(i).map((x) => x.text)].join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'env -S');
+          return;
+        }
+        continue;
+      }
       if (name === 'xargs') {
         const rep = /^(?:-I|--replace=?|-i)(.*)$/.exec(a);
         if (rep) {
@@ -629,14 +671,7 @@ function simple(words, meta, env, out, depth) {
           continue;
         }
       }
-      if ((name === 'env' || name === 'sudo') && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[i]?.value ?? null, cwd); i++; continue; }
-      if (name === 'env' && /^(?:-S|--split-string)(?:=|$)|^-S./.test(a)) { // env -S splits its string into the command and runs it
-        const str = /^-S./.test(a) ? a.slice(2) : a.includes('=') ? a.slice(a.indexOf('=') + 1) : w[i++]?.text ?? '';
-        unread(k, i);
-        sub([str, ...w.slice(i).map((x) => x.text)].join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'env -S');
-        return;
-      }
-      if (name === 'env' && /^--chdir=/.test(a)) { cwd = resolvePath(a.slice(8), cwd); continue; }
+      if (name === 'sudo' && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[i]?.value ?? null, cwd); i++; continue; }
       if (name === 'watch') {
         if (a === '--exec' || /^-[a-zA-Z]*x/.test(a)) watchExec = true;
         if (/^-[a-zA-Z]*[nq]$/.test(a)) { i++; continue; } // -n 2, -dn 2
@@ -648,18 +683,19 @@ function simple(words, meta, env, out, depth) {
       if (i < w.length) sub(w.slice(i).map((x) => x.text).join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'watch');
       return;
     }
-    if (name === 'timeout' && i < w.length) i++;
+    // timeout reads no option after its duration.
+    if (name === 'timeout' && i < w.length) { i++; opts = false; }
     if (name === 'nice' && w[i] && /^-\d+$/.test(w[i].raw)) i++;
   }
-  unread(k, i, i);
+  unread(k, i, i, opts);
   w = w.slice(i);
   if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; } // `exec > file`
   if (xargs) {
     if (xargs.replace) w = w.map((x) => (x.raw.includes(xargs.replace) ? unknownWord(x.raw) : x));
     else w = [...w, unknownWord('(xargs input)')];
   }
-  if (w[0].value === null) { emit(null, w, { cwd }); return; }
-  const name = commandName(w[0].value);
+  const name = nameOf(w[0]);
+  if (name === null) { emit(null, w, { cwd }); return; }
   const args = w.slice(1);
 
   if (CD.has(name)) {
@@ -1070,38 +1106,68 @@ const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pws
 const PS_CONTENT = /^(?:set-content|add-content|out-file|new-item|tee-object|sc|ac|ni)$/;
 const PS_COPY = /^(?:copy-item|move-item|cpi|mi|copy|move)$/;
 
-// Interpreter options before the script that take the next word as their value, by interpreter
-// (perl's and ruby's -W, and perl's -C, are flags; -r, -E and php's -c are read as code options).
-const CODE_VALUED = [
-  [/^(?:python[\d.]*|py)$/, /^(?:-[WX]|--check-hash-based-pycs)$/], [/^(?:node|nodejs|bun)$/, /^(?:-C|--(?:require|import|loader|experimental-loader|conditions|input-type|title|env-file))$/],
-  [/^ruby$/, /^-[IC]$/], [/^perl$/, /^-I$/], [/^php$/, /^-[dfz]$/],
-];
 /**
- * The words an interpreter runs as code from its options (-c, -e, -E, -p, -r, --eval, -Command), up
- * to its script or module (`python3 tool.py -c x`, `python3 -m pytest -p x`: the rest is theirs),
- * and `deno eval`'s operand. A word in an option's place built from an expansion (`python3 $O "$X"`)
- * is counted as code too, since temper cannot tell whether it is `-c`.
+ * The words an interpreter runs as code from its options, by its rules (#151 review 8):
+ * - python: `-c` (alone, at the end of a cluster, or with the code attached: `-c'...'`, `-Ic'...'`)
+ *   ends its options, and so does its script or module (`python3 tool.py -c x`, `python3 -m pytest
+ *   -p x`: the rest is theirs). `-W` and `-X` take a value.
+ * - node, bun, deno, ruby, perl, php, pwsh: a code option anywhere in the arguments (-e, -E, -p, -c,
+ *   -r, php's -B and -R, --eval, --print, -Command, attached or not), since temper cannot tell which of
+ *   their options take a value (`node --disable-warning DEP0040 -e ...`). A script's own `-e` is read
+ *   as code too. pwsh's `-EncodedCommand` is code temper cannot read. `deno eval`'s operand is code.
+ * A word that may be a code option or code temper cannot see is counted as code too, before the
+ * script or module (see plainStart: `python3 $O "$X"`, `X=--eval=...; node "$X/a.js"`): for node and
+ * the others, before a word that no option before it may take as its value.
  */
 function codeArgs(c) {
   const a = c.args;
-  if (c.name === 'deno') {
-    const k = a[0]?.value === 'eval' ? a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-')) : -1;
-    return k === -1 ? [] : [a[k]];
-  }
   const code = [];
-  // python's -c is its only code option, and ends its options; -E and -p are flags there.
-  const py = /^(?:python[\d.]*|py)$/.test(c.name);
-  const valued = CODE_VALUED.find(([n]) => n.test(c.name))?.[1];
+  if (/^(?:python[\d.]*|py)$/.test(c.name)) {
+    for (let j = 0; j < a.length; j++) {
+      const x = a[j];
+      if (!plainStart(x)) { code.push(x); break; }
+      const r = x.raw;
+      if (r === '--' || r === '-' || !r.startsWith('-')) break;
+      if (r.startsWith('--')) { if (r === '--check-hash-based-pycs') j++; continue; }
+      for (let k = 1; k < r.length; k++) {
+        if (r[k] === 'c') {
+          const v = k + 1 < r.length ? (x.literal ? literalWord(r.slice(k + 1)) : x) : a[j + 1];
+          if (v) code.push(v);
+          return code;
+        }
+        if (r[k] === 'm') return code;
+        if (r[k] === 'W' || r[k] === 'X') { if (k + 1 === r.length) j++; break; }
+      }
+    }
+    return code;
+  }
+  if (c.name === 'deno' && a[0]?.value === 'eval') {
+    const k = a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-'));
+    if (k !== -1) code.push(a[k]);
+  }
+  const ps = c.name === 'pwsh' || c.name === 'powershell';
+  let operand = false; // a script, module or subcommand was seen
+  let valueNext = false; // the word before was an option that may take the next word as its value
   for (let j = 0; j < a.length; j++) {
     const x = a[j];
-    if ((py ? /^-[a-zA-Z]*c$/.test(x.raw) : /^-[a-zA-Z]*[ceEp]$/.test(x.raw) || /^(?:-r|--eval|--print|-command)$/i.test(x.raw)) && a[j + 1]) {
-      code.push(a[++j]);
-      if (py) break;
-      continue;
+    const r = x.raw;
+    const lower = r.toLowerCase();
+    // After a code option and its value, the next word is not an option's value.
+    const value = valueNext;
+    valueNext = false;
+    if (ps && r.length > 1 && r.startsWith('-') && ('encodedcommand'.startsWith(lower.slice(1)) || lower === '-ec')) {
+      code.push(unknownWord(r));
+      j++;
+    } else if (c.name !== 'deno' && (/^-[a-zA-Z]*[ceEpBR]$/.test(r) || /^(?:-r|--eval|--print|-command)$/i.test(r))) {
+      if (a[j + 1]) code.push(a[++j]);
+    } else if (c.name === 'deno' && r === '--eval') {
+      if (a[j + 1]) code.push(a[++j]);
+    } else if (/^--(?:eval|print)=/.test(r) || (c.name !== 'deno' && /^-[a-zA-Z]*?[ceEpBRr]./.test(r))) {
+      code.push(x.literal ? literalWord(r.slice(r.startsWith('--') ? r.indexOf('=') + 1 : /^-[a-zA-Z]*?[ceEpBRr]/.exec(r)[0].length)) : x);
+    } else {
+      if (!plainStart(x)) { if (!operand) code.push(x); } else if (r === '--' || (!r.startsWith('-') && !value)) operand = true;
+      valueNext = r.startsWith('-') && !r.includes('=') && r !== '--';
     }
-    if (!pathWord(x, c.whole ?? '')) { code.push(x); break; }
-    if (x.raw === '--' || x.raw === '-' || !x.raw.startsWith('-') || (x.raw === '-m' && py)) break;
-    if (valued?.test(x.raw)) j++;
   }
   return code;
 }
@@ -1379,7 +1445,7 @@ function configWritesAlias(args) {
 }
 
 /**
- * Why temper cannot rule out that `c` applies a patch, as `{ kind, why }`, or null. `kind` is:
+ * Why temper cannot rule out that `c` applies a patch, as `{ kind, why, hint? }`, or null. `kind` is:
  * - `git`: a git subcommand it cannot resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a
  *   `-c` value it cannot read), or one git does not have, which may be an alias set anywhere;
  * - `name`: a command name it cannot read (see readName: `$X`, `"${CARGO:-cargo}"`, `{git,apply,x}`,
@@ -1391,12 +1457,14 @@ function configWritesAlias(args) {
  * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
  *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`,
  *   `bash -c "$CMD"`, `bash <<< "$X"`, `bash -c {x,y}`), an `eval` argument built from an expansion
- *   (`eval "$(cat cmd.txt)"`, `eval git*`), or commands nested deeper than temper reads;
+ *   (`eval "$(cat cmd.txt)"`, `eval git*`), commands nested deeper than temper reads, or (under
+ *   `untracked`) `env -S`, whose string is not shell syntax, with a `hint` of its own;
  * - `alias`: `git config` setting an alias, which could name git apply later.
  * Patterns, not a parse: for a fail-closed check.
  */
 export function opaquePatch(c) {
   if (c.opaque === 'depth') return { kind: 'script', why: 'commands nested deeper than temper reads' };
+  if (c.opaque === 'split') return { kind: 'script', why: 'an `env -S` string, whose syntax is not the shell\'s', hint: 'Run the command directly, without `env -S`, so temper can read it.' };
   const dashed = dashedGit(c);
   if (dashed !== null && dashed !== 'apply' && dashed !== 'am') return { kind: 'git', why: `a dashed git command (git-${dashed})` };
   const g = gitCommand(c);
@@ -1421,78 +1489,66 @@ export function opaquePatch(c) {
     return why ? { kind: 'script', why: `a ${c.name} script ${why} that temper cannot read` } : null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
-  if (codeArgs(c).some((w) => !w.literal)) return { kind: 'code', why: `${c.name} code built from an expansion` };
+  const code = codeArgs(c);
+  if (code.some((w) => !w.literal)) return { kind: 'code', why: `${c.name} code built from an expansion` };
   if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
-  // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`.
-  const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
-  if (c.stdin && !readStdin(c.stdin) && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
+  // A script from a process substitution, or on stdin that temper cannot read: `node <(...)`,
+  // `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`, `python3 /dev/stdin < x.py`.
+  if (c.args.some((x) => x.parts?.some((p) => p.t === 'proc'))) return { kind: 'code', why: `a ${c.name} script from a process substitution` };
+  const stdinArg = c.args.some((x) => x.value !== null && STDIN_PATH.test(path.posix.normalize(x.value)));
+  const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || code.length > 0;
+  if (c.stdin && !readStdin(c.stdin) && (!scriptArg || stdinArg)) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
   return null;
 }
 
 const SOURCES = new Set(['source', '.']);
 /**
- * Whether temper reads a word exactly (#151 review 7, wi-0e226b): a literal, or one variable
- * (`names`, or any) or a double-quoted `$(git rev-parse --show-toplevel)` followed by a literal
- * path (`"$HOME/.cargo/bin/cargo"`, `$PWD/target/debug/a`), on a line that does not write that
- * variable (see writesNames). An unquoted one must have a known value with no space or glob to split.
+ * The command name temper reads from a word (#151 review 8, wi-ec88b9), or null: a literal word's
+ * value, or the last segment of a word whose expansions are all double-quoted and that ends in a
+ * literal `/name` segment with no glob or brace (`"$HOME/.cargo/bin/cargo"`, `"$X"/git`). Bash looks
+ * up no PATH, alias or function for a name with a slash in it, so that segment decides what runs,
+ * exactly as for a literal path, whatever the expansions hold. An unquoted expansion is never read,
+ * since bash splits and globs its value, and neither is `"$@"` or `"${A[@]}"`, which are several words.
  */
-function pathWord(w, whole, names = null, lead = false) {
-  if (!w) return false;
-  if (w.literal) return true;
-  if (!w.parts || w.glob) return false;
-  const [head, ...tail] = w.parts.filter((p) => !p.bs && !(p.t === 'lit' && p.s === ''));
-  if (!head || !tail.every((p) => p.t === 'lit' && (p.q || !/[{}[\]*?]/.test(p.s)))) return false;
-  if (!/^\/(?:.*\/)?[^/]+$/s.test(tail.map((p) => p.s).join(''))) return false;
-  let name;
-  if (head.t === 'var' && (head.s === `$${head.name}` || head.s === `\${${head.name}}`) && /^[A-Za-z_]\w*$/.test(head.name)) name = head.name;
-  else if (head.t === 'sub' && head.q && /^\s*git\s+rev-parse\s+--show-toplevel\s*$/.test(head.src)) name = 'PWD';
-  else return false;
-  if (names && head.t === 'var' && !names.includes(name)) return false;
-  if (!head.q && (w.value === null || /[\s*?[\]{}]/.test(w.value) || lineFacts(whole, '[', false))) return false;
-  return !lineFacts(whole, name, lead);
+function readName(w) {
+  if (!w) return null;
+  if (w.literal) return w.value;
+  if (!w.parts || w.glob) return null;
+  const parts = w.parts.filter((p) => !p.bs && !(p.t === 'lit' && p.s === ''));
+  let last = -1;
+  for (const [k, p] of parts.entries()) {
+    if (p.t === 'lit') {
+      if (!p.q && /[{}[\]*?]/.test(p.s)) return null;
+    } else if (!p.q || p.t === 'proc' || p.s.includes('@')) return null;
+    else last = k;
+  }
+  if (last === -1) return null;
+  return /\/([^/]+)$/.exec(parts.slice(last + 1).map((p) => p.s).join(''))?.[1] ?? null;
 }
-/**
- * Whether temper reads a command name exactly: a literal, or $HOME, $PWD or the quoted git toplevel
- * followed by a literal path (see pathWord). Never a value from an assignment: temper's model of
- * variables is not bash's (`read`, `printf -v`, arrays, `unset`, an assignment that never runs).
- */
-const readName = (w, whole) => pathWord(w, whole, ['HOME', 'PWD']) && w.value !== null;
-// writesNames for the line being read, kept so a long line is scanned once per name, not once per
-// command; `lead` reads it without a `source` or `.` that starts it (see unreadScript).
-let facts = { whole: null, seen: new Map() };
-function lineFacts(whole, name, lead) {
-  if (facts.whole !== whole) facts = { whole, seen: new Map() };
-  const key = `${lead ? '+' : ''}${name}`;
-  if (!facts.seen.has(key)) facts.seen.set(key, writesNames(lead ? whole.trimStart().replace(/^(?:source|\.)(?=\s)/, '') : whole, name));
-  return facts.seen.get(key);
-}
+/** The command name a word runs as (see commandName), from its value or (see readName) its last segment, or null. */
+const nameOf = (w) => {
+  if (w.value !== null) return commandName(w.value);
+  const n = readName(w);
+  return n === null ? null : commandName(n);
+};
 /**
  * A wrapper's option or assignment word whose role and split temper reads: it starts with literal
  * text and its expansions are quoted (`A="$X"`), with no glob or brace list (`-I{}` is not one).
  */
 const fixedWord = (w) => Boolean(w.parts) && !w.glob && w.parts[0]?.t === 'lit' && w.parts[0].s !== ''
   && w.parts.every((p) => (p.t === 'lit' ? p.q || !p.s.replace(/\{\}/g, '').includes('{') : p.q));
-// Builtins that write a variable named by their arguments, and cd and its kin, which set PWD.
-const NAME_WRITERS = /(?:^|[\s;&|(){}!`])(?:read|mapfile|readarray|declare|typeset|local|export|readonly|unset|eval|source|\.|getopts|select|let|coproc|trap|wait|printf|cd|pushd|popd|chdir)(?=$|[\s;&|()<>`])/;
 /**
- * Whether a command line may write the variable `name` or IFS, read as text with its quotes and
- * backslashes removed, so `HO''ME` is `HOME`: an assignment, `${HOME:=...}`, a builtin that writes a
- * variable it is given (`read`, `printf -v`, `declare`, `unset`, `cd`, ...), `source`, arithmetic,
- * `${!X}` or an ANSI-C string. Patterns, not a parse: it says yes when unsure.
+ * Whether a program that still reads options cannot take a word as one it does not show: the word is
+ * literal, or starts with literal text that is not an option, or with a long option's `--name=`. Its
+ * value may hold anything else (`X=--eval=...; node "$X/a.js"`, `X=-S...; env "$X/cargo"`).
  */
-function writesNames(src, name) {
-  if (name === '[') return src.includes('[');
-  if (/\$'|\(\(|\$\[|\$\{!/.test(src)) return true;
-  const s = src.replace(/['"\\]/g, '');
-  if (NAME_WRITERS.test(s)) return true;
-  for (const m of s.matchAll(new RegExp(`(?<!\\w)(?:${name}|IFS)(?!\\w)`, 'g'))) {
-    const read = s[m.index - 1] === '$' || (s.slice(m.index - 2, m.index) === '${' && s[m.index + m[0].length] === '}');
-    if (!read) return true;
-  }
-  return false;
-}
+const plainStart = (w) => {
+  if (w.literal) return true;
+  const p = w.parts?.find((x) => !x.bs && !(x.t === 'lit' && x.s === ''));
+  return Boolean(p) && p.t === 'lit' && (!p.s.startsWith('-') || /^--[\w-]+=/.test(p.s));
+};
 // Paths that name the shell's own stdin.
-const STDIN_PATH = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
+const STDIN_PATH = /^(?:\/dev\/(?:stdin|stdout|stderr)|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
 /** Whether temper read a command's stdin exactly: a literal heredoc or here-string body, or one a plain `cat` passed on. */
 const readStdin = (s) => Boolean(s) && (s.kind === 'pipe' ? s.exact === true && s.body !== null && s.body !== undefined
   : (s.kind === 'heredoc' || s.kind === 'string') && s.literal !== null && s.literal !== undefined);
@@ -1521,8 +1577,10 @@ function unreadScript(c) {
     const w = src.word;
     if (/[<>]\(/.test(w.raw)) return 'from a process substitution';
     if (w.value === null && c.xargs) return 'from xargs input';
-    // `source` itself runs after its operand is read: the one that starts the line writes nothing before it.
-    if (!pathWord(w, c.whole ?? '', null, SOURCES.has(c.name))) return 'built from an expansion';
+    // An operand read as a path that ends in a literal name (see readName) is that file, unless the name is a stream's.
+    const name = readName(w);
+    if (name === null) return 'built from an expansion';
+    if (!w.literal && /^(?:stdin|stdout|stderr|\d+)$/.test(name)) return 'on what may be stdin';
     return w.value !== null && STDIN_PATH.test(path.posix.normalize(w.value)) ? `from ${w.value}` : null;
   }
   return readStdin(c.stdin) ? null : 'on stdin';

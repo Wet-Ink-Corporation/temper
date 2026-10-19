@@ -714,10 +714,13 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     // Ordinary review commands, and command names whose value temper knows, still run.
     for (const cmd of [
       "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' Cargo.toml", "git log --format='%H' -5", "rg 'foo\\{' crates",
-      '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo --version', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
-      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"', 'node script.js -e "$ENVNAME"',
-      'python3 -m pytest -p "$PLUGIN"', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate --check', 'source "$HOME/.cargo/env" && cargo test',
-      'PATH+=":$HOME/.cargo/bin"; cargo test',
+      '"$HOME/.cargo/bin/cargo" test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
+      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"',
+      'python3 -m pytest -p "$PLUGIN"', 'source "$HOME/.cargo/env" && cargo test', 'PATH+=":$HOME/.cargo/bin"; cargo test',
+      // #151 review 8 (wi-ec88b9): quoted expansions followed by a literal /name name that command, whatever the line writes.
+      'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test', 'cd crates/a && "$PWD/../../target/debug/a"',
+      'read HOME <<< /x; "$HOME/cargo" test', 'node .claude/temper/temper.mjs gate --check', 'node script.js "$X"', 'env RUST_LOG="$LVL" cargo test',
+      "env -i PATH=/usr/bin cargo test",
     ]) assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     // #151 review 7: temper's variable model is not bash, so a command name from an assignment is
     // never read, nor $HOME or $PWD on a line that writes them; each of these is denied.
@@ -729,9 +732,29 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `X=git; (X=cargo); $X apply ${out('doc.diff')}`, `X=cargo; time X=git; $X apply ${out('doc.diff')}`, `X=git; local X=cargo; $X apply ${out('doc.diff')}`,
       `X=cargo; X=git builtin :; $X apply ${out('doc.diff')}`, `X=cargo; . ./set.sh; $X apply ${out('doc.diff')}`, `X=gitxapply; IFS=x; $X ${out('doc.diff')}`,
       `X=cd; $X apply ${out('doc.diff')}`, `timeout $T apply ${out('doc.diff')}`, `X=status; read X <<< apply; git $X ${out('doc.diff')}`,
-      'X=cargo; cd /tmp; $PWD/x', 'read HOME <<< /x; "$HOME/cargo" test', 'IFS=/; $HOME/cargo test', `hash -p /usr/bin/git cargo; cargo apply ${out('doc.diff')}`,
+      'X=cargo; cd /tmp; $PWD/x', 'IFS=/; $HOME/cargo test', `hash -p /usr/bin/git cargo; cargo apply ${out('doc.diff')}`,
       `env -S 'git apply ${out('doc.diff')}'`, `shopt -s expand_aliases\nalias cargo='git apply'\ncargo ${out('doc.diff')}`,
+      // #151 review 8: an unquoted expansion is never read as a command name, nor quoted ones with no literal /name after them.
+      '$HOME/.cargo/bin/cargo --version', '"$X"', '"$X$Y"', '"$(which cargo)" test', 'timeout "${T:-60}" cargo test', 'nice -n "$N" cargo test',
+      // The name is the last segment: these are git apply, git am and patch.
+      `"$X/git" apply ${out('doc.diff')}`, `"$X/git-apply" ${out('doc.diff')}`, `"$X/patch" -p1 < ${out('doc.diff')}`, `"$HOME/bin/sudo" git apply ${out('doc.diff')}`,
+      // Code options anywhere in node's, bun's, ruby's, perl's and php's arguments, and attached ones.
+      `node --disable-warning DEP0040 -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `node --unhandled-rejections strict -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `node --env-file-if-exists .env -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `bun --cwd . -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`, `ruby --encoding UTF-8 -e 'system("git apply ${out('doc.diff')}")'`,
+      `php -B 'system("git apply ${out('doc.diff')}");'`, `python3 -c'import os; os.system("git apply ${out('doc.diff')}")'`,
+      `node --eval='require("child_process").execSync("git apply ${out('doc.diff')}")'`, 'node script.js -e "$ENVNAME"',
+      'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate --check', 'X=--eval=x; node "$X/a.js"',
+      // env -S, in any spelling, splits a string with its own syntax.
+      "env -S 'cargo test'", "env -iS 'cargo test'", "env --split 'cargo test'", "env --sp='cargo test'", `env -S 'git\\_apply ${out('doc.diff')}'`,
+      `env - git apply ${out('doc.diff')}`, `env --unse X git apply ${out('doc.diff')}`,
     ]) assert.equal(decision(asReviewer(cmd)), 'deny', cmd);
+    // For other agents env -S is read, `\_` as a space, and a patch onto a .rs file is denied.
+    for (const cmd of [
+      `env -iS 'git apply ${out('rs.diff')}'`, `env --split 'git apply ${out('rs.diff')}'`, `env -S 'git\\_apply ${out('rs.diff')}'`,
+      `X=; $X git apply ${out('rs.diff')}`, `"$X/git" apply ${out('rs.diff')}`,
+    ]) assert.equal(decision(bash(cmd)), 'deny', cmd);
     // Each fail-closed deny says what to run instead.
     assert.match(reason(asReviewer('git $x')), /git's own commands/);
     assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);
