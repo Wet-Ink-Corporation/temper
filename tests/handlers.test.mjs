@@ -643,6 +643,26 @@ test('Stop: a session started in a linked worktree keeps its own base when a sub
   assert.ok(res.includes(`(fingerprint ${fp})`), res);
 });
 
+test('SessionStart: a compact in a worktree the session entered later keeps that worktree\'s base', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-compact';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  // the main checkout commits, then the session moves into a worktree made from the new HEAD
+  r.put('README.md', 'later\n');
+  r.git('add', '-A');
+  r.git('commit', '-qm', 'later');
+  const w = worktree(r, 'entered');
+  preEdit({ cwd: w.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: LIB_RS_2 } });
+  w.put(LIB, LIB_RS_2);
+  const head = r.git('rev-parse', 'HEAD');
+  const fp = fingerprint(w.proj(), head);
+  writeAtomic(path.join(r.proj().stateDir, 'gate', `${fp}.json`), JSON.stringify({ ok: true, fp, at: new Date().toISOString(), steps: [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }] }));
+  recordVerdict(r.proj(), verdict(fp));
+  assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${fp}).`);
+  sessionStart({ cwd: w.dir, session_id: sid, source: 'compact' });
+  assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${fp}).`);
+});
+
 test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {
   const r = repo(t);
   const sid = 's-wt-ahead';

@@ -1224,11 +1224,19 @@ function noteTree(proj, input) {
 /**
  * A session started in a linked worktree records that checkout with the session's own base, as
  * the earliest record for it, so a later subagent's or edit's record never moves its base (#135).
+ * A resume or compact writes it only for a checkout with no record yet: one the session entered
+ * later keeps the base it was first noted with.
  */
 function noteSessionTree(proj, input, fresh) {
   if (!proj.gitRoot || !input.session_id || !isLinked(proj)) return;
-  const p = path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-session.json`);
-  if (!fresh && fs.existsSync(p)) return;
+  const dir = sessionDir(proj, input.session_id);
+  const id = treeId(proj.root);
+  const p = path.join(dir, `tree-${id}-session.json`);
+  if (!fresh) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { /* none yet */ }
+    if (names.some((n) => n.startsWith(`tree-${id}-`))) return;
+  }
   const head = baseRev(proj, input.session_id);
   if (!head) return;
   writeAtomic(p, JSON.stringify({ root: proj.root, head, branch: null, startFp: startFingerprint(proj, input.session_id), at: 0 }));
@@ -1496,12 +1504,13 @@ export function subagentStart(input) {
   if (!PRELOADED.test(type)) return none();
   // The tree to work on: the checkout the agent starts in. A reviewer started in the main checkout
   // is sent to a worktree instead when only worktrees hold this session's Rust changes (#135); an
-  // agent started in a linked worktree keeps its own, so parallel workers stay apart.
+  // agent started in a linked worktree keeps its own, so parallel workers stay apart. A reviewer
+  // sees the session's other changed worktrees listed either way.
   const reviewer = REVIEWER.test(type);
   const linked = isLinked(proj);
-  const due = reviewer && !linked ? dueTrees(proj, input) : [];
+  const due = reviewer ? dueTrees(proj, input) : [];
   const others = due.filter((t) => !t.main);
-  const target = due.some((t) => t.main) || !others.length ? { proj, base: ownTree(proj, input).base, main: true } : others[0];
+  const target = linked || due.some((t) => t.main) || !others.length ? { proj, base: ownTree(proj, input).base, main: true } : others[0];
   const tp = target.proj;
   const base = target.base;
   const also = others.filter((t) => t !== target);
