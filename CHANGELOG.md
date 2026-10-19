@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**`temper stats` counts review rounds per change (#139).** The pilot had to tally by hand how many review rounds each change took to reach approval. `stats` now prints a `review rounds per change` line, and `review.changes` in `stats --json` holds the same: the number of changes, how many were approved, how many on the first round, how many were never approved, and the median and maximum rounds to approval. A change is a session's run of reviewer verdicts up to and including the first approval of the current tree; the next verdict starts another change. A stale approval does not close a change, and approving the same tree again is not a new one. Rounds left open when the telemetry ends count as never approved, which includes a session still under way. The temper lens's Stats tab shows this line in place of rounds per session. The `stats --json` keys already there are unchanged, and no hook decision changes.
+
+Upgrading from 1.4: `scripts/temper.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.

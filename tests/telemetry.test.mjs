@@ -274,9 +274,31 @@ test('stats: gates cut short by reason and step, step times, and verdicts once p
   assert.deepEqual(doc.gate.lost, { timeout: 1, interrupted: 1, unknown: 1 });
   assert.deepEqual(doc.gate.lostSteps, { test: 2, 'fmt or before': 1 });
   assert.deepEqual(doc.gate.stepP50Ms, { clippy: 5000, test: 3000, fmt: 2000 });
-  assert.deepEqual(doc.review, { sessions: 1, roundsP50: 2, roundsMax: 2, firstApproved: 0 });
+  assert.deepEqual([doc.review.sessions, doc.review.roundsP50, doc.review.roundsMax, doc.review.firstApproved], [1, 2, 2, 0]);
+  assert.equal(doc.review.changes.count, 1);
   const text = spawnSync(process.execPath, [CLI, 'stats'], { cwd: ws, encoding: 'utf8' }).stdout;
   assert.match(text, /; 3 cut short \(1 timeout, 1 interrupted, 1 unknown\)$/m);
   assert.match(text, /^gates cut short, by the step they were on:\n {2}test {23}2\n {2}fmt or before {14}1$/m);
   assert.match(text, /^gate step times at Stop \(p50\):\n {2}clippy {21}5\.0 s\n {2}test {23}3\.0 s\n {2}fmt {24}2\.0 s$/m);
+});
+
+test('stats: parallel reviewers in one session count one round each; agent_id pairs each SubagentStop echo', { skip: noGit }, (t) => {
+  // Hand-back A, hand-back B, stop A, stop B: the previous-row check alone would keep both stops.
+  const { ws, proj } = workspace(t);
+  const rv = 'temper:rust-reviewer';
+  const log = (via, agentId, fp, verdict, extra = {}) => telemetry(proj, { session_id: 's1', agent_type: rv }, 'verdict', { via, agent_id: agentId, fp, verdict, ...extra });
+  log('handback', 'A', 'f1', 'changes-requested');
+  log('handback', 'B', 'f1', 'changes-requested');
+  log('subagent-stop', 'A', 'f1', 'changes-requested');
+  log('subagent-stop', 'B', 'f1', 'changes-requested');
+  log('handback', 'C', 'f2', 'approved');
+  log('subagent-stop', 'C', 'f2', 'approved');
+  // A SubagentStop row with no hand-back of its agent and tree before it is a round of its own.
+  log('subagent-stop', 'D', 'f2', 'approved');
+  // A stale re-approval of the tree just approved is that tree again, not a new change.
+  log('handback', 'E', 'f2', 'approved', { stale: true });
+  const doc = JSON.parse(spawnSync(process.execPath, [CLI, 'stats', '--json'], { cwd: ws, encoding: 'utf8' }).stdout);
+  assert.equal(doc.events.verdict, 8);
+  assert.deepEqual([doc.review.roundsP50, doc.review.roundsMax], [5, 5]);
+  assert.deepEqual(doc.review.changes, { count: 1, approved: 1, neverApproved: 0, firstRound: 0, roundsP50: 3, roundsMax: 3 });
 });

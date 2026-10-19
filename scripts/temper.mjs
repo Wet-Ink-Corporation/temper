@@ -605,9 +605,16 @@ function stats(args) {
   const rv = s.review;
   if (rv.sessions) {
     out.push(`review loop: ${rv.sessions} session(s) with verdicts; rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved}`);
+    out.push(changesLine(rv.changes));
   }
   process.stdout.write(`${out.join('\n')}\n`);
   return 0;
+}
+
+/** The review-rounds-per-change line of `temper stats`; the lens's Stats tab prints the same. */
+function changesLine(c) {
+  const done = c.approved ? `p50 ${c.roundsP50}, max ${c.roundsMax} (${c.approved} approved, ${c.firstRound} on the first round)` : 'none approved';
+  return `review rounds per change: ${done}; ${c.neverApproved} never approved`;
 }
 
 /**
@@ -649,25 +656,30 @@ function statsOf(rows) {
   const stepP50Ms = Object.fromEntries(Object.entries(stepMs).map(([k, v]) => [k, pct(v.sort((a, b) => a - b), 50)]).sort((a, b) => b[1] - a[1]));
   // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
   // A verdict delivered by SubagentHandback is recorded again at SubagentStop; that second row is
-  // the same review, so it is not another round. Rows that carry the reviewer's agent_id count
-  // once per agent and tree; older rows fall back to dropping a SubagentStop row that repeats the
-  // hand-back row just before it.
+  // the same review, so it is not another round. A SubagentStop row that carries the reviewer's
+  // agent_id echoes the earliest hand-back row of that agent and tree not yet matched, wherever it
+  // is, so parallel reviewers (hand-back A, hand-back B, stop A, stop B) count once each. Older
+  // rows, without agent_id, fall back to dropping a SubagentStop row that repeats the hand-back
+  // row just before it.
   const handbackEcho = (r, prev) => r.via === 'subagent-stop' && prev?.via === 'handback'
     && prev.agent === r.agent && prev.fp === r.fp && prev.verdict === r.verdict;
   const once = (v) => {
-    const seen = new Set();
+    const unmatched = new Map();
     return v.filter((r, k) => {
       if (!r.agent_id) return !handbackEcho(r, v[k - 1]);
       const key = `${r.agent_id}\0${r.fp}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+      if (r.via === 'handback') { unmatched.set(key, (unmatched.get(key) ?? 0) + 1); return true; }
+      if (r.via !== 'subagent-stop' || !unmatched.get(key)) return true;
+      unmatched.set(key, unmatched.get(key) - 1);
+      return false;
     });
   };
   const rounds = [...bySession.values()]
     .map((list) => once(list.filter((r) => r.event === 'verdict')))
     .filter((v) => v.length);
   const n = rounds.map((v) => v.length).sort((a, b) => a - b);
+  const changes = rounds.flatMap(changesOf);
+  const toApproval = changes.filter((c) => c.approved).map((c) => c.rounds).sort((a, b) => a - b);
   const byCount = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]));
   return {
     sessions: bySession.size,
@@ -687,8 +699,37 @@ function statsOf(rows) {
       sessions: rounds.length,
       roundsP50: n.length ? pct(n, 50) : null, roundsMax: n.at(-1) ?? null,
       firstApproved: rounds.filter((v) => v[0].verdict === 'approved').length,
+      changes: {
+        count: changes.length, approved: toApproval.length, neverApproved: changes.length - toApproval.length,
+        firstRound: toApproval.filter((k) => k === 1).length,
+        roundsP50: toApproval.length ? pct(toApproval, 50) : null, roundsMax: toApproval.at(-1) ?? null,
+      },
     },
   };
+}
+
+/**
+ * One session's review rounds, split into changes. A change is the run of rounds up to and
+ * including the first approval of a current tree; the next verdict starts another change. A stale
+ * approval (recorded for a tree that changed before it landed) does not close one, and an
+ * approval, stale or not, of the tree just approved is that tree reviewed again, not a new change.
+ * The rounds left open when the telemetry ends are a change never approved, which includes a
+ * session still under way.
+ */
+function changesOf(verdicts) {
+  const out = [];
+  let open = 0;
+  let approvedFp = null;
+  for (const v of verdicts) {
+    // Any re-approval of the tree just approved, stale or not, is the same change.
+    if (v.verdict === 'approved' && typeof v.fp === 'string' && v.fp === approvedFp) continue;
+    const approves = v.verdict === 'approved' && v.stale !== true;
+    open += 1;
+    approvedFp = null;
+    if (approves) { out.push({ rounds: open, approved: true }); open = 0; approvedFp = v.fp ?? null; }
+  }
+  if (open) out.push({ rounds: open, approved: false });
+  return out;
 }
 
 function telemetryCmd(args) {
