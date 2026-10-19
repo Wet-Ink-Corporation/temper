@@ -162,6 +162,16 @@ What helps, starting with the cheapest:
    - A lower `stepTimeoutSec` makes a hung step fail fast instead of eating the hook's budget.
    - `"steps": [{ "name": "…", "cmd": ["cargo", …] }]` replaces the default steps entirely. It also turns off the baseline ratchet, so use it only when you have no baseline.
 
+## The lens shows nothing
+
+temper lens draws its row above the prompt only where all of these hold:
+- **A surface that draws mods.** The desktop app on Claude Code 2.1.286 or later, or the terminal on 2.1.287 or later. Cloud sessions, VS Code's chat panel and `claude -p` draw no mods.
+- **A Rust project.** The session's directory is inside one, so `node <plugin>/scripts/temper.mjs status --json` prints a document whose `project` is not `null`.
+- **temper is on.** `TEMPER_DISABLE` is not `1`, `TEMPER_LENS` is not `0`, `disableAllHooks` is off, and the organization does not set `allowManagedModsOnly`.
+- **A refresh has run.** The row appears when the session starts, or in the desktop app when it attaches to the session. Once the lens finds no Rust project, it stays off until the session restarts.
+
+If the row reads `temper: status unavailable`, `status --json` failed or printed something that is not its document. Run it by hand from the project root to see why: `node "$TEMPER_CLI" status --json`. Run `claude --debug` to see a lens hook that failed or a module that did not load. A lens failure never blocks or allows anything, so temper's hooks run as before.
+
 ## Windows
 
 - **`node` must be a real `node.exe` on `PATH`.** Hooks start `node` directly, with no shell, and `.cmd` or `.bat` shims from version managers cannot be started that way. The desktop app reads the user and system environment, but not PowerShell profiles. Set `PATH` there, not in `$PROFILE`, then restart the app.

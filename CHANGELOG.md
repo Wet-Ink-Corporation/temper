@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-10-19)
+
+**CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
+
+**temper lens: live gate progress at `Stop` (#111).** While temper's gate runs at `Stop` or `SubagentStop`, the lens shows its progress, read from the gate's progress file through `status --json`:
+- The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 4 clippy · 1m 12s`).
+- The band shows the same, with the steps already done and their times.
+- When the gate ends, one toast gives the outcome (`temper: gate green, review approved`), or the first line of the block reason when temper's own telemetry recorded that block. Parallel subagents stopping at once share one poll.
+
+The lens polls only while a Stop runs, and stops on `session.end` and on reload. Its Stop hooks return the settings hooks' result unchanged, and a lens failure replays that result, so the lens can never decide a Stop.
+
+The README now says that Claude Code is still rolling out plugin modules. Until they are on for an account, the lens does not load and `/temper-lens` is an unknown command, while the hooks run as usual.
+
+**temper lens: Activity and Stats tabs (#113).** The `/temper-lens` pane gains two tabs:
+- **Activity** lists this session's denials and asks, newest first, from `temper stats --json --session <id>`. Each row has its event, rule IDs, file and agent, and pressing a row shows the rule. A legend points each kind of event to its section of the troubleshooting guide.
+- **Stats** shows the clone's gate latency at `Stop`, gates cut short, review rounds, first-verdict approvals and the rules blocked most, with a sparkline of recent gate times in the terminal. A button fetches the telemetry branch (`stats --json --branch`), and only when pressed.
+
+The pane remembers its last tab across sessions (`$.store`), and the tabs refresh only while it is open. `stats --json` gains `gate.recentMs`: the wall times of the last 30 uncached gate runs, oldest first.
+
+**temper lens: the `/temper-lens` review pane (#112).** `/temper-lens` opens a pane with the reviewer's verdict for the current tree, so it can be read without opening `.git/temper/verdicts/`. The pane shows:
+- the verdict, and whether it is stale;
+- the 12 rubric scores, any below 3 highlighted;
+- the findings by severity, each with its rule ID, `file:line` and fix.
+
+Pressing a finding shows the rule's text from the plugin's own `rules.md`, and a **Draft fix** button. The button fills the prompt box with a request to address the finding (`$.prompt.fill`) and never submits it. With no verdict, the pane says why: no Rust changes, a red gate, or no review yet. The read-only allow-list still holds: the lens reads `rules.md`, and fills but never submits the prompt.
+
+**temper lens: temper's state above the prompt (#110).** The plugin gains a read-only mod, temper lens. In a Rust project, in the terminal or the desktop app, it draws one row above the prompt with the Rust files changed, the gate (green, red with its failing step, running with its step, or not run), the reviewer's verdict and the baseline total. It reads `temper status --json --session <id>` from the plugin's own CLI when the session starts, when the desktop app attaches, after a turn ends and shortly after an edit or shell call. It hooks nothing that decides: every tool call's result passes on unchanged, and a lens failure is skipped. It draws and runs nothing in cloud sessions, VS Code's chat panel and `claude -p`, under `TEMPER_DISABLE=1`, or outside a Rust project, and `TEMPER_LENS=0` turns off the lens alone. `hooks/hooks.json` gains `"modules": ["./lens/register.tsx"]` and `plugin.json` gains `"types"`. CI runs the lens's plugin tests and checks it against an allow-list of the events and calls #107 permits (`tests/lens-check.sh`). It needs Claude Code 2.1.286 or later on the desktop and 2.1.287 or later in the terminal; CI's pin, 2.1.286, validates and tests it. The README has a "temper lens" section, and the troubleshooting guide covers "The lens shows nothing".
+
+**The gate reports its progress while it runs (#109).** The gate keeps `gate-progress-<fingerprint>.json` in the state dir while it runs. From the end of formatting, once the fingerprint is known, and as each step starts, it records the steps done (name, result, time) and the step it is on. It removes the file when it ends, unless another gate on the same fingerprint has written it since. `temper status --json` reports it as `gate.running` for the current tree (`null` when no gate runs), so a reader such as the temper lens can show which step a slow gate at `Stop` is on. A file whose process is gone, or whose step is older than `gate.stepTimeoutSec` plus five minutes, is ignored, and SessionStart's pruning removes it. Gate results, caching and exit codes are unchanged. The shell guard on the state dir covers the new file under a `$VAR/temper/` prefix too.
 
 **Troubleshooting: why a fix on `main` has not reached you.** `docs/troubleshooting.md` now explains that an installed plugin only moves when `plugin.json`'s version changes, so marketplace installs keep their release until the next one, and how to check which release you run. A pilot hit this: the desktop app reported temper as up to date while `main` had moved on.
 

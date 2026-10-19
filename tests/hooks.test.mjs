@@ -1884,6 +1884,8 @@ test('Bash: shell writes into the temper state dir (.git/temper/) are denied; re
     'echo {} > `git rev-parse --git-common-dir`/temper/verdicts/a.json',
     'cp v.json $(git rev-parse --git-path temper/verdicts)/a.json',
     'echo {} > target/temper/verdicts/a.json',
+    'echo {} > .git/temper/gate-progress-0123456789abcdef.json',
+    'echo {} > "$STATE/temper/gate-progress-0123456789abcdef.json"',
     `echo {} > "${path.join(ws, 'target', 'temper', 'gate', 'a.json')}"`,
     `echo {} > ${path.join(ws, 'target', 'temper', 'gate', 'a.json').split(path.sep).join('/')}`,
   ];

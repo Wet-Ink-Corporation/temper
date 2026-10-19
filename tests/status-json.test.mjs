@@ -82,6 +82,7 @@ test('status --json: a green gate and an approved verdict for the current tree',
     gate: {
       ok: true, unavailable: false, at: '2026-10-11T10:00:00.000Z',
       steps: [{ name: 'fmt', ok: true, ms: 120, summary: 'applied' }, { name: 'clippy', ok: true, ms: 9000, summary: 'clean' }],
+      running: null,
     },
     review: {
       verdict: 'approved', stale: false, fingerprint: fp, recorded_at: '2026-10-11T10:05:00.000Z', scores: SCORES,
@@ -203,7 +204,7 @@ test('stats --json: the counts stats prints, and with --session that session\'s 
   assert.deepEqual(doc.events, { 'session-start': 2, 'deny-scan': 2, 'gate-start': 2, 'stop-green': 1, verdict: 1 });
   assert.deepEqual(Object.keys(doc.events).slice(0, 3), ['session-start', 'deny-scan', 'gate-start']);
   assert.deepEqual(doc.rules, { 'ERR-01': 2, 'UNS-01': 1 });
-  assert.deepEqual(doc.gate, { runs: 1, cached: 0, cutShort: 1, p50Ms: 3000, p90Ms: 3000, maxMs: 3000 });
+  assert.deepEqual(doc.gate, { runs: 1, cached: 0, cutShort: 1, p50Ms: 3000, p90Ms: 3000, maxMs: 3000, recentMs: [3000] });
   assert.deepEqual(doc.review, { sessions: 1, roundsP50: 1, roundsMax: 1, firstApproved: 1 });
   assert.equal(doc.session.id, 's1');
   assert.deepEqual(doc.session.rows.map((r) => [r.event, r.agent, r.file, r.rules, r.via]), [
@@ -256,7 +257,7 @@ test('stats --json: empty telemetry, and no Rust project', (t) => {
   const { ws } = workspace(t);
   assert.deepEqual(json(ws, ['stats', '--json']), {
     temper_stats: 1, sessions: 0, from: null, to: null, events: {}, rules: {},
-    gate: { runs: 0, cached: 0, cutShort: 0, p50Ms: null, p90Ms: null, maxMs: null },
+    gate: { runs: 0, cached: 0, cutShort: 0, p50Ms: null, p90Ms: null, maxMs: null, recentMs: [] },
     review: { sessions: 0, roundsP50: null, roundsMax: null, firstApproved: 0 },
   });
   assert.equal(cli(ws, ['stats', '--session']).status, 2);

@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
 import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry, pushTelemetry, fetchTelemetryBranch,
 } from './lib/project.mjs';
-import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
+import { runGate, renderGate, cachedGate, gateProgress, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
 import { collectFindings, cachedFindings, isComplete } from './lib/findings.mjs';
@@ -212,7 +212,9 @@ const baselineTotal = (b) => Object.values(b.totals).reduce((s, l) => s + Object
  * `status --json`: the state of the current tree as one versioned document (`temper_status: 1`),
  * so a reader such as temper lens never parses the state dir itself. Outside a Rust project it is
  * `{ temper_status: 1, project: null }` with exit 0. With `--session ID` the base is the one that
- * session's hooks use. Verdict findings omit `evidence` to keep the document small.
+ * session's hooks use. Verdict findings omit `evidence` to keep the document small. `gate.running`
+ * is the progress of a gate running now for this fingerprint (null when none), so `gate` is
+ * `{ ok: null, steps: [], running }` while a first gate for the tree runs.
  */
 function statusJson(sid) {
   const proj = discover(process.cwd());
@@ -222,6 +224,7 @@ function statusJson(sid) {
   const fp = fingerprint(proj, base);
   // A state file that parses to something other than a record (hand-edited, truncated) reads as none.
   const g = record(cachedGate(proj, fp));
+  const running = gateProgress(proj, fp);
   const v = record(verdictFor(proj, fp));
   let baseline = null;
   try {
@@ -234,9 +237,10 @@ function statusJson(sid) {
     base: base ?? null,
     fingerprint: fp,
     changed: rustChanges(proj, base),
-    gate: g ? {
-      ok: g.ok, unavailable: Boolean(g.unavailable), at: g.at ?? null,
-      steps: list(g.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+    gate: g || running ? {
+      ok: g ? g.ok : null, unavailable: Boolean(g?.unavailable), at: g?.at ?? null,
+      steps: list(g?.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+      running,
     } : null,
     review: v ? {
       verdict: v.verdict, stale: Boolean(v.stale), fingerprint: v.fingerprint ?? fp, recorded_at: v.recorded_at ?? null, scores: v.scores ?? {},
@@ -617,7 +621,8 @@ function statsOf(rows) {
   const times = rows.map((r) => r.t).sort();
   // Gate latency at Stop (older rows carry no ms). A gate-start that the same session and agent
   // never follows with an outcome was a hook killed mid-gate, most likely by its timeout.
-  const fresh = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached).map((r) => r.ms).sort((a, b) => a - b);
+  const timed = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached);
+  const fresh = timed.map((r) => r.ms).sort((a, b) => a - b);
   const cached = rows.filter((r) => STOP_OUTCOMES.has(r.event) && r.cached === true).length;
   let killed = 0;
   for (const list of bySession.values()) {
@@ -648,6 +653,9 @@ function statsOf(rows) {
     gate: {
       runs: fresh.length, cached, cutShort: killed,
       p50Ms: fresh.length ? pct(fresh, 50) : null, p90Ms: fresh.length ? pct(fresh, 90) : null, maxMs: fresh.at(-1) ?? null,
+      // The last 30 fresh runs' times, oldest first, for a sparkline. `--branch` reads file after
+      // file, so sort by time rather than trust the row order.
+      recentMs: [...timed].sort((a, b) => String(a.t).localeCompare(String(b.t))).slice(-30).map((r) => r.ms),
     },
     review: {
       sessions: rounds.length,

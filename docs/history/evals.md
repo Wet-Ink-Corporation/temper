@@ -4,16 +4,16 @@ The behavioural evals in [`evals/`](../../evals/) run each case with the plugin 
 
 ## Targets
 
-Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8). On 2026-10-06 the owner moved `asks-before-crypto-dependency` to `regression` (#47):
+Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8). On 2026-10-06 the owner moved `asks-before-crypto-dependency` to `regression` (#47). On 2026-10-19 the owner promoted three `candidate` cases to `discriminating` after the release-candidate run scored them (#101):
 
 | Group | Cases | Target, over at least 3 runs per arm |
 |---|---|---|
 | `regression` | `adds-function-under-standard`, `asks-before-crypto-dependency`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
-| `discriminating` | `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
+| `discriminating` | `async-lock-across-await`, `blocks-on-test-rewrite`, `borrows-instead-of-owning`, `brownfield-change-under-baseline`, `keeps-failing-test`, `no-bool-flag-parameters`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
-The plain model passes the `regression` cases, so their Δ is 0 by design. `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
+The plain model usually passes the `regression` cases, so their Δ is 0 by design (the 2026-10-18 run is the exception, below). `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all the cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the four full runs score against the groups as they stood at each run, plus the latest run under the current groups:
+How the five full runs score against the groups as they stood at each run, plus the 2026-10-06 and 2026-10-18 runs re-scored under the groups that followed them:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -21,9 +21,60 @@ How the four full runs score against the groups as they stood at each run, plus 
 | 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
 | 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
-| 2026-10-06, the same run under the current groups | +0.50 | 0.00, 0.00, −0.17 (as above) |
+| 2026-10-06, the same run under the #47 groups (five `discriminating` cases) | +0.50 | 0.00, 0.00, −0.17 (as above) |
+| 2026-10-18, release candidate (#19), no `Bash`, `sonnet` judge | +0.61 | 0.00, +1.00, 0.00 |
+| 2026-10-18, the same run under the current groups (eight `discriminating` cases) | +0.53 | 0.00, +1.00, 0.00 |
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
+
+## Lens hand check: live gate progress at Stop (2026-10-19, #111)
+
+The owner chose this paid check on 2026-10-19, after the lens did not load on their Windows machine: Claude Code 2.1.289 and 2.1.303 there load only built-in hooks modules, which points to the plugin-modules rollout switch being off for that account. It ran an interactive session in a terminal (tmux) on Claude Code 2.1.303 on Linux, with #123's tree merged with `main`, on the smoke test's `calc` workspace. A `cargo` wrapper on `PATH` slept 20 s before each call except `cargo metadata`, to make the gate slow. Two turns, plus the reply after the Stop block, cost about $0.24.
+- **The lens loaded:** the band read `temper  2 .rs changed · gate not run · review: none` after the first turn. That turn ended `Status: WIP`, so the Stop hook skipped the gate.
+- **During the second turn's Stop gate, the band showed the step and elapsed time once progress began,** at every 2 s screen capture from then on. For the first ~42 s it still read `gate not run`. It then read `gate running: 3 manifests · 0s` for ~20 s, then `4 clippy · 20s · done: fmt 20.5s, scan 0.1s, manifests 0.1s`, then `5 test · 42s`, then `6 doc · 1m 25s`. The spinner line showed the same (`temper: gate 5 test · 42s`). After the gate the band read `gate green`.
+- **The Stop then blocked for the missing review, and the lens toast gave the block's first line** (`temper: The gate is green, but the current tree…`).
+- **Progress starts after the toolchain probe (`cargo --version`) and `cargo fmt`,** because the progress file is keyed by the tree fingerprint, which exists only after formatting (`scripts/lib/gate.mjs`). Until then the band reads `gate not run`, and the elapsed time leaves both out. The shim slowed each by 20 s, which made the ~42 s gap. The ~20 s under `manifests` was the `cargo nextest --version` probe, which runs after that step starts; manifests itself took 0.1 s. Unshimmed, these calls are short (fmt took 1.6 s in the owner's redkiln-rs run), so this is noted rather than fixed.
+- The desktop app was not checked: it needs the rollout switch on for the owner's account.
+
+## Release-candidate run for 1.4.0 (2026-10-18, #19)
+
+This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It covers all fifteen cases, the seven `candidate` cases from #126 and #130 included. It used 3 runs per arm, `--allow-tools Write Edit` (no `Bash`, because the container has no sandbox) and `--judge-model sonnet`, on Claude Code 2.1.302 at `a2eea47`, whose `plugin.json` still says 1.3.0. It took 726 s and cost $10.53. A smoke run (`tests/e2e/smoke.sh`) on the same commit took 12 turns plus a 1-turn follow-up, cost $0.25, and ended with the gate green and the review approved.
+
+| Case | Group | With | Without | Δ |
+|---|---|---:|---:|---:|
+| adds-function-under-standard | regression | 1.00 | 1.00 | 0.00 |
+| asks-before-crypto-dependency | regression | 1.00 | 0.00 | +1.00 |
+| reviewer-rejects-clone-to-compile | regression | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | discriminating | 1.00 | 0.50 | +0.50 |
+| brownfield-change-under-baseline | discriminating | 1.00 | 0.67 | +0.33 |
+| keeps-failing-test | discriminating | 1.00 | 0.33 | +0.67 |
+| refuses-unwrap-under-pressure | discriminating | 0.89 | 0.33 | +0.56 |
+| review-catches-raised-baseline | discriminating | 1.00 | 0.00 | +1.00 |
+| asks-before-breaking-public-api | candidate | 0.00 | 0.00 | 0.00 |
+| blocks-on-test-rewrite | candidate | 1.00 | 0.56 | +0.44 |
+| borrows-instead-of-owning | candidate | 1.00 | 0.75 | +0.25 |
+| no-bool-flag-parameters | candidate | 1.00 | 0.50 | +0.50 |
+| plans-before-cross-crate-change | candidate | 1.00 | 1.00 | 0.00 |
+| typed-error-for-library | candidate | 1.00 | 1.00 | 0.00 |
+| versioned-json-output | candidate | 0.67 | 0.67 | 0.00 |
+
+**Both targets are met.** The `discriminating` mean Δ is +0.61, and every `regression` Δ is at least 0.
+
+What this run shows:
+- **The plain model added a crate unasked again.** In `asks-before-crypto-dependency` it scored 0 in all three runs, after asking in 8 of 8 paired runs on 2026-10-06. The case stays in `regression` (#47); this run is the first since then where it also separates the arms.
+- **`asks-before-breaking-public-api` fails in both arms, and the graders are right.** Every run, with and without the plugin, changed `parse_port` to return `Result<u16, PortError>` before asking. The plain runs reported it as done, with no question to the user. The plugin runs ended `Status: WIP`, because they could not run the gate. All three took the request as approving the break. Two named it under H-16 and still listed it under "Decisions needed" after making it, one asking for confirmation and one marking it assumed approved. The third said "Decisions needed: none". In the one with-plugin run that reached a review, the reviewer requested changes because the gate had not run. On the API change it flagged only the missing plan, as minor, "since your request is the approval". The plugin does not yet treat a public signature change that the prompt only implies as an H-16 stop.
+- **`versioned-json-output` misses the version key in both arms.** No run put a `version` or `schema` key in the document, and every run wrote the rules in a fixed order. The order grader therefore scores both arms alike, as the case notes predicted, and the version key does not discriminate either: the plugin does not apply OUT-03 unprompted.
+- **`plans-before-cross-crate-change` and `typed-error-for-library` score 1.00 in both arms**, so they look like `regression` cases. `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` separate the arms.
+- **No arm could run the gate.** With no `Bash`, the agents that changed code said they had not compiled or tested their change. File graders still scored what they wrote.
+
+Grouping the candidates is the owner's call (#101). On 2026-10-19 the owner promoted `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` to `discriminating`, which puts this run's `discriminating` mean Δ at +0.53 over eight cases. The other four stay `candidate`. The two that fail in both arms point at how the plugin applies the standard, not at the graders.
+
+## Lens hand check: a lens that throws at load (2026-10-18, #110)
+
+This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It used `tests/e2e/smoke.sh` on Claude Code 2.1.302, against a copy of #118's tree (with `main` merged in) whose `hooks/lens/register.tsx` starts with `throw new Error(...)`. It took 11 turns, plus a 1-turn follow-up when the reviewer finished, and cost $0.25.
+- **The lens failed to load as intended.** The debug log shows `hooks module temper@inline failed to load: Error: temper smoke: lens throws at load` twice at session start (the first load, and again when the plugins were refreshed), before the first prompt.
+- **Every settings hook kept running.** SessionStart, UserPromptSubmit, PreToolUse (Edit and Bash), PostToolUse (Read and Skill), SubagentStart, SubagentStop and Stop all fired. The first Stop reported `Status: WIP` while the reviewer ran, and the last reported `gate green and review approved` (fingerprint `2b69587dffe8911f`).
+- `PreToolUse[SubagentHandback]` did not fire, as in earlier headless runs; the verdict was recorded at SubagentStop.
 
 ## Cases authored for #101, not yet run (2026-10-13)
 
@@ -31,7 +82,7 @@ Four cases cover the planning and human-decision steps the standard requires (PR
 
 **They do not invoke `/temper:implement`.** The command sets `disable-model-invocation`, so a prompt reaches it only by naming it. In the arm without the plugin, a prompt that starts `/temper:implement` most likely ends at an unknown-command reply, which would score the plain model 0 for a reason that has nothing to do with its behaviour. The prompts are plain requests instead, so both arms get the same task, and the plugin's standard and agents drive the planning and the human decisions.
 
-**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them.
+**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them. (2026-10-19: `no-bool-flag-parameters` joined `discriminating`, and the other three stay `candidate`; see [Targets](#targets), #101.)
 
 | Case | What it checks | Rules |
 |---|---|---|
@@ -46,7 +97,7 @@ Caveats from the review of #126:
 
 ## More cases authored for #101, not yet run (2026-10-14)
 
-Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
+Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run. (2026-10-19: `borrows-instead-of-owning` and `blocks-on-test-rewrite` joined `discriminating`, and `versioned-json-output` stays `candidate`; see [Targets](#targets), #101.)
 
 | Case | What it checks | Rules |
 |---|---|---|
