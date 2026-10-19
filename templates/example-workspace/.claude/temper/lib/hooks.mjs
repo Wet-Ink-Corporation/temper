@@ -1272,7 +1272,9 @@ export function subagentStop(input) {
     // A subagent that hands back (cloud sessions) has no last_assistant_message: read its report from the transcript.
     const report = input.last_assistant_message ?? reportFromTranscript(input.agent_transcript_path);
     const v = extractVerdict(report);
-    if (!v && already) return none(); // recorded by SubagentHandback or an earlier SubagentStop for this agent
+    // Recorded by SubagentHandback or an earlier SubagentStop for this agent: a hand-back's report
+    // read back from the transcript is not recorded twice (#136).
+    if (already && (!v || v.fingerprint === already.trim())) return none();
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }

@@ -103,9 +103,25 @@ export function validateVerdict(v, ctx = {}) {
 
 const serious = (f) => f?.severity === 'blocker' || f?.severity === 'major';
 
+/** The dimensions `v` scores below 3. */
+const lowScores = (v) => DIMENSIONS.filter((d) => Number.isInteger(v.scores?.[d]) && v.scores[d] < 3);
+
+/** The gate entries of `v` that are neither "pass" nor "n/a". */
+const failedGate = (v) => Object.entries(v.gate ?? {}).filter(([, x]) => x !== 'pass' && x !== 'n/a').map(([k]) => k);
+
+/**
+ * Whether `v` gives a reason to overturn an approval of its tree: a blocker or
+ * major finding, a score below 3, or a gate entry that is not "pass" or "n/a".
+ */
+const overturns = (v) => (v.findings ?? []).some(serious) || lowScores(v).length > 0 || failedGate(v).length > 0;
+
+/** `s` on one line, so a multi-line field cannot add lines to a hook's message. */
+const oneLine = (s) => String(s ?? '').replace(/\s*[\r\n]+\s*/g, ' ');
+
 /**
  * Record `v` as the verdict for its fingerprint, the one Stop reads. A
- * changes-requested verdict with no blocker or major finding does not replace a
+ * changes-requested verdict that gives no reason to overturn (no blocker or
+ * major finding, no score below 3, no failing gate entry) does not replace a
  * non-stale approval of the same tree (#136): the approval stays, and `v` is
  * appended to verdicts/<fp>.history.jsonl, which is pruned with the verdict.
  * The returned record then carries `kept: 'approved'`.
@@ -114,7 +130,7 @@ export function recordVerdict(proj, v, meta = {}) {
   const rec = { ...v, recorded_at: new Date().toISOString(), ...meta };
   const dir = path.join(proj.stateDir, 'verdicts');
   const prev = verdictFor(proj, v.fingerprint);
-  if (prev?.verdict === 'approved' && !prev.stale && v.verdict === 'changes-requested' && !(v.findings ?? []).some(serious)) {
+  if (prev?.verdict === 'approved' && !prev.stale && v.verdict === 'changes-requested' && !overturns(v)) {
     const kept = { ...rec, kept: 'approved' };
     fs.mkdirSync(dir, { recursive: true });
     fs.appendFileSync(path.join(dir, `${v.fingerprint}.history.jsonl`), `${JSON.stringify(kept)}\n`);
@@ -133,20 +149,25 @@ export function verdictFor(proj, fp) {
 export function summarizeFindings(v, max = 10) {
   const bad = (v.findings ?? []).filter(serious);
   const rest = (v.findings ?? []).length - bad.length;
-  return bad.slice(0, max).map((f) => `- [${f.severity}] ${f.rule} ${f.file}${f.line ? `:${f.line}` : ''}: ${f.fix}`).join('\n')
+  return bad.slice(0, max).map((f) => `- [${f.severity}] ${oneLine(f.rule)} ${oneLine(f.file)}${f.line ? `:${oneLine(f.line)}` : ''}: ${oneLine(f.fix)}`).join('\n')
     + (rest > 0 ? `\n(${rest} minor/nit finding(s) in the full verdict)` : '');
 }
 
 /**
  * The reviewer's SubagentStart lines for a tree that already has verdict `v` (#136): the earlier
- * verdict, when it was recorded and its blocker and major findings, so a repeat review re-checks
- * them, and an approval of the unchanged tree is overturned only by a blocker or major finding.
+ * verdict, when it was recorded, its blocker and major findings, low scores and failing gate
+ * entries, so a repeat review re-checks them, and an approval of the unchanged tree is overturned
+ * only for one of those reasons.
  */
 export function earlierReview(v) {
   const list = summarizeFindings(v).trim();
-  const head = `- An earlier review of this same tree is recorded: ${v.verdict} at ${v.recorded_at ?? 'an unknown time'}`;
-  const lines = [(v.findings ?? []).some(serious) ? `${head}.\n${list}` : `${head}, with no blocker or major finding.${list ? `\n${list}` : ''}`];
+  const head = `- An earlier review of this same tree is recorded: ${v.verdict} at ${oneLine(v.recorded_at ?? 'an unknown time')}`;
+  const lines = [(v.findings ?? []).some(serious) ? `${head}.\n${list}` : `${head}${overturns(v) ? '.' : ', with no blocker or major finding.'}${list ? `\n${list}` : ''}`];
+  const low = lowScores(v);
+  if (low.length) lines.push(`  Scores below 3: ${low.join(', ')}.`);
+  const gate = failedGate(v);
+  if (gate.length) lines.push(`  Gate entries not "pass": ${gate.map(oneLine).join(', ')}.`);
   lines.push('  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.');
-  if (v.verdict === 'approved') lines.push('  Overturn that approval only with a blocker or major finding, quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval.');
+  if (v.verdict === 'approved') lines.push('  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not "pass", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval.');
   return lines.join('\n');
 }

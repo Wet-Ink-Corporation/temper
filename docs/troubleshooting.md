@@ -132,7 +132,7 @@ Advisories such as `H-08 … new .clone() call(s)` and `ARC-12` caret-requiremen
 
 A verdict whose fingerprint no longer matches the tree is recorded as stale. Any change after the review needs a fresh one.
 
-Repeat reviews of one unchanged tree converge. A reviewer of a tree that already has a verdict is told that verdict, when it was recorded and its blocker and major findings, and re-checks each one. A `changes-requested` verdict with no blocker or major finding does not replace an approval of the same tree: the approval stays the verdict Stop reads, the later verdict is appended to `.git/temper/verdicts/<fingerprint>.history.jsonl`, and its telemetry row carries `"kept": "approved"`. A blocker or major finding replaces the approval, and an approval always replaces a `changes-requested` verdict.
+Repeat reviews of one unchanged tree converge. A reviewer of a tree that already has a verdict is told that verdict, when it was recorded, its blocker and major findings, its scores below 3 and its gate entries that are not `pass`, and re-checks each one. A `changes-requested` verdict with none of those (no blocker or major finding, no score below 3, every gate entry `pass` or `n/a`) does not replace an approval of the same tree: the approval stays the verdict Stop reads, the later verdict is appended to `.git/temper/verdicts/<fingerprint>.history.jsonl`, and its telemetry row carries `"kept": "approved"`. A verdict with any of them replaces the approval, and an approval always replaces a `changes-requested` verdict.
 
 ## Finishing a turn (the `Stop` hook)
 
