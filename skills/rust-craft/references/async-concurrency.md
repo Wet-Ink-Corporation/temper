@@ -931,7 +931,7 @@ pub fn wait_for_item(items: &Mutex<Vec<u64>>, not_empty: &Condvar) -> Option<u64
 `parking_lot`, `crossbeam`, `arc-swap` and similar crates are H-16 decisions with a benchmark (PERF-01).
 
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:spin-lock
 /// A "lock": a flag and a spin, no fairness, no parking, and every guarded
 /// value needs its own ordering argument.
 pub struct SpinLock { locked: AtomicBool }
@@ -947,7 +947,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 ```
 Application code relies on std primitives plus Miri (TST-17).
 
-**Detect.** Review: an `AtomicBool` named like a lock (`locked`, `busy`, `in_use`), `swap(true, ..)` or `compare_exchange` in a loop, a hand-written once-flag beside a value.
+**Detect.** Scan advisory `spin-lock`: `spin_loop()`, and `swap(true, ..)` or `compare_exchange` in a loop. Review: an `AtomicBool` named like a lock (`locked`, `busy`, `in_use`), a hand-written once-flag beside a value.
 
 ## Send and Sync
 

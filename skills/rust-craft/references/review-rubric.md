@@ -2,7 +2,7 @@
 
 How Rust changes are judged. The reviewer agent uses all of it. Implementers use the checklist for self-review (PROC-07) before asking for review. The verdict schema at the end is machine-validated: a hook refuses a verdict that is malformed or internally inconsistent.
 
-Rules covered: PROC-07, PROC-08 and the review side of the rules in `rules.md`. The dimensions and the checklist name 80 of its 182 rules by ID (72 one by one, the rest in ranges such as H-01..H-11). A finding may cite any rule in `rules.md`, named here or not.
+Rules covered: PROC-07, PROC-08 and the review side of the rules in `rules.md`. The dimensions and the checklist name 92 of its 182 rules by ID (84 one by one, the rest in ranges such as H-01..H-11). The MUST rules that `rules.md` marks review-only by design are each named here. A finding may cite any rule in `rules.md`, named here or not.
 
 ## Principles
 
@@ -23,7 +23,7 @@ Rules covered: PROC-07, PROC-08 and the review side of the rules in `rules.md`. 
    ```
    Read the plan in `.temper/plans/`, if there is one, and the `AGENTS.md` charter of every crate touched.
 2. **Gate.** Run the temper gate yourself in check mode (`gate --check`, which verifies formatting without rewriting files). If it is red, the verdict is already `changes-requested`, but continue so the implementer gets every finding.
-3. **Scan.** Run `temper scan` and judge every advisory: justified, or a finding.
+3. **Scan.** Run `temper scan` and judge every advisory: justified, or a finding. The gate's output lists the advisories the change adds under MUST rules (`advisories this change adds under MUST rules`); each one is fixed, justified in a comment at the code, or reported as a finding under its rule.
 4. **Tests first.** Read the added and changed tests before the code. Red-first (TST-01) is checked through the plan's Progress section, which records each red run (test name and failure line). No record for a new behavior is a finding. Would they fail if the behavior broke? Are they deterministic? Were any removed or loosened? Check with `git diff <base> -- '*.rs' | grep -E '^-.*(#\[test\]|assert|expect_err|matches!)'`.
 5. **API.** Read public signatures (`git diff <base> | grep -E '^\+\s*pub '`). Consider ownership, naming, error types, visibility and semver impact.
 6. **Implementation.** Read each changed file in full, top to bottom, and work through the checklist below.
@@ -151,7 +151,7 @@ Correctness
 - [ ] No `map[&k]` on `HashMap`/`BTreeMap` or `deque[i]` on `VecDeque`; no lint catches them. (H-04)
 
 Escape hatches
-- [ ] No new scan hits, and every advisory is judged. (H-01..H-11)
+- [ ] No new scan hits, and every advisory is judged; each one the gate lists under a MUST rule is fixed, justified at the code, or a finding. (H-01..H-11)
 - [ ] Every `#[expect]` is minimal, reasoned and approved. (H-05)
 
 Ownership
@@ -183,19 +183,24 @@ Architecture
 - [ ] Ports are owned by the consumer; no adapter types leak inward. (ARC-03)
 - [ ] No global state; configuration is passed in. (ARC-09, ARC-11)
 - [ ] The charter is updated if the crate's purpose, surface or dependencies changed. (ARC-08, PROC-11)
+- [ ] Each crate builds on its own: its manifest enables every dependency feature its code uses. CI checks each member separately. (ARC-16)
 - [ ] Every new dependency has a recorded human decision. (ARC-12, H-16)
 
 Tests
 - [ ] Tests would fail if the behavior broke; exact values and variants are asserted. (TST-05)
 - [ ] Tests are deterministic: no sleep, no wall clock, no network. (TST-10)
 - [ ] Unit tests sit beside the code; integration tests use the public API. (TST-02)
+- [ ] Test doubles are hand-written fakes of port traits; no `cfg!(test)` or `#[cfg(test)]` branch in production code; mocking crates only at external seams and only in `[dev-dependencies]`. (TST-09)
+- [ ] Every performance claim in the change ships with a benchmark (`criterion` or `divan`). (TST-16)
 - [ ] No test was removed, ignored or loosened. (H-12)
 - [ ] Property or snapshot tests are used where they fit. (TST-06, TST-07)
 - [ ] No tautological test: none restates a constant or mirrors the implementation's branches. (TST-05)
 - [ ] Crates with non-`Relaxed` atomics, `Condvar`s or hand-written thread coordination run under Miri and on aarch64; a Miri-incompatible test carries `cfg_attr(miri, ignore = "reason")`. (TST-17)
 
 Performance and concurrency
+- [ ] Each optimization cites a benchmark or profile, in the plan and in a why-comment at the code. (PERF-01)
 - [ ] I/O is buffered; resources are bounded; timeouts are in place. (PERF-07, PERF-10, ASY-08)
+- [ ] `async` is used only for I/O-bound concurrency; CPU-bound work goes to threads, `rayon` or `spawn_blocking`. (ASY-01)
 - [ ] Tasks are owned, channels bounded, cancellation handled. (ASY-04, ASY-05, ASY-07)
 - [ ] Nothing blocks in async code; no guard, entered span or `watch::Ref` is held across `.await`. (H-14)
 - [ ] Every atomic ordering has a comment justifying it; unsure means a `Mutex`, not `SeqCst`. (ASY-13)
@@ -206,8 +211,17 @@ Performance and concurrency
 
 Observability and craft
 - [ ] `tracing` with fields; no secrets; deterministic machine output. (OUT-04, OUT-08)
+- [ ] Public serde contracts pin `rename_all`, enum tagging and `deny_unknown_fields` on inbound types. (OUT-02)
+- [ ] Persisted and public schemas carry a version and evolve additively, with an upcaster for each old version. (OUT-03)
+- [ ] External data is deserialized into a raw DTO and converted with `TryFrom`; no validated type derives `Deserialize`. (OUT-05)
 - [ ] Names reveal intent; functions are small; no dead or commented-out code; comments say why. (CRF-01..05)
 - [ ] No speculative generality: no single-implementation trait that is not a port, extension, sealed or closure-blanket trait, and no marker trait without a sealing or typestate purpose. (CRF-05)
 - [ ] Rustdoc and READMEs describe the contract; `//` comments justify the current design in the present tense; design history and rule-compliance tables live in the plan or decisions log. (CRF-11)
 - [ ] Public docs are complete, with `# Errors`; examples use `?`. (API-15, TST-11)
 - [ ] Parameters are named in prose, never in `# Arguments` or `# Returns` sections. (API-15)
+
+Process (from the plan, the Progress section and the diff)
+- [ ] The work started from the charter, public API, tests and call sites, and dependency APIs were checked against the locked version. (PROC-01)
+- [ ] Every H-16 decision the change needs was surfaced to the human, not assumed. (PROC-04)
+- [ ] For multi-step work, the plan's checklist matches what was done. (PROC-06)
+- [ ] A compiler error that took two failed attempts led to re-modelling ownership, not a third workaround such as a clone. (PROC-09)
