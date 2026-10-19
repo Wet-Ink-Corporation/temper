@@ -391,19 +391,17 @@ export function pidAlive(pid) {
 }
 
 /**
- * Remove gate progress files left behind by a gate that is gone: its process has ended (a hook
- * killed by its timeout), or the file is over a day old (its pid since reused). A gate in another
- * PID namespace sharing this .git (a dev container) reads as gone too.
+ * Remove gate progress files over a day old. A younger one whose process has ended (a hook killed
+ * by its timeout) is kept: the next hook of its session reads it for the gate-lost row and then
+ * removes it, and this runs at any session's startup, maybe first. Readers already treat a file
+ * whose pid is gone as stale.
  */
 function pruneGateProgress(proj) {
   let names;
   try { names = fs.readdirSync(proj.stateDir); } catch { return; }
   for (const n of names.filter((x) => /^gate-progress-[0-9a-f]+\.json$/.test(x))) {
     const p = path.join(proj.stateDir, n);
-    try {
-      const pid = JSON.parse(fs.readFileSync(p, 'utf8')).pid;
-      if (!pidAlive(pid) || fs.statSync(p).mtimeMs < Date.now() - 86400000) fs.rmSync(p, { force: true });
-    } catch { try { fs.rmSync(p, { force: true }); } catch { /* ignore */ } }
+    try { if (fs.statSync(p).mtimeMs < Date.now() - 86400000) fs.rmSync(p, { force: true }); } catch { /* gone */ }
   }
 }
 
@@ -426,35 +424,70 @@ export function telemetry(proj, input, event, detail = {}) {
   } catch { /* best effort */ }
 }
 
-// A name that looks like it holds a secret: of a `--flag`, a header or an env assignment.
-const SECRET_WORD = String.raw`(?:token|secret|passw(?:or)?d|passphrase|api[-_]?key|private[-_]?key|access[-_]?key|credential|auth(?![a-z]))`;
-const SECRET_NAME = String.raw`[\w-]*${SECRET_WORD}[\w-]*`;
+// A name that looks like it holds a secret: of a `--flag`, a header, a query parameter or an env
+// assignment. Every run of name characters is bounded, so no pattern rescans a long word from
+// each of its positions (an unbounded `[\w-]*` made a long hyphenated line quadratic).
+const SECRET_WORD = String.raw`(?:token|secret|passw(?:or)?d|passphrase|api[-_]?key|private[-_]?key|access[-_]?key|credential|cookie|auth(?![a-z]))`;
+const SECRET_NAME = String.raw`[\w-]{0,64}${SECRET_WORD}[\w-]{0,64}`;
 const SECRET_VALUE = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+const QUOTE = String.raw`\\?["']`;
 const REDACTIONS = [
-  // scheme://user:password@host
-  [/\b([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/gi, '$1***@'],
-  // Authorization: Bearer x, X-Api-Key: x, up to the closing quote or the end of the line.
+  // scheme://user:password@host, up to the last @ before the host (a password may hold an @).
+  [/\b([a-z][\w+.-]{0,31}:\/\/)[^\s/'"]+@/gi, '$1***@'],
+  // Authorization: Bearer x, X-Api-Key: x, Cookie: a=b, up to the closing quote or the end of the line.
   [new RegExp(String.raw`\b((?:proxy-)?authorization|${SECRET_NAME})(\s*:\s*)[^'"\n]+`, 'gi'), '$1$2***'],
-  // "token": "x" in JSON
-  [new RegExp(String.raw`("${SECRET_NAME}"\s*:\s*)"[^"]*"`, 'gi'), '$1"***"'],
+  // "token": "x" in JSON (or a Python dict), its quotes escaped or not; and "pin": 1234.
+  [new RegExp(String.raw`(${QUOTE}${SECRET_NAME}${QUOTE}\s*:\s*)(${QUOTE})(?:(?!\2)[^\n])*\2`, 'gi'), '$1$2***$2'],
+  [new RegExp(String.raw`(${QUOTE}${SECRET_NAME}${QUOTE}\s*:\s*)(?![\s"'\\])[^\s,}]+`, 'gi'), '$1***'],
+  // ?api_key=x&token=y in a URL
+  [new RegExp(String.raw`([?&](?:[\w.-]{0,64}${SECRET_WORD}[\w.-]{0,64}|key|sig|signature|pwd|code|session(?:id)?)=)[^&\s'"#]*`, 'gi'), '$1***'],
   // --token x, --password=x
-  [new RegExp(String.raw`(\s--?${SECRET_NAME})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2***'],
-  // GH_TOKEN=x, export API_KEY='x'
-  [new RegExp(String.raw`(^|[\s;&|(])(\w*${SECRET_WORD}\w*)=${SECRET_VALUE}`, 'gi'), '$1$2=***'],
+  [new RegExp(String.raw`(^|\s)(--?${SECRET_NAME})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2$3***'],
+  // GH_TOKEN=x, export API_KEY='x' (a bare value ends where the shell ends a word); PowerShell's $env:GH_TOKEN = "x"
+  [new RegExp(String.raw`(^|[\s;&|(])(\w{0,64}${SECRET_WORD}\w{0,64})=(?!\*\*\*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)`, 'gi'), '$1$2=***'],
+  [new RegExp(String.raw`(\$env:\w{0,64}${SECRET_WORD}\w{0,64})(\s*=\s*)${SECRET_VALUE}`, 'gi'), '$1$2***'],
+  // curl -u user:password, --user=user:password, -uuser:password
+  [/(\s(?:-u|--user)(?:=|\s*))(?:"[^"\s]*:[^"]*"|'[^'\s]*:[^']*'|[^\s'"]*:\S*)/g, '$1***'],
+  // aws configure set aws_secret_access_key x, npm config set //host/:_authToken x, git config github.token x
+  [new RegExp(String.raw`(\bconfig(?:ure)?(?:\s+-[\w-]{1,32})*\s+(?:set\s+)?[^\s=]{0,128}${SECRET_WORD}[^\s=]{0,128})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2***'],
+  // _authToken=x and _password=x, as in .npmrc
+  [/(_auth(?:Token)?|_password)(\s*=\s*|\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1$2***'],
+  // A short -p password: mysql -pX, mysql -p X, sshpass -p X, docker login -p X
+  [/(\b(?:mysql\w{0,16}|mariadb\w{0,16}|sshpass|(?:docker|podman|nerdctl|helm\s+registry)\s+login)\b[^;&|\n]{0,256}?\s-p)(\s*)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1$2***'],
+  // A private key, from its BEGIN line to its END line or the end of the text.
+  [/-----BEGIN[A-Z ]{0,32}PRIVATE KEY-----.*?(?:-----END[A-Z ]{0,32}PRIVATE KEY-----|$)/g, '***'],
+  // Webhook URLs, whose path is the secret.
+  [/\b(hooks\.slack\.com\/services\/|discord(?:app)?\.com\/api\/webhooks\/)[\w/-]+/gi, '$1***'],
   // Well-known token shapes, wherever they appear.
-  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16})\b/g, '***'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{20,}|AIza[\w-]{30,}|xox[abprs]-[\w-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/g, '***'],
 ];
 
+// How much of a command is redacted at most. Redaction runs only on this much, so a hook's time
+// does not grow with the command (a timed-out PreToolUse hook lets the command run).
+const REDACT_CAP = 2048;
+
 /**
- * A shell command as a telemetry row keeps it: likely secrets replaced by *** (URL userinfo,
- * Authorization and other secret-named headers, the values of secret-named flags and env
- * assignments, well-known token shapes), then clipped to `max` characters. Redaction runs on the
- * whole command first, so a secret the clip would cut is still removed.
+ * A shell command as a telemetry row keeps it: its first line, up to any heredoc or here-string
+ * (`<<`), whose body is often a file or a token; likely secrets replaced by *** (URL userinfo,
+ * Authorization, cookie and other secret-named headers, the values of secret-named flags, query
+ * parameters, config keys and env assignments, -u user:password, short -p passwords, private keys,
+ * webhook URLs, well-known token shapes); then clipped to `max` characters (code points). An
+ * ellipsis marks a command cut short. Redaction runs before the clip, so a secret the clip would
+ * cut is still removed; a first line longer than REDACT_CAP is cut back to its last whole word
+ * first, so no partial secret survives that cut.
  */
 export function redactCommand(cmd, max = 200) {
-  let s = String(cmd ?? '');
+  const all = String(cmd ?? '');
+  const eol = all.search(/[\r\n]/);
+  let s = eol < 0 ? all : all.slice(0, eol);
+  const here = s.indexOf('<<');
+  if (here >= 0) s = s.slice(0, here + 2);
+  if (s.length > REDACT_CAP) s = s.slice(0, REDACT_CAP).replace(/\S*$/, '');
+  let cut = s.length < all.length;
   for (const [re, to] of REDACTIONS) s = s.replace(re, to);
-  return s.length > max ? `${s.slice(0, max)}…` : s;
+  const cps = Array.from(s);
+  if (cps.length > max) { s = cps.slice(0, max).join(''); cut = true; }
+  return cut ? `${s}…` : s;
 }
 
 const parseRows = (text) => String(text ?? '').split('\n')

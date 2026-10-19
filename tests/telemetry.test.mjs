@@ -10,8 +10,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { preBash, preHandback, sessionStart, hookTimeoutMs, lostGateRow, openGateStarts, stepTimes, startHeartbeat, heartbeatPath } from '../scripts/lib/hooks.mjs';
-import { discover, fingerprint, gateProgressPath, readTelemetry, redactCommand, sessionTelemetry, telemetry, writeAtomic } from '../scripts/lib/project.mjs';
+import { preBash, preHandback, sessionStart, hookTimeoutMs, lostGateRow, openGateStarts, stepTimes, startHeartbeat, stopHeartbeat, heartbeatPath } from '../scripts/lib/hooks.mjs';
+import { discover, fingerprint, gateProgressPath, readTelemetry, redactCommand, sessionDir, sessionTelemetry, telemetry, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, problemKinds, validateVerdict, verdictProblems } from '../scripts/lib/verdict.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -52,9 +52,62 @@ test('redactCommand: likely secrets become ***, and the rest of the command stay
     ['echo sk-abcdefghijklmnopqrstuvwxyz0123 xoxb-1234567890-abc AKIAABCDEFGHIJKLMNOP', 'echo *** *** ***'],
     // Names that only contain a secret-looking word are left alone.
     ['GIT_AUTHOR_NAME=me git commit --author me -m x', 'GIT_AUTHOR_NAME=me git commit --author me -m x'],
-    ['cat > src/lib.rs <<EOF\nfn a() {}\nEOF', 'cat > src/lib.rs <<EOF\nfn a() {}\nEOF'],
+    ['git push -u origin main && sort -u f && git checkout -b fix/token-refresh', 'git push -u origin main && sort -u f && git checkout -b fix/token-refresh'],
   ];
   for (const [cmd, want] of cases) assert.equal(redactCommand(cmd), want, cmd);
+});
+
+test('redactCommand: only the first line, up to any heredoc or here-string, is kept', () => {
+  assert.equal(redactCommand('cat > src/lib.rs <<EOF\nlet k = "s3cret";\nEOF'), 'cat > src/lib.rs <<…');
+  assert.equal(redactCommand('gh auth login --with-token <<< tok_s3cret'), 'gh auth login --with-token ***…');
+  assert.equal(redactCommand('cat <<< s3cret > f'), 'cat <<…');
+  assert.equal(redactCommand('echo a &&\r\necho s3cret'), 'echo a &&…');
+  assert.equal(redactCommand('curl \\\n  -H "Authorization: Bearer s3cret" x'), 'curl \\…');
+});
+
+test('redactCommand: the forms a secret takes on a command line', () => {
+  const cases = [
+    ['curl -u bob:s3cret https://x', 'curl -u *** https://x'],
+    ['curl --user=bob:s3cret x; curl --user "bob:s3 cret" x; curl -ubob:s3cret x', 'curl --user=*** x; curl --user *** x; curl -u*** x'],
+    ['$env:GH_TOKEN="s3cret"; $env:API_KEY = "s3 cret"; $env:PATH = "C:\\bin"', '$env:GH_TOKEN=***; $env:API_KEY = ***; $env:PATH = "C:\\bin"'],
+    ['curl "https://x/a?api_key=s1&page=2&access_token=s2&key=s3#top"', 'curl "https://x/a?api_key=***&page=2&access_token=***&key=***#top"'],
+    ['curl "https://x/?sig=s1&X-Amz-Credential=s2&password=s3"', 'curl "https://x/?sig=***&X-Amz-Credential=***&password=***"'],
+    ['curl -H "Cookie: sid=s3cret; a=b" -H \'Set-Cookie: t=s3cret\' x', 'curl -H "Cookie: ***" -H \'Set-Cookie: ***\' x'],
+    ['curl --cookie "sid=s3cret" x', 'curl --cookie *** x'],
+    ['psql postgresql://user:p@ss@db.example.com/app', 'psql postgresql://***@db.example.com/app'],
+    ['--token="s3 cret" x', '--token=*** x'],
+    ['aws configure set aws_secret_access_key s3cret --profile p', 'aws configure set aws_secret_access_key *** --profile p'],
+    ['npm config set //registry.npmjs.org/:_authToken s3cret', 'npm config set //registry.npmjs.org/:_authToken ***'],
+    ['git config --global github.token s3cret', 'git config --global github.token ***'],
+    ['echo "//registry.npmjs.org/:_authToken=s3cret" >> .npmrc', 'echo "//registry.npmjs.org/:_authToken=*** >> .npmrc'],
+    ['mysql -u root -ps3cret app', 'mysql -u root -p*** app'],
+    ['mysqldump -h db -p s3cret app', 'mysqldump -h db -p *** app'],
+    ['sshpass -p s3cret ssh host', 'sshpass -p *** ssh host'],
+    ['docker login -u me -p s3cret ghcr.io', 'docker login -u me -p *** ghcr.io'],
+    ['echo npm_abcdefghijklmnopqrstuvwxyz0123 sk_live_abcdef123456 rk_live_abcdef123456', 'echo *** *** ***'],
+    ['echo AIzaSyA-abcdefghijklmnopqrstuvwxyz012 ASIAABCDEFGHIJKLMNOP', 'echo *** ***'],
+    ['echo "-----BEGIN RSA PRIVATE KEY-----MIIEs3cret-----END RSA PRIVATE KEY-----" > k', 'echo "***" > k'],
+    ['echo "-----BEGIN OPENSSH PRIVATE KEY----- s3cret" > k', 'echo "***'],
+    ['curl -d @m.json https://hooks.slack.com/services/T00/B00/s3cret', 'curl -d @m.json https://hooks.slack.com/services/***'],
+    ['curl -d {\\"token\\":\\"s3cret\\"} x', 'curl -d {\\"token\\":\\"***\\"} x'],
+    ['python -c "print({\'password\': \'s3cret\', \'pin_token\': 1234})"', 'python -c "print({\'password\': \'***\', \'pin_token\': ***})"'],
+  ];
+  for (const [cmd, want] of cases) {
+    assert.equal(redactCommand(cmd), want, cmd);
+    assert.ok(!redactCommand(cmd).includes('s3'), cmd);
+  }
+});
+
+test('redactCommand: time does not grow with the command, even on a 1 MB hyphenated line', () => {
+  for (const big of ['a-'.repeat(500000), 'token-'.repeat(170000), `config ${'--a '.repeat(250000)}`, `x ${'a'.repeat(1 << 20)}\n${'b-'.repeat(500000)}`]) {
+    const t0 = process.hrtime.bigint();
+    const out = redactCommand(big);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 1000, `${big.slice(0, 12)}: ${ms} ms`);
+    assert.ok(out.endsWith('…') && Array.from(out).length <= 201, out);
+  }
+  // A first line cut back to its last whole word leaves no part of a long token.
+  assert.equal(redactCommand(`${'a '.repeat(1020)}ghp_${'x'.repeat(40)}`, 5000), `${'a '.repeat(1020)}…`);
 });
 
 test('redactCommand: clipped to 200 characters after redaction, so a cut secret is still removed', () => {
@@ -63,6 +116,8 @@ test('redactCommand: clipped to 200 characters after redaction, so a cut secret 
   assert.equal(redactCommand('y'.repeat(300)), `${'y'.repeat(200)}…`);
   assert.equal(redactCommand('y'.repeat(300), 10), `${'y'.repeat(10)}…`);
   assert.equal(redactCommand(undefined), '');
+  // By code points: a character outside the BMP is not split into half a surrogate pair.
+  assert.equal(redactCommand(`${'y'.repeat(9)}\u{1F600}z`, 10), `${'y'.repeat(9)}\u{1F600}…`);
 });
 
 // ---------------------------------------------------------- verdict problems
@@ -148,6 +203,26 @@ test('startHeartbeat: a worker thread keeps beating while the main thread waits 
   assert.equal(read().at, last.at, 'no beats after the process is gone');
 });
 
+test('stopHeartbeat: the beats stop when the gate returns; a worker error is heard, not thrown', { timeout: 30000 }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-beat-'));
+  t.after(() => { stopHeartbeat(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const proj = { stateDir: dir };
+  const input = { session_id: 's-stop' };
+  const w = startHeartbeat(proj, input, 20);
+  // With no listener, an 'error' event would throw here, as it would end the hook with exit 1.
+  assert.ok(w.listenerCount('error') >= 1);
+  w.emit('error', new Error('worker failed'));
+  const file = heartbeatPath(proj, input);
+  const read = () => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).at; } catch { return null; } };
+  const t0 = Date.now();
+  while (!(read() > t0) && Date.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 20));
+  stopHeartbeat();
+  await new Promise((r) => setTimeout(r, 200));
+  const last = read();
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(read(), last, 'no beats after stopHeartbeat');
+});
+
 test('stepTimes: a fresh gate\'s step times for its Stop row; none for a cached result', () => {
   const steps = [{ name: 'fmt', ok: true, ms: 800, summary: 'applied' }, { name: 'clippy', ok: false, ms: 64000, summary: 'x' }];
   assert.deepEqual(stepTimes({ ok: false, steps, cached: false }), { steps: { fmt: 800, clippy: 64000 } });
@@ -202,6 +277,36 @@ test('SessionStart on resume logs gate-lost for the session\'s killed gates, onc
   assert.deepEqual(sessionTelemetry(proj, 's-lost').map((r) => r.event),
     ['gate-start', 'gate-start', 'gate-start', 'session-start', 'gate-lost', 'gate-lost', 'session-start']);
   assert.deepEqual(sessionTelemetry(proj, undefined), []);
+  // The progress file has served once its gate-lost row is logged.
+  assert.equal(fs.existsSync(gateProgressPath(proj, fp())), false);
+});
+
+test('a lost gate another hook has claimed is not logged again; another session\'s startup keeps its progress file', { skip: noGit }, (t) => {
+  const { ws, proj, fp } = workspace(t);
+  const t0 = Date.now() - 60000;
+  const [claimed, open] = [deadPid(), deadPid()];
+  const row = (sid, pid) => fs.appendFileSync(path.join(proj.stateDir, 'telemetry.jsonl'), `${JSON.stringify({ t: new Date(t0).toISOString(), sid, agent: 'main', event: 'gate-start', pid, timeoutMs: 1200000 })}\n`);
+  fs.mkdirSync(proj.stateDir, { recursive: true });
+  row('s-race', claimed);
+  row('s-later', open);
+  // A concurrent hook of s-race (a Stop beside a SubagentStop) has claimed the first gate.
+  fs.mkdirSync(sessionDir(proj, 's-race'), { recursive: true });
+  fs.writeFileSync(path.join(sessionDir(proj, 's-race'), `gate-lost-${claimed}-${t0}`), '');
+  sessionStart({ cwd: ws, session_id: 's-race', source: 'resume' });
+  assert.deepEqual(readTelemetry(proj).filter((r) => r.event === 'gate-lost'), []);
+  // s-later's gate left a progress file; a new session starting meanwhile keeps it while it is
+  // under a day old, and drops one that is older.
+  const prog = gateProgressPath(proj, fp());
+  writeAtomic(prog, JSON.stringify({ fp: fp(), pid: open, startedAt: new Date(t0).toISOString(), steps: [], current: { name: 'clippy', startedAt: new Date(t0).toISOString() } }));
+  const old = gateProgressPath(proj, 'ab'.repeat(8));
+  writeAtomic(old, JSON.stringify({ fp: 'ab'.repeat(8), pid: deadPid(), startedAt: new Date(t0).toISOString(), steps: [], current: null }));
+  fs.utimesSync(old, new Date(Date.now() - 2 * 86400000), new Date(Date.now() - 2 * 86400000));
+  sessionStart({ cwd: ws, session_id: 's-new', source: 'startup' });
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(prog), true);
+  sessionStart({ cwd: ws, session_id: 's-later', source: 'resume' });
+  const lost = readTelemetry(proj).filter((r) => r.event === 'gate-lost');
+  assert.deepEqual(lost.map((r) => [r.sid, r.pid, r.step]), [['s-later', open, 'clippy']]);
 });
 
 // ------------------------------------------------------- hook rows (#138)
@@ -218,7 +323,7 @@ test('shell deny rows carry the command, redacted and clipped', { skip: noGit },
   for (const c of cmds) assert.equal(bash(c).json?.hookSpecificOutput?.permissionDecision, 'deny', c);
   const rows = sessionTelemetry(proj, 's-cmd');
   assert.deepEqual(rows.map((r) => r.event), ['deny-shell-write', 'deny-lockfile', 'deny-shell-write', 'deny-ignore-rust-version']);
-  assert.equal(rows[0].cmd, "GH_TOKEN=*** cat > src/lib.rs <<'EOF'\npub fn x() {}\nEOF");
+  assert.equal(rows[0].cmd, 'GH_TOKEN=*** cat > src/lib.rs <<…');
   assert.equal(rows[1].cmd, 'echo x > Cargo.lock');
   assert.match(rows[2].cmd, /^curl -H "Authorization: \*\*\*" https:\/\/example\.com\/p+…$/);
   assert.equal(rows[2].cmd.length, 201);
@@ -256,6 +361,8 @@ test('stats: gates cut short by reason and step, step times, and verdicts once p
   log('s1', 'gate-lost', { pid: 2, reason: 'interrupted', step: 'test' });
   log('s1', 'gate-start', { pid: 3 });
   log('s1', 'gate-lost', { pid: 3, reason: 'unknown', step: null, progress: false });
+  log('s1', 'gate-start', { pid: 7 });
+  log('s1', 'gate-lost', { pid: 7, reason: 'interrupted', step: null, progress: true });
   log('s1', 'gate-start', { pid: 4 });
   log('s1', 'stop-green', { pid: 4, ms: 9000, cached: false, steps: { fmt: 1000, clippy: 5000, test: 3000 } });
   log('s1', 'stop-blocked', { pid: 5, ms: 4000, cached: false, steps: { fmt: 2000, clippy: 2000 } });
@@ -270,15 +377,15 @@ test('stats: gates cut short by reason and step, step times, and verdicts once p
   const r = spawnSync(process.execPath, [CLI, 'stats', '--json'], { cwd: ws, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const doc = JSON.parse(r.stdout);
-  assert.equal(doc.gate.cutShort, 3);
-  assert.deepEqual(doc.gate.lost, { timeout: 1, interrupted: 1, unknown: 1 });
-  assert.deepEqual(doc.gate.lostSteps, { test: 2, 'fmt or before': 1 });
+  assert.equal(doc.gate.cutShort, 4);
+  assert.deepEqual(doc.gate.lost, { timeout: 1, interrupted: 2, unknown: 1 });
+  assert.deepEqual(doc.gate.lostSteps, { test: 2, 'fmt or before': 1, 'after fmt, before any step': 1 });
   assert.deepEqual(doc.gate.stepP50Ms, { clippy: 5000, test: 3000, fmt: 2000 });
   assert.deepEqual([doc.review.sessions, doc.review.roundsP50, doc.review.roundsMax, doc.review.firstApproved], [1, 2, 2, 0]);
   assert.equal(doc.review.changes.count, 1);
   const text = spawnSync(process.execPath, [CLI, 'stats'], { cwd: ws, encoding: 'utf8' }).stdout;
-  assert.match(text, /; 3 cut short \(1 timeout, 1 interrupted, 1 unknown\)$/m);
-  assert.match(text, /^gates cut short, by the step they were on:\n {2}test {23}2\n {2}fmt or before {14}1$/m);
+  assert.match(text, /; 4 cut short \(1 timeout, 2 interrupted, 1 unknown\)$/m);
+  assert.match(text, /^gates cut short, by the step they were on:\n {2}test {23}2\n {2}fmt or before {14}1\n {2}after fmt, before any step 1$/m);
   assert.match(text, /^gate step times at Stop \(p50\):\n {2}clippy {21}5\.0 s\n {2}test {23}3\.0 s\n {2}fmt {24}2\.0 s$/m);
 });
 

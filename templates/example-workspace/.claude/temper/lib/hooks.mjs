@@ -1235,15 +1235,26 @@ setInterval(beat, w.every);`;
 let beating = null;
 export const heartbeatPath = (proj, input) => path.join(sessionDir(proj, input.session_id), `gate-alive-${agentKey(input)}.json`);
 
-/** Start the heartbeat of this hook's gate run (one per process; it ends with the process). */
+/**
+ * Start the heartbeat of this hook's gate run (one per process), and return its worker. A worker
+ * error is ignored: unheard, it would end the hook with exit 1 after the hook had decided.
+ */
 export function startHeartbeat(proj, input, every = BEAT_MS) {
   try {
-    beating?.terminate();
+    stopHeartbeat();
     const file = heartbeatPath(proj, input);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     beating = new Worker(BEAT, { eval: true, workerData: { file, pid: process.pid, every } });
+    beating.on('error', () => { /* the heartbeat is best effort */ });
     beating.unref();
   } catch { beating = null; }
+  return beating;
+}
+
+/** Stop the heartbeat, when the gate run it watches has returned. */
+export function stopHeartbeat() {
+  try { beating?.terminate().catch(() => { /* gone already */ }); } catch { /* best effort */ }
+  beating = null;
 }
 
 /**
@@ -1272,20 +1283,28 @@ export function lostGateRow(start, prog, beat, now = Date.now()) {
 
 /**
  * Log a gate-lost row for each gate run of this session whose hook was killed (#137), with the
- * step it was on from the progress file it left behind (none: it died formatting, or between
- * steps). A gate whose pid still runs is not lost, and rows from before gate-start carried a pid
- * are left alone.
+ * step it was on from the progress file it left behind (none: it died formatting; no step: after
+ * formatting, before the first step). A gate whose pid still runs is not lost, and rows from
+ * before gate-start carried a pid are left alone. Two hooks of the session can find the same lost
+ * gate at once (a Stop and a SubagentStop), so each claims it first with a marker file that only
+ * one can create; the claimant then removes the gate's progress file, which has served.
  */
 function logLostGates(proj, input) {
   try {
     const lost = openGateStarts(sessionTelemetry(proj, input.session_id)).filter((r) => Number.isInteger(r.pid) && r.pid !== process.pid && !pidAlive(r.pid));
     if (!lost.length) return;
     const progress = gateProgressFiles(proj);
+    const dir = sessionDir(proj, input.session_id);
+    fs.mkdirSync(dir, { recursive: true });
     for (const r of lost) {
+      try { fs.closeSync(fs.openSync(path.join(dir, `gate-lost-${r.pid}-${Date.parse(r.t) || 0}`), 'wx')); } catch { continue; /* claimed by another hook */ }
       const who = { ...input, agent_type: r.agent === 'main' ? undefined : r.agent, agent_id: r.agent_id };
       let beat = null;
       try { beat = JSON.parse(readText(heartbeatPath(proj, who)) ?? 'null'); } catch { /* none */ }
-      telemetry(proj, who, 'gate-lost', lostGateRow(r, progress.get(r.pid) ?? null, beat));
+      const prog = progress.get(r.pid) ?? null;
+      telemetry(proj, who, 'gate-lost', lostGateRow(r, prog, beat));
+      // Unless another gate on the same tree has written the file since.
+      if (prog) { try { if (JSON.parse(fs.readFileSync(prog.path, 'utf8')).pid === r.pid) fs.rmSync(prog.path, { force: true }); } catch { /* gone */ } }
     }
   } catch { /* telemetry is best effort */ }
 }
@@ -1299,7 +1318,7 @@ function gateProgressFiles(proj) {
     try {
       const p = path.join(proj.stateDir, n);
       const rec = JSON.parse(fs.readFileSync(p, 'utf8'));
-      if (Number.isInteger(rec?.pid)) out.set(rec.pid, { ...rec, mtimeMs: fs.statSync(p).mtimeMs });
+      if (Number.isInteger(rec?.pid)) out.set(rec.pid, { ...rec, path: p, mtimeMs: fs.statSync(p).mtimeMs });
     } catch { /* unreadable: skipped */ }
   }
   return out;
@@ -1324,7 +1343,8 @@ function completionGate(input, { requireReview }) {
   telemetry(proj, input, 'gate-start', { pid: process.pid, agent_id: input.agent_id, timeoutMs: hookTimeoutMs(requireReview ? 'Stop' : 'SubagentStop') });
   startHeartbeat(proj, input);
   const t0 = Date.now();
-  const res = runGate(proj, { base });
+  let res;
+  try { res = runGate(proj, { base }); } finally { stopHeartbeat(); }
   const timing = { ms: Date.now() - t0, cached: Boolean(res.cached), pid: process.pid, ...stepTimes(res) };
   if (res.unavailable) {
     telemetry(proj, input, 'gate-unavailable', timing);
