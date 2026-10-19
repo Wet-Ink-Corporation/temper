@@ -426,12 +426,51 @@ export function telemetry(proj, input, event, detail = {}) {
   } catch { /* best effort */ }
 }
 
+// A name that looks like it holds a secret: of a `--flag`, a header or an env assignment.
+const SECRET_WORD = String.raw`(?:token|secret|passw(?:or)?d|passphrase|api[-_]?key|private[-_]?key|access[-_]?key|credential|auth(?![a-z]))`;
+const SECRET_NAME = String.raw`[\w-]*${SECRET_WORD}[\w-]*`;
+const SECRET_VALUE = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
+const REDACTIONS = [
+  // scheme://user:password@host
+  [/\b([a-z][\w+.-]*:\/\/)[^\s/@'"]+@/gi, '$1***@'],
+  // Authorization: Bearer x, X-Api-Key: x, up to the closing quote or the end of the line.
+  [new RegExp(String.raw`\b((?:proxy-)?authorization|${SECRET_NAME})(\s*:\s*)[^'"\n]+`, 'gi'), '$1$2***'],
+  // "token": "x" in JSON
+  [new RegExp(String.raw`("${SECRET_NAME}"\s*:\s*)"[^"]*"`, 'gi'), '$1"***"'],
+  // --token x, --password=x
+  [new RegExp(String.raw`(\s--?${SECRET_NAME})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2***'],
+  // GH_TOKEN=x, export API_KEY='x'
+  [new RegExp(String.raw`(^|[\s;&|(])(\w*${SECRET_WORD}\w*)=${SECRET_VALUE}`, 'gi'), '$1$2=***'],
+  // Well-known token shapes, wherever they appear.
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16})\b/g, '***'],
+];
+
+/**
+ * A shell command as a telemetry row keeps it: likely secrets replaced by *** (URL userinfo,
+ * Authorization and other secret-named headers, the values of secret-named flags and env
+ * assignments, well-known token shapes), then clipped to `max` characters. Redaction runs on the
+ * whole command first, so a secret the clip would cut is still removed.
+ */
+export function redactCommand(cmd, max = 200) {
+  let s = String(cmd ?? '');
+  for (const [re, to] of REDACTIONS) s = s.replace(re, to);
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
 const parseRows = (text) => String(text ?? '').split('\n')
   .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
 
 /** The telemetry rows that remain, oldest file first; lines that do not parse are skipped. */
 export function readTelemetry(proj) {
   return [TELEMETRY_OLD, TELEMETRY].flatMap((f) => parseRows(readText(path.join(proj.stateDir, f))));
+}
+
+/** The telemetry rows of session `sid`, oldest first; lines that do not name it are not parsed. */
+export function sessionTelemetry(proj, sid) {
+  if (!sid) return [];
+  const id = JSON.stringify(String(sid));
+  return [TELEMETRY_OLD, TELEMETRY].flatMap((f) => parseRows(String(readText(path.join(proj.stateDir, f)) ?? '')
+    .split('\n').filter((l) => l.includes(id)).join('\n'))).filter((r) => r.sid === sid);
 }
 
 const TELEMETRY_TIP = 'refs/temper/telemetry-tip';

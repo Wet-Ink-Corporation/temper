@@ -5,10 +5,11 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import {
   discover, relTo, norm, readText, writeAtomic, globMatch, crateOf, sessionDir, agentKey,
   markSkillLoaded, skillLoaded, setBase, baseRev, pruneSessions, pruneMarkers, telemetry, rustChanges,
-  fingerprint, diffStat, run, startFingerprint, pruneFingerprintState,
+  fingerprint, diffStat, run, startFingerprint, pruneFingerprintState, redactCommand, sessionTelemetry, pidAlive,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
 import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
@@ -20,7 +21,7 @@ import {
 import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
-import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
+import { extractVerdict, verdictProblems, problemKinds, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
 import {
   parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
   landing as protectedLanding, patchFiles as protectedPatchFiles, commandDeletes as protectedDeletes,
@@ -106,6 +107,7 @@ export function sessionStart(input) {
     state = `${changes.length} Rust file(s) changed; gate ${g ? (g.ok ? 'green' : 'red') : 'not run'}; review ${v ? v.verdict : 'none'} (fingerprint ${fp})`;
   }
   telemetry(proj, input, 'session-start', { source: input.source });
+  logLostGates(proj, input);
   const loaded = skillLoaded(proj, input);
   const text = [
     'This repository is a Rust workspace governed by the temper plugin and the rust-craft engineering standard.',
@@ -632,19 +634,19 @@ function shellRustWrites(cmd, proj, input) {
   }
 
   if (direct.length) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'shell-reader' });
+    telemetry(proj, input, 'deny-shell-write', { via: 'shell-reader', cmd: redactCommand(cmd) });
     return deny(RS_SHELL_DENY);
   }
   const unreadPatch = unknown.find((u) => u.why === 'patch' || u.why === 'later');
   if (unreadPatch) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'patch-unread' });
+    telemetry(proj, input, 'deny-shell-write', { via: 'patch-unread', cmd: redactCommand(cmd) });
     const why = unreadPatch.why === 'later'
       ? 'its patch file does not exist yet, or is rewritten, earlier in this command'
       : 'stdin, a variable or a missing file';
     return deny(`temper: temper cannot read the patch that \`${unreadPatch.t.slice(0, 120)}\` applies (${why}), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with \`git apply --stat <file>\`; make changes to .rs files with the Edit tool so the standard's checks run on them.`);
   }
   if (unknown.length) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'copy-unread' });
+    telemetry(proj, input, 'deny-shell-write', { via: 'copy-unread', cmd: redactCommand(cmd) });
     const u = unknown[0];
     const why = u.why === 'cwd'
       ? `temper cannot tell which directory \`${u.t.slice(0, 120)}\` is relative to (an earlier \`cd\` it cannot follow)`
@@ -654,12 +656,12 @@ function shellRustWrites(cmd, proj, input) {
     return deny(`temper: write Rust sources with the Edit or Write tools, not the shell, so the standard's checks run on them (H-12). ${why}, so it was not run. Copy from a literal path that exists, or use the Edit tool.`);
   }
   if (patched.length) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'patch', files: patched.length });
+    telemetry(proj, input, 'deny-shell-write', { via: 'patch', files: patched.length, cmd: redactCommand(cmd) });
     const list = patched.slice(0, 5).join(', ') + (patched.length > 5 ? `, and ${patched.length - 5} more` : '');
     return deny(`temper: this patch changes Rust sources (${list}), and applying it from the shell skips the standard's checks (H-12), so it was not run. Make the change with the Edit tool, so the scanner checks each hunk. \`git apply --check\`, \`git apply --stat\` and \`patch --dry-run\` still run for inspecting it.`);
   }
   if (denies.length) {
-    telemetry(proj, input, 'deny-scan', { via: 'shell-copy', rules: denies.map((d) => d.split(' ')[0]) });
+    telemetry(proj, input, 'deny-scan', { via: 'shell-copy', rules: denies.map((d) => d.split(' ')[0]), cmd: redactCommand(cmd) });
     return deny([
       `temper: this command writes ${denies.length} escape hatch(es) into Rust sources, so it was not run. Rewrite the source without them, or make the change with the Edit or Write tools:`,
       ...denies.slice(0, 10),
@@ -1001,7 +1003,7 @@ export function preBash(input) {
   const proj = discover(input.cwd);
   if (!proj) return none();
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
-    telemetry(proj, input, 'deny-shell-write', {});
+    telemetry(proj, input, 'deny-shell-write', { cmd: redactCommand(cmd) });
     return deny(RS_SHELL_DENY);
   }
   // cp/mv/install onto .rs and git apply/patch: scanned like an Edit/Write (engine-1-8).
@@ -1019,19 +1021,19 @@ export function preBash(input) {
     return rsWrite;
   }
   if (SHELL_WRITE_LOCK.some((re) => re.test(cmd))) {
-    telemetry(proj, input, 'deny-lockfile', { via: 'shell' });
+    telemetry(proj, input, 'deny-lockfile', { via: 'shell', cmd: redactCommand(cmd) });
     return deny(LOCKFILE_DENY('Cargo.lock'));
   }
   if (SHELL_WRITE_TOML.some((re) => re.test(cmd))) {
-    telemetry(proj, input, 'deny-shell-write', { file: 'Cargo.toml' });
+    telemetry(proj, input, 'deny-shell-write', { file: 'Cargo.toml', cmd: redactCommand(cmd) });
     return deny(MANIFEST_SHELL_DENY);
   }
   if (SHELL_WRITE_BASELINE.some((re) => re.test(cmd))) {
-    telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json' });
+    telemetry(proj, input, 'deny-shell-write', { file: 'temper-baseline.json', cmd: redactCommand(cmd) });
     return deny(BASELINE_SHELL_DENY);
   }
   if (readerRule(() => stateDirWrite(proj, cmd, input.cwd ?? proj.root), false)) {
-    telemetry(proj, input, 'deny-shell-write', { file: 'state-dir' });
+    telemetry(proj, input, 'deny-shell-write', { file: 'state-dir', cmd: redactCommand(cmd) });
     return deny(STATE_SHELL_DENY);
   }
   if (/TEMPER_ALLOW_RAISE/.test(cmd)) {
@@ -1039,12 +1041,12 @@ export function preBash(input) {
     return ask(`temper: this command sets TEMPER_ALLOW_RAISE, which lets \`temper baseline --init\`/\`--update\` record every current finding as accepted legacy debt, so the gate and CI stop failing on it. Raising the baseline weakens verification (H-12): approve only if you asked for it.`);
   }
   if (SHELL_WRITE_VENDORED.some((re) => re.test(cmd))) {
-    telemetry(proj, input, 'deny-shell-write', { file: '.claude/temper/' });
+    telemetry(proj, input, 'deny-shell-write', { file: '.claude/temper/', cmd: redactCommand(cmd) });
     return deny(VENDORED_SHELL_DENY);
   }
   const raise = baselineRaise(cmd);
   if (raise) {
-    telemetry(proj, input, 'deny-baseline-raise', { via: `baseline ${raise}` });
+    telemetry(proj, input, 'deny-baseline-raise', { via: `baseline ${raise}`, cmd: redactCommand(cmd) });
     return deny(`temper: \`temper baseline ${raise}\` records every current finding as accepted legacy debt (H-12), so it is the human's decision, and the CLI refuses it inside Claude Code. To request it, run the same command prefixed with \`TEMPER_ALLOW_RAISE=1\`: the human will be asked to approve it. (\`baseline --tighten\` and \`--check\` never raise it and run freely.)`);
   }
   const restore = claudeRestore(cmd);
@@ -1053,7 +1055,7 @@ export function preBash(input) {
     return ask(`temper: \`${restore.slice(0, 160)}\` puts older verification configuration back into .claude/ (the lint baseline, settings or the vendored CLI). An older baseline can accept more debt (H-12): approve only if you asked for it.`);
   }
   if (segments(cmd).some((seg) => isCargo(seg) && /(?:^|\s)--ignore-rust-version(?![\w-])/.test(seg))) {
-    telemetry(proj, input, 'deny-ignore-rust-version', {});
+    telemetry(proj, input, 'deny-ignore-rust-version', { cmd: redactCommand(cmd) });
     return deny('temper: --ignore-rust-version bypasses the MSRV check, so green would not mean the declared rust-version builds (MOD-01, H-12). If a dependency needs a newer Rust, raising rust-version is a human decision (H-16): say so and ask.');
   }
   const text = blankProse(cmd);
@@ -1112,8 +1114,8 @@ export function preHandback(input) {
   const v = extractVerdict(String(input.tool_input?.message ?? ''));
   const problems = checkVerdict(proj, input, v);
   if (problems.length) {
-    telemetry(proj, input, 'verdict-invalid', { via: 'handback', problems: problems.length });
-    return deny(`temper: the review verdict is invalid, so the report was not delivered:\n- ${problems.join('\n- ')}\nFix the verdict block and hand back again.`);
+    telemetry(proj, input, 'verdict-invalid', { via: 'handback', problems: problems.length, kinds: problemKinds(problems), agent_id: input.agent_id });
+    return deny(`temper: the review verdict is invalid, so the report was not delivered:\n- ${problems.map((x) => x.message).join('\n- ')}\nFix the verdict block and hand back again.`);
   }
   storeVerdict(proj, input, v, 'handback');
   return none();
@@ -1140,10 +1142,11 @@ export function reportFromTranscript(file) {
   return null;
 }
 
+/** The verdict's problems ({ kind, message }) against this session's changes and gate. */
 function checkVerdict(proj, input, v) {
   const base = baseRev(proj, input.session_id);
   const gate = v?.fingerprint ? cachedGate(proj, v.fingerprint) : null;
-  return validateVerdict(v, { changedRust: rustChanges(proj, base).filter((f) => f.endsWith('.rs')), gate });
+  return verdictProblems(v, { changedRust: rustChanges(proj, base).filter((f) => f.endsWith('.rs')), gate });
 }
 
 function storeVerdict(proj, input, v, via) {
@@ -1151,7 +1154,7 @@ function storeVerdict(proj, input, v, via) {
   const current = fingerprint(proj, base);
   recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
-  telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
+  telemetry(proj, input, 'verdict', { via, agent_id: input.agent_id, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
 }
 
 // ----------------------------------------------------------------- PostToolUse
@@ -1184,6 +1187,116 @@ function lastBlock(proj, input) {
   return { prev, save: (rec) => writeAtomic(p, JSON.stringify(rec)) };
 }
 
+/** The `timeout` hooks/hooks.json gives the hook for `event`, in milliseconds; null if unreadable. */
+export function hookTimeoutMs(event, root = pluginRoot()) {
+  try {
+    const sec = JSON.parse(readText(path.join(root, 'hooks', 'hooks.json')) ?? '').hooks[event][0].hooks[0].timeout;
+    return Number.isFinite(sec) ? sec * 1000 : null;
+  } catch { return null; }
+}
+
+/** A fresh gate's step times in milliseconds, { steps: { fmt: 812, clippy: 64020, ... } }; {} when cached. */
+export const stepTimes = (res) => (res.cached || !Array.isArray(res.steps) ? {} : { steps: Object.fromEntries(res.steps.map((s) => [s.name, s.ms])) });
+
+/** The events that end a gate run at Stop or SubagentStop (temper stats reads the same list). */
+export const STOP_OUTCOMES = new Set(['stop-green', 'stop-blocked', 'stop-allowed-red', 'stop-allowed-unreviewed', 'stop-advisory-unreviewed', 'gate-unavailable']);
+
+/**
+ * The gate-start rows of session `rows` with no outcome after them: the hook running that gate
+ * was killed. A row and its outcome pair up by agent and pid (older rows carry no pid).
+ */
+export function openGateStarts(rows) {
+  const open = new Map();
+  for (const r of rows) {
+    const key = `${r.agent ?? 'main'}\0${r.pid ?? ''}`;
+    if (r.event === 'gate-start') open.set(key, r);
+    else if (STOP_OUTCOMES.has(r.event) || r.event === 'gate-lost') open.delete(key);
+  }
+  return [...open.values()];
+}
+
+// While a gate runs at Stop, a worker thread writes the time to gate-alive-<agent>.json in the
+// session dir every BEAT_MS: cargo runs synchronously on the main thread, so only another thread
+// can. When the hook is killed, the file holds its last sign of life, to within BEAT_MS (#137).
+const BEAT_MS = 10000;
+const BEAT = `const { workerData: w } = require('node:worker_threads');
+const fs = require('node:fs');
+const beat = () => { try { fs.writeFileSync(w.file, JSON.stringify({ pid: w.pid, at: Date.now() })); } catch { /* best effort */ } };
+beat();
+setInterval(beat, w.every);`;
+let beating = null;
+export const heartbeatPath = (proj, input) => path.join(sessionDir(proj, input.session_id), `gate-alive-${agentKey(input)}.json`);
+
+/** Start the heartbeat of this hook's gate run (one per process; it ends with the process). */
+export function startHeartbeat(proj, input, every = BEAT_MS) {
+  try {
+    beating?.terminate();
+    const file = heartbeatPath(proj, input);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    beating = new Worker(BEAT, { eval: true, workerData: { file, pid: process.pid, every } });
+    beating.unref();
+  } catch { beating = null; }
+}
+
+/**
+ * Why a gate run with no outcome ended (#137), from its gate-start row, its progress file and
+ * heartbeat (each null when absent), and the time it was found. `ranMs` is the hook's last sign
+ * of life after the start: its heartbeat, else the last step the progress file records. Within
+ * 30 s of the hook's deadline it was the timeout (the slack covers the heartbeat's interval and
+ * the work before gate-start); short of it with a heartbeat, an interruption (or a crash). With
+ * no heartbeat, it was an interruption only if it was found before the deadline; else unknown.
+ */
+export function lostGateRow(start, prog, beat, now = Date.now()) {
+  const t0 = Date.parse(start.t);
+  const alive = beat?.pid === start.pid && Number.isFinite(beat.at) ? beat.at : 0;
+  const seen = Math.max(t0, Date.parse(prog?.current?.startedAt ?? '') || 0, prog?.mtimeMs ?? 0, alive);
+  const ranMs = seen - t0;
+  const deadline = start.timeoutMs;
+  const reason = !Number.isFinite(deadline) ? 'unknown'
+    : ranMs >= deadline - 3 * BEAT_MS ? 'timeout'
+      : alive || now - t0 < deadline ? 'interrupted' : 'unknown';
+  const done = Array.isArray(prog?.steps) ? prog.steps : [];
+  return {
+    pid: start.pid, reason, ranMs, foundMs: now - t0, timeoutMs: deadline ?? null, heartbeat: Boolean(alive),
+    progress: Boolean(prog), step: prog?.current?.name ?? null, steps: Object.fromEntries(done.map((s) => [s.name, s.ms])),
+  };
+}
+
+/**
+ * Log a gate-lost row for each gate run of this session whose hook was killed (#137), with the
+ * step it was on from the progress file it left behind (none: it died formatting, or between
+ * steps). A gate whose pid still runs is not lost, and rows from before gate-start carried a pid
+ * are left alone.
+ */
+function logLostGates(proj, input) {
+  try {
+    const lost = openGateStarts(sessionTelemetry(proj, input.session_id)).filter((r) => Number.isInteger(r.pid) && r.pid !== process.pid && !pidAlive(r.pid));
+    if (!lost.length) return;
+    const progress = gateProgressFiles(proj);
+    for (const r of lost) {
+      const who = { ...input, agent_type: r.agent === 'main' ? undefined : r.agent, agent_id: r.agent_id };
+      let beat = null;
+      try { beat = JSON.parse(readText(heartbeatPath(proj, who)) ?? 'null'); } catch { /* none */ }
+      telemetry(proj, who, 'gate-lost', lostGateRow(r, progress.get(r.pid) ?? null, beat));
+    }
+  } catch { /* telemetry is best effort */ }
+}
+
+/** The progress files in the state dir by pid, each with its mtime. */
+function gateProgressFiles(proj) {
+  const out = new Map();
+  let names = [];
+  try { names = fs.readdirSync(proj.stateDir).filter((n) => /^gate-progress-[0-9a-f]+\.json$/.test(n)); } catch { return out; }
+  for (const n of names) {
+    try {
+      const p = path.join(proj.stateDir, n);
+      const rec = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (Number.isInteger(rec?.pid)) out.set(rec.pid, { ...rec, mtimeMs: fs.statSync(p).mtimeMs });
+    } catch { /* unreadable: skipped */ }
+  }
+  return out;
+}
+
 function completionGate(input, { requireReview }) {
   const proj = discover(input.cwd);
   if (!proj || input.permission_mode === 'plan') return none();
@@ -1197,11 +1310,14 @@ function completionGate(input, { requireReview }) {
     telemetry(proj, input, 'stop-declared', { status });
     return notice(`temper: Rust changes left ${status === 'WIP' ? 'in progress' : 'blocked'}; the gate and review were not enforced for this turn.`);
   }
-  // gate-start with no Stop outcome after it in the session means the hook was killed (its timeout).
-  telemetry(proj, input, 'gate-start', {});
+  // gate-start with no Stop outcome after it in the session means the hook was killed: its
+  // timeout, or an interruption. The next hook in the session logs gate-lost for it (#137).
+  logLostGates(proj, input);
+  telemetry(proj, input, 'gate-start', { pid: process.pid, agent_id: input.agent_id, timeoutMs: hookTimeoutMs(requireReview ? 'Stop' : 'SubagentStop') });
+  startHeartbeat(proj, input);
   const t0 = Date.now();
   const res = runGate(proj, { base });
-  const timing = { ms: Date.now() - t0, cached: Boolean(res.cached) };
+  const timing = { ms: Date.now() - t0, cached: Boolean(res.cached), pid: process.pid, ...stepTimes(res) };
   if (res.unavailable) {
     telemetry(proj, input, 'gate-unavailable', timing);
     return notice(`temper: ${renderGate(res)}`);
@@ -1223,7 +1339,10 @@ function completionGate(input, { requireReview }) {
   if (requireReview && proj.config.review !== 'off') {
     const v = verdictFor(proj, fp);
     if (!v || v.verdict !== 'approved') {
-      if (proj.config.review === 'advisory') return notice(`temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
+      if (proj.config.review === 'advisory') {
+        telemetry(proj, input, 'stop-advisory-unreviewed', { fp, ...timing });
+        return notice(`temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
+      }
       if (stuck('review')) {
         telemetry(proj, input, 'stop-allowed-unreviewed', { fp, ...timing });
         return notice(`temper: stopped without an approving review for fingerprint ${fp}.`);
@@ -1275,9 +1394,10 @@ export function subagentStop(input) {
     if (!v && already) return none(); // recorded by SubagentHandback or an earlier SubagentStop for this agent
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
-      if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }
-      telemetry(proj, input, 'verdict-invalid', { via: 'subagent-stop', problems: problems.length });
-      return block(`temper: your review verdict is invalid:\n- ${problems.join('\n- ')}\nEnd your final report with a corrected \`\`\`json verdict block.`);
+      const detail = { problems: problems.length, kinds: problemKinds(problems), agent_id: input.agent_id };
+      if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', detail); return none(); }
+      telemetry(proj, input, 'verdict-invalid', { via: 'subagent-stop', ...detail });
+      return block(`temper: your review verdict is invalid:\n- ${problems.map((x) => x.message).join('\n- ')}\nEnd your final report with a corrected \`\`\`json verdict block.`);
     }
     storeVerdict(proj, input, v, 'subagent-stop');
     return none();

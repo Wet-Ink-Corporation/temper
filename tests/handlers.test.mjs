@@ -492,6 +492,12 @@ test('Stop: review "advisory" and "off" in .claude/temper.json', { skip: noCargo
   const fp = r.gate(true);
   r.config({ review: 'advisory' });
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-adv' })), `temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
+  // The advisory notice is an outcome too, so the gate-start before it is not read as a killed hook;
+  // both carry the hook's pid, and gate-start the hook's deadline (#137).
+  const adv = readTelemetry(r.proj()).filter((x) => x.sid === 's-adv');
+  assert.deepEqual(adv.map((x) => x.event), ['gate-start', 'stop-advisory-unreviewed']);
+  assert.deepEqual([adv[0].pid, adv[0].timeoutMs, adv[1].pid, adv[1].fp, adv[1].cached], [process.pid, 1200000, process.pid, fp, true]);
+  assert.equal('steps' in adv[1], false); // a cached result's step times are the original run's
   r.config({ review: 'off' });
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-off' })), `temper: gate green (fingerprint ${fp}).`);
   // a red gate still blocks when review is off
