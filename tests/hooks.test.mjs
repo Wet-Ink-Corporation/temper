@@ -562,7 +562,7 @@ test('Bash: git apply and patch that touch .rs files are refused; read-only form
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
-      assert.match(reason(res), /with the Edit tool/, cmd);
+      assert.match(reason(res), /with the Edit or Write tools/, cmd);
       assert.match(reason(res), /crates\/ledger-domain\/src\/lib\.rs/, cmd);
     }
     for (const cmd of [`cat "${out('rs.diff')}" | git apply`, 'curl -sL https://example.com/fix.diff | patch -p1', `git apply "${out('missing.diff')}"`, 'git apply $PATCH']) {
@@ -581,6 +581,45 @@ test('Bash: git apply and patch that touch .rs files are refused; read-only form
       "git log --grep 'git apply'",
       'echo "patch -p1 < fix.diff"',
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+// Pilot #140: Workflow subagents retried denied patches between worktrees, and the read-only reviewer tried to apply patches.
+test('Bash: a denied Rust patch names the scanned routes and says a retry is denied again', () => {
+  withOutside((out) => {
+    for (const cmd of [`git apply "${out('rs.diff')}"`, `cat "${out('rs.diff')}" | git apply`]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /Edit or Write tools/, cmd);
+      assert.match(reason(res), /commit it in the worktree it was made in and run `git cherry-pick <commit>`/, cmd);
+      assert.match(reason(res), /Retrying this patch[^.]* is denied again/, cmd);
+    }
+    // The sanctioned route between worktrees runs: the Stop gate and CI check what it brings in.
+    for (const cmd of ['git cherry-pick abc123', 'git merge --no-ff feature']) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+test('Bash: the read-only reviewer may not apply any patch, and is told not to retry', () => {
+  const asReviewer = (command) => preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: 'temper:rust-reviewer', tool_input: { command } });
+  withOutside((out) => {
+    for (const cmd of [
+      `git apply "${out('rs.diff')}"`,
+      `git apply "${out('doc.diff')}"`,
+      `patch -p1 < "${out('doc.diff')}"`,
+      `git am "${out('doc.diff')}"`,
+      'git diff | git apply -R',
+    ]) {
+      const res = asReviewer(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /reviewer is read-only/, cmd);
+      assert.match(reason(res), /Do not retry/, cmd);
+    }
+    // Inspecting a patch is review work.
+    for (const cmd of [`git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat']) {
+      assert.equal(decision(asReviewer(cmd)), 'none', cmd);
+    }
+    // Another agent's non-Rust patch still runs.
+    assert.equal(decision(bash(`git apply "${out('doc.diff')}"`)), 'none');
   });
 });
 
