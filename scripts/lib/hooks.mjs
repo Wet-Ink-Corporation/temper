@@ -422,6 +422,9 @@ function patchTouches(p, c, written, want = (f) => /\.rs$/.test(f)) {
 }
 
 const RS_COPY_SCANNED = Symbol('temper-rs-copies-scanned');
+// The sanctioned way to move Rust between worktrees (#140): a commit brought in with git, which the Stop gate and CI check.
+const PATCH_ROUTE = 'To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in.';
+const REVIEWER_PATCH_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**
  * cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs files, and git apply/am/patch of
@@ -643,7 +646,7 @@ function shellRustWrites(cmd, proj, input) {
     const why = unreadPatch.why === 'later'
       ? 'its patch file does not exist yet, or is rewritten, earlier in this command'
       : 'stdin, a variable or a missing file';
-    return deny(`temper: temper cannot read the patch that \`${unreadPatch.t.slice(0, 120)}\` applies (${why}), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with \`git apply --stat <file>\`; make changes to .rs files with the Edit tool so the standard's checks run on them.`);
+    return deny(`temper: temper cannot read the patch that \`${unreadPatch.t.slice(0, 120)}\` applies (${why}), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with \`git apply --stat <file>\`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. ${PATCH_ROUTE} Retrying this patch the same way is denied again.`);
   }
   if (unknown.length) {
     telemetry(proj, input, 'deny-shell-write', { via: 'copy-unread', cmd: redactCommand(cmd) });
@@ -658,7 +661,7 @@ function shellRustWrites(cmd, proj, input) {
   if (patched.length) {
     telemetry(proj, input, 'deny-shell-write', { via: 'patch', files: patched.length, cmd: redactCommand(cmd) });
     const list = patched.slice(0, 5).join(', ') + (patched.length > 5 ? `, and ${patched.length - 5} more` : '');
-    return deny(`temper: this patch changes Rust sources (${list}), and applying it from the shell skips the standard's checks (H-12), so it was not run. Make the change with the Edit tool, so the scanner checks each hunk. \`git apply --check\`, \`git apply --stat\` and \`patch --dry-run\` still run for inspecting it.`);
+    return deny(`temper: this patch changes Rust sources (${list}), and applying it from the shell skips the standard's checks (H-12), so it was not run. Make the change with the Edit or Write tools, so the scanner checks each hunk. ${PATCH_ROUTE} Retrying this patch, from a file, a pipe or with git am, is denied again. \`git apply --check\`, \`git apply --stat\` and \`patch --dry-run\` still run for inspecting it.`);
   }
   if (denies.length) {
     telemetry(proj, input, 'deny-scan', { via: 'shell-copy', rules: denies.map((d) => d.split(' ')[0]), cmd: redactCommand(cmd) });
@@ -1002,6 +1005,11 @@ export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
   if (!proj) return none();
+  // The reviewer reviews the tree as it is: it applies no patch, Rust or not (#140).
+  if (REVIEWER.test(input.agent_type ?? '') && readerRule(() => parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root }).some((c) => patchCommand(c)?.apply), false)) {
+    telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
+    return deny(REVIEWER_PATCH_DENY);
+  }
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { cmd: redactCommand(cmd) });
     return deny(RS_SHELL_DENY);
