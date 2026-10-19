@@ -929,8 +929,8 @@ Phase 8: cutover
   - `temper stats` counts review rounds per change (#139, #146).
   - Patch denials name the scanned routes (#140, #145).
   - The baseline is recorded per host (#141, #147).
-  - The lens follow-ups (#143, #149).
-  - #58's checks for review-only MUST rules and the gate's list of MUST advisories (#154, #156).
-  
-  Two findings were still open on 2026-10-19: verdict stability (#136, #148, waiting on the owner's pick) and the patch-check gaps (#151, #153). The test table's counts are re-taken when Phase 0a starts.
+  - The lens and gate-progress follow-ups from the #121 and #123 reviews landed (#143, #149).
+  - Five MUST rules that only review enforced gained checks, the rest are marked review-only by design, and the gate lists the MUST advisories a change adds (#58; #154, #156).
+
+  Three findings were still open on 2026-10-19: verdict stability (#136, #148, waiting on the owner's pick), the patch-check gaps (#151, #153), and slow Stop gates (#137, waiting on telemetry from real sessions). The follow-ups #155, #157 and #158 are open too. The test table's counts are re-taken when Phase 0a starts.
 - Next: Phase 0a (adds `LICENSE-APACHE`), after v1 goes live and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).
