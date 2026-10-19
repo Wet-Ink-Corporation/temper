@@ -9,6 +9,8 @@
 
 The lens polls only while a Stop runs, and stops on `session.end` and on reload. Its Stop hooks return the settings hooks' result unchanged, and a lens failure replays that result, so the lens can never decide a Stop.
 
+The README now says that Claude Code is still rolling out plugin modules. Until they are on for an account, the lens does not load and `/temper-lens` is an unknown command, while the hooks run as usual.
+
 **temper lens: Activity and Stats tabs (#113).** The `/temper-lens` pane gains two tabs:
 - **Activity** lists this session's denials and asks, newest first, from `temper stats --json --session <id>`. Each row has its event, rule IDs, file and agent, and pressing a row shows the rule. A legend points each kind of event to its section of the troubleshooting guide.
 - **Stats** shows the clone's gate latency at `Stop`, gates cut short, review rounds, first-verdict approvals and the rules blocked most, with a sparkline of recent gate times in the terminal. A button fetches the telemetry branch (`stats --json --branch`), and only when pressed.

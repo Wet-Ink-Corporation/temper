@@ -26,6 +26,14 @@ How the five full runs score against the groups as they stood at each run, plus 
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
+## Lens hand check: live gate progress at Stop (2026-10-19, #111)
+
+The owner chose this paid check on 2026-10-19, after the lens did not load on their Windows machine: Claude Code 2.1.289 and 2.1.303 there load only built-in hooks modules, which points to the plugin-modules rollout switch being off for that account. It ran an interactive session in a terminal (tmux) on Claude Code 2.1.303 on Linux, with #123's tree merged with `main`, on the smoke test's `calc` workspace. A `cargo` wrapper on `PATH` slept 20 s before each call except `cargo metadata`, to make the gate slow. Two turns cost about $0.24.
+- **The lens loaded** (`hooks module temper@inline loaded`), and the band read `temper  2 .rs changed · gate not run · review: none` after the first turn. That turn ended `Status: WIP`, so the Stop hook skipped the gate.
+- **During the second turn's Stop gate, the band showed the step and elapsed time,** at every 2 s screen capture: `gate running: 4 clippy · 20s · done: fmt 20.5s, scan 0.1s, manifests 0.1s`, then `5 test · 42s`, then `6 doc · 1m 25s`. The spinner line showed the same (`temper: gate 5 test · 42s`). After the gate the band read `gate green`.
+- **Progress starts after `cargo fmt`,** because the progress file is keyed by the tree fingerprint, which exists only after formatting (`scripts/lib/gate.mjs`). During fmt the band still reads `gate not run`, and the elapsed time leaves fmt out. In the owner's redkiln-rs run, fmt took 1.6 s, so this is noted rather than fixed.
+- The desktop app was not checked: it needs the rollout switch on for the owner's account.
+
 ## Release-candidate run for 1.4.0 (2026-10-18, #19)
 
 This paid run is part of the post-pilot close-out the owner asked for on 2026-10-18. It covers all fifteen cases, the seven `candidate` cases from #126 and #130 included. It used 3 runs per arm, `--allow-tools Write Edit` (no `Bash`, because the container has no sandbox) and `--judge-model sonnet`, on Claude Code 2.1.302 at `a2eea47`, whose `plugin.json` still says 1.3.0. It took 726 s and cost $10.53. A smoke run (`tests/e2e/smoke.sh`) on the same commit took 12 turns plus a 1-turn follow-up, cost $0.25, and ended with the gate green and the review approved.
