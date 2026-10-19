@@ -8,6 +8,8 @@ This is the canonical list of rules. Reviewers cite these IDs in findings. Imple
 
 **Review-only by design.** These MUST rules need judgement or describe how the work is done, so no tool can check them without false positives: API-04, ARC-03, TST-01, TST-02, TST-16, PERF-01, PERF-10, ASY-01, ASY-05, OUT-03, OUT-05, PROC-01, PROC-04, PROC-06, PROC-07, PROC-09 and PROC-11. They still block merge, through the reviewer's verdict (PROC-08), and the review rubric names each one.
 
+**Advisory scans under MUST rules.** For API-02, API-19, API-21, ARC-09, ARC-11, TST-10, ASY-04, ASY-07, ASY-17, OUT-04 and CRF-04 (and `SeqCst` under ASY-13), the only tool is a scanner advisory: each pattern it looks for has legitimate uses that a blocking check would refuse, and the template enables no lint for it, because a new lint would fail code that adopted repositories already have. The gate lists the advisories a change adds under MUST rules, and the reviewer judges each one: fixed, justified in a comment at the code, or a finding under its rule.
+
 **Detail** points to the reference file that explains the rule, with examples. `sources.md` records which external guidance each rule draws on, and what was deliberately not adopted.
 
 **Production code** means everything except `#[cfg(test)]` items and `#[test]` functions. Test relaxations, including clippy's `allow-*-in-tests`, apply only inside those, so plain helper functions in `tests/` are not exempt. Benchmarks (`benches/`, compiled without `cfg(test)`), `examples/`, `build.rs` and doctest examples follow production rules.
