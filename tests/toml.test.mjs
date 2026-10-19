@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseToml } from '../scripts/lib/toml.mjs';
-import { workspaceRootFor, memberProblems, watchedKeys, nonCaretRequirement, depRequirements, majorOf, cleanRel, membersFromToml, dependencyNames } from '../scripts/lib/manifest.mjs';
+import { workspaceRootFor, memberProblems, watchedKeys, nonCaretRequirement, depRequirements, majorOf, cleanRel, membersFromToml, dependencyNames, MOCKING_CRATES, splitProblems } from '../scripts/lib/manifest.mjs';
 
 test('parses the Cargo manifest shapes temper reads', () => {
   const m = parseToml(`# comment
@@ -140,4 +140,29 @@ test('major versions, path normalization, members without cargo, dependency name
   }
   const names = dependencyNames(parseToml('[dependencies]\nnix.workspace = true\n[dev-dependencies]\nproptest = "1"\n[[bench]]\nname = "b"\nharness = false\n[target.\'cfg(unix)\'.build-dependencies]\ncc = "1"\n[workspace.dependencies]\nserde = "1"\n'));
   assert.deepEqual([...names].sort(), ['build-dependencies:cc', 'dependencies:nix', 'dependencies:serde', 'dev-dependencies:proptest']);
+});
+
+test('a mocking crate in [dependencies] is a member problem (TST-09); dev-dependencies, optional and workspace tables are not', () => {
+  const root = { path: '/w/Cargo.toml', manifest: parseToml('[workspace]\nmembers = ["crates/*"]\n'), self: false };
+  const keys = (toml) => memberProblems(parseToml(`[package]\nname = "a"\n${toml}`), root).map((p) => p.key);
+  assert.deepEqual(keys('[dependencies]\nmockall = "0.13"\nserde = "1"\n'), ['TST-09:mockall']);
+  assert.deepEqual(keys('[target.\'cfg(unix)\'.dependencies]\nfake-http = { package = "wiremock", version = "0.6" }\n'), ['TST-09:wiremock']);
+  assert.deepEqual(keys('[dev-dependencies]\nmockall = "0.13"\nmockito = "1"\n'), []);
+  assert.deepEqual(keys('[dependencies]\nmockito = { version = "1", optional = true }\n[features]\ntest-util = ["dep:mockito"]\n'), []);
+  assert.deepEqual(keys('[build-dependencies]\nfaux = "0.1"\n'), []);
+  // An optional mocking crate that the default features turn on ships in production code.
+  assert.deepEqual(keys('[dependencies]\nmockito = { version = "1", optional = true }\n[features]\ndefault = ["test-util"]\ntest-util = ["dep:mockito"]\n'), ['TST-09:mockito']);
+  assert.deepEqual(keys('[dependencies]\nmockall = { version = "0.13", optional = true }\n[features]\ndefault = ["std"]\nstd = ["mocks"]\nmocks = ["mockall/nightly"]\n'), ['TST-09:mockall']);
+  assert.deepEqual(keys('[dependencies]\nmockall = { version = "0.13", optional = true }\n[features]\ndefault = ["mockall"]\n'), ['TST-09:mockall']);
+  assert.deepEqual(keys('[dependencies]\nmockall = { version = "0.13", optional = true }\nserde = { version = "1", optional = true }\n[features]\ndefault = ["serde"]\nserde = ["dep:serde", "mockall?/serde"]\n'), []);
+  const self = { path: '/w/Cargo.toml', manifest: parseToml('[workspace]\n[workspace.dependencies]\nmockall = "0.13"\n'), self: true };
+  assert.deepEqual(memberProblems(parseToml('[package]\nname = "r"\n[workspace]\n[workspace.dependencies]\nmockall = "0.13"\n'), self), []);
+  const p = memberProblems(parseToml('[package]\nname = "a"\n[dependencies]\nmry = "0.10"\n'), root)[0];
+  assert.equal(p.id, 'TST-09');
+  assert.match(p.fix, /\[dev-dependencies\]/);
+  for (const name of ['mockall', 'mockito', 'faux', 'mry']) assert.ok(MOCKING_CRATES.includes(name), name);
+  // The ratchet compares problems by key, so a second mocking crate is a new problem.
+  const before = memberProblems(parseToml('[package]\nname = "a"\n[dependencies]\nmockall = "0.13"\n'), root);
+  const after = memberProblems(parseToml('[package]\nname = "a"\n[dependencies]\nmockall = "0.13"\nfaux = "0.1"\n'), root);
+  assert.deepEqual(splitProblems(before, after).fresh.map((x) => x.key), ['TST-09:faux']);
 });
