@@ -11,7 +11,7 @@ import {
   fingerprint, diffStat, run, startFingerprint, pruneFingerprintState,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
-import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
+import { parseCommands, commandWrites, patchCommand, opaquePatch, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
@@ -1003,10 +1003,20 @@ export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
   if (!proj) return none();
-  // The reviewer reviews the tree as it is: it applies no patch, Rust or not (#140).
-  if (REVIEWER.test(input.agent_type ?? '') && readerRule(() => parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root }).some((c) => patchCommand(c)?.apply), false)) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
-    return deny(REVIEWER_PATCH_DENY);
+  // The reviewer reviews the tree as it is: it applies no patch, Rust or not (#140). For it alone,
+  // a command temper cannot resolve that may apply one is denied too (#151); other agents'
+  // dynamic commands are left to the Stop gate and CI, which check the Rust they leave.
+  if (REVIEWER.test(input.agent_type ?? '')) {
+    const cmds = readerRule(() => parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root }), []);
+    if (cmds.some((c) => readerRule(() => patchCommand(c)?.apply, false))) {
+      telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
+      return deny(REVIEWER_PATCH_DENY);
+    }
+    const opaque = cmds.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
+    if (opaque) {
+      telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
+      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque}, so temper cannot tell that it applies no patch. Run git with its subcommand written out.`);
+    }
   }
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', {});

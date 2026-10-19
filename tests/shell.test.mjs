@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { parseCommands, writeTargets, landing, patchCommand, patchFiles, codeWriteTargets, resolvePath, pathspecPattern, commandDeletes } from '../scripts/lib/shell.mjs';
+import { parseCommands, writeTargets, landing, patchCommand, opaquePatch, patchFiles, codeWriteTargets, resolvePath, pathspecPattern, commandDeletes } from '../scripts/lib/shell.mjs';
 
 const root = path.resolve(os.tmpdir(), 'shell-test-root');
 const at = (...p) => path.join(root, ...p);
@@ -100,6 +100,46 @@ test('shell: patchCommand reads git apply, git am and patch; inspecting forms ap
   assert.equal(pt.cwd, at('sub'));
   assert.deepEqual(pt.inputs.map((w) => w.value), ['x.diff']);
   assert.deepEqual(patchFiles('--- a/x.rs\t2026-01-01 00:00:00\n+++ b/x.rs\n'), ['a/x.rs', 'b/x.rs']);
+});
+
+// #151: forms that got past the patch checks.
+test('shell: patchCommand reads gpatch, busybox patch, watch and git -c aliases', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    'gpatch -p1 -i x.diff', 'busybox patch -p1 -i x.diff', '/usr/bin/gpatch -p1 -i x.diff',
+    'watch git apply x.diff', 'watch -n 1 -d git apply x.diff', 'watch -n1 "git apply x.diff"', 'watch --interval=2 -x git apply x.diff',
+    'git -c alias.ap=apply ap x.diff', "git -c 'alias.ap=apply --index' ap x.diff", 'git -c alias.a=b -c alias.b=apply a x.diff', 'git -c alias.AP=apply ap x.diff',
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p('git -c alias.x=am x a.mbox').tool, 'git am');
+  for (const cmd of ['gpatch --dry-run -p1 -i x.diff', 'busybox patch --dry-run -i x.diff', 'watch git apply --check x.diff', "git -c 'alias.ck=apply --check' ck x.diff"]) {
+    assert.equal(p(cmd)?.apply, false, cmd);
+  }
+  for (const cmd of ['git -c alias.st=status st', 'watch -n 5 git status', 'busybox ls', 'git -c alias.ap=apply status', 'git ap x.diff']) assert.equal(p(cmd), null, cmd);
+});
+
+test('shell: opaquePatch flags git subcommands and interpreter code temper cannot resolve', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'git ${CMD:-apply} x.diff', 'git $x x.diff', 'git -C sub $SUB x.diff', 'git -c "$CFG" ap x.diff', "git -c 'alias.x=!git apply x.diff' x", 'git -c alias.ap=$A ap x.diff', 'git -c $K=apply ap x.diff',
+    '$GIT apply x.diff', '${P:-patch} -p1 < x.diff',
+    `python3 -c "import subprocess; subprocess.run(['git', 'apply', 'x.diff'])"`,
+    `python -c "import os; os.system('patch -p1 < x.diff')"`,
+    `node -e "require('child_process').execSync('git apply x.diff')"`,
+    `node --eval "require('child_process').execFileSync('git', ['am', 'x.mbox'])"`,
+    `node -p "require('child_process').execSync('gpatch -p1 -i x.diff')"`,
+    `perl -e 'system("git", "apply", "x.diff")'`, `perl -E 'system("cd sub && patch -p1 < x.diff")'`,
+    `ruby -e 'system("git am x.mbox")'`, `deno eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['busybox', 'patch', '-i', 'x.diff'])\nEOF",
+  ]) assert.ok(o(cmd), cmd);
+  for (const cmd of [
+    'git diff', 'git apply --check x.diff', 'git -c core.pager=cat log', 'git -c color.ui=$C diff', "git log --grep 'git apply'", 'git -c alias.ap=apply ap x.diff',
+    `python3 -c "print(1)"`, `python3 -c "from unittest import mock; mock.patch('os.getcwd')"`, `node -e "console.log('x.patch')"`,
+    `perl -e 'print "--patch\n"'`, `ruby -e 'puts "I am here"'`, 'echo "git apply x.diff"', 'deno run main.ts',
+  ]) assert.equal(o(cmd), null, cmd);
 });
 
 test('shell: codeWriteTargets finds literals in write positions only', () => {

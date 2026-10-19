@@ -608,6 +608,19 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `patch -p1 < "${out('doc.diff')}"`,
       `git am "${out('doc.diff')}"`,
       'git diff | git apply -R',
+      // #151: other names for patch, watch, git -c aliases, and forms temper cannot resolve.
+      `gpatch -p1 -i "${out('doc.diff')}"`,
+      `busybox patch -p1 -i "${out('doc.diff')}"`,
+      `watch -n 1 git apply "${out('doc.diff')}"`,
+      `git -c alias.ap=apply ap "${out('doc.diff')}"`,
+      `git \${CMD:-apply} "${out('doc.diff')}"`,
+      `git $x "${out('doc.diff')}"`,
+      `pwsh -Command "git apply ${out('doc.diff')}"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
+      `node -e "require('child_process').execSync('git am x.mbox')"`,
+      `perl -e 'system("patch -p1 < x.diff")'`,
+      `ruby -e 'system("git apply x.diff")'`,
+      `deno eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -615,11 +628,39 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       assert.match(reason(res), /Do not retry/, cmd);
     }
     // Inspecting a patch is review work.
-    for (const cmd of [`git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat']) {
+    for (const cmd of [
+      `git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat',
+      `gpatch --dry-run -p1 -i "${out('doc.diff')}"`, 'watch -n 5 git status', 'git -c alias.st=status st', 'git -c core.pager=cat log -1',
+      'python3 -c "print(1 + 1)"', `node -e "console.log(require('fs').existsSync('x.patch'))"`, "git log --grep 'git apply'",
+    ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
-    // Another agent's non-Rust patch still runs.
-    assert.equal(decision(bash(`git apply "${out('doc.diff')}"`)), 'none');
+    // Another agent's non-Rust patch still runs, and so do the forms the reviewer alone is denied because temper cannot resolve them.
+    for (const cmd of [
+      `git apply "${out('doc.diff')}"`, `gpatch -p1 -i "${out('doc.diff')}"`, 'git ${CMD:-status}',
+      `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files are refused for any agent (#151)', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      `gpatch -p1 -i "${out('rs.diff')}"`,
+      `busybox patch -p1 -i "${out('rs.diff')}"`,
+      `watch git apply "${out('rs.diff')}"`,
+      `watch -n 1 -x git apply "${out('rs.diff')}"`,
+      `git -c alias.ap=apply ap "${out('rs.diff')}"`,
+      `git -c 'alias.ap=apply --index' ap "${out('rs.diff')}"`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /crates\/ledger-domain\/src\/lib\.rs/, cmd);
+    }
+    for (const cmd of [
+      `gpatch --dry-run -p1 -i "${out('rs.diff')}"`, `watch git apply --check "${out('rs.diff')}"`, `git -c 'alias.ck=apply --check' ck "${out('rs.diff')}"`,
+      `busybox patch -p1 -i "${out('doc.diff')}"`,
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
 });
 

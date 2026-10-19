@@ -356,15 +356,16 @@ const WRAPPERS = new Map([
   ['exec', ['-a']], ['nohup', []], ['time', ['-f', '-o', '--format', '--output']], ['nice', ['-n', '--adjustment']],
   ['ionice', ['-c', '-n', '-p']], ['stdbuf', ['-i', '-o', '-e']], ['timeout', ['-s', '-k', '--signal', '--kill-after']],
   ['xargs', ['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--replace']],
-  ['chronic', []], ['unbuffer', []], ['setsid', []],
+  ['chronic', []], ['unbuffer', []], ['setsid', []], ['busybox', []],
+  ['watch', ['-n', '--interval', '-q', '--equexit']], // without -x, watch runs its words with sh -c
 ]);
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const CD = new Set(['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl']);
 const DECLARE = new Set(['export', 'declare', 'local', 'readonly', 'typeset']);
 const MAX_DEPTH = 4;
 
-/** A command name as the rules compare it: basename, lower case, no `.exe`. */
-const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().toLowerCase().replace(/\.exe$/, '');
+/** A command name as the rules compare it: basename, lower case, no `.exe`; GNU patch's `gpatch` is `patch`. */
+const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().toLowerCase().replace(/\.exe$/, '').replace(/^gpatch$/, 'patch');
 
 /**
  * The simple commands `cmd` runs, in order, each as `{ name, argv0, args, redirects, stdin,
@@ -499,6 +500,7 @@ function simple(words, meta, env, out, depth) {
     w = w.slice(1);
     if (name === 'command' && w[0] && /^-[vV]+$/.test(w[0].raw)) return; // a lookup, not a run
     if (name === 'xargs') xargs = { replace: null };
+    let watchExec = false;
     while (w.length && ((w[0].raw.startsWith('-') && w[0].raw !== '-') || (name === 'env' && isAssign(w[0])))) {
       const a = w[0].raw;
       w = w.slice(1);
@@ -512,7 +514,15 @@ function simple(words, meta, env, out, depth) {
       }
       if ((name === 'env' || name === 'sudo') && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[0]?.value ?? null, cwd); w = w.slice(1); continue; }
       if (name === 'env' && /^--chdir=/.test(a)) { cwd = resolvePath(a.slice(8), cwd); continue; }
+      if (name === 'watch') {
+        if (a === '--exec' || /^-[a-zA-Z]*x/.test(a)) watchExec = true;
+        if (/^-[a-zA-Z]*[nq]$/.test(a)) { w = w.slice(1); continue; } // -n 2, -dn 2
+      }
       if (valued.includes(a)) w = w.slice(1);
+    }
+    if (name === 'watch' && !watchExec) {
+      if (w.length) sub(w.map((x) => x.text).join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'watch');
+      return;
     }
     if (name === 'timeout' && w.length) w = w.slice(1);
     if (name === 'nice' && w[0] && /^-\d+$/.test(w[0].raw)) w = w.slice(1);
@@ -568,19 +578,46 @@ function simple(words, meta, env, out, depth) {
 
 // ---------- what a command writes ----------
 
-/** `git [-C dir] [-c k=v] <sub> args`: `{ sub, args, cwd }`, or null when the command is not git. */
+const literalWord = (s) => ({ raw: s, text: s, value: s, glob: false, quoted: false });
+
+/**
+ * `git [-C dir] [-c k=v] <sub> args`: `{ sub, args, cwd, dynamic }`, or null when the command is
+ * not git. An alias set with `-c alias.x=...` resolves to the command it names, its words
+ * before `args`. `dynamic` is true when temper cannot tell the subcommand: an unknown word,
+ * a shell alias (`!...`), or a `-c` value that could define an alias.
+ */
 function gitCommand(c) {
   if (c.name !== 'git') return null;
   let dir = c.cwd;
   const a = c.args;
+  const aliases = new Map();
+  let opaque = false;
   for (let i = 0; i < a.length; i++) {
     const t = a[i].raw;
     if (t === '-C') { dir = wordPath(a[++i], dir); continue; }
-    if (t === '-c' || t === '--git-dir' || t === '--work-tree' || t === '--namespace') { i++; continue; }
+    if (t === '-c') {
+      const w = a[++i];
+      // `alias.x=$V` is an alias temper cannot read; `color.ui=$V` sets no alias.
+      const m = /^alias\.([^=]+)=([\s\S]*)$/i.exec(w?.value ?? w?.raw ?? '');
+      if (m) aliases.set(m[1].toLowerCase(), w.value === null ? '!' : m[2].trim());
+      else if (w?.value == null && !/^[A-Za-z][\w-]*\.[\w.-]*=/.test(w?.raw ?? '')) opaque = true;
+      continue;
+    }
+    if (t === '--git-dir' || t === '--work-tree' || t === '--namespace') { i++; continue; }
     if (t.startsWith('-')) continue;
-    return { sub: a[i].value === null ? '' : a[i].value, args: a.slice(i + 1), cwd: dir };
+    if (a[i].value === null) return { sub: '', args: a.slice(i + 1), cwd: dir, dynamic: true };
+    let sub = a[i].value;
+    let args = a.slice(i + 1);
+    for (let n = 0; n < 8 && aliases.has(sub.toLowerCase()); n++) {
+      const def = aliases.get(sub.toLowerCase());
+      if (!def || def.startsWith('!')) return { sub: '', args, cwd: dir, dynamic: true };
+      const [head, ...rest] = def.split(/\s+/);
+      sub = head;
+      args = [...rest.map(literalWord), ...args];
+    }
+    return { sub, args, cwd: dir, dynamic: opaque };
   }
-  return { sub: '', args: [], cwd: dir };
+  return { sub: '', args: [], cwd: dir, dynamic: opaque };
 }
 
 const INSTALL_VALUES = ['--suffix', '--mode', '--owner', '--group', '--strip-program', '--context'];
@@ -851,12 +888,13 @@ const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pws
 const PS_CONTENT = /^(?:set-content|add-content|out-file|new-item|tee-object|sc|ac|ni)$/;
 const PS_COPY = /^(?:copy-item|move-item|cpi|mi|copy|move)$/;
 
-/** The code an interpreter runs from its arguments (-c, -e, -E, -p, -r, --eval, -Command) and stdin. */
+/** The code an interpreter runs from its arguments (-c, -e, -E, -p, -r, --eval, -Command, `deno eval`) and stdin. */
 function interpreterCode(c) {
   if (!INTERPRETERS.test(c.name ?? '')) return [];
   const code = [];
   if (c.stdin?.body) code.push(c.stdin.body);
   const a = c.args;
+  if (c.name === 'deno' && a[0]?.value === 'eval' && a[1]) code.push(a[1].text);
   for (let j = 0; j < a.length; j++) {
     if ((/^-[a-zA-Z]*[ceEp]$/.test(a[j].raw) || /^(?:-r|--eval|--print|-command)$/i.test(a[j].raw)) && a[j + 1]) code.push(a[++j].text);
   }
@@ -1079,6 +1117,29 @@ export function patchCommand(c) {
     if (pos[1]) inputs.push(pos[1]);
   } else inputs.push(...pos.filter((p) => p.raw !== '-'));
   return { tool, apply: true, inputs, outputs, target, cwd, stored };
+}
+
+// Interpreter code that runs git apply or git am (`['git', 'apply', ...]` too), or patch.
+const PATCH_CODE = [
+  /\bgit\b[^\n;|&]{0,80}?\b(?:apply|am)\b/,
+  /(?:^|['"`(\[;|&]\s*)(?:busybox['",\s]+)?g?patch(?=[\s'"`,\]]|$)/m,
+];
+
+/**
+ * Why temper cannot rule out that `c` applies a patch, or null: a git subcommand it cannot
+ * resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a `-c` value it cannot read), a
+ * command name it cannot resolve that names git or patch or comes before `apply` or `am`, or
+ * interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
+ * mentions `git apply`, `git am` or `patch`. Patterns, not a parse: for a fail-closed check.
+ */
+export function opaquePatch(c) {
+  if (c.name === null) {
+    if (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am')) return 'an unresolved command name';
+    return null;
+  }
+  if (gitCommand(c)?.dynamic) return 'a git subcommand temper cannot resolve';
+  if (interpreterCode(c).some((code) => PATCH_CODE.some((re) => re.test(code)))) return `${c.name} code that runs git apply, git am or patch`;
+  return null;
 }
 
 /**
