@@ -623,7 +623,24 @@ test('SubagentStart: parallel agents in their own worktrees each keep their own 
   assert.doesNotMatch(rv, /^- (Target|Also changed)/m);
   assert.ok(rv.includes(`- Project root: ${w1.proj().root}`), rv);
   assert.match(rv, new RegExp(`^- Your verdict's "fingerprint" field must be ${w1.fp(sid)}\\.`, 'm'));
-  assert.match(rv, /Gate command: node "[^"]+" gate --check$/m);
+  assert.match(rv, /Gate command: TEMPER_BASE=[0-9a-f]{40} node "[^"]+" gate --check$/m);
+});
+
+test('Stop: a session started in a linked worktree keeps its own base when a subagent starts there later', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const w = worktree(r, 'session-wt');
+  const sid = 's-wt-own';
+  sessionStart({ cwd: w.dir, session_id: sid, source: 'startup' });
+  // Rust arrives without an Edit (a cherry-pick, a merge) and is committed
+  w.put(LIB, LIB_RS_2);
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qam', 'two'], { cwd: w.dir });
+  const fp = w.gate(sid, true);
+  assert.ok(blocked(stop({ cwd: w.dir, session_id: sid })), 'unreviewed');
+  // a subagent starting in that worktree records its HEAD, which must not become the session's base
+  subagentStart({ cwd: w.dir, session_id: sid, agent_type: 'Explore', agent_id: 'x1' });
+  const res = blocked(stop({ cwd: w.dir, session_id: sid }));
+  assert.ok(res, 'still unreviewed after the subagent started');
+  assert.ok(res.includes(`(fingerprint ${fp})`), res);
 });
 
 test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {

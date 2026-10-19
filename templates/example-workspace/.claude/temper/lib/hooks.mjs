@@ -93,6 +93,7 @@ export function sessionStart(input) {
   const fresh = ['startup', 'clear', 'fork'].includes(input.source);
   setBase(proj, sid, fresh);
   if (input.source === 'startup') { pruneSessions(proj); pruneMarkers(); pruneFingerprintState(proj, startFingerprint(proj, sid)); }
+  noteSessionTree(proj, input, fresh);
   if (process.env.CLAUDE_ENV_FILE) {
     const baseLine = baseRev(proj, sid) ? `export TEMPER_BASE="${baseRev(proj, sid)}"\n` : '';
     try { fs.appendFileSync(process.env.CLAUDE_ENV_FILE, `export TEMPER_CLI="${norm(cli())}"\n${baseLine}`); } catch { /* ignore */ }
@@ -1221,6 +1222,19 @@ function noteTree(proj, input) {
 }
 
 /**
+ * A session started in a linked worktree records that checkout with the session's own base, as
+ * the earliest record for it, so a later subagent's or edit's record never moves its base (#135).
+ */
+function noteSessionTree(proj, input, fresh) {
+  if (!proj.gitRoot || !input.session_id || !isLinked(proj)) return;
+  const p = path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-session.json`);
+  if (!fresh && fs.existsSync(p)) return;
+  const head = baseRev(proj, input.session_id);
+  if (!head) return;
+  writeAtomic(p, JSON.stringify({ root: proj.root, head, branch: null, startFp: startFingerprint(proj, input.session_id), at: 0 }));
+}
+
+/**
  * The other checkouts of `proj`'s repository that this session changed, each with its base (its
  * HEAD when first noted) and the fingerprint it had then. `agent` limits them to the trees that
  * agent context edited; without it, every agent context counts. With `gone`, a noted checkout
@@ -1232,16 +1246,17 @@ function otherTrees(proj, input, { agent, gone = false } = {}) {
   let names = [];
   try { names = fs.readdirSync(dir).filter((n) => /^tree-[0-9a-f]{12}-.+\.json$/.test(n)); } catch { return []; }
   const byRoot = new Map();
+  const mine = new Set(); // with `agent`, the roots it edited; each tree's base is still its earliest record
   for (const n of names) {
-    if (agent && !n.endsWith(`-${agent}.json`)) continue;
     let rec;
     try { rec = JSON.parse(readText(path.join(dir, n)) ?? ''); } catch { continue; }
     if (!rec?.root || path.resolve(rec.root) === path.resolve(proj.root)) continue;
+    if (!agent || n.endsWith(`-${agent}.json`)) mine.add(rec.root);
     const seen = byRoot.get(rec.root);
     if (!seen || rec.at < seen.at) byRoot.set(rec.root, rec);
   }
   const out = [];
-  for (const rec of [...byRoot.values()].sort((a, b) => a.root.localeCompare(b.root))) {
+  for (const rec of [...byRoot.values()].filter((x) => mine.has(x.root)).sort((a, b) => a.root.localeCompare(b.root))) {
     if (!fs.existsSync(rec.root)) { if (gone) out.push({ gone: true, rec }); continue; }
     const tree = discover(rec.root);
     if (!tree || path.resolve(tree.root) !== path.resolve(rec.root) || tree.stateDir !== proj.stateDir) continue;
@@ -1310,9 +1325,9 @@ const treeLabel = (main, tree) => {
 /** True when `proj` is a linked worktree (its git dir is not the repository's common dir). */
 function isLinked(proj) {
   if (!proj.gitRoot) return false;
-  const r = run('git', ['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], { cwd: proj.gitRoot });
+  const r = run('git', ['rev-parse', '--git-dir', '--git-common-dir'], { cwd: proj.gitRoot });
   if (r.code !== 0) return false;
-  const [gd, common] = r.stdout.trim().split('\n').map((x) => path.resolve(x.trim()));
+  const [gd, common] = r.stdout.trim().split('\n').map((x) => path.resolve(proj.gitRoot, x.trim()));
   return Boolean(gd && common) && gd !== common;
 }
 
@@ -1498,7 +1513,7 @@ export function subagentStart(input) {
   const at = norm(tp.root);
   // The env file exports the session's base; a tree with another base names its own to the CLI.
   const sessionBase = baseRev(proj, input.session_id);
-  const gateIn = (t) => `${t.base && t.base !== sessionBase ? `TEMPER_BASE=${t.base} ` : ''}${gateCmd()}${reviewer ? ' --check' : ''}`;
+  const gateIn = (t) => `${t.base && (!t.main || linked || t.base !== sessionBase) ? `TEMPER_BASE=${t.base} ` : ''}${gateCmd()}${reviewer ? ' --check' : ''}`;
   const lines = [
     `temper context for ${type}:`,
     ...(target.main ? [] : [`- Target: the worktree ${treeLabel(proj, tp)}. This session changed Rust there and not in the main checkout, so that worktree is the tree to work on: run every command in it (\`git -C "${at}" …\`, and the gate as \`cd "${at}" && ${gateIn(target)}\`).`]),
