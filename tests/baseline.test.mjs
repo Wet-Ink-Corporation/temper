@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   BASELINE_PATH, readBaseline, writeBaseline, renderBaseline, baselineFrom, tighten, parseDiff, changedLines, ratchet,
-  renderRatchet, debtLine, diffTotals,
+  renderRatchet, debtLine, diffTotals, forTarget, recordTarget,
 } from '../scripts/lib/baseline.mjs';
 import { discover, fingerprint, BASELINE_FILE, safeOutputPath, relTo } from '../scripts/lib/project.mjs';
 import { runGate, renderGate } from '../scripts/lib/gate.mjs';
@@ -197,6 +197,32 @@ test('ratchet with a base compares the baseline at the merge base: a raise is fl
     assert.match(renderRatchet(res), /BASELINE RAISED since [0-9a-f]{12}: 1 count\(s\) higher[\s\S]*dom clippy::unwrap_used: 2 -> 3/);
     const same = ratchet(collection(LEGACY, { crates }), BASE, { proj, base: 'HEAD' });
     assert.deepEqual(same.raised, []);
+    // a new section for another host is a raise over the counts that host was held to, labelled with it
+    const onLinux = { ...raisedBaseline, host: 'x86_64-unknown-linux-gnu' };
+    writeBaseline(r.dir, onLinux);
+    r.commit('host');
+    const win = recordTarget(onLinux, collection([...more, F('dom', 'clippy::unwrap_used', 'crates/dom/src/win.rs', 2)], { crates, host: 'x86_64-pc-windows-msvc' }));
+    writeBaseline(r.dir, win);
+    const sec = ratchet(collection(more, { crates, host: 'x86_64-unknown-linux-gnu' }), win, { proj, base: 'HEAD' });
+    assert.equal(sec.ok, true);
+    assert.deepEqual(sec.raised, [{ target: 'x86_64-pc-windows-msvc', crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 4 }]);
+    assert.match(renderRatchet(sec), /BASELINE RAISED[\s\S]*\[x86_64-pc-windows-msvc\] dom clippy::unwrap_used: 3 -> 4/);
+    r.commit('windows');
+    const unwraps = (n) => ({ ...onLinux.totals, dom: { ...onLinux.totals.dom, 'clippy::unwrap_used': n } });
+    // a dropped section (1.4's --update keeps no targets): its host now gets the recorded counts
+    const dropped = { ...onLinux, totals: unwraps(5) };
+    writeBaseline(r.dir, dropped);
+    assert.deepEqual(ratchet(collection(more, { crates, host: 'x86_64-unknown-linux-gnu' }), dropped, { proj, base: 'HEAD' }).raised, [
+      { crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 5 },
+      { target: 'x86_64-pc-windows-msvc', crate: 'dom', lint: 'clippy::unwrap_used', from: 4, to: 5 },
+    ]);
+    writeBaseline(r.dir, onLinux);
+    assert.deepEqual(ratchet(collection(more, { crates, host: 'x86_64-unknown-linux-gnu' }), onLinux, { proj, base: 'HEAD' }).raised, [], 'dropping a section alone holds its host to fewer counts');
+    // an older --update on Windows: the recorded host switches and Linux is held to the Windows counts
+    const switched = { ...onLinux, host: 'x86_64-pc-windows-msvc', totals: unwraps(4) };
+    writeBaseline(r.dir, switched);
+    const sw = ratchet(collection(more, { crates, host: 'x86_64-pc-windows-msvc' }), switched, { proj, base: 'HEAD' });
+    assert.deepEqual(sw.raised, [{ target: 'x86_64-unknown-linux-gnu', crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 4 }], 'the same rise for hosts with no section is not repeated');
   } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
 });
 
@@ -444,6 +470,104 @@ test('ratchet: a baseline from an older toolchain says why counts rose', () => {
   assert.match(res.notes.join('\n'), /recorded on Rust 1\.98\.1 and this run used 1\.99\.0/);
 });
 
+// ------------------------------------------------------------ per-target counts (#141)
+
+const LINUX = 'x86_64-unknown-linux-gnu';
+const WINDOWS = 'x86_64-pc-windows-msvc';
+// code under cfg(windows) adds findings that Linux never compiles
+const WIN_ONLY = [
+  F('dom', 'clippy::unwrap_used', 'crates/dom/src/win.rs', 7),
+  F('app', 'clippy::let_underscore_must_use', 'crates/app/src/win.rs', 3),
+];
+const ON_LINUX = baselineFrom(collection(LEGACY, { host: LINUX }));
+
+test('per target: a host with its own section ratchets against it; the recorded host keeps its counts', () => {
+  const both = recordTarget(ON_LINUX, collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS }));
+  assert.deepEqual(both.totals, ON_LINUX.totals, 'the recorded host is untouched');
+  assert.equal(both.host, LINUX);
+  assert.deepEqual(both.targets[WINDOWS].totals, {
+    app: { 'clippy::as_conversions': 1, 'clippy::let_underscore_must_use': 1, 'rustdoc::broken_intra_doc_links': 1 },
+    dom: { 'clippy::indexing_slicing': 1, 'clippy::unwrap_used': 3, missing_docs: 1 },
+  });
+  assert.deepEqual(forTarget(both, WINDOWS).totals, both.targets[WINDOWS].totals);
+  assert.deepEqual(forTarget(both, LINUX).totals, both.totals);
+  assert.deepEqual(forTarget(both, null).totals, both.totals, 'an unknown host gets the recorded counts');
+  // Windows: its own counts, strict
+  const win = ratchet(collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS }), both, { changed: null });
+  assert.equal(win.ok, true);
+  assert.equal(win.missing_target, null);
+  assert.doesNotMatch(win.notes.join('\n'), /recorded on|no counts/);
+  const winMore = ratchet(collection([...LEGACY, ...WIN_ONLY, F('dom', 'clippy::unwrap_used', 'crates/dom/src/win.rs', 9)], { host: WINDOWS }), both, { changed: null });
+  assert.equal(winMore.ok, false, 'no increase on a recorded target');
+  assert.deepEqual(winMore.increases, [{ crate: 'dom', lint: 'clippy::unwrap_used', baseline: 3, current: 4 }]);
+  // Linux: the Windows section never loosens it
+  assert.equal(ratchet(collection(LEGACY, { host: LINUX }), both, { changed: null }).ok, true);
+  const linuxMore = ratchet(collection([...LEGACY, ...WIN_ONLY], { host: LINUX }), both, { changed: null });
+  assert.equal(linuxMore.ok, false, 'the recorded host stays strict');
+  assert.equal(linuxMore.increases.length, 2);
+  // update on the recorded host rewrites its counts and keeps the other sections
+  const fixedOnLinux = recordTarget(both, collection(LEGACY.slice(1), { host: LINUX }));
+  assert.equal(fixedOnLinux.totals.dom['clippy::unwrap_used'], 1);
+  assert.deepEqual(fixedOnLinux.targets, both.targets);
+});
+
+test('per target: a host with no section is compared with the recorded counts and told how to record its own', () => {
+  const res = ratchet(collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS }), ON_LINUX, { changed: null });
+  assert.equal(res.ok, false, 'no silent pass on an unrecorded platform');
+  assert.deepEqual(res.missing_target, { host: WINDOWS, recorded: LINUX });
+  assert.match(res.notes.join('\n'), new RegExp(`counts for ${LINUX} and none for ${WINDOWS}`));
+  const text = renderRatchet(res);
+  assert.match(text, new RegExp(`no baseline counts for ${WINDOWS}[\\s\\S]*run \`temper baseline --init\` on this platform[\\s\\S]*commit \\.claude/temper-baseline\\.json`));
+  // a fix there does not suggest --tighten, which would lower the recorded host's counts
+  const fewer = ratchet(collection(LEGACY.slice(1), { host: WINDOWS }), ON_LINUX, { changed: null });
+  assert.equal(fewer.ok, true);
+  assert.doesNotMatch(debtLine(fewer), /--tighten/);
+  // a baseline that records no host works exactly as before: no section, no note
+  const old = ratchet(collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS }), BASE, { changed: null });
+  assert.equal(old.missing_target, null);
+  assert.equal(old.increases.length, 2);
+  assert.deepEqual(old.notes, []);
+  assert.doesNotMatch(renderRatchet(old), /no baseline counts/);
+  const oldRecord = recordTarget(BASE, collection(LEGACY, { host: WINDOWS }));
+  assert.equal(oldRecord.host, WINDOWS, 'recording on a baseline with no host rewrites its counts, as --update did');
+  assert.equal(oldRecord.targets, undefined);
+});
+
+test('per target: tighten lowers the counts for this host only, and never raises', () => {
+  const both = recordTarget(ON_LINUX, collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS }));
+  const now = [...LEGACY.filter((f) => f.lint !== 'clippy::indexing_slicing'), ...WIN_ONLY, F('dom', 'clippy::dbg_macro', 'crates/dom/src/win.rs', 1)];
+  const next = tighten(both, collection(now, { host: WINDOWS }));
+  assert.deepEqual(next.totals, both.totals, 'the recorded host is untouched');
+  assert.equal(next.targets[WINDOWS].totals.dom['clippy::indexing_slicing'], undefined);
+  assert.equal(next.targets[WINDOWS].totals.dom['clippy::dbg_macro'], undefined, 'never adds an entry');
+  assert.deepEqual(diffTotals(forTarget(both, WINDOWS), forTarget(next, WINDOWS)), [{ crate: 'dom', lint: 'clippy::indexing_slicing', from: 1, to: 0 }]);
+  const onLinux = tighten(both, collection(LEGACY.slice(1), { host: LINUX }));
+  assert.deepEqual(onLinux.targets, both.targets, 'tightening the recorded host leaves the sections');
+  assert.equal(onLinux.totals.dom['clippy::unwrap_used'], 1);
+});
+
+test('per target: the file keeps the recorded host on top, sections sorted; older readers see the recorded counts', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-bl-'));
+  try {
+    const mac = 'aarch64-apple-darwin';
+    const both = recordTarget(recordTarget(ON_LINUX, collection([...LEGACY, ...WIN_ONLY], { host: WINDOWS, toolchain: '1.98.0' })), collection(LEGACY, { host: mac }));
+    const p = writeBaseline(dir, both);
+    const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert.deepEqual(Object.keys(raw), ['temper_baseline', 'created', 'updated', 'commit', 'toolchain', 'host', 'targets', 'crates', 'totals'], 'where a 1.4 tidy puts an unknown key');
+    assert.deepEqual(Object.keys(raw.targets), [mac, WINDOWS]);
+    assert.deepEqual(Object.keys(raw.targets[WINDOWS]), ['created', 'updated', 'commit', 'toolchain', 'totals']);
+    assert.equal(raw.targets[WINDOWS].toolchain, '1.98.0');
+    assert.equal(raw.temper_baseline, 1, 'same format version: 1.4 reads it and uses the recorded counts');
+    assert.deepEqual(raw.totals, ON_LINUX.totals);
+    assert.equal(renderBaseline(readBaseline(dir)), fs.readFileSync(p, 'utf8'), 'stable round trip');
+    assert.equal(forTarget(readBaseline(dir), WINDOWS).toolchain, '1.98.0');
+    for (const bad of [{ targets: [] }, { targets: { [WINDOWS]: null } }, { targets: { [WINDOWS]: { totals: 3 } } }, { targets: { [WINDOWS]: { totals: [] } } }, { totals: [] }]) {
+      fs.writeFileSync(p, JSON.stringify({ ...raw, ...bad }));
+      assert.throws(() => readBaseline(dir), /not a temper baseline/);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ------------------------------------------------------------ tighten and the file
 
 test('tighten never raises a count or adds an entry, and drops zeros', () => {
@@ -519,6 +643,41 @@ test('the baseline is part of the fingerprint, tracked or untracked', { skip: !h
     fs.rmSync(path.join(r.dir, 'notes.md'));
     assert.equal(fingerprint(proj, base), withNotes, 'other files still do not count');
   } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+});
+
+test('crate charters are part of the fingerprint (ARC-08 reads them); a tree without charter changes keeps its fingerprint', { skip: !hasGit && 'git not installed' }, () => {
+  const r = repo();
+  try {
+    r.put('crates/a/src/lib.rs', '//! A.\n');
+    r.put('crates/b/AGENTS.md', '# b\n');
+    const base = r.commit('base');
+    const proj = discover(r.dir);
+    const clean = fingerprint(proj, base);
+    r.put('docs/notes.md', 'unrelated\n');
+    assert.equal(fingerprint(proj, base), clean, 'other markdown does not count');
+    r.put('crates/a/AGENTS.md', '# a\n');
+    const added = fingerprint(proj, base);
+    assert.notEqual(added, clean, 'adding a charter (untracked) changes it');
+    fs.rmSync(path.join(r.dir, 'crates', 'a', 'AGENTS.md'));
+    assert.equal(fingerprint(proj, base), clean);
+    fs.rmSync(path.join(r.dir, 'crates', 'b', 'AGENTS.md'));
+    assert.notEqual(fingerprint(proj, base), clean, 'deleting a tracked charter changes it');
+  } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+});
+
+test('without git, crate charters are part of the fingerprint', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nogit-charter-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'crates', 'a', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[workspace]\nmembers = ["crates/*"]\n');
+    fs.writeFileSync(path.join(dir, 'crates', 'a', 'src', 'lib.rs'), '//! A.\n');
+    const proj = { root: dir, gitRoot: null, stateDir: path.join(dir, 'target', 'temper'), config: discover(dir).config };
+    const before = fingerprint(proj);
+    fs.writeFileSync(path.join(dir, 'README.md'), 'x\n');
+    assert.equal(fingerprint(proj), before);
+    fs.writeFileSync(path.join(dir, 'crates', 'a', 'AGENTS.md'), '# a\n');
+    assert.notEqual(fingerprint(proj), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ------------------------------------------------------------ the gate in ratchet mode
@@ -651,6 +810,22 @@ test('CLI: usage errors, a bad --base or --findings-out, and raises inside Claud
     assert.match(again.out, /already exists/);
     fs.writeFileSync(path.join(dir, '.claude', 'temper-baseline.json'), '[]');
     assert.equal(cli(dir, ['baseline', '--check']).code, 2);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('CLI: --init on a host the baseline has no counts for gets past the exists check; on a recorded host it refuses', { skip: !hasCargo && 'cargo not installed' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-cli-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[workspace]\nmembers = []\n');
+    writeBaseline(dir, { ...BASE, host: 'aarch64-other-host' });
+    const add = cli(dir, ['baseline', '--init'], CLI, { CLAUDECODE: '1' });
+    assert.equal(add.code, 2);
+    assert.match(add.out, /refused inside a Claude Code session/, 'adding a host records debt: a human decision');
+    const host = /^host:\s*(\S+)/m.exec(spawnSync('rustc', ['-vV'], { cwd: dir, encoding: 'utf8' }).stdout)?.[1];
+    writeBaseline(dir, { ...BASE, host });
+    const again = cli(dir, ['baseline', '--init']);
+    assert.equal(again.code, 2);
+    assert.match(again.out, /already exists with counts for this host/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

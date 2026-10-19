@@ -795,6 +795,61 @@ const KEY_CASES = {
       ['test', 'fn f() { assert_eq!(parse("1"), Ok(1)); assert!(r.is_ok() && done); }'],
     ],
   },
+  'test-branch': {
+    hit: [
+      ['prod', 'pub fn timeout_secs() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}', ['TST-09:hard@2']],
+      ['prod', 'pub fn f() -> u8 {\n    #[cfg(test)]\n    return 0;\n    1\n}', ['TST-09:hard@2']],
+      ['bin', 'fn main() {\n    if cfg!(not(test)) { run(); }\n}', ['TST-09:hard@2']],
+      ['prod', 'impl Store {\n    pub fn open() -> Self {\n        let dir = if cfg!(any(test, feature = "x")) { "t" } else { "p" };\n        Self(dir)\n    }\n}', ['TST-09:hard@3']],
+    ],
+    miss: [
+      ['prod', 'pub fn f() {}\n#[cfg(test)]\nmod tests {\n    fn helper() -> bool { cfg!(test) }\n}'],
+      ['prod', '#[cfg(any(test, feature = "test-util"))]\npub mod fakes;\n#[cfg(test)]\nfn fixture() -> u8 { 1 }\npub fn f() -> bool { cfg!(feature = "test") || cfg!(debug_assertions) }'],
+      ['test', 'fn helper() -> bool { cfg!(test) }'],
+      ['prod', 'pub fn f() -> &\'static str { "cfg!(test)" } // #[cfg(test)]'],
+      ['prod', 'pub trait Port {\n    #[cfg(test)]\n    fn probe(&self);\n}'],
+    ],
+  },
+  'serde-hashmap': {
+    hit: [
+      ['prod', 'use std::collections::HashMap;\n#[derive(Debug, Serialize)]\npub struct Report {\n    counts: HashMap<String, u64>,\n}', ['OUT-04:soft@4']],
+      ['bin', '#[derive(serde::Serialize)]\nenum Event {\n    Seen { ids: std::collections::HashSet<u64> },\n}', ['OUT-04:soft@3']],
+      ['prod', '#[cfg_attr(feature = "serde", derive(Serialize))]\npub struct Tally(pub HashMap<u8, u8>);', ['OUT-04:soft@2']],
+    ],
+    miss: [
+      ['prod', '#[derive(Debug, Deserialize)]\npub struct Input {\n    counts: HashMap<String, u64>,\n}'],
+      ['prod', '#[derive(Serialize)]\npub struct Report {\n    counts: BTreeMap<String, u64>,\n    #[serde(serialize_with = "sorted", default)]\n    extra: HashMap<String, u64>,\n    #[serde(skip)]\n    cache: HashMap<u8, u8>,\n}'],
+      ['prod', '#[derive(Serialize)]\npub struct A { x: u8 }\npub struct B { m: HashMap<u8, u8> }'],
+      ['test', '#[derive(Serialize)]\nstruct Fixture { m: HashMap<u8, u8> }'],
+    ],
+  },
+  'ambient-now': {
+    hit: [
+      ['prod', 'pub fn stamp() -> SystemTime {\n    SystemTime::now()\n}', ['OUT-04:soft@2']],
+      ['prod', 'pub fn id() -> Uuid { Uuid::new_v4() }', ['OUT-04:soft@1']],
+      ['prod', 'pub fn t() -> DateTime<Utc> { chrono::Utc::now() }', ['OUT-04:soft@1']],
+      ['prod', 'pub fn t() -> OffsetDateTime { OffsetDateTime::now_utc() }', ['OUT-04:soft@1']],
+    ],
+    miss: [
+      ['bin', 'fn main() { let _t = std::time::SystemTime::now(); }'],
+      ['prod', 'impl Clock for SystemClock {\n    fn now(&self) -> SystemTime { SystemTime::now() }\n}'],
+      ['prod', 'pub fn elapsed() -> Duration { let t = Instant::now(); t.elapsed() }'],
+      ['test', 'fn f() { let _id = Uuid::new_v4(); }'],
+      ['prod', 'pub fn f(clock: &impl Clock) -> u64 { clock.now() } // SystemTime::now()'],
+    ],
+  },
+  'spin-lock': {
+    hit: [
+      ['prod', 'pub fn lock(&self) {\n    while self.locked.swap(true, Ordering::Acquire) {\n        std::hint::spin_loop();\n    }\n}', ['ASY-17:soft@2', 'ASY-17:soft@3']],
+      ['prod', 'pub fn take(&self) {\n    loop {\n        if self.flag.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() { return; }\n    }\n}', ['ASY-17:soft@3']],
+    ],
+    miss: [
+      ['prod', 'pub fn first(&self) -> bool { !self.done.swap(true, Ordering::AcqRel) }'],
+      ['test', 'fn f() { loop { std::hint::spin_loop(); } }'],
+      ['prod', 'pub fn f(v: &mut [u8]) { for i in 0..2 { v.swap(i, 1); } }'],
+      ['prod', 'pub fn f(flag: &AtomicBool) -> bool { flag.compare_exchange(false, true, AcqRel, Acquire).is_ok() }'],
+    ],
+  },
   'todo-comment': {
     hit: [
       ['prod', 'pub fn f() {}\n// TODO: handle overflow', ['CRF-04:soft@2']],

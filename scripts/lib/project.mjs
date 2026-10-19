@@ -522,8 +522,14 @@ const EXCLUDE = ['.temper', 'target'];
  * so it is part of the fingerprint, but it is not a Rust change on its own.
  */
 export const BASELINE_FILE = '.claude/temper-baseline.json';
-const FINGERPRINT_PATHSPECS = [...RELEVANT_PATHSPECS, `:(literal)${BASELINE_FILE}`];
-const inFingerprint = (rel) => RUST_RELEVANT.test(rel) || rel === BASELINE_FILE;
+/**
+ * Crate charters (`AGENTS.md`): the gate's manifests step checks that each
+ * member has one (ARC-08), so they count like the baseline: in the
+ * fingerprint, but not a Rust change on their own.
+ */
+const CHARTER = /(^|\/)AGENTS\.md$/;
+const FINGERPRINT_PATHSPECS = [...RELEVANT_PATHSPECS, `:(literal)${BASELINE_FILE}`, ':(glob)**/AGENTS.md'];
+const inFingerprint = (rel) => RUST_RELEVANT.test(rel) || rel === BASELINE_FILE || CHARTER.test(rel);
 
 /**
  * temper's config at the project root (the git top-level in a repository) counts
@@ -583,7 +589,7 @@ export function rustChanges(proj, base) {
   return changedGateConfig(proj, base) === null ? files : [...files, TEMPER_CONFIG_FILE];
 }
 
-function walkRust(root) {
+function walkRust(root, keep = (rel) => RUST_RELEVANT.test(rel)) {
   const out = [];
   const walk = (d) => {
     let es = [];
@@ -592,7 +598,7 @@ function walkRust(root) {
       if (e.name === 'target' || e.name === '.git' || e.name === 'node_modules' || e.name === '.temper') continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (RUST_RELEVANT.test(norm(p))) out.push(p);
+      else if (keep(norm(p))) out.push(p);
     }
   };
   walk(root);
@@ -620,7 +626,7 @@ export function fingerprint(proj, base) {
     }
   } else {
     const baseline = path.join(proj.root, ...BASELINE_FILE.split('/'));
-    const files = walkRust(proj.root).concat(fs.existsSync(baseline) ? [baseline] : []);
+    const files = walkRust(proj.root, (rel) => RUST_RELEVANT.test(rel) || CHARTER.test(rel)).concat(fs.existsSync(baseline) ? [baseline] : []);
     for (const f of files.sort()) {
       h.update(`\n${relTo(proj.root, f)}\n`);
       try { h.update(fs.readFileSync(f)); } catch { /* vanished */ }

@@ -81,6 +81,7 @@ tokio = { workspace = true }    # domain now chooses a runtime
 - `cargo tree --workspace --depth workspace -e normal --target all` shows the whole crate graph on one screen. `--target all` includes `[target.'cfg(..)'.dependencies]`, which the default host-only view skips.
 - `cargo tree -e normal --target all -p ledger-domain` must not show `tokio`, `sqlx`, `reqwest`, `hyper`, `axum`, or any `ledger-adapter-*`.
 - `cargo tree -e normal --target all -i ledger-adapter-fs` must show only binaries as dependents.
+- The template's `deny.toml` does not check layers. cargo-deny's `[bans]` can deny a crate everywhere except under the `wrappers` it lists, but a layer rule needs the workspace's own crate names, and `wrappers` would have to list every crate in the graph that uses the banned crate directly (`hyper` and `reqwest` use `tokio`). A workspace can add such entries for its own crates; the check stays review and `cargo tree`.
 - Run the pure crates under Miri with isolation on: `cargo +nightly miri test -p <domain>`, without `-Zmiri-disable-isolation`. The template's `miri` job turns isolation off for the whole workspace, so it does not do this. With isolation on, a domain or application test that touches the file system aborts, and one that reads the environment or clock gets deterministic fakes. Either way, that test is using the wrong seam.
 
 **CONSIDER** `#![no_std]` for a pure domain crate, with `extern crate alloc;` (and `#[cfg(test)] extern crate std;` when tests need std). The compiler then rejects `std::fs`, `std::env`, `SystemTime::now` and threads, so ARC-02 and ARC-04 become compile errors. It costs `BTreeMap` instead of `HashMap` (OUT-04 wants that anyway), `core::error::Error` (MOD-08), and `thiserror` with `default-features = false`.
@@ -643,7 +644,7 @@ Do not split for "organization", for one struct, or to share three helper functi
 
 ### ARC-08 · Every crate has a charter
 **Why.** The charter is the first thing an agent reads (PROC-01). It records decisions that code cannot express: what the crate is for, what it must never depend on, which invariants hold. Stale charters mislead, so update them in the same change.
-**Detect.** A crate directory without `AGENTS.md`; a diff that changes dependencies, public surface or invariants without touching the charter.
+**Detect.** A crate directory without `AGENTS.md`: the gate fails for a crate that is new since the base or whose charter was deleted, and reports older crates without one as advisory. Review: a diff that changes dependencies, public surface or invariants without touching the charter.
 
 Put this in `crates/<name>/AGENTS.md`, and `@AGENTS.md` in `crates/<name>/CLAUDE.md`:
 
