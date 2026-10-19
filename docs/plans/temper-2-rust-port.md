@@ -923,4 +923,14 @@ Phase 8: cutover
 - 2026-10-11: Facts refreshed for #82 to #89 (merged 2026-10-07), #96 and #98. The test table is recounted (339 engine tests, seven new files); §1.5 has #88's retention rules; §2.3 and the fingerprint test have #87's inputs; `validate_verdict` has #86's evidence and score rules; the launcher and SessionStart tests have #89's Node warning; §3 says how 1.x releases ship during the port (#22); a risk covers owner bandwidth and owner-only setup (`port-2.0-1-17`). #23's arm64 box is ticked.
 - 2026-10-14: Facts refreshed for what merged since 2026-10-11: #100 (`Declined:` in the status block, ignored by `parse_status`), #104 (deletes of protected config ask, wi-2000a3), #106 (the template's vendored-copy step and `--keep-going`), #108/#116 (`status --json`, `stats --json`) and #125 (a verdict recorded at hand-back and at `SubagentStop` counts once). The test table is recounted (352 engine tests; `status-json.test.mjs` added), and §6 drops the vendored-copy step from the 2.0 `rust.yml`. The `setup --vendor-only` test is still pending the owner (§2.2).
 - 2026-10-19: The owner retired the `setup --vendor-only` test into D16(i), amending wi-348e0b (#64). Its replacement checks that `--force` on a pinned repository updates only `.claude/temper-version`.
+- 2026-10-19: The pilot findings were folded into 1.x (#22). Each changes behaviour that the parity harness must reproduce, so the port starts from the `main` that holds them, not from 1.4.0:
+  - `Stop` gates the worktrees subagents change, under a time budget (#135, #144).
+  - Telemetry drops quoted text from logged commands, records verdict problem kinds, and says why a gate was cut short (#137, #138, #150).
+  - `temper stats` counts review rounds per change (#139, #146).
+  - Patch denials name the scanned routes (#140, #145).
+  - The baseline is recorded per host (#141, #147).
+  - The lens and gate-progress follow-ups from the #121 and #123 reviews landed (#143, #149).
+  - Five MUST rules that only review enforced gained checks, the rest are marked review-only by design, and the gate lists the MUST advisories a change adds (#58; #154, #156).
+
+  Three findings were still open on 2026-10-19: verdict stability (#136, #148, waiting on the owner's pick), the patch-check gaps (#151, #153), and slow Stop gates (#137, waiting on telemetry from real sessions). The follow-ups #155, #157 and #158 are open too. The test table's counts are re-taken when Phase 0a starts.
 - Next: Phase 0a (adds `LICENSE-APACHE`), after v1 goes live and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).

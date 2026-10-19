@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { sessionStart, userPromptSubmit, postTool, preEdit, stop, subagentStop, subagentStart, preHandback, reportFromTranscript } from '../scripts/lib/hooks.mjs';
+import { sessionStart, userPromptSubmit, postTool, preEdit, preBash, stop, subagentStop, subagentStart, preHandback, reportFromTranscript } from '../scripts/lib/hooks.mjs';
 import { discover, fingerprint, loadConfig, readTelemetry, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
@@ -78,6 +78,8 @@ const context = (res) => res.json?.hookSpecificOutput?.additionalContext ?? '';
 const decision = (res) => res.json?.hookSpecificOutput?.permissionDecision ?? 'none';
 const reason = (res) => res.json?.hookSpecificOutput?.permissionDecisionReason ?? '';
 const blocked = (res) => (res.json?.decision === 'block' ? res.json.reason : null);
+/** The commands a SubagentStart context gives the agent: its backquoted commands and the gate command. */
+const toldCommands = (said) => [...said.matchAll(/`((?:git|cd|node|TEMPER_BASE=)[^`…]*)`/g), ...said.matchAll(/Gate command: (.+)$/gm)].map((m) => m[1]);
 const message = (res) => res.json?.systemMessage ?? null;
 
 /** A valid approving verdict for `fp` that read the changed files. */
@@ -554,6 +556,9 @@ test('Stop: Rust a subagent changed in its own worktree is gated and needs a rev
   const rv = { cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
   const said = context(subagentStart(rv));
   assert.match(said, /^- Target: the worktree \.claude\/worktrees\/agent-a1\. /m);
+  // Each command the context gives the reviewer runs for it (#151 round 9, wi-9792d6).
+  assert.ok(toldCommands(said).some((c) => /^cd ".+" && TEMPER_BASE=[0-9a-f]{40} node ".+" gate --check$/.test(c)), said);
+  for (const command of toldCommands(said)) assert.equal(decision(preBash({ tool_name: 'Bash', ...rv, tool_input: { command } })), 'none', command);
   assert.match(said, new RegExp(`^- Changed Rust files \\(1\\): ${LIB}$`, 'm'));
   const told = said.match(/^- Your verdict's "fingerprint" field must be ([0-9a-f]{16})\./m)?.[1];
   assert.equal(told, fp, 'the fingerprint the reviewer is told to use is the worktree\'s');
@@ -677,6 +682,11 @@ test('SubagentStart: parallel agents in their own worktrees each keep their own 
   assert.ok(rv.includes(`- Project root: ${w1.proj().root}`), rv);
   assert.match(rv, new RegExp(`^- Your verdict's "fingerprint" field must be ${w1.fp(sid)}\\.`, 'm'));
   assert.match(rv, /Gate command: TEMPER_BASE=[0-9a-f]{40} node "[^"]+" gate --check$/m);
+  // Each command the context gives the reviewer runs for it (#151 round 9, wi-9792d6).
+  assert.ok(toldCommands(rv).length >= 2, rv);
+  for (const command of toldCommands(rv)) {
+    assert.equal(decision(preBash({ tool_name: 'Bash', cwd: w1.dir, session_id: sid, agent_type: 'temper:rust-reviewer', tool_input: { command } })), 'none', command);
+  }
 });
 
 test('Stop: a session started in a linked worktree keeps its own base when a subagent starts there later', { skip: noCargo }, (t) => {
