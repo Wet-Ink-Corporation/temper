@@ -572,7 +572,7 @@ function strictLints(root, tpl) {
 
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.floor((sorted.length * p) / 100))];
 const secs = (ms) => `${(ms / 1000).toFixed(1)} s`;
-const STOP_OUTCOMES = new Set(['stop-green', 'stop-blocked', 'stop-allowed-red', 'stop-allowed-unreviewed', 'gate-unavailable']);
+const { STOP_OUTCOMES } = H;
 
 function stats(args) {
   const json = args.includes('--json');
@@ -612,8 +612,11 @@ function stats(args) {
   if (Object.keys(s.rules).length) out.push(`escape hatches blocked by rule:\n${Object.entries(s.rules).map(([k, v]) => `  ${k.padEnd(8)} ${v}`).join('\n')}`);
   const g = s.gate;
   if (g.runs || g.cached || g.cutShort) {
-    out.push(`gate at Stop: ${g.runs} run(s), ${g.cached} cached${g.runs ? `; p50 ${secs(g.p50Ms)}, p90 ${secs(g.p90Ms)}, max ${secs(g.maxMs)}` : ''}${g.cutShort ? `; ${g.cutShort} cut short (hook timeout?)` : ''}`);
+    const why = Object.entries(g.lost).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(', ');
+    out.push(`gate at Stop: ${g.runs} run(s), ${g.cached} cached${g.runs ? `; p50 ${secs(g.p50Ms)}, p90 ${secs(g.p90Ms)}, max ${secs(g.maxMs)}` : ''}${g.cutShort ? `; ${g.cutShort} cut short (${why || 'hook timeout?'})` : ''}`);
   }
+  if (Object.keys(g.lostSteps).length) out.push(`gates cut short, by the step they were on:\n${Object.entries(g.lostSteps).map(([k, v]) => `  ${k.padEnd(26)} ${v}`).join('\n')}`);
+  if (Object.keys(g.stepP50Ms).length) out.push(`gate step times at Stop (p50):\n${Object.entries(g.stepP50Ms).map(([k, v]) => `  ${k.padEnd(26)} ${secs(v)}`).join('\n')}`);
   const rv = s.review;
   if (rv.sessions) {
     out.push(`review loop: ${rv.sessions} session(s) with verdicts; rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved}`);
@@ -656,13 +659,46 @@ function statsOf(rows) {
     }
     killed += pending.size;
   }
+  // Why gates were cut short, from the gate-lost rows the next hook logs (#137), and the step
+  // they were on; and each step's p50 over the fresh runs that record step times.
+  const lostRows = rows.filter((r) => r.event === 'gate-lost');
+  const lost = { timeout: 0, interrupted: 0, unknown: 0 };
+  for (const r of lostRows) { const k = Object.hasOwn(lost, r.reason) ? r.reason : 'unknown'; lost[k] += 1; }
+  const lostSteps = {};
+  // With no step current: no progress file means fmt or before; one with no step done, after fmt;
+  // else between steps (the nextest probe runs after manifests), named by the last step done.
+  const lostAt = (r) => {
+    if (r.step) return r.step;
+    if (r.progress === false) return 'fmt or before';
+    const last = Object.keys(r.steps ?? {}).at(-1);
+    return last ? `after ${last}` : 'after fmt, before any step';
+  };
+  for (const r of lostRows) { const k = lostAt(r); lostSteps[k] = (lostSteps[k] ?? 0) + 1; }
+  const stepMs = {};
+  for (const r of timed) for (const [k, v] of Object.entries(r.steps ?? {})) if (typeof v === 'number') (stepMs[k] ??= []).push(v);
+  const stepP50Ms = Object.fromEntries(Object.entries(stepMs).map(([k, v]) => [k, pct(v.sort((a, b) => a - b), 50)]).sort((a, b) => b[1] - a[1]));
   // Review loop: verdicts per session, and how many sessions were approved on the first verdict.
   // A verdict delivered by SubagentHandback is recorded again at SubagentStop; that second row is
-  // the same review, so it is not another round.
+  // the same review, so it is not another round. A SubagentStop row that carries the reviewer's
+  // agent_id echoes the earliest hand-back row of that agent and tree not yet matched, wherever it
+  // is, so parallel reviewers (hand-back A, hand-back B, stop A, stop B) count once each. Older
+  // rows, without agent_id, fall back to dropping a SubagentStop row that repeats the hand-back
+  // row just before it.
   const handbackEcho = (r, prev) => r.via === 'subagent-stop' && prev?.via === 'handback'
     && prev.agent === r.agent && prev.fp === r.fp && prev.verdict === r.verdict;
+  const once = (v) => {
+    const unmatched = new Map();
+    return v.filter((r, k) => {
+      if (!r.agent_id) return !handbackEcho(r, v[k - 1]);
+      const key = `${r.agent_id}\0${r.fp}`;
+      if (r.via === 'handback') { unmatched.set(key, (unmatched.get(key) ?? 0) + 1); return true; }
+      if (r.via !== 'subagent-stop' || !unmatched.get(key)) return true;
+      unmatched.set(key, unmatched.get(key) - 1);
+      return false;
+    });
+  };
   const rounds = [...bySession.values()]
-    .map((list) => list.filter((r) => r.event === 'verdict').filter((r, k, v) => !handbackEcho(r, v[k - 1])))
+    .map((list) => once(list.filter((r) => r.event === 'verdict')))
     .filter((v) => v.length);
   const n = rounds.map((v) => v.length).sort((a, b) => a - b);
   const changes = rounds.flatMap(changesOf);
@@ -680,6 +716,7 @@ function statsOf(rows) {
       // The last 30 fresh runs' times, oldest first, for a sparkline. `--branch` reads file after
       // file, so sort by time rather than trust the row order.
       recentMs: [...timed].sort((a, b) => String(a.t).localeCompare(String(b.t))).slice(-30).map((r) => r.ms),
+      lost, lostSteps: byCount(lostSteps), stepP50Ms,
     },
     review: {
       sessions: rounds.length,
@@ -697,17 +734,19 @@ function statsOf(rows) {
 /**
  * One session's review rounds, split into changes. A change is the run of rounds up to and
  * including the first approval of a current tree; the next verdict starts another change. A stale
- * approval (recorded for a tree that changed before it landed) does not close one, and an approval
- * of the tree just approved is that tree reviewed again, not a new change. The rounds left open
- * when the telemetry ends are a change never approved, which includes a session still under way.
+ * approval (recorded for a tree that changed before it landed) does not close one, and an
+ * approval, stale or not, of the tree just approved is that tree reviewed again, not a new change.
+ * The rounds left open when the telemetry ends are a change never approved, which includes a
+ * session still under way.
  */
 function changesOf(verdicts) {
   const out = [];
   let open = 0;
   let approvedFp = null;
   for (const v of verdicts) {
+    // Any re-approval of the tree just approved, stale or not, is the same change.
+    if (v.verdict === 'approved' && typeof v.fp === 'string' && v.fp === approvedFp) continue;
     const approves = v.verdict === 'approved' && v.stale !== true;
-    if (approves && typeof v.fp === 'string' && v.fp === approvedFp) continue;
     open += 1;
     approvedFp = null;
     if (approves) { out.push({ rounds: open, approved: true }); open = 0; approvedFp = v.fp ?? null; }

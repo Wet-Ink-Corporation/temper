@@ -492,6 +492,12 @@ test('Stop: review "advisory" and "off" in .claude/temper.json', { skip: noCargo
   const fp = r.gate(true);
   r.config({ review: 'advisory' });
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-adv' })), `temper: gate green; no approving review for fingerprint ${fp} (review is advisory in this repo).`);
+  // The advisory notice is an outcome too, so the gate-start before it is not read as a killed hook;
+  // both carry the hook's pid, and gate-start the hook's deadline (#137).
+  const adv = readTelemetry(r.proj()).filter((x) => x.sid === 's-adv');
+  assert.deepEqual(adv.map((x) => x.event), ['gate-start', 'stop-advisory-unreviewed']);
+  assert.deepEqual([adv[0].pid, adv[0].timeoutMs, adv[1].pid, adv[1].fp, adv[1].cached], [process.pid, 1200000, process.pid, fp, true]);
+  assert.equal('steps' in adv[1], false); // a cached result's step times are the original run's
   r.config({ review: 'off' });
   assert.equal(message(stop({ cwd: r.dir, session_id: 's-off' })), `temper: gate green (fingerprint ${fp}).`);
   // a red gate still blocks when review is off
@@ -558,6 +564,29 @@ test('Stop: Rust a subagent changed in its own worktree is gated and needs a rev
   assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: In the worktree .claude/worktrees/agent-a1: gate green and review approved (fingerprint ${fp}).`);
   const rows = readTelemetry(r.proj()).filter((x) => x.event === 'stop-green');
   assert.equal(rows.at(-1).tree, '.claude/worktrees/agent-a1');
+});
+
+test('Stop: each tree a Stop gates gets its gate-start, heartbeat and outcome telemetry (#135, #137)', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-tel';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const w = worktree(r, 'agent-t1');
+  subagentEdits(w, sid, 't1', LIB, LIB_RS_2);
+  r.put(LIB, LIB_RS_2);
+  r.gate(true);
+  const fp = w.gate(sid, true);
+  r.config({ review: 'off' });
+  assert.match(message(stop({ cwd: r.dir, session_id: sid })), new RegExp(`\\ntemper: In the worktree \\.claude/worktrees/agent-t1: gate green \\(fingerprint ${fp}\\)\\.$`));
+  const rows = readTelemetry(r.proj()).filter((x) => x.sid === sid && /^(gate-start|stop-)/.test(x.event));
+  assert.deepEqual(rows.map((x) => [x.event, x.tree ?? null]), [['gate-start', null], ['stop-green', null], ['gate-start', '.claude/worktrees/agent-t1'], ['stop-green', '.claude/worktrees/agent-t1']]);
+  for (const x of rows) assert.equal(x.pid, process.pid, x.event);
+  // Both gate-starts carry the deadline; the later one, how far into it this Stop already was.
+  assert.deepEqual([rows[0].timeoutMs, 'afterMs' in rows[0], rows[2].timeoutMs, typeof rows[2].afterMs], [1200000, false, 1200000, 'number']);
+  assert.equal(rows[3].fp, fp);
+  // The heartbeat file was written for the gate runs, and every gate-start has its outcome.
+  assert.ok(fs.existsSync(path.join(sessionDir(r.proj(), sid), 'gate-alive-main.json')));
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'resume' });
+  assert.equal(readTelemetry(r.proj()).filter((x) => x.sid === sid && x.event === 'gate-lost').length, 0);
 });
 
 test('Stop: a worktree the session never changed, one merged into the main checkout, and a removed one are not gated', { skip: noCargo }, (t) => {
