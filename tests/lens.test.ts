@@ -376,7 +376,7 @@ const STATS = (over: Record<string, unknown> = {}) => JSON.stringify({
   temper_stats: 1, sessions: 2, from: 't0', to: 't1',
   events: { 'deny-scan': 2, ask: 1 }, rules: { 'H-02': 2, 'ERR-02': 1 },
   gate: { runs: 3, cached: 1, cutShort: 1, p50Ms: 3000, p90Ms: 9000, maxMs: 9000, recentMs: [3000, 9000, 1000] },
-  review: { sessions: 1, roundsP50: 2, roundsMax: 2, firstApproved: 0 },
+  review: { sessions: 1, roundsP50: 3, roundsMax: 3, firstApproved: 0, changes: { count: 2, approved: 1, neverApproved: 1, firstRound: 0, roundsP50: 2, roundsMax: 2 } },
   session: { id: 'test-session', rows: [
     { t: '2026-10-11T10:00:01.000Z', event: 'session-start', agent: 'main', file: null, rules: [], via: null },
     { t: '2026-10-11T10:00:02.000Z', event: 'deny-scan', agent: 'main', file: 'src/a.rs', rules: ['H-02'], via: null },
@@ -429,7 +429,7 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'tab-stats' })
     const texts = (await ui.findAll({ type: 'Text' })).map((t: { text: string }) => t.text).join('\n')
     expect(texts).toContain('gate at Stop: p50 3.0 s, p90 9.0 s, max 9.0 s over 3 run(s); 1 cut short')
-    expect(texts).toContain('approved on the first verdict in 0 of 1')
+    expect(texts).toContain('review rounds per change: p50 2, max 2 (1 approved, 0 on the first round); 1 never approved')
     expect(texts).toContain('top rules blocked: H-02 2, ERR-02 1')
     expect(runs.some(r => r.includes('--branch'))).toBe(false)
     if (surface === 'terminal') expect(await ui.find({ key: 'gate-times' })).toBeDefined()

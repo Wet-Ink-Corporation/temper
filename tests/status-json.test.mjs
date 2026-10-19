@@ -205,7 +205,10 @@ test('stats --json: the counts stats prints, and with --session that session\'s 
   assert.deepEqual(Object.keys(doc.events).slice(0, 3), ['session-start', 'deny-scan', 'gate-start']);
   assert.deepEqual(doc.rules, { 'ERR-01': 2, 'UNS-01': 1 });
   assert.deepEqual(doc.gate, { runs: 1, cached: 0, cutShort: 1, p50Ms: 3000, p90Ms: 3000, maxMs: 3000, recentMs: [3000] });
-  assert.deepEqual(doc.review, { sessions: 1, roundsP50: 1, roundsMax: 1, firstApproved: 1 });
+  assert.deepEqual(doc.review, {
+    sessions: 1, roundsP50: 1, roundsMax: 1, firstApproved: 1,
+    changes: { count: 1, approved: 1, neverApproved: 0, firstRound: 1, roundsP50: 1, roundsMax: 1 },
+  });
   assert.equal(doc.session.id, 's1');
   assert.deepEqual(doc.session.rows.map((r) => [r.event, r.agent, r.file, r.rules, r.via]), [
     ['session-start', 'main', null, [], null],
@@ -245,8 +248,45 @@ test('stats: a verdict recorded at hand-back and again at SubagentStop counts on
   log('s3', { via: 'subagent-stop', verdict: 'changes-requested', fp: 'e' });
   const doc = json(ws, ['stats', '--json']);
   assert.equal(doc.events.verdict, 10);
-  assert.deepEqual(doc.review, { sessions: 3, roundsP50: 3, roundsMax: 4, firstApproved: 2 });
+  // Changes: s1 [a, b] approved in 2 (the repeat on b is not a new change); s2 [c] in 1; s3 [d] in
+  // 1, [e] in 1, and the changes-requested on e after its approval opens a change never approved.
+  assert.deepEqual(doc.review, {
+    sessions: 3, roundsP50: 3, roundsMax: 4, firstApproved: 2,
+    changes: { count: 5, approved: 4, neverApproved: 1, firstRound: 3, roundsP50: 1, roundsMax: 2 },
+  });
   assert.match(cli(ws, ['stats']).stdout, /^review loop: 3 session\(s\) with verdicts; rounds per session p50 3, max 4; approved on the first verdict in 2$/m);
+});
+
+test('stats: review rounds per change, from the first verdict to the approval that closes it', { skip: noGit }, (t) => {
+  // A change is a session's run of review rounds up to and including the first approval of a
+  // current tree. A stale approval (recorded for a tree that has changed since) does not close it.
+  const { ws, proj } = workspace(t);
+  const log = (sid, verdict, fp, extra = {}) => telemetry(proj, { session_id: sid, agent_type: 'temper:rust-reviewer' }, 'verdict', { via: 'handback', verdict, fp, ...extra });
+  log('s1', 'changes-requested', 'a');
+  log('s1', 'changes-requested', 'b');
+  log('s1', 'approved', 'c'); // change 1: 3 rounds
+  log('s1', 'approved', 'c'); // the approved tree reviewed again: not a new change
+  log('s1', 'changes-requested', 'd');
+  log('s1', 'approved', 'e'); // change 2: 2 rounds
+  log('s2', 'approved', 'f', { stale: true });
+  log('s2', 'approved', 'g'); // change 3: 2 rounds, the stale approval did not close it
+  log('s3', 'changes-requested', 'h');
+  log('s3', 'changes-requested', 'i'); // change 4: never approved
+  log('s4', 'approved', 'j');
+  telemetry(proj, { session_id: 's4', agent_type: 'temper:rust-reviewer' }, 'verdict', { via: 'subagent-stop', verdict: 'approved', fp: 'j' });
+  // change 5: 1 round; the SubagentStop echo of the hand-back is the same round
+  telemetry(proj, { session_id: 's4' }, 'stop-green', { fp: 'j' });
+  const doc = json(ws, ['stats', '--json']);
+  assert.deepEqual(doc.review.changes, { count: 5, approved: 4, neverApproved: 1, firstRound: 1, roundsP50: 2, roundsMax: 3 });
+  assert.match(cli(ws, ['stats']).stdout, /^review rounds per change: p50 2, max 3 \(4 approved, 1 on the first round\); 1 never approved$/m);
+});
+
+test('stats: review rounds per change when no change was approved', { skip: noGit }, (t) => {
+  const { ws, proj } = workspace(t);
+  telemetry(proj, { session_id: 's1', agent_type: 'temper:rust-reviewer' }, 'verdict', { via: 'handback', verdict: 'changes-requested', fp: 'a' });
+  const doc = json(ws, ['stats', '--json']);
+  assert.deepEqual(doc.review.changes, { count: 1, approved: 0, neverApproved: 1, firstRound: 0, roundsP50: null, roundsMax: null });
+  assert.match(cli(ws, ['stats']).stdout, /^review rounds per change: none approved; 1 never approved$/m);
 });
 
 test('stats --json: empty telemetry, and no Rust project', (t) => {
@@ -258,7 +298,11 @@ test('stats --json: empty telemetry, and no Rust project', (t) => {
   assert.deepEqual(json(ws, ['stats', '--json']), {
     temper_stats: 1, sessions: 0, from: null, to: null, events: {}, rules: {},
     gate: { runs: 0, cached: 0, cutShort: 0, p50Ms: null, p90Ms: null, maxMs: null, recentMs: [] },
-    review: { sessions: 0, roundsP50: null, roundsMax: null, firstApproved: 0 },
+    review: {
+      sessions: 0, roundsP50: null, roundsMax: null, firstApproved: 0,
+      changes: { count: 0, approved: 0, neverApproved: 0, firstRound: 0, roundsP50: null, roundsMax: null },
+    },
   });
+  assert.doesNotMatch(cli(ws, ['stats']).stdout, /review rounds per change/);
   assert.equal(cli(ws, ['stats', '--session']).status, 2);
 });
