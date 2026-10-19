@@ -3,7 +3,7 @@
 ## Unreleased
 
 **temper lens: live gate progress at `Stop` (#111).** While temper's gate runs at `Stop` or `SubagentStop`, the lens shows its progress, read from the gate's progress file through `status --json`:
-- The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 3 clippy · 1m 12s`).
+- The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 4 clippy · 1m 12s`).
 - The band shows the same, with the steps already done and their times.
 - When the gate ends, one toast gives the outcome (`temper: gate green, review approved`), or the first line of the block reason when temper's own telemetry recorded that block. Parallel subagents stopping at once share one poll.
 
