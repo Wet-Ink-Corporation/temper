@@ -390,7 +390,7 @@ pub fn now() -> UnixSeconds {
 }
 mock.expect_find().times(1).returning(|_| Ok(None)); // asserts call count, not outcome
 ```
-**Detect.** `cfg!(test)` or `#[cfg(test)]` inside function bodies of production code: the scanner's `test-branch` rule refuses a new one at Write and Edit, and the gate fails on one in a changed file. A mocking crate (`mockall`, `mockall_double`, `faux`, `mry`, `unimock`, `mockito`, `wiremock`, `httpmock`) added to `[dependencies]` is refused by the manifest hook and the gate; under `[dev-dependencies]`, or optional behind `test-util`, it is not. Review: `mockall` or similar outside external seams (HTTP clients, cloud SDKs).
+**Detect.** `cfg!(test)` or `#[cfg(test)]` inside function bodies of production code: the scanner's `test-branch` rule refuses a new one at Write and Edit, and the gate fails on one in a changed file. A mocking crate (`mockall`, `mockall_double`, `faux`, `mry`, `unimock`, `mockito`, `wiremock`, `httpmock`) added to `[dependencies]` is refused by the manifest hook and the gate; under `[dev-dependencies]`, or optional behind `test-util` and not turned on by `default`, it is not. Review: `mockall` or similar outside external seams (HTTP clients, cloud SDKs).
 
 ## Test data builders
 

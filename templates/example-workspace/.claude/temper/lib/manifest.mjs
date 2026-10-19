@@ -95,7 +95,7 @@ export function memberProblems(manifest, root, opts = {}) {
       out.push({
         id: 'TST-09', key: `TST-09:${name}`, newOnly: true,
         msg: `the mocking crate \`${name}\` is a normal dependency, so it is compiled into production code`,
-        fix: 'declare it under `[dev-dependencies]` and use it only at external seams (HTTP, cloud SDKs); fake your own ports by hand (TST-09). An optional dependency behind a `test-util` feature is also fine.',
+        fix: 'declare it under `[dev-dependencies]` and use it only at external seams (HTTP, cloud SDKs); fake your own ports by hand (TST-09). An optional dependency behind a `test-util` feature that `default` does not enable is also fine.',
       });
     }
   }
@@ -109,13 +109,39 @@ export function memberProblems(manifest, root, opts = {}) {
  */
 export const MOCKING_CRATES = ['faux', 'httpmock', 'mockall', 'mockall_double', 'mockito', 'mry', 'unimock', 'wiremock'];
 
-/** Mocking crates among the non-optional `[dependencies]` (also per target), by crate name (`package = ".."` wins). */
+/**
+ * What the default features enable: feature names and optional dependency keys,
+ * following `default` through the features it names (`dep:x`, `x` and `x/f`
+ * enable `x`; a weak `x?/f` does not).
+ */
+function enabledByDefault(m) {
+  const features = m?.features && typeof m.features === 'object' ? m.features : {};
+  const on = new Set();
+  const todo = ['default'];
+  while (todo.length) {
+    const f = todo.pop();
+    if (on.has(f)) continue;
+    on.add(f);
+    for (const item of Array.isArray(features[f]) ? features[f] : []) {
+      const s = String(item);
+      if (/^[^/]+\?\//.test(s)) continue;
+      todo.push(s.replace(/^dep:/, '').replace(/\/.*$/, ''));
+    }
+  }
+  return on;
+}
+
+/**
+ * Mocking crates among the `[dependencies]` (also per target), by crate name
+ * (`package = ".."` wins). An optional one counts only when the default features turn it on.
+ */
 function mockingDependencies(m) {
   const out = new Set();
+  let defaults = null;
   const visit = (deps) => {
     if (!deps || typeof deps !== 'object') return;
     for (const [key, spec] of Object.entries(deps)) {
-      if (spec?.optional === true) continue;
+      if (spec?.optional === true && !(defaults ??= enabledByDefault(m)).has(key)) continue;
       const name = typeof spec?.package === 'string' ? spec.package : key;
       if (MOCKING_CRATES.includes(name)) out.add(name);
     }

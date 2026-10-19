@@ -647,8 +647,8 @@ function fnBodies(code) {
  */
 function testBranches(env) {
   const sev = TEST_BRANCH_CTX[env.kind];
-  if (!sev) return [];
   const { code } = env;
+  if (!sev || !/\bcfg\b/.test(code)) return [];
   const bodies = fnBodies(code).filter(([kw]) => !inRegions(env.regions, kw));
   if (!bodies.length) return [];
   const out = [];

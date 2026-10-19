@@ -9,7 +9,7 @@ import path from 'node:path';
 import {
   run, readText, writeAtomic, fingerprint, gateProgressPath, pidAlive, rustChanges, changedFiles, showAt, crateOf, relTo, globMatch, norm,
 } from './project.mjs';
-import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
+import { scanSource, newHits, classifyPath, formatHit, isBuildScript, NEW_CODE_ONLY } from './scan.mjs';
 import { parseToml } from './toml.mjs';
 import { memberProblems, membersFromToml, ownLintsMember, splitProblems } from './manifest.mjs';
 import { collectFindings, mergeCollections, isComplete, writeCachedFindings } from './findings.mjs';
@@ -98,6 +98,7 @@ export function summarizeFmt(out, { check = false } = {}) {
 /** Scan changed .rs files against their base-revision content: new hard hits fail the gate. */
 export function scanChanged(proj, base) {
   const out = { hard: [], ask: [], soft: [] };
+  const comparable = Boolean(proj.gitRoot && base);
   const files = rustChanges(proj, base).filter((f) => f.endsWith('.rs'));
   // A moved or renamed file (staged or not) is compared with its content at the old path.
   const renames = files.length ? renamedSince(proj, base) : new Map();
@@ -112,7 +113,11 @@ export function scanChanged(proj, base) {
     const before = showAt(proj, base, renames.get(norm(rel)) ?? rel) ?? '';
     const exempt = (h) => (proj.config.scanner.exempt ?? []).some((e) => e.rule === h.id && (e.paths ?? []).some((p) => globMatch(p, rel)));
     const fresh = newHits(scanSource(before, { kind, build }).hits, scanSource(after, { kind, build }).hits).filter((h) => !exempt(h));
-    for (const h of fresh) out[h.severity]?.push({ ...h, file: rel });
+    for (const h of fresh) {
+      // Without git or a base, nothing tells new code from old: a new-code-only rule (decisions.md 3.2) only advises.
+      const sev = !comparable && NEW_CODE_ONLY.has(h.key) && h.severity === 'hard' ? 'soft' : h.severity;
+      out[sev]?.push({ ...h, severity: sev, file: rel });
+    }
   }
   return out;
 }

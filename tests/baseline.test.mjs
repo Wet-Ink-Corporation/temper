@@ -645,6 +645,41 @@ test('the baseline is part of the fingerprint, tracked or untracked', { skip: !h
   } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
 });
 
+test('crate charters are part of the fingerprint (ARC-08 reads them); a tree without charter changes keeps its fingerprint', { skip: !hasGit && 'git not installed' }, () => {
+  const r = repo();
+  try {
+    r.put('crates/a/src/lib.rs', '//! A.\n');
+    r.put('crates/b/AGENTS.md', '# b\n');
+    const base = r.commit('base');
+    const proj = discover(r.dir);
+    const clean = fingerprint(proj, base);
+    r.put('docs/notes.md', 'unrelated\n');
+    assert.equal(fingerprint(proj, base), clean, 'other markdown does not count');
+    r.put('crates/a/AGENTS.md', '# a\n');
+    const added = fingerprint(proj, base);
+    assert.notEqual(added, clean, 'adding a charter (untracked) changes it');
+    fs.rmSync(path.join(r.dir, 'crates', 'a', 'AGENTS.md'));
+    assert.equal(fingerprint(proj, base), clean);
+    fs.rmSync(path.join(r.dir, 'crates', 'b', 'AGENTS.md'));
+    assert.notEqual(fingerprint(proj, base), clean, 'deleting a tracked charter changes it');
+  } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
+});
+
+test('without git, crate charters are part of the fingerprint', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-nogit-charter-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'crates', 'a', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Cargo.toml'), '[workspace]\nmembers = ["crates/*"]\n');
+    fs.writeFileSync(path.join(dir, 'crates', 'a', 'src', 'lib.rs'), '//! A.\n');
+    const proj = { root: dir, gitRoot: null, stateDir: path.join(dir, 'target', 'temper'), config: discover(dir).config };
+    const before = fingerprint(proj);
+    fs.writeFileSync(path.join(dir, 'README.md'), 'x\n');
+    assert.equal(fingerprint(proj), before);
+    fs.writeFileSync(path.join(dir, 'crates', 'a', 'AGENTS.md'), '# a\n');
+    assert.notEqual(fingerprint(proj), before);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ------------------------------------------------------------ the gate in ratchet mode
 
 const LINTS = `[workspace]

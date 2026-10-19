@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { preEdit, preBash, lintConfigChanged } from '../scripts/lib/hooks.mjs';
-import { checkManifests, checkManifestsToml, runGate, renderGate } from '../scripts/lib/gate.mjs';
+import { checkManifests, checkManifestsToml, runGate, renderGate, scanChanged } from '../scripts/lib/gate.mjs';
 import { discover } from '../scripts/lib/project.mjs';
 
 const ROOT = `# Workspace manifest (from the temper template).
@@ -1257,6 +1257,32 @@ test('gate manifests step with git: only problems new since the base fail', { sk
     assert.equal(own.ok, true, own.summary);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('gate scan: without a base, a new-code-only rule (test-branch) advises instead of failing untouched code', { skip: !git && 'git not installed' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-newonly-'));
+  const put = (rel, text) => { const p = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const g = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  try {
+    put('Cargo.toml', '[package]\nname = "x"\nedition = "2024"\n');
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\n');
+    const keys = (s) => ({ hard: s.hard.map((h) => h.key), soft: s.soft.filter((h) => h.key === 'test-branch').map((h) => h.key) });
+    // no git: every file counts as changed, so the rule only advises
+    assert.deepEqual(keys(scanChanged(discover(dir), null)), { hard: [], soft: ['test-branch'] });
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const base = g('rev-parse', 'HEAD').stdout.trim();
+    // git without a base revision: also advisory
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\npub fn u() {}\n');
+    assert.deepEqual(keys(scanChanged(discover(dir), null)), { hard: [], soft: ['test-branch'] });
+    // with a base: the legacy hit is not new, a new one fails
+    assert.deepEqual(keys(scanChanged(discover(dir), base)), { hard: [], soft: [] });
+    put('src/lib.rs', '//! X.\npub fn t() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}\npub fn u() -> bool {\n    cfg!(not(test))\n}\n');
+    assert.deepEqual(keys(scanChanged(discover(dir), base)), { hard: ['test-branch'], soft: [] });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
