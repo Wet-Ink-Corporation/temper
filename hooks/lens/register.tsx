@@ -47,8 +47,9 @@ let pending: { cancel: () => void } | null = null
 let commandRegistered = false
 let polling: { cancel: () => void } | null = null
 // The Stops and SubagentStops running now: parallel subagents stop at the same time. One timer
-// polls for all of them, and each watch notes whether it saw temper's gate run.
-type Watch = { startedAt: number; sawGate: boolean }
+// polls for all of them, and each watch notes whether it saw temper's gate run. `agent` is the
+// agent type temper's telemetry records for that Stop: 'main', or the subagent's type.
+type Watch = { startedAt: number; sawGate: boolean; agent: string }
 const watches = new Set<Watch>()
 /** The telemetry rows temper writes when its own Stop or SubagentStop hook blocks. */
 const TEMPER_BLOCKS = new Set(['stop-blocked', 'verdict-invalid'])
@@ -155,8 +156,8 @@ function refreshSoon($: EngineInterface): void {
  * A Stop starts: poll `status --json` each second, so the band and spinner show the gate's step,
  * until the last running Stop ends.
  */
-async function watchStop($: EngineInterface): Promise<Watch> {
-  const watch = { startedAt: await $.clock.now(), sawGate: false }
+async function watchStop($: EngineInterface, agent: string): Promise<Watch> {
+  const watch = { startedAt: await $.clock.now(), sawGate: false, agent }
   // Every await comes before the add: a call that throws must not leave a watch behind, or the
   // poll would never stop.
   const drawing = await draws($)
@@ -221,7 +222,7 @@ async function afterStop($: EngineInterface, watch: Watch, reason: string | unde
     // A failed poll changes nothing here: the refresh below reads the state afresh.
   }
   await refresh($)
-  if (reason !== undefined && (await temperBlocked($, watch.startedAt))) {
+  if (reason !== undefined && (await temperBlocked($, watch))) {
     const line = reason.split('\n')[0] ?? ''
     $.ui.toast(line.startsWith('temper') ? line : `temper: ${line}`)
     return
@@ -230,13 +231,18 @@ async function afterStop($: EngineInterface, watch: Watch, reason: string | unde
   if (watch.sawGate && v?.kind === 'status') $.ui.toast(`temper: ${outcome(v.status)}`)
 }
 
-/** Whether temper's telemetry has a block of its own in this session since `since` (ms). */
-async function temperBlocked($: EngineInterface, since: number): Promise<boolean> {
+/**
+ * Whether temper's telemetry has a block of its own in this session for the watch's agent since
+ * the watch began: another subagent's block, stopping at the same time, is not this Stop's. Rows
+ * name the agent's type, not its id, so two subagents of one type stopping together still share.
+ */
+async function temperBlocked($: EngineInterface, watch: Watch): Promise<boolean> {
   const r = await runStats($, ['--session', await $.session.id()])
   if (!r.ok) return false
-  const rows: { t?: unknown; event?: unknown }[] = r.doc.session?.rows ?? []
+  const rows: { t?: unknown; event?: unknown; agent?: unknown }[] = r.doc.session?.rows ?? []
   // A second of slack for the hook process's clock against this one.
-  return rows.some(row => TEMPER_BLOCKS.has(String(row.event)) && Date.parse(String(row.t)) >= since - 1000)
+  return rows.some(row => TEMPER_BLOCKS.has(String(row.event)) && String(row.agent ?? 'main') === watch.agent
+    && Date.parse(String(row.t)) >= watch.startedAt - 1000)
 }
 
 /** `gate green, review approved`, and the like, for the toast after a Stop. */
@@ -323,7 +329,7 @@ export const register: Register = on => {
   // a lens failure can never decide a Stop.
   on('classic.Stop', async ($, e, next) => {
     if (off) return next(e)
-    const watch = await watchStop($)
+    const watch = await watchStop($, e.agent_type ?? 'main')
     let result
     try {
       result = await next(e)
@@ -336,7 +342,7 @@ export const register: Register = on => {
 
   on('classic.SubagentStop', async ($, e, next) => {
     if (off) return next(e)
-    const watch = await watchStop($)
+    const watch = await watchStop($, e.agent_type ?? 'main')
     let result
     try {
       result = await next(e)
@@ -673,9 +679,10 @@ function slim(doc: Record<string, any>): LensStatus {
 type Part = { text: string; color?: 'success' | 'error' | 'warning'; drop: number }
 
 /**
- * The band's segments for `status`, fitted to `columns`: when narrow the baseline goes first,
- * then the review's counts, then the gate's step name, and last whole segments from the end, so
- * the band never wraps to a second row. `drop` orders the shortening (higher first; 0 is never shortened).
+ * The band's segments for `status`, fitted to `columns`: when narrow a running gate's list of
+ * steps done goes first, then the baseline, then the review's counts, then a red gate's failing
+ * step, and last whole segments from the end, so the band never wraps to a second row. `drop`
+ * orders the shortening (higher first; 0 is never shortened).
  */
 export function bandParts(status: LensStatus, columns: number, now = 0): { text: string; color?: Part['color'] }[] {
   const n = status.changed.length

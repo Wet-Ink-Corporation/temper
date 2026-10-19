@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**temper lens and gate progress: follow-ups from the #121 and #123 reviews (#143).** The gate's progress file now times the whole gate: its `startedAt` is the gate's own start, before the toolchain probe and formatting, so the lens's elapsed time counts those too. The `cargo nextest --version` probe that picks the test steps now runs between steps, with no step current, rather than under `manifests`. After a blocked `Stop` or `SubagentStop`, the lens toasts the block's first line as temper's only when temper's telemetry recorded a block for the same agent type, so a subagent stopping at the same time no longer lends its block to another. New plugin tests cover `session.end` stopping the poll, a lens failure after the settings hooks have run, and the per-agent block check. The `bandParts` doc comment gives the band's real drop order, and `tests/lens-types/README.md` names both places a session writes the plugin API types, the engine's `.claude-plugin/types/claude-code/index.d.ts` among them.
+
+Upgrading from 1.4: `scripts/lib/gate.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing under `templates/workspace/` changed.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.

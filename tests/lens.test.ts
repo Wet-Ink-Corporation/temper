@@ -480,8 +480,8 @@ const RUNNING = (current: string, done: { name: string; ms: number }[]) => doc({
 
 const SPINNER = { plugin: 'temper', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
 
-/** Telemetry rows for `stats --json --session`: temper's own record of a block, at `ms`. */
-const temperBlock = (event: string, ms: number) => ({ t: new Date(ms).toISOString(), event, agent: 'main', file: null, rules: [], via: null })
+/** Telemetry rows for `stats --json --session`: temper's own record of a block, at `ms`, for `agent`'s type. */
+const temperBlock = (event: string, ms: number, agent = 'main') => ({ t: new Date(ms).toISOString(), event, agent, file: null, rules: [], via: null })
 
 /**
  * A Stop world: `status --json` answers `answer()` at each run, `stats --json` lists `rows()` as
@@ -500,7 +500,7 @@ function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'termi
   })
   on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
   on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`) as any)
-  on('session.end', async () => ({}) as any)
+  on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))
   on('command.register', async () => ({ value: undefined }) as any)
   bottoms(on)
   mock.env(on, {})
@@ -571,7 +571,7 @@ test('Stop: a block passes down and back unchanged, and its first line is the to
 
 test('SubagentStop is watched the same way', async ($, on) => {
   const clock = mock.clock(on, { now: 72000 })
-  const w = stopWorld(on, () => doc(), 'terminal', () => [temperBlock('verdict-invalid', 72500)])
+  const w = stopWorld(on, () => doc(), 'terminal', () => [temperBlock('verdict-invalid', 72500, 'temper:rust-implementer')])
   const input = { stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' }
   const seen: unknown[] = []
   on('classic.SubagentStop', async (_$, e) => {
@@ -686,6 +686,71 @@ test('SubagentStops that start together share one poll, and it stops when both e
   const after = polls
   await clock.advance(5000)
   expect(polls).toBe(after)
+})
+
+/** A Stop held open while the gate runs: polls are counted, and `release` lets the Stop return. */
+function heldStop(on: On) {
+  const st = { polls: 0, release: () => {} }
+  stopWorld(on, () => {
+    st.polls += 1
+    return RUNNING('clippy', [])
+  })
+  const held = new Promise<void>(r => { st.release = r })
+  on('classic.Stop', async () => {
+    await held
+    return { block: 'temper: the gate is red' }
+  })
+  return st
+}
+
+test('session.end stops the poll, though the Stop has not returned', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = heldStop(on)
+  await start($)
+  const stop = $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(2000)
+  expect(w.polls).toBeGreaterThanOrEqual(2)
+  await $.session.end({ reason: 'other', sessionId: 'test-session', resume: 'test-session' } as any)
+  const after = w.polls
+  await clock.advance(5000)
+  expect(w.polls).toBe(after)
+  w.release()
+  expect(await stop).toEqual({ block: 'temper: the gate is red' })
+})
+
+test("Stop: the lens failing after next() leaves the settings hooks' result as it came, and runs them once", async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  const w = stopWorld(on, () => doc({ gate: RED }), 'terminal', () => [temperBlock('stop-blocked', 72000)])
+  let stops = 0
+  const block = 'temper: the Rust gate is red (clippy).'
+  on('classic.Stop', async () => {
+    stops += 1
+    // From here on every surfaces call throws, so the lens's own work after next() fails: the
+    // report after the Stop, and the hook itself were it to await that report.
+    w.breakSurfaces()
+    return { block }
+  })
+  await start($)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block })
+  await clock.advance(0)
+  expect(stops).toBe(1)
+  expect(w.toasts).toEqual([])
+})
+
+test("Stop and SubagentStop: another agent's temper block at the same time is not this Stop's", async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  // temper blocked the reviewer's SubagentStop just now; this Stop and this implementer were blocked by another hook.
+  const w = stopWorld(on, () => doc({ gate: GREEN }), 'terminal', () => [temperBlock('verdict-invalid', 72000, 'temper:rust-reviewer')])
+  on('classic.Stop', async () => ({ block: 'lint-bot: run the formatter first' }))
+  on('classic.SubagentStop', async (_$, e: any) => ({ block: e.agent_type === 'temper:rust-reviewer' ? 'temper: your review verdict is invalid' : 'lint-bot: run the formatter first' }))
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'i', agent_type: 'temper:rust-implementer' } as any)
+  await clock.advance(0)
+  expect(w.toasts).toEqual([])
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'r', agent_type: 'temper:rust-reviewer' } as any)
+  await clock.advance(0)
+  expect(w.toasts).toEqual(['temper: your review verdict is invalid'])
 })
 
 test('a terminal attaching during a Stop gets its progress from then on', async ($, on) => {
