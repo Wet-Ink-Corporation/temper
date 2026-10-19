@@ -158,6 +158,7 @@ test('stats --branch: sessions, gate latency, cut-short gates and review rounds 
   assert.match(r.stdout, /^sessions: 2$/m);
   assert.match(r.stdout, /gate at Stop: 2 run\(s\), 1 cached; p50 90\.0 s, p90 90\.0 s, max 90\.0 s; 1 cut short/);
   assert.match(r.stdout, /review loop: 2 session\(s\) with verdicts; rounds per session p50 2, max 2; approved on the first verdict in 1/);
+  assert.match(r.stdout, /^review rounds per change: p50 2, max 2 \(2 approved, 1 on the first round\); 0 never approved$/m);
 });
 
 test('telemetry push CLI: usage without a session, a reason when off', { skip: noGit }, (t) => {
