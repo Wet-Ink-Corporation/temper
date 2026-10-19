@@ -395,6 +395,8 @@ const WRAPPERS = new Map([
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const CD = new Set(['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl']);
 const DECLARE = new Set(['export', 'declare', 'local', 'readonly', 'typeset']);
+// The builtins whose effect temper models or checks: a name with a slash in it is never one of them.
+const BUILTINS = new Set([...CD, ...DECLARE, 'eval', 'source', '.', 'alias', 'hash']);
 const MAX_DEPTH = 4;
 
 /** A command name as the rules compare it: basename, lower case, no `.exe`; GNU patch's `gpatch` is `patch`. */
@@ -419,7 +421,7 @@ const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().
  *
  * `$TMPDIR`, `$TMP`, `$TEMP`, `$env:TEMP` and `$(mktemp [-d])` name the temp directory.
  *
- * Each command's `named` says whether temper reads its name exactly (see readName).
+ * Each command's `named` says whether its name is a literal word, which temper reads exactly.
  *
  * Options: `cwd` (the starting directory), `home`, `top` (`--show-toplevel`), `gitDir`, `tmp`, and
  * `untracked`, under which a variable the command assigns is unknown rather than its model's value
@@ -594,16 +596,17 @@ function simple(words, meta, env, out, depth) {
     name, argv0: rest[0], args: rest.slice(1), redirects: meta.redirects, stdin: meta.stdin, piped: meta.piped,
     cwd: extra.cwd !== undefined ? extra.cwd : env.cwd, raw: meta.raw, line: meta.line, via: meta.via,
     envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))], xargs: Boolean(xargs),
-    named: readName(rest[0]) !== null,
+    named: rest[0]?.literal === true,
   });
   // Under `untracked`, a wrapper word (w[from..to)) or command name (w[name]) temper does not read
   // exactly is reported before the model acts on it: `timeout $T apply x` runs `git apply x` when $T is `5 git`.
-  // The first word is a name (see readName); a later one a wrapper may read as its option, so it
-  // also starts with literal text (see fixedWord), and so does the name while `opts` (see plainStart).
-  const unread = (from, to, name = -1, opts = false) => {
+  // A command word (the name, or a wrapper's own: `cmds`) is read only when it is literal (wi-9792d6);
+  // a wrapper's option or assignment word when it starts with literal text (see fixedWord).
+  const cmds = new Set();
+  const unread = (from, to, name = -1) => {
     if (!env.untracked) return;
-    const x = w.slice(from, to).find((y, j) => (from + j === k ? readName(y) === null : !y.literal && !fixedWord(y)))
-      ?? (name < w.length && name !== -1 && (readName(w[name]) === null || (opts && name > k && !plainStart(w[name]))) ? w[name] : undefined);
+    const x = w.slice(from, to).find((y, j) => !y.literal && (cmds.has(from + j) || !fixedWord(y)))
+      ?? (name !== -1 && name < w.length && !w[name].literal ? w[name] : undefined);
     if (x) out.push(depthMarker(meta.raw, env, meta.via, 'name', x));
   };
   w = w.slice(skipKeywords(w, 0));
@@ -633,14 +636,13 @@ function simple(words, meta, env, out, depth) {
   let cwd = env.cwd;
   // Wrappers are walked with an index, so a long chain (`busybox busybox ...`) stays linear.
   let i = k;
-  let opts = false; // whether the word at i is one a wrapper may still read as its option
   for (;;) {
     if (i >= w.length) break;
     const name = nameOf(w[i]);
     const valued = name === null ? undefined : WRAPPERS.get(name);
     if (!valued) break;
+    cmds.add(i);
     i++;
-    opts = true;
     if (name === 'command' && w[i] && /^-[vV]+$/.test(w[i].raw)) return; // a lookup, not a run
     if (name === 'xargs') xargs = { replace: null };
     let watchExec = false;
@@ -658,7 +660,8 @@ function simple(words, meta, env, out, depth) {
         if (o.opt === 'S') { // env -S splits its string into the command and runs it
           // Its quoting and escapes are not the shell's, so the fail-closed parse does not read it.
           if (env.untracked) { out.push(depthMarker(meta.raw, env, meta.via, 'split')); return; }
-          sub([v.replace(/\\_/g, ' '), ...w.slice(i).map((x) => x.text)].join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'env -S');
+          // env reads `\_`, `\t`, `\n`, `\v`, `\f` and `\r` in it as whitespace.
+          sub([v.replace(/\\[_tnvfr]/g, ' '), ...w.slice(i).map((x) => x.text)].join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'env -S');
           return;
         }
         continue;
@@ -684,18 +687,20 @@ function simple(words, meta, env, out, depth) {
       return;
     }
     // timeout reads no option after its duration.
-    if (name === 'timeout' && i < w.length) { i++; opts = false; }
+    if (name === 'timeout' && i < w.length) i++;
     if (name === 'nice' && w[i] && /^-\d+$/.test(w[i].raw)) i++;
   }
-  unread(k, i, i, opts);
+  unread(k, i, i);
   w = w.slice(i);
   if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; } // `exec > file`
   if (xargs) {
     if (xargs.replace) w = w.map((x) => (x.raw.includes(xargs.replace) ? unknownWord(x.raw) : x));
     else w = [...w, unknownWord('(xargs input)')];
   }
-  const name = nameOf(w[0]);
+  let name = nameOf(w[0]);
   if (name === null) { emit(null, w, { cwd }); return; }
+  // A name with a slash in it runs that file, never a builtin (`"$HOME/cd" x`, `/usr/bin/eval`).
+  if (BUILTINS.has(name) && w[0].value.includes('/')) name = w[0].value.toLowerCase();
   const args = w.slice(1);
 
   if (CD.has(name)) {
@@ -1106,76 +1111,54 @@ const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pws
 const PS_CONTENT = /^(?:set-content|add-content|out-file|new-item|tee-object|sc|ac|ni)$/;
 const PS_COPY = /^(?:copy-item|move-item|cpi|mi|copy|move)$/;
 
+// An option whose next word is code, in any interpreter's arguments (-c, -e, -E, -p, -r, --eval, -Command).
+const CODE_OPTION = (r) => /^-[a-zA-Z]*[ceEp]$/.test(r) || /^(?:-r|--eval|--print|-command)$/i.test(r);
+
 /**
- * The words an interpreter runs as code from its options, by its rules (#151 review 8):
- * - python: `-c` (alone, at the end of a cluster, or with the code attached: `-c'...'`, `-Ic'...'`)
- *   ends its options, and so does its script or module (`python3 tool.py -c x`, `python3 -m pytest
- *   -p x`: the rest is theirs). `-W` and `-X` take a value.
- * - node, bun, deno, ruby, perl, php, pwsh: a code option anywhere in the arguments (-e, -E, -p, -c,
- *   -r, php's -B and -R, --eval, --print, -Command, attached or not), since temper cannot tell which of
- *   their options take a value (`node --disable-warning DEP0040 -e ...`). A script's own `-e` is read
- *   as code too. pwsh's `-EncodedCommand` is code temper cannot read. `deno eval`'s operand is code.
- * A word that may be a code option or code temper cannot see is counted as code too, before the
- * script or module (see plainStart: `python3 $O "$X"`, `X=--eval=...; node "$X/a.js"`): for node and
- * the others, before a word that no option before it may take as its value.
+ * The words an interpreter runs as code from its options (see CODE_OPTION). With `every`, the word
+ * after each code option, even one an earlier option took as its value (`python3 -Wignore -c '...'`,
+ * `perl -p -e '...'`): for the reviewer's check, which may read too much but not too little.
  */
-function codeArgs(c) {
+function codeWords(c, every = false) {
   const a = c.args;
   const code = [];
-  if (/^(?:python[\d.]*|py)$/.test(c.name)) {
-    for (let j = 0; j < a.length; j++) {
-      const x = a[j];
-      if (!plainStart(x)) { code.push(x); break; }
-      const r = x.raw;
-      if (r === '--' || r === '-' || !r.startsWith('-')) break;
-      if (r.startsWith('--')) { if (r === '--check-hash-based-pycs') j++; continue; }
-      for (let k = 1; k < r.length; k++) {
-        if (r[k] === 'c') {
-          const v = k + 1 < r.length ? (x.literal ? literalWord(r.slice(k + 1)) : x) : a[j + 1];
-          if (v) code.push(v);
-          return code;
-        }
-        if (r[k] === 'm') return code;
-        if (r[k] === 'W' || r[k] === 'X') { if (k + 1 === r.length) j++; break; }
-      }
-    }
-    return code;
-  }
-  if (c.name === 'deno' && a[0]?.value === 'eval') {
-    const k = a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-'));
-    if (k !== -1) code.push(a[k]);
-  }
-  const ps = c.name === 'pwsh' || c.name === 'powershell';
-  let operand = false; // a script, module or subcommand was seen
-  let valueNext = false; // the word before was an option that may take the next word as its value
   for (let j = 0; j < a.length; j++) {
-    const x = a[j];
-    const r = x.raw;
-    const lower = r.toLowerCase();
-    // After a code option and its value, the next word is not an option's value.
-    const value = valueNext;
-    valueNext = false;
-    if (ps && r.length > 1 && r.startsWith('-') && ('encodedcommand'.startsWith(lower.slice(1)) || lower === '-ec')) {
-      code.push(unknownWord(r));
-      j++;
-    } else if (c.name !== 'deno' && (/^-[a-zA-Z]*[ceEpBR]$/.test(r) || /^(?:-r|--eval|--print|-command)$/i.test(r))) {
-      if (a[j + 1]) code.push(a[++j]);
-    } else if (c.name === 'deno' && r === '--eval') {
-      if (a[j + 1]) code.push(a[++j]);
-    } else if (/^--(?:eval|print)=/.test(r) || (c.name !== 'deno' && /^-[a-zA-Z]*?[ceEpBRr]./.test(r))) {
-      code.push(x.literal ? literalWord(r.slice(r.startsWith('--') ? r.indexOf('=') + 1 : /^-[a-zA-Z]*?[ceEpBRr]/.exec(r)[0].length)) : x);
-    } else {
-      if (!plainStart(x)) { if (!operand) code.push(x); } else if (r === '--' || (!r.startsWith('-') && !value)) operand = true;
-      valueNext = r.startsWith('-') && !r.includes('=') && r !== '--';
-    }
+    if (!CODE_OPTION(a[j].raw) || !a[j + 1]) continue;
+    code.push(a[j + 1]);
+    if (!every) j++;
   }
   return code;
 }
 
-/** The code an interpreter runs from its arguments (see codeArgs) and stdin. */
+/** The code an interpreter runs from its arguments (see codeWords) and stdin. */
 function interpreterCode(c) {
   if (!INTERPRETERS.test(c.name ?? '')) return [];
-  return [...(c.stdin?.body ? [c.stdin.body] : []), ...codeArgs(c).map((w) => w.text)];
+  return [...(c.stdin?.body ? [c.stdin.body] : []), ...codeWords(c).map((w) => w.text)];
+}
+
+/**
+ * The code word, right after a code option, that is not literal (#151, wi-9792d6), or undefined:
+ * python's `-c` (alone or ending a cluster of flags, before its script or module; `-W` and `-X`
+ * take a value), and node's, bun's, ruby's, perl's and php's `-e`, `-p`, `-r`, `--eval` and `--print`.
+ */
+function unreadCode(c) {
+  const a = c.args;
+  if (/^(?:python[\d.]*|py)$/.test(c.name)) {
+    for (let j = 0; j < a.length; j++) {
+      const r = a[j].raw;
+      if (r === '--' || r === '-' || !r.startsWith('-')) return undefined;
+      if (r.startsWith('--')) { if (r === '--check-hash-based-pycs') j++; continue; }
+      // python's flags, then the option that ends the cluster.
+      const [, opt, rest] = /^-[bBdEhiIOPqRsSuvVx]*([cmWX]?)(.*)$/.exec(r);
+      if (opt === 'c') return rest === '' && a[j + 1]?.literal === false ? a[j + 1] : undefined;
+      if (opt === 'm') return undefined;
+      if (opt && rest === '') j++;
+    }
+    return undefined;
+  }
+  if (!/^(?:node|nodejs|bun|ruby|perl|php)$/.test(c.name)) return undefined;
+  // Each code option's next word, even one an earlier option took (`perl -p -e "$X"`).
+  return a.find((x, j) => j > 0 && x.literal === false && (/^-[a-zA-Z]*[ep]$/.test(a[j - 1].raw) || /^(?:-r|--eval|--print)$/.test(a[j - 1].raw)));
 }
 
 /**
@@ -1448,12 +1431,13 @@ function configWritesAlias(args) {
  * Why temper cannot rule out that `c` applies a patch, as `{ kind, why, hint? }`, or null. `kind` is:
  * - `git`: a git subcommand it cannot resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a
  *   `-c` value it cannot read), or one git does not have, which may be an alias set anywhere;
- * - `name`: a command name it cannot read (see readName: `$X`, `"${CARGO:-cargo}"`, `{git,apply,x}`,
- *   `git*`, a wrapper word under `untracked`), or one it cannot resolve that names git or patch, or
- *   comes before `apply` or `am`, and an alias or `hash -p`, which make a name run another command;
- * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
- *   mentions `git apply`, `git am` or a patch command or is built from an expansion (`python3 -c "$X"`),
- *   or code piped or redirected into one that temper cannot read;
+ * - `name`: a command name that is not a literal word (wi-9792d6: `$X`, `"${CARGO:-cargo}"`,
+ *   `"$HOME/bin/cargo"`, `{git,apply,x}`, `git*`, a wrapper's command word under `untracked`), or
+ *   one it cannot resolve that names git or patch, or comes before `apply` or `am`, and an alias or
+ *   `hash -p`, which make a name run another command;
+ * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, ...) that mentions
+ *   `git apply`, `git am` or a patch command, a code word built from an expansion (see unreadCode:
+ *   `python3 -c "$X"`), or code piped or redirected into one that temper cannot read;
  * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
  *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`,
  *   `bash -c "$CMD"`, `bash <<< "$X"`, `bash -c {x,y}`), an `eval` argument built from an expansion
@@ -1471,7 +1455,7 @@ export function opaquePatch(c) {
   if (!g && c.name === null && (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am'))) {
     return { kind: 'name', why: 'an unresolved command name' };
   }
-  // A command name temper cannot read (see readName), or an eval argument built from an expansion, runs text temper cannot read exactly (wi-0e226b).
+  // A command name that is not a literal word, or an eval argument built from an expansion, runs text temper cannot read exactly (wi-0e226b).
   if (c.opaque === 'name') return { kind: 'name', why: 'a command name or wrapper word built from an expansion' };
   if (c.named === false) return { kind: 'name', why: 'a command name built from an expansion' };
   // An alias or `hash -p` makes a name run another command.
@@ -1489,64 +1473,27 @@ export function opaquePatch(c) {
     return why ? { kind: 'script', why: `a ${c.name} script ${why} that temper cannot read` } : null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
-  const code = codeArgs(c);
-  if (code.some((w) => !w.literal)) return { kind: 'code', why: `${c.name} code built from an expansion` };
-  if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
+  if (unreadCode(c)) return { kind: 'code', why: `${c.name} code built from an expansion` };
+  const code = [...(c.stdin?.body ? [c.stdin.body] : []), ...codeWords(c, true).map((w) => w.text)];
+  if (code.some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
   // A script from a process substitution, or on stdin that temper cannot read: `node <(...)`,
   // `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`, `python3 /dev/stdin < x.py`.
   if (c.args.some((x) => x.parts?.some((p) => p.t === 'proc'))) return { kind: 'code', why: `a ${c.name} script from a process substitution` };
   const stdinArg = c.args.some((x) => x.value !== null && STDIN_PATH.test(path.posix.normalize(x.value)));
-  const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || code.length > 0;
+  const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || codeWords(c).length > 0;
   if (c.stdin && !readStdin(c.stdin) && (!scriptArg || stdinArg)) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
   return null;
 }
 
 const SOURCES = new Set(['source', '.']);
-/**
- * The command name temper reads from a word (#151 review 8, wi-ec88b9), or null: a literal word's
- * value, or the last segment of a word whose expansions are all double-quoted and that ends in a
- * literal `/name` segment with no glob or brace (`"$HOME/.cargo/bin/cargo"`, `"$X"/git`). Bash looks
- * up no PATH, alias or function for a name with a slash in it, so that segment decides what runs,
- * exactly as for a literal path, whatever the expansions hold. An unquoted expansion is never read,
- * since bash splits and globs its value, and neither is `"$@"` or `"${A[@]}"`, which are several words.
- */
-function readName(w) {
-  if (!w) return null;
-  if (w.literal) return w.value;
-  if (!w.parts || w.glob) return null;
-  const parts = w.parts.filter((p) => !p.bs && !(p.t === 'lit' && p.s === ''));
-  let last = -1;
-  for (const [k, p] of parts.entries()) {
-    if (p.t === 'lit') {
-      if (!p.q && /[{}[\]*?]/.test(p.s)) return null;
-    } else if (!p.q || p.t === 'proc' || p.s.includes('@')) return null;
-    else last = k;
-  }
-  if (last === -1) return null;
-  return /\/([^/]+)$/.exec(parts.slice(last + 1).map((p) => p.s).join(''))?.[1] ?? null;
-}
-/** The command name a word runs as (see commandName), from its value or (see readName) its last segment, or null. */
-const nameOf = (w) => {
-  if (w.value !== null) return commandName(w.value);
-  const n = readName(w);
-  return n === null ? null : commandName(n);
-};
+/** The command name a word runs as (see commandName), from its value, or null. */
+const nameOf = (w) => (w.value === null ? null : commandName(w.value));
 /**
  * A wrapper's option or assignment word whose role and split temper reads: it starts with literal
  * text and its expansions are quoted (`A="$X"`), with no glob or brace list (`-I{}` is not one).
  */
 const fixedWord = (w) => Boolean(w.parts) && !w.glob && w.parts[0]?.t === 'lit' && w.parts[0].s !== ''
   && w.parts.every((p) => (p.t === 'lit' ? p.q || !p.s.replace(/\{\}/g, '').includes('{') : p.q));
-/**
- * Whether a program that still reads options cannot take a word as one it does not show: the word is
- * literal, or starts with literal text that is not an option, or with a long option's `--name=`. Its
- * value may hold anything else (`X=--eval=...; node "$X/a.js"`, `X=-S...; env "$X/cargo"`).
- */
-const plainStart = (w) => {
-  if (w.literal) return true;
-  const p = w.parts?.find((x) => !x.bs && !(x.t === 'lit' && x.s === ''));
-  return Boolean(p) && p.t === 'lit' && (!p.s.startsWith('-') || /^--[\w-]+=/.test(p.s));
-};
 // Paths that name the shell's own stdin.
 const STDIN_PATH = /^(?:\/dev\/(?:stdin|stdout|stderr)|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
 /** Whether temper read a command's stdin exactly: a literal heredoc or here-string body, or one a plain `cat` passed on. */
@@ -1577,10 +1524,10 @@ function unreadScript(c) {
     const w = src.word;
     if (/[<>]\(/.test(w.raw)) return 'from a process substitution';
     if (w.value === null && c.xargs) return 'from xargs input';
-    // An operand read as a path that ends in a literal name (see readName) is that file, unless the name is a stream's.
-    const name = readName(w);
-    if (name === null) return 'built from an expansion';
-    if (!w.literal && /^(?:stdin|stdout|stderr|\d+)$/.test(name)) return 'on what may be stdin';
+    // A glob or brace list is an expansion too (`bash /dev/std*`).
+    if (w.value === null || w.glob || (w.literal === false && w.parts?.every((p) => p.t === 'lit'))) return 'built from an expansion';
+    // An operand built from an expansion whose last segment names a stream may be stdin (`"$HOME/stdin"` after `read HOME`).
+    if (!w.literal && /^(?:stdin|stdout|stderr|\d+)$/.test(path.posix.basename(w.value))) return 'on what may be stdin';
     return w.value !== null && STDIN_PATH.test(path.posix.normalize(w.value)) ? `from ${w.value}` : null;
   }
   return readStdin(c.stdin) ? null : 'on stdin';

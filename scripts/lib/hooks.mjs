@@ -434,9 +434,9 @@ const REVIEWER_OPAQUE_HINT = {
   script: 'Run the commands directly, not as a script piped or redirected into a shell, so temper can read them.',
   alias: 'The reviewer sets no git alias, because an alias could run `git apply` or `git am` later.',
 };
-// A command name temper cannot read (#151 review 6): the command may be fine, written so temper can read it.
+// A command name that is not a literal word (#151 review 6, wi-9792d6): the command may be fine, written out.
 const REVIEWER_NAME_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so a command whose name temper cannot read was not run.';
-const REVIEWER_NAME_HINT = 'Write the command name out, or as a quoted path that ends in it (`~/.cargo/bin/cargo test`, `"$HOME/.cargo/bin/cargo" test`, not `"$CARGO" test`, `$HOME/.cargo/bin/cargo test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
+const REVIEWER_NAME_HINT = 'Write the command name out, with no variable or `$(...)` in it (`cargo test`, `~/.cargo/bin/cargo test`, not `"$CARGO" test`, `"$HOME/.cargo/bin/cargo" test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
 const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**

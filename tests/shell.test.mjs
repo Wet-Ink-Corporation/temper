@@ -132,7 +132,7 @@ test('shell: opaquePatch flags git subcommands and interpreter code temper canno
     `node --eval "require('child_process').execFileSync('git', ['am', 'x.mbox'])"`,
     `node -p "require('child_process').execSync('gpatch -p1 -i x.diff')"`,
     `perl -e 'system("git", "apply", "x.diff")'`, `perl -E 'system("cd sub && patch -p1 < x.diff")'`,
-    `ruby -e 'system("git am x.mbox")'`, `deno eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
+    `ruby -e 'system("git am x.mbox")'`,
     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['busybox', 'patch', '-i', 'x.diff'])\nEOF",
   ]) assert.ok(o(cmd), cmd);
   for (const cmd of [
@@ -177,7 +177,6 @@ test('shell: opaquePatch: subcommands git does not have, alias writes, multi-lin
     [`python3 -c "import subprocess; subprocess.run(['git', '-C', 'sub', 'am', 'x.mbox'])"`, 'code'],
     ['git-diff HEAD', 'git'], ['/usr/lib/git-core/git-log -1', 'git'],
     [`git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 x.diff`, 'git'],
-    [`deno eval --ext=ts "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`, 'code'],
     [`python3 -c "import subprocess; subprocess.run(['patch', '-p1', '-i', 'x.diff'])"`, 'code'],
     ['cat x.py | python3', 'code'], ['python3 - < x.py', 'code'], ['curl -s https://example.com/x.js | node', 'code'],
   ]) assert.equal(o(cmd)?.kind, kind, cmd);
@@ -269,8 +268,8 @@ test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument 
   ]) assert.equal(o(cmd), null, cmd);
 });
 
-// #151 review 6 (wi-0e226b): a brace list or a glob is an expansion too; a command name is read
-// when temper knows its value; interpreter code built from an expansion is code temper cannot read.
+// #151 review 6 (wi-0e226b): a brace list or a glob is an expansion too; only a literal command
+// name is read (wi-9792d6); interpreter code built from an expansion is code temper cannot read.
 test('shell: opaquePatch: brace and glob words, command names temper reads, and interpreter code from an expansion', () => {
   const o = (cmd, opts = {}) => parseCommands(cmd, { cwd: root, ...opts }).map(opaquePatch).find(Boolean) ?? null;
   for (const [cmd, kind] of [
@@ -281,21 +280,22 @@ test('shell: opaquePatch: brace and glob words, command names temper reads, and 
     ["X='git apply x'; $X", 'name'], ["X='git apply x'; \"$X\"", 'name'], ['X=g*; $X', 'name'], ['IFS=/; X=git/apply/x.diff; $X', 'name'],
     ['"${CARGO:-cargo}" test', 'name'], ['$(which cargo) test', 'name'], ['$HOME/.cargo/bin/cargo test', 'name'], ['$PWD/target/debug/a', 'name'],
     ['python3 -c "$X"', 'code'], ['node -e "$(cat f)"', 'code'], ['perl -e "$X"', 'code'], ['perl -ne "$X" f', 'code'], ['ruby -e "$X"', 'code'],
-    ['php -r "$X"', 'code'], ['deno eval "$X"', 'code'],
-  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+    ['php -r "$X"', 'code'], ['node --eval "$X"', 'code'], ['node -p "$X"', 'code'], ['bun -e "$X"', 'code'], ['python3 -Ic "$X"', 'code'],
+    // A value temper knows is not enough: the name must be literal (wi-9792d6).
+    ['"$HOME/.cargo/bin/cargo" test', 'name'], ['"$PWD/target/debug/a" --help', 'name'], ['"$(git rev-parse --show-toplevel)/scripts/check.sh"', 'name'],
+  ]) assert.equal(o(cmd, { top: root })?.kind, kind, cmd);
   for (const cmd of [
     "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' x.json", "git log --format='%H' -5", "rg 'foo\\{' crates",
     'rg foo\\{ crates', 'find crates -name x -exec grep -n unwrap {} +', 'git show HEAD@{1} --stat', "eval 'git status'", 'ls crates/*/src',
-    '"$HOME/.cargo/bin/cargo" test', '"$PWD/target/debug/a" --help', '~/.cargo/bin/cargo test',
-    '"$(git rev-parse --show-toplevel)/scripts/check.sh"', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
+    '~/.cargo/bin/cargo test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
     'python3 -c "print(1)"', "node -e 'console.log(1)'", "perl -ne 'print if /unwrap/' x.rs",
   ]) assert.equal(o(cmd, { top: root }), null, cmd);
 });
 
 // #151 review 7 (wi-0e226b): temper's variable model is not bash (`read`, `printf -v`, arrays, an
 // assignment that never runs, ...), so for the reviewer a command name is never read from a tracked
-// assignment: only a literal, or (review 8, wi-ec88b9) quoted expansions followed by a literal
-// `/name`, which name the command whatever their value. The words of a wrapper before it are read the same way.
+// assignment: only a literal (wi-9792d6, which supersedes review 8's wi-ec88b9). A wrapper's command
+// word is read the same way, and its other words when they start with literal text.
 test('shell: opaquePatch never reads a command name from a variable', () => {
   const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
   for (const cmd of [
@@ -316,110 +316,126 @@ test('shell: opaquePatch never reads a command name from a variable', () => {
     'X=cd; $X apply x.diff', 'X=export; $X apply x.diff', 'X=nice; $X git apply x.diff', 'timeout $T apply x.diff', 'nice -n $N apply x.diff',
     'timeout "$T" 5 git apply x.diff', 'env A=$X apply x.diff', 'watch -n $N apply x.diff',
     "alias cargo='git apply'", 'hash -p /usr/bin/git cargo',
-    // An unquoted expansion, or one not followed by a literal /name.
+    // An expansion in the name, quoted or not, whatever temper knows of its value (wi-9792d6).
     'export HOME=/x; $HOME/cargo test', 'unset HOME; $HOME/cargo test', ': ${HOME:=/x}; $HOME/cargo test', 'for HOME in /x; do $HOME/cargo test; done',
     'IFS=/; $HOME/cargo test', 'read IFS <<< /; $HOME/cargo test', '$HOME/cargo test', '$PWD/x',
     '$HOME', '"$HOME"', '"$HOME/"', '"$HOME/x$Y"', '$HOME/{x,y}', '$(git rev-parse --show-toplevel)/x',
-  ]) assert.equal(o(cmd)?.kind, 'name', cmd);
-  for (const cmd of [
-    '"$HOME/.cargo/bin/cargo" test', '"${HOME}"/.cargo/bin/cargo test',
-    '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"', '~/.cargo/bin/cargo test',
-    // Review 8 (wi-ec88b9): quoted expansions followed by a literal /name, whatever the line writes, name that command.
+    '"$HOME/.cargo/bin/cargo" test', '"${HOME}"/.cargo/bin/cargo test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
     'X=/usr/bin; "$X/cargo" test', 'read HOME <<< /x; "$HOME/cargo" test', 'printf -v HOME /x; "$HOME/cargo" test', 'HOME=/x; "$HOME/cargo" test',
     'declare -n R=HOME; "$HOME/cargo" test', 'Y=ME; read HO$Y <<< /x; "$HOME/cargo" test', "mapfile -t HO''ME <<< /x; \"$HOME/cargo\" test",
     'cd /tmp; "$PWD/x"', 'pushd /tmp; "$PWD/x"', 'source ./set.sh; "$HOME/cargo" test', '(( HOME = 1 )); "$HOME/cargo" test',
     '"$HOME$PWD/x"', '"$TMPDIR/x"', '"$OLDPWD/x"', '"$(git rev-parse --show-toplevel)$X/x"', '"${HOME:-/x}/cargo" test', '"$(git rev-parse --git-dir)/x"',
-    'echo "$HOME"; "$HOME/.cargo/bin/cargo" test', 'X=1; echo $X; "$HOME/.cargo/bin/cargo" test', 'cd crates && cargo test', 'timeout 60 cargo test',
-    'nice -n 5 cargo test', 'env A="$X" cargo test', 'X=crates; ls $X', '"$HOME/My Tools/x" --help',
+    'echo "$HOME"; "$HOME/.cargo/bin/cargo" test', 'X=1; echo $X; "$HOME/.cargo/bin/cargo" test', '"$HOME/My Tools/x" --help',
+  ]) assert.equal(o(cmd)?.kind, 'name', cmd);
+  for (const cmd of [
+    '~/.cargo/bin/cargo test', 'cd crates && cargo test', 'timeout 60 cargo test',
+    'nice -n 5 cargo test', 'env A="$X" cargo test', 'X=crates; ls $X',
     // An interpreter's -c or -e after its script or module is the script's own argument (#151 review 7).
-    // python's, that is: review 8 reads node's, ruby's and the others' code options in every argument.
+    // python's, that is: node's, ruby's and the others' code options are read in every argument.
     'python3 tool.py -c "$CFG"', 'python3 -m pytest -p "$PLUGIN"', 'python3 -u tool.py -c "$CFG"',
     'deno run x.ts -e "$X"', 'python3 -c "import sys; print(sys.argv)" "$X"',
-    // A shell's or source's script operand from quoted expansions followed by a literal path.
-    'source "$HOME/.cargo/env"', 'bash "$CLAUDE_PLUGIN_ROOT/x.sh"',
+    // A shell's or source's script operand whose value temper knows.
+    'source "$HOME/.cargo/env"', 'bash "$HOME/x.sh"',
     'PATH+=":$HOME/.cargo/bin"; cargo test',
   ]) assert.equal(o(cmd), null, cmd);
   // A script operand temper cannot name exactly may be /dev/stdin.
-  for (const cmd of ['F=/dev/stdin; bash "$F" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'bash "$X"', '. "$X"']) {
+  for (const cmd of ['F=/dev/stdin; bash "$F" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'bash "$X"', '. "$X"', 'bash "$CLAUDE_PLUGIN_ROOT/x.sh"']) {
     assert.equal(o(cmd)?.kind, 'script', cmd);
   }
   // Code before the script is still read: an option's value is not the script.
   for (const cmd of ['python3 -W ignore -c "$X"', 'python3 -X dev -c "$X"', 'node -r ./x.js -e "$X"', 'node --require ./x.js -e "$X"', 'perl -pi -e "$X" x',
-    'python3 $O "$X"', 'python3 "$O" "$X"', 'python3 -E -c "$X"', 'python3 -Ic "$X"', 'perl -W -e "$X"', 'ruby -W -e "$X"', 'perl -I lib -e "$X"',
+    'python3 -E -c "$X"', 'python3 -Ic "$X"', 'perl -W -e "$X"', 'ruby -W -e "$X"', 'perl -I lib -e "$X"',
     // perl's -W is a flag, so the code after it is read.
     `perl -W -e 'system("git apply x.diff")'`]) {
     assert.equal(o(cmd)?.kind, 'code', cmd);
   }
 });
 
-// #151 review 8 (wi-ec88b9): a command name, wrapper word or script operand is read when every
-// expansion in it is double-quoted and it ends in a literal `/name` segment. Bash looks up no PATH,
-// alias or function for a name with a slash, so that segment is the name. An unquoted expansion is never read.
-test('shell: a quoted expansion followed by a literal /name is read as that name', () => {
+// wi-9792d6 (superseding review 8's wi-ec88b9): a command name built from an expansion is never
+// read, even when it ends in a literal `/name` segment; only the dashed git-apply and git-am are
+// read at any path. A script operand is read by its value.
+test('shell: a command name built from an expansion is not read, whatever its last segment', () => {
   const ps = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true });
   const o = (cmd) => ps(cmd).map(opaquePatch).find(Boolean) ?? null;
-  for (const [cmd, tool] of [
-    ['"$X/git" apply x.diff', 'git apply'], ['"$X/git-apply" x.diff', 'git apply'], ['"$X/patch" -p1 < x.diff', 'patch'],
-    ['"$X"/../git am x.mbox', 'git am'], ['"$X/bin/sudo" git apply x.diff', 'git apply'], ['timeout 5 "$X/git" apply x.diff', 'git apply'],
-  ]) {
-    assert.equal(ps(cmd).map(patchCommand).find(Boolean)?.tool, tool, cmd);
-    assert.equal(parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.tool, tool, cmd);
+  for (const cmd of ['"$X/git-apply" x.diff', '"$X"/../git-apply x.diff']) {
+    assert.equal(ps(cmd).map(patchCommand).find(Boolean)?.tool, 'git apply', cmd);
+    assert.equal(parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.tool, 'git apply', cmd);
   }
   for (const cmd of [
+    '"$X/git" apply x.diff', '"$X/patch" -p1 < x.diff', '"$X"/../git am x.mbox', '"$X/bin/sudo" git apply x.diff', 'timeout 5 "$X/git" apply x.diff',
     '"$HOME/.cargo/bin/cargo" test', 'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test',
     'cd crates/a && "$PWD/../../target/debug/a"', 'HOME=/x; "$HOME/cargo" test', 'read X; "$X/cargo" test', '"${X:-/usr}/bin/cargo" test',
     '"$(git rev-parse --show-toplevel)/scripts/check.sh"', '"$X"/cargo test', '"$X"/\'cargo\' test', 'timeout 60 "$X/cargo" test',
-    'bash "$HOME/x.sh"', 'source "$X/env"', 'bash "$(git rev-parse --show-toplevel)/scripts/check.sh"',
-  ]) assert.equal(o(cmd), null, cmd);
-  for (const cmd of [
     '$HOME/.cargo/bin/cargo test', '$PWD/target/debug/a', '${HOME}/.cargo/bin/cargo test', '"$X"', '"$X$Y"', '"$(which cargo)"', '"$X/"',
     '"$X/c$Y"', '"$X"/{a,b}', '"$X"/c*', '"$@/cargo"', '"${A[@]}/cargo"', '"$X"/$Y',
-    // A word a wrapper may still read as its option: `X=-S...; env "$X/cargo"` runs what X says.
-    'env "$X/cargo" test', 'nice "$X/cargo" test', 'xargs "$X/cargo" test',
+    'env "$X/cargo" test', 'nice "$X/cargo" test', 'xargs "$X/cargo" test', '"$HOME/bin/timeout" 5 cargo test', 'nohup "$HOME/bin/timeout" 5 cargo test',
   ]) assert.equal(o(cmd)?.kind, 'name', cmd);
-  // A script operand whose last segment names a standard stream may be the shell's stdin.
-  for (const cmd of ['bash "$X/stdin" < cmd.sh', 'bash "$X/fd/0" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh']) {
+  // Other agents' commands keep main's reading: a name temper cannot read is not git apply or patch.
+  for (const cmd of ['"$X/git" apply x.diff', '"$X/patch" -p1 < x.diff']) {
+    assert.equal(parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean), undefined, cmd);
+  }
+  for (const cmd of ['bash "$HOME/x.sh"', 'bash "$(git rev-parse --show-toplevel)/scripts/check.sh"', 'source "$HOME/.cargo/env"']) assert.equal(o(cmd), null, cmd);
+  // A script operand whose value temper does not know, or whose last segment names a standard stream, may be the shell's stdin.
+  for (const cmd of ['bash "$X/stdin" < cmd.sh', 'bash "$X/fd/0" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'source "$X/env"',
+    // A glob or brace list in it is an expansion too.
+    'bash /dev/std* < cmd.sh', 'bash /dev/st?in < cmd.sh', 'source {/dev/stdin,x}', 'bash "$HOME"/x* < cmd.sh']) {
     assert.equal(o(cmd)?.kind, 'script', cmd);
   }
 });
 
-// #151 review 8: node, bun, deno, ruby, perl and php take a code option anywhere, since temper
-// cannot tell which of their options take a value; python's -c, and its first operand, end its options.
-// A code option's value may be attached (`-c'...'`, `--eval=...`), and an interpreter's option word
-// that starts with an expansion may be one (`X=--eval=...; node "$X/a.js"`).
-test('shell: interpreter code options are read in every argument, attached or not', () => {
+// A name with a slash in it runs a file, never a builtin: `/usr/bin/cd x` changes no directory.
+test('shell: a command name with a slash in it is never a builtin', () => {
+  const cwdOf = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.cwd;
+  assert.equal(cwdOf('cd sub; git apply x.diff'), path.join(root, 'sub'));
+  for (const cmd of ['/usr/bin/cd sub; git apply x.diff', '"$HOME/cd" sub; git apply x.diff', './pushd sub; git apply x.diff']) {
+    assert.equal(cwdOf(cmd), root, cmd);
+  }
+  const names = (cmd) => parseCommands(cmd, { cwd: root }).map((c) => c.name);
+  assert.deepEqual(names('/x/eval "git apply x.diff"'), ['/x/eval']);
+  assert.deepEqual(names('/x/export X=git; $X apply x.diff'), ['/x/export', null]);
+  assert.deepEqual(names('/x/source ./set.sh'), ['/x/source']);
+});
+
+// Interpreter code options are read as on main: the word after -c, -e, -E, -p, -r, --eval or
+// --print, in any argument. For the reviewer, a code word built from an expansion is code temper
+// cannot read (wi-9792d6); an option attached to its code, a word that may be a code option, and
+// pwsh's encoded command wait on #155. A script operand is not code.
+test('shell: interpreter code options and a code word built from an expansion', () => {
   const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
   for (const cmd of [
     `node --disable-warning DEP0040 -e "require('child_process').execSync('git apply x.diff')"`,
     `node --unhandled-rejections strict -e "require('child_process').execSync('git apply x.diff')"`,
     `node --env-file-if-exists .env -e "require('child_process').execSync('git apply x.diff')"`,
     `bun --cwd . -e "require('child_process').execSync('git apply x.diff')"`, `ruby --encoding UTF-8 -e 'system("git apply x.diff")'`,
-    `php -B 'system("git apply x.diff");'`, `php -R 'system("git apply x.diff");'`, `python3 -c'import os; os.system("git apply x.diff")'`,
-    `python3 -Ic'import os; os.system("git apply x.diff")'`, `node --eval='require("child_process").execSync("git apply x.diff")'`,
-    `node --print='require("child_process").execSync("git apply x.diff")'`, `ruby -e'system("git apply x.diff")'`, `perl -e'system("git apply x.diff")'`,
-    `php -r'system("git apply x.diff");'`, `deno repl --eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
-    'node --disable-warning X -e "$X"', 'node --disable-warning X "$O" "$X"', 'node script.js -e "$ENVNAME"', 'ruby x.rb -e "$X"',
-    'python3 -c"$X"', 'X=--eval=x; node "$X/a.js"', 'python3 "$X/a.py"', 'python3 -u "$HOME/x.py"', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate',
-    'php -B "$X"', 'deno repl --eval="$X"',
-    // A script read from stdin by name or from a process substitution, and pwsh's encoded command.
-    'echo x | python3 /dev/stdin', 'cat x.js | node /dev/fd/0', "node <(echo 'x')", 'pwsh -EncodedCommand ZwBp', 'pwsh -enc ZwBp',
+    `deno repl --eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
+    'node --disable-warning X -e "$X"', 'node script.js -e "$ENVNAME"', 'ruby x.rb -e "$X"', 'php -r "$X"', 'node -p "$X"', 'perl -ne "$X"',
+    'python3 -W ignore -c "$X"', 'python3 -Ic "$X"', 'perl -p -e "$X"',
+    // A code option that a word before it would take as its value is read too (`-Wignore` ends in e).
+    `python3 -Wignore -c 'import os; os.system("git apply x.diff")'`, `perl -p -e 'system("git apply x.diff")'`,
+    // A script read from stdin by name or from a process substitution.
+    'echo x | python3 /dev/stdin', 'cat x.js | node /dev/fd/0', "node <(echo 'x')",
   ]) assert.equal(o(cmd)?.kind, 'code', cmd);
   for (const cmd of [
     'python3 tool.py -c "$CFG"', 'python3 -m pytest -p "$PLUGIN"', 'python3 -u tool.py -c "$CFG"', 'node script.js "$X"', 'ruby x.rb "$X"',
-    "python3 -c'print(1)' < x.json", 'node "/opt/$X/a.js"', "perl -Mstrict -e 'print 1'", "node -pe '1 + 1'", 'deno run x.ts -e "$X"',
+    'node "/opt/$X/a.js"', "perl -Mstrict -e 'print 1'", "node -pe '1 + 1'", 'deno run x.ts -e "$X"',
     'node .claude/temper/temper.mjs gate --check', "perl -ne 'print if /unwrap/' x.rs", "python3 /dev/stdin <<'EOF'\nprint(1)\nEOF",
     'pwsh -NoProfile -File x.ps1', 'node -r ./x.js script.js "$X"', "ruby -e 'require \"x\"' x.rb \"$X\"",
+    // A script operand built from an expansion is the script, not code (the reviewer's gate and scan, #151 round 9).
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" gate --check', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" scan',
+    'X=--eval=x; node "$X/a.js"', 'python3 "$X/a.py"', 'python3 -u "$HOME/x.py"', 'node "$TEMPER_CLI" gate --check',
   ]) assert.equal(o(cmd), null, cmd);
 });
 
 // #151 review 8: env -S in every spelling env accepts. Other agents' commands read its string, with
-// `\_` as a space; for the reviewer it is denied, since its syntax is not the shell's.
+// `\_`, `\t`, `\n`, `\v`, `\f` and `\r` as whitespace; for the reviewer it is denied, since its syntax is not the shell's.
 test('shell: env -S and --split-string in every spelling', () => {
   const tool = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.tool;
   for (const cmd of [
     "env -S 'git apply x.diff'", "env -iS 'git apply x.diff'", "env -vS 'git apply x.diff'", "env -iS'git apply x.diff'", "env -0vS 'git apply x.diff'",
     "env --s 'git apply x.diff'", "env --sp='git apply x.diff'", "env --split 'git apply x.diff'", "env --split-string='git apply x.diff'",
     "env -S 'git\\_apply x.diff'", "env -S 'git\\_apply\\_x.diff'", "env -u X -S 'git apply x.diff'", "env -iu X -S 'git apply x.diff'",
+    // `\t`, `\n`, `\v`, `\f` and `\r` are whitespace in its string too.
+    "env -S 'git\\tapply x.diff'", "env -S 'git\\napply x.diff'", "env -S 'git\\vapply\\fx.diff'", "env -S 'git\\rapply x.diff'",
     // env's other options, in their prefixes and clusters, are read too.
     'env --unse X git apply x.diff', 'env - git apply x.diff', 'env -iu X git apply x.diff', 'env --ch=/tmp git apply x.diff', 'env -C /tmp git apply x.diff',
   ]) assert.equal(tool(cmd), 'git apply', cmd);

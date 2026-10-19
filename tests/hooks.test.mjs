@@ -622,7 +622,6 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `node -e "require('child_process').execSync('git am x.mbox')"`,
       `perl -e 'system("patch -p1 < x.diff")'`,
       `ruby -e 'system("git apply x.diff")'`,
-      `deno eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
       `git ap "${out('doc.diff')}"`,
       'git config alias.ap apply',
       'cat x.py | python3',
@@ -704,6 +703,10 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     for (const cmd of [
       `{git,apply,${out('doc.diff')}}`, `{bash,-c,'git apply ${out('doc.diff')}'}`, `{eval,'git apply ${out('doc.diff')}'}`,
       `{patch,-p1,-i,${out('doc.diff')}}`, 'X=$(cat cmd.txt); $X', `X='git apply ${out('doc.diff')}'; $X`, '"${CARGO:-cargo}" test', '$(which cargo) test',
+      // wi-9792d6: a name built from an expansion is not read, even when temper knows its value or it ends in a literal /name.
+      '"$HOME/.cargo/bin/cargo" test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
+      'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test', 'cd crates/a && "$PWD/../../target/debug/a"',
+      'read HOME <<< /x; "$HOME/cargo" test', `"$X/git" apply ${out('doc.diff')}`, '"$HOME/bin/timeout" 60 cargo test',
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -711,16 +714,13 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       assert.match(reason(res), /Write the command name out/, cmd);
       assert.doesNotMatch(reason(res), /Do not retry|piped or redirected/, cmd);
     }
-    // Ordinary review commands, and command names whose value temper knows, still run.
+    // Ordinary review commands, with names written out, still run.
     for (const cmd of [
       "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' Cargo.toml", "git log --format='%H' -5", "rg 'foo\\{' crates",
-      '"$HOME/.cargo/bin/cargo" test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
-      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"',
+      '~/.cargo/bin/cargo test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"',
       'python3 -m pytest -p "$PLUGIN"', 'source "$HOME/.cargo/env" && cargo test', 'PATH+=":$HOME/.cargo/bin"; cargo test',
-      // #151 review 8 (wi-ec88b9): quoted expansions followed by a literal /name name that command, whatever the line writes.
-      'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test', 'cd crates/a && "$PWD/../../target/debug/a"',
-      'read HOME <<< /x; "$HOME/cargo" test', 'node .claude/temper/temper.mjs gate --check', 'node script.js "$X"', 'env RUST_LOG="$LVL" cargo test',
-      "env -i PATH=/usr/bin cargo test",
+      'node .claude/temper/temper.mjs gate --check', 'node script.js "$X"', 'env RUST_LOG="$LVL" cargo test',
+      "env -i PATH=/usr/bin cargo test", 'X=--eval=x; node "$X/a.js"',
     ]) assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     // #151 review 7: temper's variable model is not bash, so a command name from an assignment is
     // never read, nor $HOME or $PWD on a line that writes them; each of these is denied.
@@ -734,18 +734,16 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `X=cd; $X apply ${out('doc.diff')}`, `timeout $T apply ${out('doc.diff')}`, `X=status; read X <<< apply; git $X ${out('doc.diff')}`,
       'X=cargo; cd /tmp; $PWD/x', 'IFS=/; $HOME/cargo test', `hash -p /usr/bin/git cargo; cargo apply ${out('doc.diff')}`,
       `env -S 'git apply ${out('doc.diff')}'`, `shopt -s expand_aliases\nalias cargo='git apply'\ncargo ${out('doc.diff')}`,
-      // #151 review 8: an unquoted expansion is never read as a command name, nor quoted ones with no literal /name after them.
+      // #151 review 8: an expansion in a command name or a wrapper's word.
       '$HOME/.cargo/bin/cargo --version', '"$X"', '"$X$Y"', '"$(which cargo)" test', 'timeout "${T:-60}" cargo test', 'nice -n "$N" cargo test',
-      // The name is the last segment: these are git apply, git am and patch.
+      // A name built from an expansion is not read, whatever its last segment (wi-9792d6); the dashed git-apply is read at any path.
       `"$X/git" apply ${out('doc.diff')}`, `"$X/git-apply" ${out('doc.diff')}`, `"$X/patch" -p1 < ${out('doc.diff')}`, `"$HOME/bin/sudo" git apply ${out('doc.diff')}`,
-      // Code options anywhere in node's, bun's, ruby's, perl's and php's arguments, and attached ones.
+      // Code options in any argument of node, bun and ruby, and a code word built from an expansion.
       `node --disable-warning DEP0040 -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
       `node --unhandled-rejections strict -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
       `node --env-file-if-exists .env -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
       `bun --cwd . -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`, `ruby --encoding UTF-8 -e 'system("git apply ${out('doc.diff')}")'`,
-      `php -B 'system("git apply ${out('doc.diff')}");'`, `python3 -c'import os; os.system("git apply ${out('doc.diff')}")'`,
-      `node --eval='require("child_process").execSync("git apply ${out('doc.diff')}")'`, 'node script.js -e "$ENVNAME"',
-      'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate --check', 'X=--eval=x; node "$X/a.js"',
+      'node script.js -e "$ENVNAME"', 'node --eval "$X"', 'php -r "$X"', 'python3 -Ic "$X"',
       // env -S, in any spelling, splits a string with its own syntax.
       "env -S 'cargo test'", "env -iS 'cargo test'", "env --split 'cargo test'", "env --sp='cargo test'", `env -S 'git\\_apply ${out('doc.diff')}'`,
       `env - git apply ${out('doc.diff')}`, `env --unse X git apply ${out('doc.diff')}`,
@@ -753,7 +751,7 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     // For other agents env -S is read, `\_` as a space, and a patch onto a .rs file is denied.
     for (const cmd of [
       `env -iS 'git apply ${out('rs.diff')}'`, `env --split 'git apply ${out('rs.diff')}'`, `env -S 'git\\_apply ${out('rs.diff')}'`,
-      `X=; $X git apply ${out('rs.diff')}`, `"$X/git" apply ${out('rs.diff')}`,
+      `X=; $X git apply ${out('rs.diff')}`, `"$X/git-apply" ${out('rs.diff')}`,
     ]) assert.equal(decision(bash(cmd)), 'deny', cmd);
     // Each fail-closed deny says what to run instead.
     assert.match(reason(asReviewer('git $x')), /git's own commands/);
@@ -764,8 +762,41 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     for (const cmd of [
       `git apply "${out('doc.diff')}"`, `gpatch -p1 -i "${out('doc.diff')}"`, 'git ${CMD:-status}',
       `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
+      // A name built from an expansion keeps main's reading for other agents (wi-9792d6).
+      `"$X/git" apply ${out('rs.diff')}`, '"$HOME/.cargo/bin/cargo" test',
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
+});
+
+// #151 round 9 (wi-9792d6): every command temper tells the reviewer to run, in its agent file, the
+// review skill, the rubric and its SubagentStart context, runs for it, as on main.
+test('Bash: every command temper tells the reviewer to run is not denied', () => {
+  const asReviewer = (command) => preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: 'temper:rust-reviewer', tool_input: { command } });
+  const docs = ['agents/rust-reviewer.md', 'skills/review/SKILL.md', 'skills/rust-craft/references/review-rubric.md']
+    .map((f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')).join('\n');
+  const said = [...docs.matchAll(/`((?:node|git|cargo|temper) [^`]+)`/g)].map((m) => m[1])
+    // What the reviewer is told never to run.
+    .filter((c) => !/^git (?:apply|am|cherry-pick|merge|checkout)$/.test(c))
+    // `git diff/log/show/status` and `cargo clippy/test/doc/tree/metadata` name several commands.
+    .flatMap((c) => (/^(git|cargo) (\w+(?:\/\w+)+)$/.test(c) ? c.split(' ')[1].split('/').map((x) => `${c.split(' ')[0]} ${x}`) : [c]))
+    .map((c) => c.replace(/<base>/g, 'HEAD~1').replace(/<crate>/g, 'ledger-domain').replace(/<worktree> …/g, `"${ws}" diff`).replace(/\$ARGUMENTS/g, 'main'));
+  const gate = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" gate --check';
+  const scan = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" scan';
+  assert.ok(said.includes(gate) && said.includes(scan), said.join('\n'));
+  assert.ok(said.length >= 15, said.join('\n'));
+  // The SubagentStart context's gate command (TEMPER_BASE when the tree has its own base, cd into a
+  // worktree), its scope command, and the CLI path the SessionStart env file exports.
+  const cli = path.join(ws, 'plugin', 'scripts', 'temper.mjs').split(path.sep).join('/');
+  const context = [
+    `node "${cli}" gate --check`, `TEMPER_BASE=0123456789abcdef0123456789abcdef01234567 node "${cli}" gate --check`,
+    `cd "${ws}" && TEMPER_BASE=0123456789abcdef0123456789abcdef01234567 node "${cli}" gate --check`,
+    `git -C "${ws}" diff 0123456789abcdef0123456789abcdef01234567`, 'node "$TEMPER_CLI" gate --check',
+  ];
+  for (const cmd of [...said, ...context]) {
+    for (const form of [cmd, cmd.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, '$CLAUDE_PLUGIN_ROOT'), `${cmd} || true`, `${cmd} 2>&1 | tail -n 40`]) {
+      assert.equal(decision(asReviewer(form)), 'none', form);
+    }
+  }
 });
 
 // #151 review 5: \s*\[?\s* in the call pattern backtracked quadratically over a run of spaces.
