@@ -199,6 +199,8 @@ export function runGate(proj, opts = {}) {
   const logs = path.join(proj.stateDir, 'logs');
   fs.mkdirSync(logs, { recursive: true });
   const env = { CARGO_TERM_COLOR: 'never' };
+  // The gate's start, for the progress file's elapsed time: the toolchain probe and fmt count too.
+  const began = Date.now();
 
   // 0. Is the toolchain usable here at all? An unusable toolchain is an
   // environment problem, not a red gate: report it instead of blocking.
@@ -235,8 +237,9 @@ export function runGate(proj, opts = {}) {
 
   // While it runs, the gate keeps a progress file for this fingerprint (gate-progress-<fp>.json)
   // so readers such as `status --json` can show the step it is on; it goes when the gate ends.
-  // It starts here, after formatting, because the fingerprint is known only then.
-  const prog = progress(proj, fp, steps);
+  // It is written from here, after formatting, because the fingerprint is known only then; its
+  // start is the gate's own, so the elapsed time covers the toolchain probe and fmt too.
+  const prog = progress(proj, fp, steps, began);
   try {
     // 3. escape-hatch scan of changed files (cheap; catches code written around the edit hooks)
     if (cfg.gate.scan) {
@@ -262,7 +265,9 @@ export function runGate(proj, opts = {}) {
     }
 
     // 5. cargo steps, fail fast. With a baseline, clippy and rustdoc ratchet
-    // against it; a gate.steps override in temper.json always wins.
+    // against it; a gate.steps override in temper.json always wins. Choosing the
+    // default steps probes for nextest: that runs between steps, under none of them.
+    prog.between();
     const ratcheting = !cfg.gate.steps && baselineExists(proj.root);
     const rs = { collection: null, baseline: null, changed: undefined };
     for (const step of cfg.gate.steps ?? (ratcheting ? ratchetSteps(cfg) : defaultSteps(cfg))) {
@@ -337,12 +342,13 @@ const STALE_MARGIN_SEC = 300;
 
 /**
  * The progress file of a gate running for `fp`: { fp, pid, startedAt, steps: [{ name, ok, ms }],
- * current: { name, startedAt } | null }. Each write replaces it whole (writeAtomic), from the
+ * current: { name, startedAt } | null }. `startedAt` is the gate's start (`began`, ms), before its
+ * toolchain probe and fmt. Each write replaces it whole (writeAtomic), from the
  * gate's own `steps` list; any failure to write is ignored, since progress is only a view.
  */
-function progress(proj, fp, steps) {
+function progress(proj, fp, steps, began) {
   const file = gateProgressPath(proj, fp);
-  const startedAt = new Date().toISOString();
+  const startedAt = new Date(began).toISOString();
   let current = null;
   const write = () => {
     try {
@@ -352,6 +358,8 @@ function progress(proj, fp, steps) {
   write();
   return {
     start(name) { current = { name, startedAt: new Date().toISOString() }; write(); },
+    // The last step is done and the next not started: the steps done, with no step current.
+    between() { current = null; write(); },
     // Another gate on the same fingerprint (a second worktree at the same tree, `gate --no-cache`
     // beside Stop) may have written the file since: leave it to that gate.
     done() {
