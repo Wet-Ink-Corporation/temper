@@ -32,12 +32,12 @@ const counted = (collection) => (collection.findings ?? []).filter((f) => !f.exc
 export function parseBaseline(text) {
   let b;
   try { b = JSON.parse(text); } catch (e) { throw new Error(`${BASELINE_PATH} is not valid JSON (${e.message})`); }
-  if (b?.temper_baseline !== 1 || typeof b.totals !== 'object' || b.totals === null) {
+  const table = (t) => typeof t === 'object' && t !== null && !Array.isArray(t);
+  if (b?.temper_baseline !== 1 || !table(b.totals)) {
     throw new Error(`${BASELINE_PATH} is not a temper baseline (expected "temper_baseline": 1 and a "totals" table)`);
   }
   const sections = b.targets ?? {};
-  const bad = typeof sections !== 'object' || sections === null || Array.isArray(sections)
-    || Object.values(sections).some((t) => typeof t !== 'object' || t === null || typeof t.totals !== 'object' || t.totals === null);
+  const bad = !table(sections) || Object.values(sections).some((t) => !table(t) || !table(t.totals));
   if (bad) throw new Error(`${BASELINE_PATH} is not a temper baseline ("targets" must map each host to a section with a "totals" table)`);
   const { files: _files, ...rest } = b;
   return { ...rest, crates: b.crates ?? {} };
@@ -441,17 +441,30 @@ function raisedSince(proj, mb, baseline) {
   // a crate renamed between the two baselines keeps its counts
   const alias = crateAliases(before, Object.entries(baseline.crates ?? {}).map(([name, dir]) => ({ name, dir })));
   // Each host's counts against what that host was held to before: its own
-  // section, else the recorded counts (so a new section shows what it adds).
+  // section, else the recorded counts. Every host either baseline names counts,
+  // so a new section shows what it adds, and a section that was dropped, or a
+  // recorded host that changed (an older --update), shows what its host now
+  // gets. `null` stands for the hosts neither names, held to `totals`.
+  const named = [before.host, baseline.host, ...Object.keys(before.targets ?? {}), ...Object.keys(baseline.targets ?? {})].filter(Boolean);
+  const others = [...new Set(named)].filter((h) => h !== baseline.host).sort();
+  const hosts = [baseline.host ?? null, ...others, ...(baseline.host ? [null] : [])];
   const raised = [];
-  const hosts = [baseline.host ?? null, ...Object.keys(baseline.targets ?? {}).filter((h) => h !== baseline.host).sort()];
+  const seen = new Set();
   for (const h of hosts) {
     const renamed = { totals: {} };
     for (const [c, lints] of Object.entries(forTarget(before, h).totals ?? {})) {
       const now = [...alias].find(([, old]) => old === c)?.[0] ?? c;
       renamed.totals[now] = lints;
     }
-    const label = h && h !== baseline.host ? { target: h } : {};
-    for (const d of diffTotals(renamed, forTarget(baseline, h))) if (d.to > d.from) raised.push({ ...label, ...d });
+    const label = h === (baseline.host ?? null) ? {} : { target: h ?? '(hosts with no section)' };
+    for (const d of diffTotals(renamed, forTarget(baseline, h))) {
+      if (d.to <= d.from) continue;
+      // the hosts-with-no-section row repeats a named host's row when the two were held to the same counts
+      const key = `${d.crate}\0${d.lint}\0${d.from}\0${d.to}`;
+      if (h === null && seen.has(key)) continue;
+      seen.add(key);
+      raised.push({ ...label, ...d });
+    }
   }
   return { raised, note };
 }

@@ -435,7 +435,7 @@ function baseline(args) {
   else if (res.fixed.length) tight = res.ok ? `tight: no; ${res.fixed_count} fixed since the baseline: run temper baseline --tighten` : `tight: no; ${res.fixed_count} fixed since the baseline (tighten once the counts above are fixed)`;
   process.stdout.write([
     `temper baseline: ${where} (created ${mine.created ?? '?'}, updated ${mine.updated ?? '?'}, toolchain ${mine.toolchain ?? '?'}, host ${mine.host ?? '?'})`,
-    ...(Object.keys(current.targets ?? {}).length ? [`  counts for: ${[current.host, ...Object.keys(current.targets)].join(', ')}`] : []),
+    ...(Object.keys(current.targets ?? {}).length ? [`  counts for: ${[current.host, ...Object.keys(current.targets)].filter(Boolean).join(', ')}`] : []),
     `  ${'crate'.padEnd(width)}  baseline     now`,
     ...rows,
     `  ${'total'.padEnd(width)}  ${String(res.baseline_total).padStart(8)}  ${String(res.legacy_total).padStart(6)}`,

@@ -207,6 +207,22 @@ test('ratchet with a base compares the baseline at the merge base: a raise is fl
     assert.equal(sec.ok, true);
     assert.deepEqual(sec.raised, [{ target: 'x86_64-pc-windows-msvc', crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 4 }]);
     assert.match(renderRatchet(sec), /BASELINE RAISED[\s\S]*\[x86_64-pc-windows-msvc\] dom clippy::unwrap_used: 3 -> 4/);
+    r.commit('windows');
+    const unwraps = (n) => ({ ...onLinux.totals, dom: { ...onLinux.totals.dom, 'clippy::unwrap_used': n } });
+    // a dropped section (1.4's --update keeps no targets): its host now gets the recorded counts
+    const dropped = { ...onLinux, totals: unwraps(5) };
+    writeBaseline(r.dir, dropped);
+    assert.deepEqual(ratchet(collection(more, { crates, host: 'x86_64-unknown-linux-gnu' }), dropped, { proj, base: 'HEAD' }).raised, [
+      { crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 5 },
+      { target: 'x86_64-pc-windows-msvc', crate: 'dom', lint: 'clippy::unwrap_used', from: 4, to: 5 },
+    ]);
+    writeBaseline(r.dir, onLinux);
+    assert.deepEqual(ratchet(collection(more, { crates, host: 'x86_64-unknown-linux-gnu' }), onLinux, { proj, base: 'HEAD' }).raised, [], 'dropping a section alone holds its host to fewer counts');
+    // an older --update on Windows: the recorded host switches and Linux is held to the Windows counts
+    const switched = { ...onLinux, host: 'x86_64-pc-windows-msvc', totals: unwraps(4) };
+    writeBaseline(r.dir, switched);
+    const sw = ratchet(collection(more, { crates, host: 'x86_64-pc-windows-msvc' }), switched, { proj, base: 'HEAD' });
+    assert.deepEqual(sw.raised, [{ target: 'x86_64-unknown-linux-gnu', crate: 'dom', lint: 'clippy::unwrap_used', from: 3, to: 4 }], 'the same rise for hosts with no section is not repeated');
   } finally { fs.rmSync(r.dir, { recursive: true, force: true }); }
 });
 
@@ -545,8 +561,8 @@ test('per target: the file keeps the recorded host on top, sections sorted; olde
     assert.deepEqual(raw.totals, ON_LINUX.totals);
     assert.equal(renderBaseline(readBaseline(dir)), fs.readFileSync(p, 'utf8'), 'stable round trip');
     assert.equal(forTarget(readBaseline(dir), WINDOWS).toolchain, '1.98.0');
-    for (const bad of [[], { [WINDOWS]: null }, { [WINDOWS]: { totals: 3 } }]) {
-      fs.writeFileSync(p, JSON.stringify({ ...raw, targets: bad }));
+    for (const bad of [{ targets: [] }, { targets: { [WINDOWS]: null } }, { targets: { [WINDOWS]: { totals: 3 } } }, { targets: { [WINDOWS]: { totals: [] } } }, { totals: [] }]) {
+      fs.writeFileSync(p, JSON.stringify({ ...raw, ...bad }));
       assert.throws(() => readBaseline(dir), /not a temper baseline/);
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
