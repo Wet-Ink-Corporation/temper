@@ -1224,15 +1224,21 @@ function noteTree(proj, input) {
   const p = path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-${agentKey(input)}.json`);
   if (fs.existsSync(p)) return;
   let head = resolveRev(proj, 'HEAD');
+  let widened = false;
   // The main session entering a linked worktree it did not start in: the scope starts at the
   // session base when the worktree holds it, so the session's earlier commits stay in scope.
   const sessionBase = baseRev(proj, input.session_id);
   if (agentKey(input) === 'main' && head && sessionBase && head !== sessionBase && isLinked(proj)
     && !fs.existsSync(path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-session.json`))
-    && run('git', ['merge-base', '--is-ancestor', sessionBase, head], { cwd: proj.gitRoot }).code === 0) head = sessionBase;
+    && run('git', ['merge-base', '--is-ancestor', sessionBase, head], { cwd: proj.gitRoot }).code === 0) {
+    widened = true;
+    head = sessionBase;
+  }
   const br = run('git', ['symbolic-ref', '--short', '-q', 'HEAD'], { cwd: proj.gitRoot });
   const branch = br.code === 0 ? br.stdout.trim() || null : null;
-  writeAtomic(p, JSON.stringify({ root: proj.root, head, branch, startFp: fingerprint(proj, head ?? baseRev(proj, input.session_id)), at: Date.now() }));
+  // A widened scope already holds the session's commits, so the tree before this edit is no starting point.
+  const startFp = widened ? null : fingerprint(proj, head ?? baseRev(proj, input.session_id));
+  writeAtomic(p, JSON.stringify({ root: proj.root, head, branch, startFp, at: Date.now() }));
 }
 
 /**
@@ -1287,10 +1293,14 @@ function otherTrees(proj, input, { agent, gone = false } = {}) {
   return out;
 }
 
-/** True when a scope from `base` covers one from `other`: `base` is `other` or an ancestor of it. */
-function coversBase(proj, base, other) {
-  if (!base || !other) return !other;
-  return base === other || run('git', ['merge-base', '--is-ancestor', base, other], { cwd: proj.gitRoot }).code === 0;
+/** True when a scope from `base` holds all of `tree`'s own commits (those after `treeBase`): none of them is already in `base`. */
+function coversBase(proj, base, treeBase, tree) {
+  if (!treeBase) return true;
+  if (!base) return false;
+  const head = resolveRev(tree, 'HEAD');
+  if (!head) return false;
+  const count = (...revs) => Number(run('git', ['rev-list', '--count', head, `^${treeBase}`, ...revs], { cwd: proj.gitRoot }).stdout.trim());
+  return count() === count(`^${base}`);
 }
 
 /** True when everything `tree` holds is already in `main`'s HEAD: its HEAD is an ancestor, and it has no uncommitted Rust change. */
@@ -1318,7 +1328,7 @@ function dueTrees(proj, input, { agent } = {}) {
     const fp = fingerprint(t.proj, t.base);
     if (t.startFp && t.startFp === fp) continue; // nothing changed by this session
     // the gating checkout holds it and is gated itself, from a base no later than this tree's
-    if (!t.main && mergedInto(t.proj, proj) && coversBase(proj, candidates[0].base, t.base)) continue;
+    if (!t.main && due[0]?.main && mergedInto(t.proj, proj) && coversBase(proj, candidates[0].base, t.base, t.proj)) continue;
     due.push({ ...t, fp });
   }
   return due;

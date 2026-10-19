@@ -691,6 +691,19 @@ test('Stop: commits in the main checkout stay in scope after the session moves i
   assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${wide}).`);
 });
 
+test('Stop: commits in the main checkout are gated when the session enters a worktree made from them and leaves it unchanged', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-noop';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  preEdit({ cwd: r.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: r.file(LIB), content: LIB_RS_2 } });
+  r.put(LIB, LIB_RS_2);
+  r.git('commit', '-qam', 'two');
+  const w = worktree(r, 'noop');
+  // an edit there is noted (and denied, or reverted): the worktree's own tree does not change
+  preEdit({ cwd: w.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: 'fn x() {}\n' } });
+  assert.ok(blocked(stop({ cwd: w.dir, session_id: sid })), 'the main checkout\'s commit is still ungated and unreviewed');
+});
+
 test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {
   const r = repo(t);
   const sid = 's-wt-ahead';
