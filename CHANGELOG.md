@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+**CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
+
 **temper lens: live gate progress at `Stop` (#111).** While temper's gate runs at `Stop` or `SubagentStop`, the lens shows its progress, read from the gate's progress file through `status --json`:
 - The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 4 clippy · 1m 12s`).
 - The band shows the same, with the steps already done and their times.
