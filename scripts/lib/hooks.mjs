@@ -1159,7 +1159,8 @@ function storeVerdict(proj, input, v, via) {
   const current = fingerprint(proj, base);
   const rec = recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
-  writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`), verdictHash(v));
+  // One-shot: this agent's SubagentStop uses it to skip the same report read back from the transcript.
+  if (via === 'handback') writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`), verdictHash(v));
   telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length, ...(rec.kept ? { kept: rec.kept } : {}) });
 }
 
@@ -1284,8 +1285,10 @@ export function subagentStop(input) {
     // Recorded by SubagentHandback or an earlier SubagentStop for this agent: a hand-back's report
     // read back from the transcript is not recorded twice (#136), while a resumed reviewer's new
     // verdict, even on the same tree, is checked and recorded.
-    const seen = already && v && readText(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`));
-    if (already && (!v || seen === verdictHash(v))) return none();
+    const hashFile = path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`);
+    const seen = readText(hashFile);
+    if (seen !== null) fs.rmSync(hashFile, { force: true });
+    if (already && (!v || (seen !== null && seen === verdictHash(v)))) return none();
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       if (input.stop_hook_active) { telemetry(proj, input, 'verdict-invalid-final', { problems: problems.length }); return none(); }

@@ -630,10 +630,27 @@ test('SubagentStop (reviewer): a resumed reviewer\'s new verdict on the same tre
   // and the reverse: approved again after changes requested
   assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp)) }), {});
   assert.equal(verdictFor(proj, fp).verdict, 'approved');
-  // the same report delivered again is not a new verdict
-  assert.deepEqual(subagentStop({ ...input, last_assistant_message: fenced(verdict(fp)) }), {});
   const rows = readTelemetry(proj).filter((x) => x.sid === 's-rv-resume' && x.event === 'verdict');
   assert.deepEqual(rows.map((x) => x.verdict), ['approved', 'changes-requested', 'approved']);
+  // SubagentStop never leaves a marker that would skip a later verdict
+  assert.ok(!fs.existsSync(path.join(sessionDir(proj, 's-rv-resume'), 'verdict-agent-rv1.hash')));
+});
+
+test('SubagentStop (reviewer): a resumed reviewer repeating its own verdict after another approved the tree is recorded (#136)', { skip: noGit }, (t) => {
+  // No hand-backs: rv1 requests changes with a blocker, rv2 approves, rv1 is resumed and ends with
+  // the byte-identical changes-requested verdict. It is checked and recorded, and replaces the approval.
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.fp();
+  const proj = r.proj();
+  const input = { cwd: r.dir, session_id: 's-rv-repeat', agent_type: 'temper:rust-reviewer' };
+  const cr = fenced(verdict(fp, { verdict: 'changes-requested', findings: [{ rule: 'H-02', severity: 'blocker', file: LIB, line: 10, evidence: 'x.unwrap()', fix: 'propagate with ?' }] }));
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv1', last_assistant_message: cr }), {});
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv2', last_assistant_message: fenced(verdict(fp)) }), {});
+  assert.equal(verdictFor(proj, fp).verdict, 'approved');
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv1', last_assistant_message: cr }), {});
+  assert.equal(verdictFor(proj, fp).verdict, 'changes-requested');
+  assert.equal(verdictFor(proj, fp).agent_id, 'rv1');
 });
 
 test('SubagentStop (reviewer): a verdict the hand-back recorded is not recorded again from the transcript (#136)', { skip: noGit }, (t) => {
@@ -649,6 +666,8 @@ test('SubagentStop (reviewer): a verdict the hand-back recorded is not recorded 
   assert.deepEqual(subagentStop({ ...input, agent_id: 'rv1', agent_transcript_path: transcript(r, report) }), {});
   const history = fs.readFileSync(path.join(proj.stateDir, 'verdicts', `${fp}.history.jsonl`), 'utf8').trim().split('\n');
   assert.equal(history.length, 1);
+  // the hand-back's marker is one-shot: used by that SubagentStop, then removed
+  assert.ok(!fs.existsSync(path.join(sessionDir(proj, 's-rv-once'), 'verdict-agent-rv1.hash')));
   const rows = readTelemetry(proj).filter((x) => x.sid === 's-rv-once' && x.event === 'verdict');
   assert.deepEqual(rows.map((x) => [x.via, x.kept]), [['handback', 'approved']]);
   // the reviewer's context counts the verdict kept as history
