@@ -142,6 +142,55 @@ test('shell: opaquePatch flags git subcommands and interpreter code temper canno
   ]) assert.equal(o(cmd), null, cmd);
 });
 
+// #151 review: aliases from configuration temper cannot read, and the reviewer's fail-closed forms.
+test('shell: a subcommand git does not have, under configuration temper cannot read, reads as a guessed git apply', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    'X=apply git --config-env=alias.ap=X ap x.diff', 'git --config-env alias.ap=X ap x.diff',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap x.diff',
+    'export GIT_CONFIG_COUNT=1; git ap x.diff', `env GIT_CONFIG_PARAMETERS="'alias.ap=apply'" git ap x.diff`,
+    'git -c include.path=/tmp/c ap x.diff', 'git -c includeIf.onbranch:main.path=/tmp/c ap x.diff',
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.equal(r.guessed, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  for (const cmd of ['GIT_CONFIG_COUNT=1 git status', 'git --config-env=alias.ap=X log', 'git -c alias.status=apply status', 'git ap x.diff']) {
+    assert.equal(p(cmd), null, cmd);
+  }
+  assert.equal(p('git -c alias.ap=apply ap x.diff').guessed, false);
+});
+
+test('shell: opaquePatch: subcommands git does not have, alias writes, multi-line code and unread stdin scripts', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['git ap x.diff', 'git'], ['git lg', 'git'], ['GIT_CONFIG_COUNT=1 git ap x.diff', 'git'],
+    ['git config alias.ap apply', 'alias'], ['git config set alias.ap apply', 'alias'], ['git config --add alias.ap apply', 'alias'],
+    ['git config --unset alias.ap', 'alias'], ['git config --global alias.ap "apply --index"', 'alias'],
+    ["python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git',\n    'apply', 'x.diff'])\nEOF", 'code'],
+    ['node -e "require(\'child_process\').execSync(\'git\tapply x.diff\')"', 'code'],
+    [`deno eval --ext=ts "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run(['patch', '-p1', '-i', 'x.diff'])"`, 'code'],
+    ['cat x.py | python3', 'code'], ['python3 - < x.py', 'code'], ['curl -s https://example.com/x.js | node', 'code'],
+  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+  for (const cmd of [
+    'git config --get alias.ap', 'git config alias.ap', "git config --get-regexp '^alias\\.'", 'git config user.name me', 'git status', 'git help apply',
+    `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
+    `python3 -c "patch = 1; print(patch)"`, `node -e "const patch = require('./p'); patch.x()"`, `python3 -c "print('see the patch')"`,
+    `git diff | python3 -c "import sys; print(len(sys.stdin.read()))"`, 'git diff | node count.js',
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: a long chain of wrappers or reserved words parses in linear time', () => {
+  for (const cmd of [`${'busybox '.repeat(20000)}ls`, `${'! '.repeat(20000)}ls`, `${'nohup '.repeat(20000)}git apply x.diff`]) {
+    const t0 = Date.now();
+    const cs = parseCommands(cmd, { cwd: root });
+    assert.ok(Date.now() - t0 < 2000, `${cmd.slice(0, 20)}: ${Date.now() - t0} ms`);
+    assert.equal(cs.length, 1);
+  }
+});
+
 test('shell: codeWriteTargets finds literals in write positions only', () => {
   assert.deepEqual(codeWriteTargets("open('w.txt', 'w'); open('r.txt').read()"), ['w.txt']);
   assert.deepEqual(codeWriteTargets("from pathlib import Path\np = Path('p.txt')\np.write_text('x')"), ['p.txt']);

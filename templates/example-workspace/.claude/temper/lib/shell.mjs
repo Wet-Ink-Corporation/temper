@@ -459,17 +459,26 @@ const assignTo = (env, w) => {
   else env.vars.set(w.assign, w.value.slice(w.assign.length + 1));
 };
 
+// The index of the first word at or after `i` that is not a reserved word.
+const skipKeywords = (w, i) => {
+  while (i < w.length && KEYWORDS.has(w[i].raw) && !w[i].quoted) i++;
+  return i;
+};
+
 function simple(words, meta, env, out, depth) {
   let w = words;
+  // The variables the command's environment sets: `VAR=value` prefixes, `env VAR=value`, and
+  // GIT_CONFIG_* set earlier (git reads them as configuration, aliases included).
+  const envNames = [];
   const emit = (name, rest, extra = {}) => out.push({
     name, argv0: rest[0], args: rest.slice(1), redirects: meta.redirects, stdin: meta.stdin, piped: meta.piped,
     cwd: extra.cwd !== undefined ? extra.cwd : env.cwd, raw: meta.raw, line: meta.line, via: meta.via,
+    envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))],
   });
-  while (w.length && KEYWORDS.has(w[0].raw) && !w[0].quoted) w = w.slice(1);
+  w = w.slice(skipKeywords(w, 0));
   if (!w.length) { if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]); return; }
   if (w[0].raw === 'function' && !w[0].quoted) { // function f { ...
-    w = w.slice(2);
-    while (w.length && KEYWORDS.has(w[0].raw) && !w[0].quoted) w = w.slice(1);
+    w = w.slice(skipKeywords(w, 2));
     if (!w.length) return;
   }
   if (['for', 'select', 'case'].includes(w[0].raw) && !w[0].quoted) {
@@ -489,44 +498,48 @@ function simple(words, meta, env, out, depth) {
     if (w[2].value === null) env.vars.delete(w[0].raw.slice(1)); else env.vars.set(w[0].raw.slice(1), w[2].value);
     return;
   }
-  w = w.slice(k);
+  for (const a of w.slice(0, k)) envNames.push(a.assign);
   let cwd = env.cwd;
   let xargs = null;
+  // Wrappers are walked with an index, so a long chain (`busybox busybox ...`) stays linear.
+  let i = k;
   for (;;) {
-    if (!w.length || w[0].value === null) break;
-    const name = commandName(w[0].value);
+    if (i >= w.length || w[i].value === null) break;
+    const name = commandName(w[i].value);
     const valued = WRAPPERS.get(name);
     if (!valued) break;
-    w = w.slice(1);
-    if (name === 'command' && w[0] && /^-[vV]+$/.test(w[0].raw)) return; // a lookup, not a run
+    i++;
+    if (name === 'command' && w[i] && /^-[vV]+$/.test(w[i].raw)) return; // a lookup, not a run
     if (name === 'xargs') xargs = { replace: null };
     let watchExec = false;
-    while (w.length && ((w[0].raw.startsWith('-') && w[0].raw !== '-') || (name === 'env' && isAssign(w[0])))) {
-      const a = w[0].raw;
-      w = w.slice(1);
+    while (i < w.length && ((w[i].raw.startsWith('-') && w[i].raw !== '-') || (name === 'env' && isAssign(w[i])))) {
+      const a = w[i].raw;
+      if (name === 'env' && isAssign(w[i])) envNames.push(w[i].assign);
+      i++;
       if (name === 'xargs') {
         const rep = /^(?:-I|--replace=?|-i)(.*)$/.exec(a);
         if (rep) {
           if (rep[1]) xargs.replace = rep[1];
-          else if (a === '-I' || a === '--replace') { xargs.replace = w[0]?.raw ?? '{}'; w = w.slice(1); } else xargs.replace = '{}';
+          else if (a === '-I' || a === '--replace') { xargs.replace = w[i]?.raw ?? '{}'; i++; } else xargs.replace = '{}';
           continue;
         }
       }
-      if ((name === 'env' || name === 'sudo') && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[0]?.value ?? null, cwd); w = w.slice(1); continue; }
+      if ((name === 'env' || name === 'sudo') && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[i]?.value ?? null, cwd); i++; continue; }
       if (name === 'env' && /^--chdir=/.test(a)) { cwd = resolvePath(a.slice(8), cwd); continue; }
       if (name === 'watch') {
         if (a === '--exec' || /^-[a-zA-Z]*x/.test(a)) watchExec = true;
-        if (/^-[a-zA-Z]*[nq]$/.test(a)) { w = w.slice(1); continue; } // -n 2, -dn 2
+        if (/^-[a-zA-Z]*[nq]$/.test(a)) { i++; continue; } // -n 2, -dn 2
       }
-      if (valued.includes(a)) w = w.slice(1);
+      if (valued.includes(a)) i++;
     }
     if (name === 'watch' && !watchExec) {
-      if (w.length) sub(w.map((x) => x.text).join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'watch');
+      if (i < w.length) sub(w.slice(i).map((x) => x.text).join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'watch');
       return;
     }
-    if (name === 'timeout' && w.length) w = w.slice(1);
-    if (name === 'nice' && w[0] && /^-\d+$/.test(w[0].raw)) w = w.slice(1);
+    if (name === 'timeout' && i < w.length) i++;
+    if (name === 'nice' && w[i] && /^-\d+$/.test(w[i].raw)) i++;
   }
+  w = w.slice(i);
   if (!w.length) { if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]); return; } // `exec > file`
   if (xargs) {
     if (xargs.replace) w = w.map((x) => (x.raw.includes(xargs.replace) ? unknownWord(x.raw) : x));
@@ -580,11 +593,35 @@ function simple(words, meta, env, out, depth) {
 
 const literalWord = (s) => ({ raw: s, text: s, value: s, glob: false, quoted: false });
 
+// git's own commands (`git --list-cmds=main`, plus the newer `backfill`, `refs` and `replay`).
+// An alias never overrides one; any other subcommand may be an alias.
+export const GIT_BUILTINS = new Set(`add am annotate apply archive backfill bisect blame branch bugreport bundle cat-file check-attr
+check-ignore check-mailmap check-ref-format checkout checkout-index cherry cherry-pick citool clean clone column commit
+commit-graph commit-tree config count-objects credential credential-cache credential-store daemon describe diagnose diff
+diff-files diff-index diff-tree difftool fast-export fast-import fetch fetch-pack filter-branch fmt-merge-msg for-each-ref
+for-each-repo format-patch fsck fsck-objects gc get-tar-commit-id grep gui hash-object help hook http-backend http-fetch
+http-push imap-send index-pack init init-db instaweb interpret-trailers log ls-files ls-remote ls-tree mailinfo mailsplit
+maintenance merge merge-base merge-file merge-index merge-octopus merge-one-file merge-ours merge-recursive
+merge-recursive-ours merge-recursive-theirs merge-resolve merge-subtree merge-tree mergetool mktag mktree multi-pack-index mv
+name-rev notes pack-objects pack-redundant pack-refs patch-id pickaxe prune prune-packed pull push quiltimport range-diff
+read-tree rebase receive-pack reflog refs remote remote-ext remote-fd remote-ftp remote-ftps remote-http remote-https repack
+replace replay request-pull rerere reset restore rev-list rev-parse revert rm send-pack shell shortlog show show-branch
+show-index show-ref sparse-checkout stage stash status stripspace submodule switch symbolic-ref tag unpack-file
+unpack-objects update-index update-ref update-server-info upload-archive upload-pack var verify-commit verify-pack
+verify-tag version whatchanged worktree write-tree`.split(/\s+/));
+
+// Configuration git reads from somewhere temper does not: the environment, or an included file.
+const HIDDEN_CONFIG_ENV = /^GIT_CONFIG/;
+const INCLUDE_KEY = /^include(?:if\.[\s\S]*)?\.path=/i;
+
 /**
- * `git [-C dir] [-c k=v] <sub> args`: `{ sub, args, cwd, dynamic }`, or null when the command is
- * not git. An alias set with `-c alias.x=...` resolves to the command it names, its words
- * before `args`. `dynamic` is true when temper cannot tell the subcommand: an unknown word,
- * a shell alias (`!...`), or a `-c` value that could define an alias.
+ * `git [-C dir] [-c k=v] [--config-env k=ENV] <sub> args`: `{ sub, args, cwd, dynamic, hiddenAlias }`,
+ * or null when the command is not git. A subcommand that is not one of git's own and has an alias
+ * set with `-c alias.x=...` resolves to the command it names, its words before `args`.
+ * `dynamic` is true when temper cannot tell the subcommand: an unknown word, a shell alias
+ * (`!...`), a `-c` value that could define an alias, or a subcommand git does not have while
+ * configuration temper cannot read is in play (`--config-env alias.x=...`, a `GIT_CONFIG_*`
+ * variable, `-c include.path=...`); `hiddenAlias` marks that last case.
  */
 function gitCommand(c) {
   if (c.name !== 'git') return null;
@@ -592,6 +629,7 @@ function gitCommand(c) {
   const a = c.args;
   const aliases = new Map();
   let opaque = false;
+  let hidden = (c.envNames ?? []).some((n) => HIDDEN_CONFIG_ENV.test(n));
   for (let i = 0; i < a.length; i++) {
     const t = a[i].raw;
     if (t === '-C') { dir = wordPath(a[++i], dir); continue; }
@@ -600,24 +638,33 @@ function gitCommand(c) {
       // `alias.x=$V` is an alias temper cannot read; `color.ui=$V` sets no alias.
       const m = /^alias\.([^=]+)=([\s\S]*)$/i.exec(w?.value ?? w?.raw ?? '');
       if (m) aliases.set(m[1].toLowerCase(), w.value === null ? '!' : m[2].trim());
+      else if (INCLUDE_KEY.test(w?.value ?? w?.raw ?? '')) hidden = true;
       else if (w?.value == null && !/^[A-Za-z][\w-]*\.[\w.-]*=/.test(w?.raw ?? '')) opaque = true;
+      continue;
+    }
+    if (t === '--config-env' || t.startsWith('--config-env=')) {
+      // Its value comes from the environment, so an alias it sets is never readable.
+      const v = t === '--config-env' ? a[++i]?.raw ?? '' : t.slice('--config-env='.length);
+      if (/^alias\./i.test(v)) hidden = true;
+      else if (!/^[A-Za-z][\w-]*\.[\w.-]*=/.test(v) || INCLUDE_KEY.test(v)) hidden = true;
       continue;
     }
     if (t === '--git-dir' || t === '--work-tree' || t === '--namespace') { i++; continue; }
     if (t.startsWith('-')) continue;
-    if (a[i].value === null) return { sub: '', args: a.slice(i + 1), cwd: dir, dynamic: true };
+    if (a[i].value === null) return { sub: '', args: a.slice(i + 1), cwd: dir, dynamic: true, hiddenAlias: false };
     let sub = a[i].value;
     let args = a.slice(i + 1);
-    for (let n = 0; n < 8 && aliases.has(sub.toLowerCase()); n++) {
+    for (let n = 0; n < 8 && !GIT_BUILTINS.has(sub) && aliases.has(sub.toLowerCase()); n++) {
       const def = aliases.get(sub.toLowerCase());
-      if (!def || def.startsWith('!')) return { sub: '', args, cwd: dir, dynamic: true };
+      if (!def || def.startsWith('!')) return { sub: '', args, cwd: dir, dynamic: true, hiddenAlias: false };
       const [head, ...rest] = def.split(/\s+/);
       sub = head;
       args = [...rest.map(literalWord), ...args];
     }
-    return { sub, args, cwd: dir, dynamic: opaque };
+    const hiddenAlias = hidden && !GIT_BUILTINS.has(sub);
+    return { sub, args, cwd: dir, dynamic: opaque || hiddenAlias, hiddenAlias };
   }
-  return { sub: '', args: [], cwd: dir, dynamic: opaque };
+  return { sub: '', args: [], cwd: dir, dynamic: opaque, hiddenAlias: false };
 }
 
 const INSTALL_VALUES = ['--suffix', '--mode', '--owner', '--group', '--strip-program', '--context'];
@@ -894,7 +941,10 @@ function interpreterCode(c) {
   const code = [];
   if (c.stdin?.body) code.push(c.stdin.body);
   const a = c.args;
-  if (c.name === 'deno' && a[0]?.value === 'eval' && a[1]) code.push(a[1].text);
+  if (c.name === 'deno' && a[0]?.value === 'eval') {
+    const k = a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-'));
+    if (k !== -1) code.push(a[k].text);
+  }
   for (let j = 0; j < a.length; j++) {
     if ((/^-[a-zA-Z]*[ceEp]$/.test(a[j].raw) || /^(?:-r|--eval|--print|-command)$/i.test(a[j].raw)) && a[j + 1]) code.push(a[++j].text);
   }
@@ -1066,13 +1116,17 @@ const GIT_APPLY_VALUES = new Set(['-p', '-C', '--exclude', '--include', '--direc
  * which applies patches temper cannot see.
  */
 export function patchCommand(c) {
+  let guessed = false;
   let tool;
   let args;
   let cwd = c.cwd;
   if (c.name === 'patch') { tool = 'patch'; args = c.args; } else {
     const g = gitCommand(c);
-    if (!g || (g.sub !== 'apply' && g.sub !== 'am')) return null;
-    tool = `git ${g.sub}`;
+    if (!g || (g.sub !== 'apply' && g.sub !== 'am' && !g.hiddenAlias)) return null;
+    // A subcommand git does not have, under configuration temper cannot read, may be an alias
+    // of git apply: it is read as one, and only a patch file temper can read counts (`guessed`).
+    if (g.hiddenAlias) guessed = true;
+    tool = g.hiddenAlias ? 'git apply' : `git ${g.sub}`;
     args = g.args;
     cwd = g.cwd;
   }
@@ -1116,29 +1170,53 @@ export function patchCommand(c) {
     target = pos[0] ?? null;
     if (pos[1]) inputs.push(pos[1]);
   } else inputs.push(...pos.filter((p) => p.raw !== '-'));
-  return { tool, apply: true, inputs, outputs, target, cwd, stored };
+  return { tool, apply: true, inputs, outputs, target, cwd, stored, guessed };
 }
 
-// Interpreter code that runs git apply or git am (`['git', 'apply', ...]` too), or patch.
+// Interpreter code that runs git apply or git am (`['git', 'apply', ...]` too, across lines), or a
+// patch command: `patch` followed by an option, a file or `<`, in a string or after `;`, `|`, `&`.
 const PATCH_CODE = [
-  /\bgit\b[^\n;|&]{0,80}?\b(?:apply|am)\b/,
-  /(?:^|['"`(\[;|&]\s*)(?:busybox['",\s]+)?g?patch(?=[\s'"`,\]]|$)/m,
+  /\bgit\b[\s\S]{0,80}?(?<![\w./-])(?:apply|am)(?![\w./-])/,
+  /(?:^|['"`(\[;|&]\s*|\bbusybox\s+)g?patch(?:\s+[-<\w./~$"']|['"],\s*['"][-<\w./~$])/m,
 ];
+const CONFIG_VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
+const CONFIG_WRITE_FLAGS = /^--(?:add|unset|unset-all|replace-all|rename-section|remove-section)$/;
+
+/** Whether `git config <args>` sets, unsets or renames an `alias.*` key (`git config alias.x` alone reads it). */
+function configWritesAlias(args) {
+  const pos = args.filter((x) => !x.raw.startsWith('-'));
+  const verb = CONFIG_VERBS.has(pos[0]?.raw) ? pos.shift() : null;
+  const key = pos.findIndex((x) => /^alias\./i.test(x.value ?? x.raw));
+  if (key === -1) return false;
+  return Boolean(verb) || pos.length > key + 1 || args.some((x) => CONFIG_WRITE_FLAGS.test(x.raw.split('=')[0]));
+}
 
 /**
- * Why temper cannot rule out that `c` applies a patch, or null: a git subcommand it cannot
- * resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a `-c` value it cannot read), a
- * command name it cannot resolve that names git or patch or comes before `apply` or `am`, or
- * interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
- * mentions `git apply`, `git am` or `patch`. Patterns, not a parse: for a fail-closed check.
+ * Why temper cannot rule out that `c` applies a patch, as `{ kind, why }`, or null. `kind` is:
+ * - `git`: a git subcommand it cannot resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a
+ *   `-c` value it cannot read), or one git does not have, which may be an alias set anywhere;
+ * - `name`: a command name it cannot resolve that names git or patch, or comes before `apply` or `am`;
+ * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
+ *   mentions `git apply`, `git am` or a patch command, or code piped or redirected into one;
+ * - `alias`: `git config` setting an alias, which could name git apply later.
+ * Patterns, not a parse: for a fail-closed check.
  */
 export function opaquePatch(c) {
   if (c.name === null) {
-    if (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am')) return 'an unresolved command name';
+    if (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am')) return { kind: 'name', why: 'an unresolved command name' };
     return null;
   }
-  if (gitCommand(c)?.dynamic) return 'a git subcommand temper cannot resolve';
-  if (interpreterCode(c).some((code) => PATCH_CODE.some((re) => re.test(code)))) return `${c.name} code that runs git apply, git am or patch`;
+  const g = gitCommand(c);
+  if (g) {
+    if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
+    if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
+    return null;
+  }
+  if (!INTERPRETERS.test(c.name)) return null;
+  if (interpreterCode(c).some((code) => PATCH_CODE.some((re) => re.test(code)))) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
+  // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`.
+  const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
+  if ((c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !c.stdin.body && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
   return null;
 }
 

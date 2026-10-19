@@ -422,7 +422,14 @@ function patchTouches(p, c, written, want = (f) => /\.rs$/.test(f)) {
 const RS_COPY_SCANNED = Symbol('temper-rs-copies-scanned');
 // The sanctioned way to move Rust between worktrees (#140): a commit brought in with git, which the Stop gate and CI check.
 const PATCH_ROUTE = 'To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in.';
-const REVIEWER_PATCH_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
+// What the reviewer runs instead of a command temper cannot resolve (#151), by opaquePatch's kind.
+const REVIEWER_OPAQUE_HINT = {
+  git: 'Run one of git\'s own commands with its name written out; the reviewer runs no git alias.',
+  name: 'Run the command with its name written out.',
+  code: 'Run the git or shell command directly, not through an interpreter, so temper can read it.',
+  alias: 'The reviewer sets no git alias, because an alias could run `git apply` or `git am` later.',
+};
+const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**
  * cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs files, and git apply/am/patch of
@@ -617,8 +624,9 @@ function shellRustWrites(cmd, proj, input) {
     const p = patchCommand(c);
     if (p?.apply) {
       const r = patchTouches(p, c, written);
-      if (!r.read) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
-      else patched.push(...r.touched);
+      // A guessed alias (see patchCommand) counts only with a patch file temper can read.
+      if (r.read) patched.push(...r.touched);
+      else if (!p.guessed) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
     }
     const lnFlag = (letter, long) => c.name === 'ln' && c.args.some((a) => new RegExp(`^-[a-zA-Z]*${letter}`).test(a.raw) || a.raw === long);
     const symbolic = lnFlag('s', '--symbolic');
@@ -839,7 +847,8 @@ function protectedShellWrites(proj, cmd, cwd) {
     const p = protectedPatch(c);
     if (p?.apply) {
       const r = configPatchTouches(p, c);
-      if (!r.read && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
+      // A guessed alias (see patchCommand) counts only with a patch file temper can read.
+      if (!r.read && !p.guessed && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
       const named = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.value);
       const listed = r.read ? r.touched.filter((f) => !named.includes(f)) : [];
       for (const base of p.cwd ? [p.cwd] : [start, proj.root]) {
@@ -1015,7 +1024,7 @@ export function preBash(input) {
     const opaque = cmds.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
     if (opaque) {
       telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
-      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque}, so temper cannot tell that it applies no patch. Run git with its subcommand written out.`);
+      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque.why}, so temper cannot tell that it applies no patch. ${REVIEWER_OPAQUE_HINT[opaque.kind]}`);
     }
   }
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {

@@ -621,6 +621,10 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `perl -e 'system("patch -p1 < x.diff")'`,
       `ruby -e 'system("git apply x.diff")'`,
       `deno eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
+      `git ap "${out('doc.diff')}"`,
+      'git config alias.ap apply',
+      'cat x.py | python3',
+      `X=apply git --config-env=alias.ap=X ap "${out('doc.diff')}"`,
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -632,9 +636,14 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat',
       `gpatch --dry-run -p1 -i "${out('doc.diff')}"`, 'watch -n 5 git status', 'git -c alias.st=status st', 'git -c core.pager=cat log -1',
       'python3 -c "print(1 + 1)"', `node -e "console.log(require('fs').existsSync('x.patch'))"`, "git log --grep 'git apply'",
+      'git config --get alias.ap', `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
     ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
+    // Each fail-closed deny says what to run instead.
+    assert.match(reason(asReviewer('git $x')), /git's own commands/);
+    assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);
+    assert.match(reason(asReviewer('git config alias.ap apply')), /sets no git alias/);
     // Another agent's non-Rust patch still runs, and so do the forms the reviewer alone is denied because temper cannot resolve them.
     for (const cmd of [
       `git apply "${out('doc.diff')}"`, `gpatch -p1 -i "${out('doc.diff')}"`, 'git ${CMD:-status}',
@@ -652,6 +661,9 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       `watch -n 1 -x git apply "${out('rs.diff')}"`,
       `git -c alias.ap=apply ap "${out('rs.diff')}"`,
       `git -c 'alias.ap=apply --index' ap "${out('rs.diff')}"`,
+      // An alias temper cannot read, on a subcommand git does not have, reads as git apply.
+      `X=apply git --config-env=alias.ap=X ap "${out('rs.diff')}"`,
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('rs.diff')}"`,
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -660,6 +672,9 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
     for (const cmd of [
       `gpatch --dry-run -p1 -i "${out('rs.diff')}"`, `watch git apply --check "${out('rs.diff')}"`, `git -c 'alias.ck=apply --check' ck "${out('rs.diff')}"`,
       `busybox patch -p1 -i "${out('doc.diff')}"`,
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('doc.diff')}"`,
+      'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.lg GIT_CONFIG_VALUE_0=log git lg --oneline',
+      'git config alias.ap apply',
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
 });
