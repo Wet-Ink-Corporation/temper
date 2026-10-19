@@ -48,7 +48,11 @@ export type LensStats = {
   sessions: number
   rules: Record<string, number>
   gate: { runs: number; cached: number; cutShort: number; p50Ms: number | null; p90Ms: number | null; maxMs: number | null; recentMs: number[] }
-  review: { sessions: number; roundsP50: number | null; roundsMax: number | null; firstApproved: number }
+  review: {
+    sessions: number; roundsP50: number | null; roundsMax: number | null; firstApproved: number
+    /** Review rounds per change: a session's rounds up to the approval that closes them. */
+    changes: { count: number; approved: number; neverApproved: number; firstRound: number; roundsP50: number | null; roundsMax: number | null }
+  }
 }
 
 /** One telemetry row of this session, as `stats --json --session` gives it. */
