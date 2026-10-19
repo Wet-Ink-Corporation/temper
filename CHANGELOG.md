@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
 
