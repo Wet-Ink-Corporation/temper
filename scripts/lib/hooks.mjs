@@ -1024,12 +1024,15 @@ export function preBash(input) {
   // a command temper cannot resolve that may apply one is denied too (#151); other agents'
   // dynamic commands are left to the Stop gate and CI, which check the Rust they leave.
   if (REVIEWER.test(input.agent_type ?? '')) {
-    const cmds = readerRule(() => parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root }), []);
+    const opts = { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root };
+    const cmds = readerRule(() => parseCommands(cmd, opts), []);
     if (cmds.some((c) => readerRule(() => patchCommand(c)?.apply, false))) {
       telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
       return deny(REVIEWER_PATCH_DENY);
     }
-    const opaque = cmds.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
+    // The fail-closed check takes no value from temper's model of variables, which is not bash's (#151 review 7).
+    const unread = readerRule(() => parseCommands(cmd, { ...opts, untracked: true }), []);
+    const opaque = unread.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
     if (opaque) {
       telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
       if (opaque.kind === 'name') return deny(`${REVIEWER_NAME_DENY} This command holds ${opaque.why}. ${REVIEWER_NAME_HINT}`);

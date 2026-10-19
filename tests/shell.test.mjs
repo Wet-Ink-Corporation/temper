@@ -281,17 +281,73 @@ test('shell: opaquePatch: brace and glob words, command names temper reads, and 
     ["X='git apply x'; $X", 'name'], ["X='git apply x'; \"$X\"", 'name'], ['X=g*; $X', 'name'], ['IFS=/; X=git/apply/x.diff; $X', 'name'],
     ['"${CARGO:-cargo}" test', 'name'], ['$(which cargo) test', 'name'],
     ['python3 -c "$X"', 'code'], ['node -e "$(cat f)"', 'code'], ['perl -e "$X"', 'code'], ['perl -ne "$X" f', 'code'], ['ruby -e "$X"', 'code'],
-    ['php -r "$X"', 'code'], ['deno eval "$X"', 'code'], ['awk "$X"', 'code'], ['awk -F: "$X" f', 'code'], ['gawk -v a=1 "$X" f', 'code'],
-    ["awk 'BEGIN { system(\"git apply x.diff\") }'", 'code'],
+    ['php -r "$X"', 'code'], ['deno eval "$X"', 'code'],
   ]) assert.equal(o(cmd)?.kind, kind, cmd);
   for (const cmd of [
     "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' x.json", "git log --format='%H' -5", "rg 'foo\\{' crates",
     'rg foo\\{ crates', 'find crates -name x -exec grep -n unwrap {} +', 'git show HEAD@{1} --stat', "eval 'git status'", 'ls crates/*/src',
     '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo test', '"$PWD/target/debug/a" --help', '~/.cargo/bin/cargo test',
-    '"$(git rev-parse --show-toplevel)/scripts/check.sh"', 'X=cargo; $X test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
-    'python3 -c "print(1)"', "node -e 'console.log(1)'", "awk '{print $1}' x.txt", "awk -F: '{print $1}' x.txt", 'awk -f prog.awk x.txt',
-    "perl -ne 'print if /unwrap/' x.rs",
+    '"$(git rev-parse --show-toplevel)/scripts/check.sh"', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
+    'python3 -c "print(1)"', "node -e 'console.log(1)'", "perl -ne 'print if /unwrap/' x.rs",
   ]) assert.equal(o(cmd, { top: root }), null, cmd);
+});
+
+// #151 review 7 (wi-0e226b): temper's variable model is not bash (`read`, `printf -v`, arrays, an
+// assignment that never runs, ...), so for the reviewer a command name is read only when it is
+// literal, or $HOME, $PWD or the quoted git toplevel followed by a literal path, on a line that
+// writes none of them; never from a tracked assignment. The words of a wrapper before it are read
+// the same way, and an interpreter's -c or -e is code only before its script or module.
+test('shell: opaquePatch reads a command name from $HOME, $PWD or the toplevel only, never from a variable', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    // A value from an assignment: never read, whatever temper's model says it is.
+    'X=cargo; $X test', 'X=cargo; export X; $X test', 'X=git; $X status', 'X=/usr/bin; "$X/cargo" test', "X='git'; X=\"${X}\"; $X status",
+    // Builtins that write a variable temper does not follow, and values it would read wrong.
+    'X=cargo; read X <<< git; $X apply x.diff', 'X=cargo; printf -v X git; $X apply x.diff', 'X=cargo; mapfile -t X <<< git; $X apply x.diff',
+    'Y=git; X=cargo; declare -n X=Y; $X apply x.diff', 'X=cargo; X[0]=git; $X apply x.diff', 'X=cargo; X=(git); $X apply x.diff',
+    'X=cargo; ${X/cargo/git} apply x.diff', 'X=GIT; ${X,,} apply x.diff', 'Y=git; X=Y; ${!X} apply x.diff', 'X=cargo; unset X; $X git apply x.diff',
+    'X=; $X git apply x.diff', "X=''; $X git apply x.diff", '$X git apply x.diff', 'set -- git; "$@" apply x.diff', 'X=cargo; : ${X:=git}; $X test',
+    // Assignments that never run, or run elsewhere.
+    'X=git; false && X=cargo; $X apply x.diff', 'X=git; if false; then X=cargo; fi; $X apply x.diff', 'X=git; f() { X=cargo; }; $X apply x.diff',
+    'X=git; { X=cargo; } | cat; $X apply x.diff', 'X=git; { X=cargo; } & $X apply x.diff', 'X=git\nX=cargo &\n$X apply x.diff',
+    'X=git; case a in b) X=cargo;; esac; $X apply x.diff', 'X=git; local X=cargo 2>/dev/null; $X apply x.diff', 'X=cargo; time X=git; $X apply x.diff',
+    'X=cargo; X=git eval :; $X apply x.diff', 'X=cargo; X=git export Y; $X apply x.diff', 'X=cargo; source ./set.sh; $X apply x.diff',
+    'X=gitxapply; IFS=x; $X x.diff', 'X=gitxapply; read IFS <<< x; $X x.diff', "X=cargo; trap 'X=git' DEBUG; $X apply x.diff",
+    // A name the model would read as cd, export or a wrapper, and a wrapper's word built from an expansion.
+    'X=cd; $X apply x.diff', 'X=export; $X apply x.diff', 'X=nice; $X git apply x.diff', 'timeout $T apply x.diff', 'nice -n $N apply x.diff',
+    'timeout "$T" 5 git apply x.diff', 'env A=$X apply x.diff', 'env -S"$X"', 'watch -n $N apply x.diff',
+    "alias cargo='git apply'", 'hash -p /usr/bin/git cargo',
+    // $HOME, $PWD or the toplevel on a line that writes them, or not followed by a literal path.
+    'read HOME <<< /x; "$HOME/cargo" test', 'printf -v HOME /x; "$HOME/cargo" test', 'HOME=/x; "$HOME/cargo" test', 'export HOME=/x; $HOME/cargo test',
+    'unset HOME; $HOME/cargo test', ': ${HOME:=/x}; $HOME/cargo test', 'for HOME in /x; do $HOME/cargo test; done', 'declare -n R=HOME; "$HOME/cargo" test',
+    'Y=ME; read HO$Y <<< /x; "$HOME/cargo" test', "mapfile -t HO''ME <<< /x; \"$HOME/cargo\" test", 'cd /tmp; "$PWD/x"', 'pushd /tmp; "$PWD/x"',
+    'IFS=/; $HOME/cargo test', 'read IFS <<< /; $HOME/cargo test', 'source ./set.sh; "$HOME/cargo" test', '(( HOME = 1 )); "$HOME/cargo" test',
+    '$HOME', '"$HOME"', '"$HOME/"', '"$HOME$PWD/x"', '"$HOME/x$Y"', '$HOME/{x,y}', '"$TMPDIR/x"', '"$OLDPWD/x"', '$(git rev-parse --show-toplevel)/x',
+    '"$(git rev-parse --show-toplevel)$X/x"', '"${HOME:-/x}/cargo" test', '"$(git rev-parse --git-dir)/x"',
+  ]) assert.equal(o(cmd)?.kind, 'name', cmd);
+  for (const cmd of [
+    '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo test', '${HOME}/.cargo/bin/cargo test', '"${HOME}"/.cargo/bin/cargo test',
+    '"$PWD/target/debug/a" --help', '$PWD/target/debug/a', '"$(git rev-parse --show-toplevel)/scripts/check.sh"', '~/.cargo/bin/cargo test',
+    'echo "$HOME"; "$HOME/.cargo/bin/cargo" test', 'X=1; echo $X; "$HOME/.cargo/bin/cargo" test', 'cd crates && cargo test', 'timeout 60 cargo test',
+    'nice -n 5 cargo test', 'env A="$X" cargo test', 'X=crates; ls $X', '"$HOME/My Tools/x" --help',
+    // An interpreter's -c or -e after its script or module is the script's own argument (#151 review 7).
+    'python3 tool.py -c "$CFG"', 'node script.js -e "$ENVNAME"', 'python3 -m pytest -p "$PLUGIN"', 'python3 -u tool.py -c "$CFG"',
+    'deno run x.ts -e "$X"', 'ruby x.rb -e "$X"', 'python3 -c "import sys; print(sys.argv)" "$X"',
+    // A script or interpreter operand from a variable the line does not write, followed by a path.
+    'source "$HOME/.cargo/env"', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate --check', 'bash "$CLAUDE_PLUGIN_ROOT/x.sh"',
+    'PATH+=":$HOME/.cargo/bin"; cargo test',
+  ]) assert.equal(o(cmd), null, cmd);
+  // A script operand temper cannot name exactly may be /dev/stdin.
+  for (const cmd of ['F=/dev/stdin; bash "$F" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'bash "$X"', '. "$X"']) {
+    assert.equal(o(cmd)?.kind, 'script', cmd);
+  }
+  // Code before the script is still read: an option's value is not the script.
+  for (const cmd of ['python3 -W ignore -c "$X"', 'python3 -X dev -c "$X"', 'node -r ./x.js -e "$X"', 'node --require ./x.js -e "$X"', 'perl -pi -e "$X" x',
+    'python3 $O "$X"', 'python3 "$O" "$X"', 'python3 -E -c "$X"', 'python3 -Ic "$X"', 'perl -W -e "$X"', 'ruby -W -e "$X"', 'perl -I lib -e "$X"',
+    // perl's -W is a flag, so the code after it is read.
+    `perl -W -e 'system("git apply x.diff")'`]) {
+    assert.equal(o(cmd)?.kind, 'code', cmd);
+  }
 });
 
 // #151 review 5: `$'...'` is decoded as bash decodes it; an escape temper does not decode exactly leaves the word unknown.

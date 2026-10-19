@@ -676,7 +676,7 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       "find crates -name '*.rs' | xargs -I{} sh -c 'echo {}; grep -c unwrap {}'",
       // #151 review 6: a brace list or a glob is an expansion, and so is interpreter code built from one.
       `eval {git,apply,${out('doc.diff')}}`, `bash -c {'git apply ${out('doc.diff')}',x}`, `eval git*`, `bash -c gi?' apply ${out('doc.diff')}'`,
-      'python3 -c "$X"', 'node -e "$(cat f)"', 'perl -e "$X"', 'awk "$X"',
+      'python3 -c "$X"', 'node -e "$(cat f)"', 'perl -e "$X"',
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -715,8 +715,23 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     for (const cmd of [
       "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' Cargo.toml", "git log --format='%H' -5", "rg 'foo\\{' crates",
       '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo --version', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
-      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", "awk '{print $1}' Cargo.toml",
+      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"', 'node script.js -e "$ENVNAME"',
+      'python3 -m pytest -p "$PLUGIN"', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" gate --check', 'source "$HOME/.cargo/env" && cargo test',
+      'PATH+=":$HOME/.cargo/bin"; cargo test',
     ]) assert.equal(decision(asReviewer(cmd)), 'none', cmd);
+    // #151 review 7: temper's variable model is not bash, so a command name from an assignment is
+    // never read, nor $HOME or $PWD on a line that writes them; each of these is denied.
+    for (const cmd of [
+      'X=cargo; $X test', `X=cargo; read X <<< git; $X apply ${out('doc.diff')}`, `X=cargo; printf -v X git; $X apply ${out('doc.diff')}`,
+      `X=cargo; readarray -t X <<< git; $X apply ${out('doc.diff')}`, `Y=git; declare -n X=Y; $X apply ${out('doc.diff')}`,
+      `X=cargo; declare X[0]=git; $X apply ${out('doc.diff')}`, `X=cargo; unset -v X; $X git apply ${out('doc.diff')}`, `X=; $X git apply ${out('doc.diff')}`,
+      `X=git; true || X=cargo; $X apply ${out('doc.diff')}`, `X=git; while false; do X=cargo; done; $X apply ${out('doc.diff')}`,
+      `X=git; (X=cargo); $X apply ${out('doc.diff')}`, `X=cargo; time X=git; $X apply ${out('doc.diff')}`, `X=git; local X=cargo; $X apply ${out('doc.diff')}`,
+      `X=cargo; X=git builtin :; $X apply ${out('doc.diff')}`, `X=cargo; . ./set.sh; $X apply ${out('doc.diff')}`, `X=gitxapply; IFS=x; $X ${out('doc.diff')}`,
+      `X=cd; $X apply ${out('doc.diff')}`, `timeout $T apply ${out('doc.diff')}`, `X=status; read X <<< apply; git $X ${out('doc.diff')}`,
+      'X=cargo; cd /tmp; $PWD/x', 'read HOME <<< /x; "$HOME/cargo" test', 'IFS=/; $HOME/cargo test', `hash -p /usr/bin/git cargo; cargo apply ${out('doc.diff')}`,
+      `env -S 'git apply ${out('doc.diff')}'`, `shopt -s expand_aliases\nalias cargo='git apply'\ncargo ${out('doc.diff')}`,
+    ]) assert.equal(decision(asReviewer(cmd)), 'deny', cmd);
     // Each fail-closed deny says what to run instead.
     assert.match(reason(asReviewer('git $x')), /git's own commands/);
     assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);

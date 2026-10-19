@@ -284,8 +284,7 @@ function lex(src) {
  * A word as the rules see it: `raw` (quotes removed, expansions as written), `text` (known
  * expansions replaced, unknown ones as written), `value` (the text, or null when any part is
  * unknown), `literal` (no expansion, brace list or glob at all: the text is exactly what the
- * shell passes), `glob` (an unquoted `*`, `?`, `[...]` or brace list) and `quoted`. An
- * unquoted expansion after an `IFS=` assignment is unknown: bash splits it where temper does not.
+ * shell passes), `glob` (an unquoted `*`, `?`, `[...]` or brace list), `quoted` and its `parts`.
  */
 function makeWord(parts, env = {}) {
   let raw = '';
@@ -306,13 +305,13 @@ function makeWord(parts, env = {}) {
       return;
     }
     const v = partValue(p, env);
-    if (v === null || (!p.q && env.vars?.has('IFS'))) { known = false; text += p.s; } else text += v;
+    if (v === null) { known = false; text += p.s; } else text += v;
   });
   if (bracket !== -1 && raw.includes(']', bracket + 1)) glob = true;
   const assign = parts[0]?.t === 'lit' && !parts[0].q ? /^[A-Za-z_]\w*(?=\+?=)/.exec(parts[0].s)?.[0] : undefined;
   // An unquoted `{` may open a brace list, one that spans a quoted part too (`{'git apply x',y}`).
   const literal = parts.every((p) => p.t === 'lit') && !glob && !parts.some((p) => !p.q && p.s.includes('{'));
-  return { raw, text, value: known ? text : null, literal, glob, quoted: parts.some((p) => p.q), assign };
+  return { raw, text, value: known ? text : null, literal, glob, quoted: parts.some((p) => p.q), assign, parts };
 }
 
 /** An unquoted brace list (`{a,b}`, `{1..3}`), found in one pass. */
@@ -420,12 +419,19 @@ const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().
  *
  * `$TMPDIR`, `$TMP`, `$TEMP`, `$env:TEMP` and `$(mktemp [-d])` name the temp directory.
  *
- * Options: `cwd` (the starting directory), `home`, `top` (`--show-toplevel`), `gitDir`, `tmp`.
+ * Each command's `named` says whether temper reads its name exactly (see readName).
+ *
+ * Options: `cwd` (the starting directory), `home`, `top` (`--show-toplevel`), `gitDir`, `tmp`, and
+ * `untracked`, under which a variable the command assigns is unknown rather than its model's value
+ * (#151 review 7: `read`, `printf -v`, arrays and assignments that never run are not modelled), and
+ * a command whose name or wrapper words temper does not read exactly is reported as one with
+ * `opaque: 'name'` and no name, whatever the model makes of it (`cd`, `export`, `timeout $T`).
  */
 export function parseCommands(cmd, opts = {}) {
   const env = {
     cwd: opts.cwd ? path.resolve(opts.cwd) : null, prev: null, home: opts.home ?? os.homedir(),
     top: opts.top ?? null, gitDir: opts.gitDir ?? '.git', tmp: opts.tmp ?? os.tmpdir(), vars: new Map(), dirs: [],
+    untracked: Boolean(opts.untracked), whole: String(cmd),
   };
   const out = [];
   run(String(cmd), env, out, 0, undefined);
@@ -492,10 +498,10 @@ function catsStdin(words) {
   return words[i]?.value === 'cat' && words.slice(i + 1).every((w) => w.value === '-');
 }
 
-/** The command that stands for what is nested deeper than temper reads. */
-const depthMarker = (src, env, via) => ({
-  name: null, argv0: unknownWord(''), args: [], redirects: [], stdin: null, piped: false, cwd: null,
-  raw: String(src).trim(), line: String(src), via, envNames: [], opaque: 'depth',
+/** The command that stands for what is nested deeper than temper reads, or (`opaque: 'name'`) a command name it does not read. */
+const depthMarker = (src, env, via, opaque = 'depth', argv0 = unknownWord('')) => ({
+  name: null, argv0, args: [], redirects: [], stdin: null, piped: false, cwd: null,
+  raw: String(src).trim(), line: String(src), via, envNames: [], opaque, named: false, whole: env.whole,
 });
 
 function sub(src, env, out, depth, via) {
@@ -537,12 +543,17 @@ function shellScript(args) {
 }
 
 const isAssign = (w) => Boolean(w.assign);
+// A variable's new value; unknown (null) when nothing is known, or when the parse is `untracked`.
+const setVar = (env, name, value) => {
+  if (env.untracked) env.vars.set(name, null);
+  else if (value === null) env.vars.delete(name);
+  else env.vars.set(name, value);
+};
 const assignTo = (env, w) => {
   if (w.value?.[w.assign.length] === '+') { // `X+=y` appends, to a value temper may not know
     const old = env.vars.get(w.assign);
-    env.vars.set(w.assign, typeof old === 'string' ? old + w.value.slice(w.assign.length + 2) : null);
-  } else if (w.value === null) env.vars.delete(w.assign);
-  else env.vars.set(w.assign, w.value.slice(w.assign.length + 1));
+    setVar(env, w.assign, typeof old === 'string' ? old + w.value.slice(w.assign.length + 2) : null);
+  } else setVar(env, w.assign, w.value === null ? null : w.value.slice(w.assign.length + 1));
 };
 
 // The index of the first word at or after `i` that is not a reserved word.
@@ -561,7 +572,15 @@ function simple(words, meta, env, out, depth) {
     name, argv0: rest[0], args: rest.slice(1), redirects: meta.redirects, stdin: meta.stdin, piped: meta.piped,
     cwd: extra.cwd !== undefined ? extra.cwd : env.cwd, raw: meta.raw, line: meta.line, via: meta.via,
     envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))], xargs: Boolean(xargs),
+    named: readName(rest[0], env.whole), whole: env.whole,
   });
+  // Under `untracked`, a wrapper word (w[from..to)) or command name (w[name]) temper does not read
+  // exactly is reported before the model acts on it: `timeout $T apply x` runs `git apply x` when $T is `5 git`.
+  const unread = (from, to, name = -1) => {
+    if (!env.untracked) return;
+    const x = w.slice(from, to).find((y) => !readName(y, env.whole) && !fixedWord(y)) ?? (name < w.length && name !== -1 && !readName(w[name], env.whole) ? w[name] : undefined);
+    if (x) out.push(depthMarker(meta.raw, env, meta.via, 'name', x));
+  };
   w = w.slice(skipKeywords(w, 0));
   if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; }
   if (w[0].raw === 'function' && !w[0].quoted) { // function f { ...
@@ -569,7 +588,7 @@ function simple(words, meta, env, out, depth) {
     if (!w.length) return;
   }
   if (['for', 'select', 'case'].includes(w[0].raw) && !w[0].quoted) {
-    if (w[0].raw !== 'case' && w[1]) env.vars.delete(w[1].raw);
+    if (w[0].raw !== 'case' && w[1]) setVar(env, w[1].raw, null);
     return;
   }
   // Assignments: alone they set shell variables; before a command they only set its environment.
@@ -582,7 +601,7 @@ function simple(words, meta, env, out, depth) {
   }
   // PowerShell: `$x = 'value'`.
   if (w.length === 3 && /^\$\w+$/.test(w[0].raw) && w[1].raw === '=') {
-    if (w[2].value === null) env.vars.delete(w[0].raw.slice(1)); else env.vars.set(w[0].raw.slice(1), w[2].value);
+    setVar(env, w[0].raw.slice(1), w[2].value);
     return;
   }
   for (const a of w.slice(0, k)) envNames.push(a.assign);
@@ -611,6 +630,12 @@ function simple(words, meta, env, out, depth) {
         }
       }
       if ((name === 'env' || name === 'sudo') && (a === '-C' || a === '--chdir')) { cwd = resolvePath(w[i]?.value ?? null, cwd); i++; continue; }
+      if (name === 'env' && /^(?:-S|--split-string)(?:=|$)|^-S./.test(a)) { // env -S splits its string into the command and runs it
+        const str = /^-S./.test(a) ? a.slice(2) : a.includes('=') ? a.slice(a.indexOf('=') + 1) : w[i++]?.text ?? '';
+        unread(k, i);
+        sub([str, ...w.slice(i).map((x) => x.text)].join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'env -S');
+        return;
+      }
       if (name === 'env' && /^--chdir=/.test(a)) { cwd = resolvePath(a.slice(8), cwd); continue; }
       if (name === 'watch') {
         if (a === '--exec' || /^-[a-zA-Z]*x/.test(a)) watchExec = true;
@@ -619,12 +644,14 @@ function simple(words, meta, env, out, depth) {
       if (valued.includes(a)) i++;
     }
     if (name === 'watch' && !watchExec) {
+      unread(k, i);
       if (i < w.length) sub(w.slice(i).map((x) => x.text).join(' '), { ...env, cwd, ps: false }, out, depth + 1, 'watch');
       return;
     }
     if (name === 'timeout' && i < w.length) i++;
     if (name === 'nice' && w[i] && /^-\d+$/.test(w[i].raw)) i++;
   }
+  unread(k, i, i);
   w = w.slice(i);
   if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; } // `exec > file`
   if (xargs) {
@@ -1043,16 +1070,38 @@ const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pws
 const PS_CONTENT = /^(?:set-content|add-content|out-file|new-item|tee-object|sc|ac|ni)$/;
 const PS_COPY = /^(?:copy-item|move-item|cpi|mi|copy|move)$/;
 
-/** The words an interpreter runs as code from its arguments (-c, -e, -E, -p, -r, --eval, -Command, `deno eval`). */
+// Interpreter options before the script that take the next word as their value, by interpreter
+// (perl's and ruby's -W, and perl's -C, are flags; -r, -E and php's -c are read as code options).
+const CODE_VALUED = [
+  [/^(?:python[\d.]*|py)$/, /^(?:-[WX]|--check-hash-based-pycs)$/], [/^(?:node|nodejs|bun)$/, /^(?:-C|--(?:require|import|loader|experimental-loader|conditions|input-type|title|env-file))$/],
+  [/^ruby$/, /^-[IC]$/], [/^perl$/, /^-I$/], [/^php$/, /^-[dfz]$/],
+];
+/**
+ * The words an interpreter runs as code from its options (-c, -e, -E, -p, -r, --eval, -Command), up
+ * to its script or module (`python3 tool.py -c x`, `python3 -m pytest -p x`: the rest is theirs),
+ * and `deno eval`'s operand. A word in an option's place built from an expansion (`python3 $O "$X"`)
+ * is counted as code too, since temper cannot tell whether it is `-c`.
+ */
 function codeArgs(c) {
-  const code = [];
   const a = c.args;
-  if (c.name === 'deno' && a[0]?.value === 'eval') {
-    const k = a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-'));
-    if (k !== -1) code.push(a[k]);
+  if (c.name === 'deno') {
+    const k = a[0]?.value === 'eval' ? a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-')) : -1;
+    return k === -1 ? [] : [a[k]];
   }
+  const code = [];
+  // python's -c is its only code option, and ends its options; -E and -p are flags there.
+  const py = /^(?:python[\d.]*|py)$/.test(c.name);
+  const valued = CODE_VALUED.find(([n]) => n.test(c.name))?.[1];
   for (let j = 0; j < a.length; j++) {
-    if ((/^-[a-zA-Z]*[ceEp]$/.test(a[j].raw) || /^(?:-r|--eval|--print|-command)$/i.test(a[j].raw)) && a[j + 1]) code.push(a[++j]);
+    const x = a[j];
+    if ((py ? /^-[a-zA-Z]*c$/.test(x.raw) : /^-[a-zA-Z]*[ceEp]$/.test(x.raw) || /^(?:-r|--eval|--print|-command)$/i.test(x.raw)) && a[j + 1]) {
+      code.push(a[++j]);
+      if (py) break;
+      continue;
+    }
+    if (!pathWord(x, c.whole ?? '')) { code.push(x); break; }
+    if (x.raw === '--' || x.raw === '-' || !x.raw.startsWith('-') || (x.raw === '-m' && py)) break;
+    if (valued?.test(x.raw)) j++;
   }
   return code;
 }
@@ -1334,8 +1383,9 @@ function configWritesAlias(args) {
  * - `git`: a git subcommand it cannot resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a
  *   `-c` value it cannot read), or one git does not have, which may be an alias set anywhere;
  * - `name`: a command name it cannot read (see readName: `$X`, `"${CARGO:-cargo}"`, `{git,apply,x}`,
- *   `git*`), or one it cannot resolve that names git or patch, or comes before `apply` or `am`;
- * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, awk, ...) that
+ *   `git*`, a wrapper word under `untracked`), or one it cannot resolve that names git or patch, or
+ *   comes before `apply` or `am`, and an alias or `hash -p`, which make a name run another command;
+ * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
  *   mentions `git apply`, `git am` or a patch command or is built from an expansion (`python3 -c "$X"`),
  *   or code piped or redirected into one that temper cannot read;
  * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
@@ -1353,8 +1403,13 @@ export function opaquePatch(c) {
   if (!g && c.name === null && (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am'))) {
     return { kind: 'name', why: 'an unresolved command name' };
   }
-  // A command name temper cannot read, or an eval argument built from an expansion, runs text temper cannot read exactly (wi-0e226b).
-  if (!g && !readName(c.argv0)) return { kind: 'name', why: 'a command name built from an expansion' };
+  // A command name temper cannot read (see readName), or an eval argument built from an expansion, runs text temper cannot read exactly (wi-0e226b).
+  if (c.opaque === 'name') return { kind: 'name', why: 'a command name or wrapper word built from an expansion' };
+  if (c.named === false) return { kind: 'name', why: 'a command name built from an expansion' };
+  // An alias or `hash -p` makes a name run another command.
+  if ((c.name === 'alias' && c.args.some((x) => x.raw.includes('='))) || (c.name === 'hash' && c.args.some((x) => /^-\w*p/.test(x.raw)))) {
+    return { kind: 'name', why: `${c.name === 'alias' ? 'an alias' : 'a hash -p'}, which makes a command name run another command` };
+  }
   if (c.name === 'eval' && c.args.some((x) => x.literal !== true)) return { kind: 'script', why: 'an eval argument built from an expansion' };
   if (g) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
@@ -1364,11 +1419,6 @@ export function opaquePatch(c) {
   if (SHELLS.has(c.name) || SOURCES.has(c.name)) {
     const why = unreadScript(c);
     return why ? { kind: 'script', why: `a ${c.name} script ${why} that temper cannot read` } : null;
-  }
-  if (AWK.test(c.name)) {
-    const prog = awkProgram(c.args);
-    if (prog && !prog.literal) return { kind: 'code', why: `${c.name} code built from an expansion` };
-    return prog && codePatches(prog.text) ? { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` } : null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
   if (codeArgs(c).some((w) => !w.literal)) return { kind: 'code', why: `${c.name} code built from an expansion` };
@@ -1381,23 +1431,65 @@ export function opaquePatch(c) {
 
 const SOURCES = new Set(['source', '.']);
 /**
- * Whether temper reads a command name exactly: a literal, or an expansion whose value it knows
- * (`"$HOME/.cargo/bin/cargo"`, `$PWD/x`) with no space, glob or brace in it to split or expand.
+ * Whether temper reads a word exactly (#151 review 7, wi-0e226b): a literal, or one variable
+ * (`names`, or any) or a double-quoted `$(git rev-parse --show-toplevel)` followed by a literal
+ * path (`"$HOME/.cargo/bin/cargo"`, `$PWD/target/debug/a`), on a line that does not write that
+ * variable (see writesNames). An unquoted one must have a known value with no space or glob to split.
  */
-const readName = (w) => Boolean(w) && (w.literal || (w.value !== null && !w.glob && !/[\s*?[{]/.test(w.value)));
-const AWK = /^(?:awk|gawk|mawk|nawk)$/;
-// awk options that take a separate value; -f names the program file, so there is no program argument.
-const AWK_VALUED = /^(?:-[Fvil]|--(?:field-separator|assign|include|load))$/;
-/** The program word of an awk command, or null when it reads its program from a file (`-f`). */
-function awkProgram(args) {
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.value === '--') return args[i + 1] ?? null;
-    if (a.value === null || !a.raw.startsWith('-') || a.raw === '-') return a;
-    if (/^-f|^--file\b|^-E/.test(a.raw)) return null;
-    if (AWK_VALUED.test(a.raw)) i++;
+function pathWord(w, whole, names = null, lead = false) {
+  if (!w) return false;
+  if (w.literal) return true;
+  if (!w.parts || w.glob) return false;
+  const [head, ...tail] = w.parts.filter((p) => !p.bs && !(p.t === 'lit' && p.s === ''));
+  if (!head || !tail.every((p) => p.t === 'lit' && (p.q || !/[{}[\]*?]/.test(p.s)))) return false;
+  if (!/^\/(?:.*\/)?[^/]+$/s.test(tail.map((p) => p.s).join(''))) return false;
+  let name;
+  if (head.t === 'var' && (head.s === `$${head.name}` || head.s === `\${${head.name}}`) && /^[A-Za-z_]\w*$/.test(head.name)) name = head.name;
+  else if (head.t === 'sub' && head.q && /^\s*git\s+rev-parse\s+--show-toplevel\s*$/.test(head.src)) name = 'PWD';
+  else return false;
+  if (names && head.t === 'var' && !names.includes(name)) return false;
+  if (!head.q && (w.value === null || /[\s*?[\]{}]/.test(w.value) || lineFacts(whole, '[', false))) return false;
+  return !lineFacts(whole, name, lead);
+}
+/**
+ * Whether temper reads a command name exactly: a literal, or $HOME, $PWD or the quoted git toplevel
+ * followed by a literal path (see pathWord). Never a value from an assignment: temper's model of
+ * variables is not bash's (`read`, `printf -v`, arrays, `unset`, an assignment that never runs).
+ */
+const readName = (w, whole) => pathWord(w, whole, ['HOME', 'PWD']) && w.value !== null;
+// writesNames for the line being read, kept so a long line is scanned once per name, not once per
+// command; `lead` reads it without a `source` or `.` that starts it (see unreadScript).
+let facts = { whole: null, seen: new Map() };
+function lineFacts(whole, name, lead) {
+  if (facts.whole !== whole) facts = { whole, seen: new Map() };
+  const key = `${lead ? '+' : ''}${name}`;
+  if (!facts.seen.has(key)) facts.seen.set(key, writesNames(lead ? whole.trimStart().replace(/^(?:source|\.)(?=\s)/, '') : whole, name));
+  return facts.seen.get(key);
+}
+/**
+ * A wrapper's option or assignment word whose role and split temper reads: it starts with literal
+ * text and its expansions are quoted (`A="$X"`), with no glob or brace list (`-I{}` is not one).
+ */
+const fixedWord = (w) => Boolean(w.parts) && !w.glob && w.parts[0]?.t === 'lit' && w.parts[0].s !== ''
+  && w.parts.every((p) => (p.t === 'lit' ? p.q || !p.s.replace(/\{\}/g, '').includes('{') : p.q));
+// Builtins that write a variable named by their arguments, and cd and its kin, which set PWD.
+const NAME_WRITERS = /(?:^|[\s;&|(){}!`])(?:read|mapfile|readarray|declare|typeset|local|export|readonly|unset|eval|source|\.|getopts|select|let|coproc|trap|wait|printf|cd|pushd|popd|chdir)(?=$|[\s;&|()<>`])/;
+/**
+ * Whether a command line may write the variable `name` or IFS, read as text with its quotes and
+ * backslashes removed, so `HO''ME` is `HOME`: an assignment, `${HOME:=...}`, a builtin that writes a
+ * variable it is given (`read`, `printf -v`, `declare`, `unset`, `cd`, ...), `source`, arithmetic,
+ * `${!X}` or an ANSI-C string. Patterns, not a parse: it says yes when unsure.
+ */
+function writesNames(src, name) {
+  if (name === '[') return src.includes('[');
+  if (/\$'|\(\(|\$\[|\$\{!/.test(src)) return true;
+  const s = src.replace(/['"\\]/g, '');
+  if (NAME_WRITERS.test(s)) return true;
+  for (const m of s.matchAll(new RegExp(`(?<!\\w)(?:${name}|IFS)(?!\\w)`, 'g'))) {
+    const read = s[m.index - 1] === '$' || (s.slice(m.index - 2, m.index) === '${' && s[m.index + m[0].length] === '}');
+    if (!read) return true;
   }
-  return null;
+  return false;
 }
 // Paths that name the shell's own stdin.
 const STDIN_PATH = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
@@ -1428,8 +1520,10 @@ function unreadScript(c) {
   if (src.from === 'file') {
     const w = src.word;
     if (/[<>]\(/.test(w.raw)) return 'from a process substitution';
-    if (w.value === null) return c.xargs ? 'from xargs input' : null;
-    return STDIN_PATH.test(path.posix.normalize(w.value)) ? `from ${w.value}` : null;
+    if (w.value === null && c.xargs) return 'from xargs input';
+    // `source` itself runs after its operand is read: the one that starts the line writes nothing before it.
+    if (!pathWord(w, c.whole ?? '', null, SOURCES.has(c.name))) return 'built from an expansion';
+    return w.value !== null && STDIN_PATH.test(path.posix.normalize(w.value)) ? `from ${w.value}` : null;
   }
   return readStdin(c.stdin) ? null : 'on stdin';
 }
