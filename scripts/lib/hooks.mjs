@@ -1223,7 +1223,13 @@ function noteTree(proj, input) {
   if (!proj.gitRoot || !input.session_id) return;
   const p = path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-${agentKey(input)}.json`);
   if (fs.existsSync(p)) return;
-  const head = resolveRev(proj, 'HEAD');
+  let head = resolveRev(proj, 'HEAD');
+  // The main session entering a linked worktree it did not start in: the scope starts at the
+  // session base when the worktree holds it, so the session's earlier commits stay in scope.
+  const sessionBase = baseRev(proj, input.session_id);
+  if (agentKey(input) === 'main' && head && sessionBase && head !== sessionBase && isLinked(proj)
+    && !fs.existsSync(path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-session.json`))
+    && run('git', ['merge-base', '--is-ancestor', sessionBase, head], { cwd: proj.gitRoot }).code === 0) head = sessionBase;
   const br = run('git', ['symbolic-ref', '--short', '-q', 'HEAD'], { cwd: proj.gitRoot });
   const branch = br.code === 0 ? br.stdout.trim() || null : null;
   writeAtomic(p, JSON.stringify({ root: proj.root, head, branch, startFp: fingerprint(proj, head ?? baseRev(proj, input.session_id)), at: Date.now() }));
@@ -1281,6 +1287,12 @@ function otherTrees(proj, input, { agent, gone = false } = {}) {
   return out;
 }
 
+/** True when a scope from `base` covers one from `other`: `base` is `other` or an ancestor of it. */
+function coversBase(proj, base, other) {
+  if (!base || !other) return !other;
+  return base === other || run('git', ['merge-base', '--is-ancestor', base, other], { cwd: proj.gitRoot }).code === 0;
+}
+
 /** True when everything `tree` holds is already in `main`'s HEAD: its HEAD is an ancestor, and it has no uncommitted Rust change. */
 function mergedInto(tree, main) {
   const head = resolveRev(tree, 'HEAD');
@@ -1305,7 +1317,8 @@ function dueTrees(proj, input, { agent } = {}) {
     if (!rustChanges(t.proj, t.base).length) continue;
     const fp = fingerprint(t.proj, t.base);
     if (t.startFp && t.startFp === fp) continue; // nothing changed by this session
-    if (!t.main && mergedInto(t.proj, proj)) continue; // the main checkout holds it, and is gated itself
+    // the gating checkout holds it and is gated itself, from a base no later than this tree's
+    if (!t.main && mergedInto(t.proj, proj) && coversBase(proj, candidates[0].base, t.base)) continue;
     due.push({ ...t, fp });
   }
   return due;

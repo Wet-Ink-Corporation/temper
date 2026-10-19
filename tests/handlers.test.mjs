@@ -647,6 +647,7 @@ test('SessionStart: a compact in a worktree the session entered later keeps that
   const r = repo(t);
   const sid = 's-wt-compact';
   sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const base = r.git('rev-parse', 'HEAD');
   // the main checkout commits, then the session moves into a worktree made from the new HEAD
   r.put('README.md', 'later\n');
   r.git('add', '-A');
@@ -654,13 +655,40 @@ test('SessionStart: a compact in a worktree the session entered later keeps that
   const w = worktree(r, 'entered');
   preEdit({ cwd: w.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: LIB_RS_2 } });
   w.put(LIB, LIB_RS_2);
-  const head = r.git('rev-parse', 'HEAD');
-  const fp = fingerprint(w.proj(), head);
+  // the main session's scope there starts at the session base, which the worktree holds
+  const fp = fingerprint(w.proj(), base);
   writeAtomic(path.join(r.proj().stateDir, 'gate', `${fp}.json`), JSON.stringify({ ok: true, fp, at: new Date().toISOString(), steps: [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }] }));
   recordVerdict(r.proj(), verdict(fp));
   assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${fp}).`);
   sessionStart({ cwd: w.dir, session_id: sid, source: 'compact' });
   assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${fp}).`);
+});
+
+test('Stop: commits in the main checkout stay in scope after the session moves into a worktree made from them', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-moved';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const base = r.git('rev-parse', 'HEAD');
+  // Rust edited and committed in the main checkout, then the session enters a worktree made from it
+  preEdit({ cwd: r.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: r.file(LIB), content: LIB_RS_2 } });
+  r.put(LIB, LIB_RS_2);
+  r.git('commit', '-qam', 'two');
+  const w = worktree(r, 'moved');
+  const three = `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`;
+  preEdit({ cwd: w.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: three } });
+  w.put(LIB, three);
+  // approving only the worktree's own change since the new commit must not end the turn
+  const narrow = fingerprint(w.proj(), r.git('rev-parse', 'HEAD'));
+  for (const fp of [narrow]) {
+    writeAtomic(path.join(r.proj().stateDir, 'gate', `${fp}.json`), JSON.stringify({ ok: true, fp, at: new Date().toISOString(), steps: [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }] }));
+    recordVerdict(r.proj(), verdict(fp));
+  }
+  assert.ok(blocked(stop({ cwd: w.dir, session_id: sid })), 'the main checkout\'s commit is still unreviewed');
+  // the worktree's scope runs from the session base, covering both changes
+  const wide = fingerprint(w.proj(), base);
+  writeAtomic(path.join(r.proj().stateDir, 'gate', `${wide}.json`), JSON.stringify({ ok: true, fp: wide, at: new Date().toISOString(), steps: [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }] }));
+  recordVerdict(r.proj(), verdict(wide));
+  assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${wide}).`);
 });
 
 test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {
