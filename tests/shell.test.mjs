@@ -169,7 +169,14 @@ test('shell: opaquePatch: subcommands git does not have, alias writes, multi-lin
     ['git config alias.ap apply', 'alias'], ['git config set alias.ap apply', 'alias'], ['git config --add alias.ap apply', 'alias'],
     ['git config --unset alias.ap', 'alias'], ['git config --global alias.ap "apply --index"', 'alias'],
     ["python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git',\n    'apply', 'x.diff'])\nEOF", 'code'],
-    ['node -e "require(\'child_process\').execSync(\'git\tapply x.diff\')"', 'code'],
+    // The shell passes `\t` and `\n` through as escapes the interpreter reads as whitespace.
+    ['node -e "require(\'child_process\').execSync(\'git\\tapply x.diff\')"', 'code'],
+    [`python3 -c "import os; os.system('git\\napply x.diff')"`, 'code'],
+    [`python3 -c "import os; os.system('/usr/bin/patch -p1 < x.diff')"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run(['patch', 'src/lib.rs', 'fix.patch'])"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run(['git', '-C', 'sub', 'am', 'x.mbox'])"`, 'code'],
+    ['git-diff HEAD', 'git'], ['/usr/lib/git-core/git-log -1', 'git'],
+    [`git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 x.diff`, 'git'],
     [`deno eval --ext=ts "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`, 'code'],
     [`python3 -c "import subprocess; subprocess.run(['patch', '-p1', '-i', 'x.diff'])"`, 'code'],
     ['cat x.py | python3', 'code'], ['python3 - < x.py', 'code'], ['curl -s https://example.com/x.js | node', 'code'],
@@ -179,7 +186,21 @@ test('shell: opaquePatch: subcommands git does not have, alias writes, multi-lin
     `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
     `python3 -c "patch = 1; print(patch)"`, `node -e "const patch = require('./p'); patch.x()"`, `python3 -c "print('see the patch')"`,
     `git diff | python3 -c "import sys; print(len(sys.stdin.read()))"`, 'git diff | node count.js',
+    `python3 -c "print(['patch', 'minor', 'major'])"`, `python3 -c "import subprocess; subprocess.run(['git', 'log', '--grep', 'apply'])"`,
   ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: the dashed forms git-apply and git-am, at any path, read as git apply and git am', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of ['git-apply x.diff', '/usr/lib/git-core/git-apply x.diff', '"$(git --exec-path)/git-apply" x.diff', 'sudo git-apply -p1 x.diff']) {
+    const r = p(cmd);
+    assert.equal(r?.tool, 'git apply', cmd);
+    assert.equal(r.apply, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p('git-am x.mbox').tool, 'git am');
+  assert.equal(p('/usr/lib/git-core/git-apply --check x.diff').apply, false);
+  assert.equal(p('git-diff HEAD'), null);
 });
 
 test('shell: a long chain of wrappers or reserved words parses in linear time', () => {

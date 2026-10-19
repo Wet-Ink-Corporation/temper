@@ -625,6 +625,12 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       'git config alias.ap apply',
       'cat x.py | python3',
       `X=apply git --config-env=alias.ap=X ap "${out('doc.diff')}"`,
+      // The dashed forms, at any path; any other git-* name is one temper does not resolve.
+      `git-apply "${out('doc.diff')}"`,
+      `/usr/lib/git-core/git-apply "${out('doc.diff')}"`,
+      `"$(git --exec-path)/git-apply" "${out('doc.diff')}"`,
+      'git-am x.mbox',
+      'git-diff HEAD',
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -664,6 +670,10 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       // An alias temper cannot read, on a subcommand git does not have, reads as git apply.
       `X=apply git --config-env=alias.ap=X ap "${out('rs.diff')}"`,
       `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('rs.diff')}"`,
+      // The dashed forms, at any path.
+      `git-apply "${out('rs.diff')}"`,
+      `/usr/lib/git-core/git-apply "${out('rs.diff')}"`,
+      `"$(git --exec-path)/git-apply" "${out('rs.diff')}"`,
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -675,6 +685,7 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('doc.diff')}"`,
       'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.lg GIT_CONFIG_VALUE_0=log git lg --oneline',
       'git config alias.ap apply',
+      `/usr/lib/git-core/git-apply --check "${out('rs.diff')}"`, `git-apply "${out('doc.diff')}"`, 'git-diff HEAD',
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
 });

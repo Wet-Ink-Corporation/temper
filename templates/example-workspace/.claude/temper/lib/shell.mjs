@@ -593,6 +593,12 @@ function simple(words, meta, env, out, depth) {
 
 const literalWord = (s) => ({ raw: s, text: s, value: s, glob: false, quoted: false });
 
+/**
+ * The subcommand of a dashed git command (`git-apply`, `/usr/lib/git-core/git-am`,
+ * `"$(git --exec-path)/git-apply"`: the basename as written), or null.
+ */
+const dashedGit = (c) => /^git-([\w-]+)$/.exec(c.name ?? commandName(c.argv0?.raw ?? ''))?.[1] ?? null;
+
 // git's own commands (`git --list-cmds=main`, plus the newer `backfill`, `refs` and `replay`).
 // An alias never overrides one; any other subcommand may be an alias.
 export const GIT_BUILTINS = new Set(`add am annotate apply archive backfill bisect blame branch bugreport bundle cat-file check-attr
@@ -624,6 +630,8 @@ const INCLUDE_KEY = /^include(?:if\.[\s\S]*)?\.path=/i;
  * variable, `-c include.path=...`); `hiddenAlias` marks that last case.
  */
 function gitCommand(c) {
+  const dashed = dashedGit(c);
+  if (dashed === 'apply' || dashed === 'am') return { sub: dashed, args: c.args, cwd: c.cwd, dynamic: false, hiddenAlias: false };
   if (c.name !== 'git') return null;
   let dir = c.cwd;
   const a = c.args;
@@ -661,6 +669,8 @@ function gitCommand(c) {
       sub = head;
       args = [...rest.map(literalWord), ...args];
     }
+    // A chain longer than temper follows ends on an alias it did not resolve.
+    if (!GIT_BUILTINS.has(sub) && aliases.has(sub.toLowerCase())) return { sub: '', args, cwd: dir, dynamic: true, hiddenAlias: false };
     const hiddenAlias = hidden && !GIT_BUILTINS.has(sub);
     return { sub, args, cwd: dir, dynamic: opaque || hiddenAlias, hiddenAlias };
   }
@@ -1175,10 +1185,20 @@ export function patchCommand(c) {
 
 // Interpreter code that runs git apply or git am (`['git', 'apply', ...]` too, across lines), or a
 // patch command: `patch` followed by an option, a file or `<`, in a string or after `;`, `|`, `&`.
-const PATCH_CODE = [
-  /\bgit\b[\s\S]{0,80}?(?<![\w./-])(?:apply|am)(?![\w./-])/,
-  /(?:^|['"`(\[;|&]\s*|\bbusybox\s+)g?patch(?:\s+[-<\w./~$"']|['"],\s*['"][-<\w./~$])/m,
-];
+// git's options before the subcommand, the ones that take a value first.
+const GIT_OPTS = String.raw`(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--config-env)\s+\S+\s+|--?[\w-]+(?:=\S*)?\s+){0,8}`;
+// In code with quotes, commas and brackets made spaces: git, its options, then apply or am as
+// the subcommand (`--grep apply` is an option's value), or the dashed git-apply and git-am.
+const GIT_PATCH_CODE = new RegExp(String.raw`\bgit\s+(?:args\s*[:=]\s*)?${GIT_OPTS}(?:apply|am)(?![\w./-])|\bgit-(?:apply|am)\b`);
+// A patch command in a string or after `;`, `|`, `&` or a directory: `patch` followed by an
+// option, a file or `<`; in list form, by an option or a .diff or .patch argument.
+const PATCH_CMD_CODE = /(?:^|['"`(\[;|&/]\s*|\bbusybox\s+)g?patch(?:\s+[-<\w./~$"']|['"],\s*['"]-|['"](?=,[^\]\n]{0,160}?\.(?:diff|patch)['"]))/m;
+
+/** Whether interpreter code mentions git apply, git am or a patch command. Escapes (`\t`, `\n`, `\r`) count as whitespace. */
+function codePatches(code) {
+  const text = code.replace(/\\[tnr]/g, ' ');
+  return GIT_PATCH_CODE.test(text.replace(/['"`,[\]{}()+]/g, ' ')) || PATCH_CMD_CODE.test(text);
+}
 const CONFIG_VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
 const CONFIG_WRITE_FLAGS = /^--(?:add|unset|unset-all|replace-all|rename-section|remove-section)$/;
 
@@ -1202,18 +1222,20 @@ function configWritesAlias(args) {
  * Patterns, not a parse: for a fail-closed check.
  */
 export function opaquePatch(c) {
-  if (c.name === null) {
+  const dashed = dashedGit(c);
+  if (dashed !== null && dashed !== 'apply' && dashed !== 'am') return { kind: 'git', why: `a dashed git command (git-${dashed})` };
+  const g = gitCommand(c);
+  if (!g && c.name === null) {
     if (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am')) return { kind: 'name', why: 'an unresolved command name' };
     return null;
   }
-  const g = gitCommand(c);
   if (g) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
     if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
     return null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
-  if (interpreterCode(c).some((code) => PATCH_CODE.some((re) => re.test(code)))) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
+  if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
   // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`.
   const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
   if ((c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !c.stdin.body && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
