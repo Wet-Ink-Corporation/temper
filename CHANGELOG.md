@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**A lint baseline holds on more than one platform (#141).** A baseline recorded on Linux was always red on Windows, because code under `cfg(windows)` adds clippy counts that Linux never compiles. In the redkiln-rs pilot, `baseline --check` and the Stop gate failed on Windows whatever the change, with 7 counts over in two crates, and `--tighten` refused there. The baseline now keeps counts per host triple:
+- **The recorded host** (`host`) keeps its counts in `totals`, as before, so CI on that platform is exactly as strict.
+- **Another host** gets its own section under `targets`, keyed by its triple (`x86_64-pc-windows-msvc`), with its own `totals`, toolchain, commit and dates. `temper baseline --init` on a host the baseline has no counts for adds that section instead of refusing, and leaves every other count alone. It records debt, so it refuses inside Claude Code without `TEMPER_ALLOW_RAISE=1`, like the first `--init`. `--update` and `--tighten` change only the counts of the host they run on.
+- **`--check`, the gate and the report** compare with the section for the host they run on, so the no-increase rule holds on every recorded host. On a host with no section they compare with the recorded counts, as before, and a note says so. When a count is over, the failure says to run `temper baseline --init` on that platform and commit the file, rather than leaving the platform red with no way out. `--tighten` there still refuses unless `--any-host`.
+- **A raise is labelled with its host.** The raised-baseline check compares each host's counts with what that host was held to at the base. A new section counts as raised wherever it is above the recorded counts, so its pull request shows `BASELINE RAISED` with lines such as `[x86_64-pc-windows-msvc] rk-cli clippy::expect_used: 383 -> 384`.
+
+A baseline without `targets` reads and ratchets as before, and so does one with no `host`, whose counts hold on every host. The README's "Counts per platform" item and the troubleshooting guide's Windows section describe the flow.
+
+Upgrading from 1.4.x: files under `scripts/` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed. The baseline file keeps `"temper_baseline": 1`: temper 1.4 reads a baseline with `targets`, ignores the sections and holds every host to the recorded counts, and its `--tighten` keeps the sections. Its `--update` rewrites the file without them, so refresh the vendored CLI everywhere, CI included, before you record a second platform.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.

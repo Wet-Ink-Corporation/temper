@@ -231,7 +231,14 @@ expect 'gate is green after fixing a legacy finding and reports it' 0 'GREEN' '1
 expect 'baseline status says it is not tight' 0 'tight: no; 1 fixed' -- "${TEMPER[@]}" baseline
 cp .claude/temper-baseline.json target/baseline.json
 sed -i.bak 's/"host": "[^"]*"/"host": "aarch64-other-host"/' .claude/temper-baseline.json && rm -f .claude/temper-baseline.json.bak
-expect 'baseline --tighten refuses on another host' 2 'refused: the baseline was recorded on aarch64-other-host' -- "${TEMPER[@]}" baseline --tighten
+expect 'baseline --tighten refuses on another host' 2 'refused: .* has counts for aarch64-other-host and none for' -- "${TEMPER[@]}" baseline --tighten
+expect 'baseline --check on a host with no counts of its own says so' 0 'PASS' 'records counts for aarch64-other-host and none for' -- "${TEMPER[@]}" baseline --check --base HEAD
+# 8b. --init on that host adds its own counts and leaves the recorded host's (#141)
+expect 'baseline --init adds this host'"'"'s counts' 0 'as this host'"'"'s own counts; the counts for aarch64-other-host are unchanged' 'ledger clippy::indexing_slicing: 2 -> 1' -- "${TEMPER[@]}" baseline --init
+grep -q '"targets"' .claude/temper-baseline.json || fail '--init wrote a targets section' "$(cat .claude/temper-baseline.json)"
+grep -q '"host": "aarch64-other-host"' .claude/temper-baseline.json || fail '--init kept the recorded host' "$(cat .claude/temper-baseline.json)"
+expect 'baseline --init refuses a second time on this host' 2 'already exists with counts for' -- "${TEMPER[@]}" baseline --init
+expect 'baseline --check uses this host'"'"'s counts' 0 'PASS' -- "${TEMPER[@]}" baseline --check --base HEAD
 cp target/baseline.json .claude/temper-baseline.json
 expect 'baseline --tighten lowers the count' 0 'ledger clippy::indexing_slicing: 2 -> 1' -- "${TEMPER[@]}" baseline --tighten
 grep -q '"clippy::indexing_slicing": 1' .claude/temper-baseline.json || fail 'tighten wrote the lower count' "$(cat .claude/temper-baseline.json)"
