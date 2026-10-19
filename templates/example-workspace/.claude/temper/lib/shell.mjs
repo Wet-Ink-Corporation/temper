@@ -14,6 +14,8 @@ import path from 'node:path';
 // `temper`), and a PowerShell command reads it as a path separator (`.git\temper\verdicts`),
 // so makeWord decides once the command is known.
 const KEEP_BACKSLASH = /[\w-]/;
+// Characters inside double quotes with no special meaning there.
+const DQ_PLAIN = /[^"\\$`]*/y;
 const REDIRECT = /^(?:&>>|&>|>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)/;
 const OPERATOR = /^(?:;;&|;;|;&|&&|\|\||\|&|[;&|()])/;
 /** Redirection operators that write their target. */
@@ -70,10 +72,41 @@ function expansion(s, i, quoted) {
   return null;
 }
 
+// The escapes of ANSI-C quoting (`$'...'`) that stand for one character.
+const ANSI_C = { a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?' };
+
+/**
+ * The text of a `$'...'` whose body starts at s[j], decoded as bash decodes it, and the index of
+ * its closing quote. The text is null when an escape is one temper does not decode exactly: `\c`,
+ * a NUL (bash ends the word there), or a character outside ASCII (it depends on the locale).
+ */
+function ansiC(s, j) {
+  let text = '';
+  let exact = true;
+  while (j < s.length && s[j] !== "'") {
+    if (s[j] !== '\\' || j + 1 >= s.length) { text += s[j++]; continue; }
+    const e = s[j + 1];
+    if (ANSI_C[e] !== undefined) { text += ANSI_C[e]; j += 2; continue; }
+    const m = /^(?:[0-7]{1,3}|x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{1,4}|U[0-9a-fA-F]{1,8})/.exec(s.slice(j + 1, j + 10));
+    if (m) {
+      const code = /^[0-7]/.test(m[0]) ? parseInt(m[0], 8) : parseInt(m[0].slice(1), 16);
+      if (code === 0 || code > 0x7f) exact = false;
+      else text += String.fromCharCode(code);
+      j += 1 + m[0].length;
+      continue;
+    }
+    if ('cxuU'.includes(e)) exact = false;
+    else text += `\\${e}`; // bash keeps an escape it does not know as written
+    j += 2;
+  }
+  return [exact ? text : null, j];
+}
+
 /**
  * The simple commands of a command line as written: `{ words, redirects, sep, after, raw }`
  * entries, with `{ open: true }` / `{ close: true }` for a subshell's parentheses. A word is
- * `{ parts }`: literal text (`lit`, with `q` when quoted), `var`, `param` (`${x:-y}`), `sub`
+ * `{ parts }`: literal text (`lit`, with `q` when quoted), `var`, `param` (`${x:-y}`, or a
+ * `$'...'` with an escape temper does not decode), `sub`
  * (`$(...)` or backquotes, with its `src`), `arith` and `proc` (`<(...)`). A redirect is
  * `{ op, fd, word }`; a heredoc's also carries `body` and `quoted` (its delimiter was quoted).
  * `sep` and `after` are the operators before and after the command (`|`, `&&`, `;`, newline...).
@@ -153,25 +186,19 @@ function lex(src) {
           const x = expansion(s, j, true);
           if (x) { word.parts.push(x[0]); j = x[1]; continue; }
         }
-        lit(s[j], true);
-        j++;
+        // A run of plain characters at once, so a long string stays fast.
+        DQ_PLAIN.lastIndex = j + 1;
+        const end = DQ_PLAIN.test(s) ? DQ_PLAIN.lastIndex : j + 1;
+        lit(s.slice(j, end), true);
+        j = end;
       }
       i = j + 1;
       continue;
     }
     if (c === '$' && s[i + 1] === "'") { // ANSI-C quoting
-      let j = i + 2;
-      let text = '';
-      while (j < n && s[j] !== "'") {
-        if (s[j] === '\\' && j + 1 < n) {
-          const e = s[j + 1];
-          text += { n: '\n', t: '\t', r: '\r', 0: '\0' }[e] ?? e;
-          j += 2;
-          continue;
-        }
-        text += s[j++];
-      }
-      lit(text, true);
+      const [text, j] = ansiC(s, i + 2);
+      if (text === null) startWord().parts.push({ t: 'param', s: s.slice(i, j + 1), q: true });
+      else lit(text, true);
       i = j + 1;
       continue;
     }
@@ -256,7 +283,8 @@ function lex(src) {
 /**
  * A word as the rules see it: `raw` (quotes removed, expansions as written), `text` (known
  * expansions replaced, unknown ones as written), `value` (the text, or null when any part is
- * unknown), `glob` (an unquoted `*`, `?`, `[` or brace list) and `quoted`.
+ * unknown), `literal` (no expansion at all: the text is exactly what the shell passes), `glob`
+ * (an unquoted `*`, `?`, `[` or brace list) and `quoted`.
  */
 function makeWord(parts, env = {}) {
   let raw = '';
@@ -278,7 +306,8 @@ function makeWord(parts, env = {}) {
     if (v === null) { known = false; text += p.s; } else text += v;
   });
   const assign = parts[0]?.t === 'lit' && !parts[0].q ? /^[A-Za-z_]\w*(?==)/.exec(parts[0].s)?.[0] : undefined;
-  return { raw, text, value: known ? text : null, glob, quoted: parts.some((p) => p.q), assign };
+  const literal = parts.every((p) => p.t === 'lit');
+  return { raw, text, value: known ? text : null, literal, glob, quoted: parts.some((p) => p.q), assign };
 }
 
 /** An unquoted brace list (`{a,b}`, `{1..3}`), found in one pass. */
@@ -288,7 +317,7 @@ function braceList(s) {
 }
 
 /** A word whose value is unknown (xargs input, find's `{}`). */
-const unknownWord = (raw) => ({ raw, text: raw, value: null, glob: false, quoted: false });
+const unknownWord = (raw) => ({ raw, text: raw, value: null, literal: false, glob: false, quoted: false });
 
 /** `git rev-parse --git-dir` and friends inside `$(...)`, which name directories temper knows. */
 function gitRevParse(src, env) {
@@ -377,10 +406,12 @@ const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().
  * `$HOME`, `$PWD` and `$(git rev-parse --git-dir|--git-common-dir|--git-path p|--show-toplevel)`
  * are known. Commands inside `bash -c`, `sh -c`, `eval`, `pwsh -Command`, `find -exec`,
  * `$(...)` and a script fed to a shell on stdin are included, with `via` saying how.
- * `stdin` is `{ kind: 'file'|'heredoc'|'string'|'pipe', word?, body?, literal?, exact? }`: a pipe's
- * `body` is a heredoc or here-string body an earlier stage read, `exact` when that stage was a
- * plain `cat`. A command run under xargs has `xargs: true`. Past the nesting temper follows
- * (MAX_DEPTH), one command with `opaque: 'depth'` and no name stands for what is not read.
+ * `stdin` is `{ kind: 'file'|'heredoc'|'string'|'pipe', word?, body?, literal?, exact? }`: a
+ * heredoc's or here-string's `literal` is its body when it has no expansion (a quoted heredoc
+ * delimiter, or none written), else null; a pipe's `body` is a heredoc or here-string body an
+ * earlier stage read, `exact` when that body was literal and that stage was a plain `cat`. A
+ * command run under xargs has `xargs: true`. Past the nesting temper follows (MAX_DEPTH), one
+ * command with `opaque: 'depth'` and no name stands for what is not read.
  *
  * `$TMPDIR`, `$TMP`, `$TEMP`, `$env:TEMP` and `$(mktemp [-d])` name the temp directory.
  *
@@ -426,12 +457,12 @@ function run(src, env, out, depth, via) {
     for (const r of redirects) {
       if (r.op === '<' && r.word) stdin = { kind: 'file', word: r.word };
       else if (r.op === '<<' || r.op === '<<-') stdin = { kind: 'heredoc', body: r.body ?? null, literal: r.body !== null && r.body !== undefined && (r.quoted || !/[$`]|\\[\\$`\n]/.test(r.body)) ? r.body : null };
-      else if (r.op === '<<<' && r.word) stdin = { kind: 'string', word: r.word, body: r.word.text };
+      else if (r.op === '<<<' && r.word) stdin = { kind: 'string', word: r.word, body: r.word.text, literal: r.word.literal ? r.word.text : null };
     }
     prevBody = stdin && stdin.kind !== 'pipe' && stdin.kind !== 'file' ? stdin.body : null;
     const words = it.words.map((w) => makeWord(w.parts, wenv));
-    // A body piped on is the next stage's script exactly only when `cat` passes it through unchanged.
-    prevExact = prevBody !== null && catsStdin(words);
+    // A body piped on is the next stage's script exactly only when it is literal and `cat` passes it through unchanged.
+    prevExact = prevBody !== null && stdin.literal !== null && stdin.literal !== undefined && catsStdin(words);
     simple(words, { redirects, stdin, piped, isolated, raw: it.raw, line, via }, env, out, depth);
   }
 }
@@ -477,22 +508,27 @@ const SHELL_VALUED = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']
 
 /**
  * Where a shell (`bash`, `sh`, ...) reads its script, from its arguments: `{ from: 'arg', word }`
- * for `-c`, `{ from: 'file', word }` for a script operand, `{ from: 'stdin' }` for `-s` or no
- * operand, or `{ from: 'none' }` for `--version` and `--help`.
+ * for `-c` (the first operand after the options, which may follow `-c`; no word when there is
+ * none), `{ from: 'file', word }` for a script operand, `{ from: 'stdin' }` for `-s` or no
+ * operand, or `{ from: 'none' }` for `--version` and `--help`. `--` or `-` ends the options, and
+ * `-o` or `-O`, alone or at the end of a cluster (`-euo pipefail`), takes the next word.
  */
 function shellScript(args) {
   let stdin = false;
+  let cmd = false;
+  const operand = (w) => (cmd ? { from: 'arg', word: w } : stdin || !w ? { from: 'stdin' } : { from: 'file', word: w });
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.value === '--version' || a.value === '--help') return { from: 'none' };
-    if (a.value === '--' || a.value === '-') return stdin || !args[i + 1] ? { from: 'stdin' } : { from: 'file', word: args[i + 1] };
-    if (a.value === null || !/^[-+]/.test(a.raw)) return stdin ? { from: 'stdin' } : { from: 'file', word: a };
+    if (a.value === '--' || a.value === '-') return operand(args[i + 1]);
+    if (a.value === null || !/^[-+]/.test(a.raw)) return operand(a);
     if (SHELL_VALUED.has(a.value)) { i++; continue; }
     if (a.value.startsWith('--')) continue;
-    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a.value)) return { from: 'arg', word: args[i + 1] };
+    if (/^-[A-Za-z]*c/.test(a.value)) cmd = true;
     if (/^-[A-Za-z]*s/.test(a.value)) stdin = true;
+    i += (a.value.slice(1).match(/[oO]/g) ?? []).length;
   }
-  return { from: 'stdin' };
+  return cmd ? { from: 'arg', word: undefined } : { from: 'stdin' };
 }
 
 const isAssign = (w) => Boolean(w.assign);
@@ -519,7 +555,7 @@ function simple(words, meta, env, out, depth) {
     envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))], xargs: Boolean(xargs),
   });
   w = w.slice(skipKeywords(w, 0));
-  if (!w.length) { if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]); return; }
+  if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; }
   if (w[0].raw === 'function' && !w[0].quoted) { // function f { ...
     w = w.slice(skipKeywords(w, 2));
     if (!w.length) return;
@@ -533,7 +569,7 @@ function simple(words, meta, env, out, depth) {
   while (k < w.length && isAssign(w[k])) k++;
   if (k === w.length) {
     if (!meta.isolated) for (const a of w) assignTo(env, a);
-    if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]);
+    if (meta.redirects.length) emit('', [literalWord('')]);
     return;
   }
   // PowerShell: `$x = 'value'`.
@@ -582,7 +618,7 @@ function simple(words, meta, env, out, depth) {
     if (name === 'nice' && w[i] && /^-\d+$/.test(w[i].raw)) i++;
   }
   w = w.slice(i);
-  if (!w.length) { if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]); return; } // `exec > file`
+  if (!w.length) { if (meta.redirects.length) emit('', [literalWord('')]); return; } // `exec > file`
   if (xargs) {
     if (xargs.replace) w = w.map((x) => (x.raw.includes(xargs.replace) ? unknownWord(x.raw) : x));
     else w = [...w, unknownWord('(xargs input)')];
@@ -634,7 +670,7 @@ function simple(words, meta, env, out, depth) {
 
 // ---------- what a command writes ----------
 
-const literalWord = (s) => ({ raw: s, text: s, value: s, glob: false, quoted: false });
+const literalWord = (s) => ({ raw: s, text: s, value: s, literal: true, glob: false, quoted: false });
 
 /**
  * The subcommand of a dashed git command (`git-apply`, `/usr/lib/git-core/git-am`,
@@ -938,12 +974,19 @@ const CODE_WRITES = [
  * `__L<n>__`, its text pushed to `lits`. One pass: a quote that never closes stays as it is,
  * and so does every later quote of its kind.
  */
+const CODE_PLAIN = /[^"'`]*/y;
 function stringLiterals(code, lits) {
   let out = '';
   const open = new Set(['"', "'", '`']);
   for (let i = 0; i < code.length;) {
     const q = code[i];
-    if (!open.has(q)) { out += q; i++; continue; }
+    if (!open.has(q)) {
+      CODE_PLAIN.lastIndex = i + 1;
+      const end = CODE_PLAIN.test(code) ? CODE_PLAIN.lastIndex : i + 1;
+      out += code.slice(i, end);
+      i = end;
+      continue;
+    }
     let j = i + 1;
     while (j < code.length && code[j] !== q) j += code[j] === '\\' ? 2 : 1;
     if (j >= code.length) { open.delete(q); out += q; i++; continue; }
@@ -1247,8 +1290,8 @@ const PATCH_CMD_CODE = new RegExp(String.raw`(?:^|['"\`(\[;|&/]\s*|\b${PATCH_WRA
 // `'cat x.diff|exec patch'`, `'cat x.diff|timeout 5 patch'`), at any path.
 const PATCH_END_CODE = new RegExp(String.raw`[;|&]\s*${PATCH_WRAP}{0,3}(?:[\w.~-]*\/)*g?patch\s*(?:['"\`;&|)]|$)`, 'm');
 // A bare patch handed to a call that runs a command (`os.system('patch')`, `run(['/usr/bin/patch'])`):
-// it reads the interpreter's stdin, which may be a patch.
-const PATCH_CALL_CODE = new RegExp(String.raw`\b(?:system|popen|run|call|check_call|check_output|Popen|exec\w*|spawn\w*)\s*\(\s*\[?\s*['"\`]\s*${PATCH_WRAP}{0,3}(?:[\w.~-]*\/)*g?patch\s*['"\`]`);
+// it reads the interpreter's stdin, which may be a patch. `(?:\[\s*)?` keeps one way to match a run of spaces.
+const PATCH_CALL_CODE = new RegExp(String.raw`\b(?:system|popen|run|call|check_call|check_output|Popen|exec\w*|spawn\w*)\s*\(\s*(?:\[\s*)?['"\`]\s*${PATCH_WRAP}{0,3}(?:[\w.~-]*\/)*g?patch\s*['"\`]`);
 
 /** The string escapes interpreters read (`\x20`, `\040`, `\u0020`, `\u{20}`) decoded; `\t`, `\n`, `\r`, `\f`, `\v` as spaces. */
 const decodeEscapes = (code) => code.replace(/\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|([0-7]{1,3})|[tnrfv])/g, (m, x, ub, u, o) => {
@@ -1282,8 +1325,9 @@ function configWritesAlias(args) {
  * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
  *   mentions `git apply`, `git am` or a patch command, or code piped or redirected into one;
  * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
- *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`),
- *   or commands nested deeper than temper reads;
+ *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`,
+ *   `bash -c "$CMD"`, `bash <<< "$X"`), a command name or `eval` argument built from an expansion
+ *   (`$X`, `eval "$(cat cmd.txt)"`), or commands nested deeper than temper reads;
  * - `alias`: `git config` setting an alias, which could name git apply later.
  * Patterns, not a parse: for a fail-closed check.
  */
@@ -1292,10 +1336,12 @@ export function opaquePatch(c) {
   const dashed = dashedGit(c);
   if (dashed !== null && dashed !== 'apply' && dashed !== 'am') return { kind: 'git', why: `a dashed git command (git-${dashed})` };
   const g = gitCommand(c);
-  if (!g && c.name === null) {
-    if (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am')) return { kind: 'name', why: 'an unresolved command name' };
-    return null;
+  if (!g && c.name === null && (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am'))) {
+    return { kind: 'name', why: 'an unresolved command name' };
   }
+  // A command name or an eval argument built from an expansion runs text temper cannot read exactly (wi-0e226b).
+  if (!g && c.argv0?.literal !== true) return { kind: 'script', why: 'a command name built from an expansion' };
+  if (c.name === 'eval' && c.args.some((x) => x.literal !== true)) return { kind: 'script', why: 'an eval argument built from an expansion' };
   if (g) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
     if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
@@ -1307,23 +1353,26 @@ export function opaquePatch(c) {
   }
   if (!INTERPRETERS.test(c.name)) return null;
   if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
-  // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`.
+  // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`.
   const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
-  if ((c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !readStdin(c.stdin) && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
+  if (c.stdin && !readStdin(c.stdin) && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
   return null;
 }
 
 const SOURCES = new Set(['source', '.']);
 // Paths that name the shell's own stdin.
 const STDIN_PATH = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
-/** Whether temper read a command's stdin exactly: a heredoc or here-string body, or one a plain `cat` passed on. */
-const readStdin = (s) => Boolean(s) && s.body !== null && s.body !== undefined && (s.kind === 'heredoc' || s.kind === 'string' || s.exact === true);
+/** Whether temper read a command's stdin exactly: a literal heredoc or here-string body, or one a plain `cat` passed on. */
+const readStdin = (s) => Boolean(s) && (s.kind === 'pipe' ? s.exact === true && s.body !== null && s.body !== undefined
+  : (s.kind === 'heredoc' || s.kind === 'string') && s.literal !== null && s.literal !== undefined);
 
 /**
  * Where a shell, or `source` and `.`, reads a script temper cannot read exactly (#151, wi-0e226b),
- * or null: stdin that is not a heredoc or here-string body (a pipe, a file, a subshell's or a
- * process substitution's stdin), `/dev/stdin` and the like, a process substitution, or under
- * xargs a script from its input. `bash -c '...'` and a script file (`bash x.sh`) are not flagged.
+ * or null: a `-c` script with an expansion in it (`"$CMD"`, `"$(cat x)"`) or none at all, stdin
+ * that is not a literal heredoc or here-string body (a pipe, a file, a subshell's or a process
+ * substitution's stdin, `<<< "$X"`, `<<EOF` with `$(...)` in it), `/dev/stdin` and the like, a
+ * process substitution, or under xargs a script from its input. A literal `bash -c '...'` and a
+ * script file (`bash x.sh`) are not flagged.
  */
 function unreadScript(c) {
   let src;
@@ -1332,7 +1381,11 @@ function unreadScript(c) {
     src = c.args[k] ? { from: 'file', word: c.args[k] } : { from: 'stdin' };
   } else src = shellScript(c.args);
   if (src.from === 'none') return null;
-  if (src.from === 'arg') return c.xargs && (!src.word || src.word.value === null) ? 'from xargs input' : null;
+  if (src.from === 'arg') {
+    if (src.word?.literal) return null;
+    if (c.xargs && (!src.word || src.word.value === null)) return 'from xargs input';
+    return src.word ? 'built from an expansion' : 'after -c';
+  }
   if (src.from === 'file') {
     const w = src.word;
     if (/[<>]\(/.test(w.raw)) return 'from a process substitution';

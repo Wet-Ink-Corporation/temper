@@ -245,6 +245,53 @@ test('shell: opaquePatch flags a shell or source reading /dev/stdin, a process s
   ]) assert.equal(o(cmd), null, cmd);
 });
 
+// #151 review 5 (wi-0e226b): a -c script, a here-string, a heredoc, an eval argument or a command
+// name built from an expansion is text temper cannot read exactly.
+test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument or command name that is not literal', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'bash -c "$(cat cmd.sh)"', 'sh -c "`cat x`"', 'bash -c "$CMD"', 'X=ls; bash -c "$X"', 'bash -c', 'bash -c "ls; $(cat cmd.sh)"',
+    'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'X=ls; bash <<< "$X"', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
+    'bash <<EOF\ngit $X\nEOF', 'cat <<EOF | bash\n$X\nEOF', 'cat <<< "$X" | bash',
+    'eval `cat cmd.txt`', 'eval "$(cat cmd.txt)"', 'X=ls; eval "$X"', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
+    'X=$(cat cmd.txt); $X', '$X x.diff', '"$CMD" x.diff', '${X:-ls}', '$(cat cmd.txt)', 'X=ls; X+=";git apply x.diff"; $X',
+  ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  // An interpreter's stdin is read the same way.
+  for (const cmd of ['python3 <<< "$X"', 'python3 - <<EOF\nprint("$(cat x.py)")\nEOF']) assert.equal(o(cmd)?.kind, 'code', cmd);
+  for (const cmd of [
+    "bash -c 'ls'", "bash -lc 'cargo test 2>&1 | tail -n 20'", "bash -euo pipefail -c 'cargo test'", "bash -c -- 'cargo test'",
+    "bash <<< 'cargo test'", 'bash <<< ls', "bash <<'EOF'\ncargo test\nEOF", 'bash <<EOF\ncargo test\nEOF', "cat <<'EOF' | bash\nls\nEOF",
+    "eval 'ls'", 'eval ls -la', "python3 - <<'EOF'\nprint(1)\nEOF", 'echo "$HOME"', '~/.cargo/bin/cargo test', 'cargo test -- "$X"',
+    "find crates -name '*.rs' | head", 'X=1; echo $X',
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 5: `$'...'` is decoded as bash decodes it; an escape temper does not decode exactly leaves the word unknown.
+test("shell: ANSI-C quoting is decoded exactly, or its word is unknown", () => {
+  const v = (cmd) => parseCommands(cmd, { cwd: root })[0].args.map((a) => a.value);
+  assert.deepEqual(v("echo $'git\\x20apply' $'a\\tb' $'\\101\\x41\\u0041\\U00000041' $'\\'\\\"\\\\\\?' $'\\a\\b\\e\\E\\f\\v' $'\\q'"),
+    ['git apply', 'a\tb', 'AAAA', '\'"\\?', '\x07\x08\x1b\x1b\x0c\x0b', '\\q']);
+  for (const word of ["$'\\cA'", "$'\\u00e9'", "$'\\xff'", "$'a\\0b'", "$'\\x'", "$'\\x0'"]) assert.deepEqual(v(`echo ${word}`), [null], word);
+  const p = parseCommands("bash -c $'git\\x20apply x.diff'", { cwd: root }).map(patchCommand).find(Boolean);
+  assert.equal(p?.tool, 'git apply');
+  assert.equal(parseCommands("bash -c $'git\\cAapply x.diff'", { cwd: root }).map(opaquePatch).find(Boolean)?.kind, 'script');
+});
+
+// #151 review 5: bash and sh take options after -c, and `--` or `-` ends them; the first operand is the script.
+test('shell: the -c script is the first operand after the options', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    "bash -c -- 'git apply x.diff'", "bash -c -x 'git apply x.diff'", "sh -c -- 'patch -p1 < x.diff'", "bash -c - 'git apply x.diff'",
+    "bash -c -o pipefail 'git apply x.diff'", "bash -co pipefail 'git apply x.diff'", "bash -euo pipefail -c 'git apply x.diff'",
+    "bash -c -O extglob -- 'git apply x.diff' arg0", "bash -xc 'git apply x.diff'", "dash -c -e 'git apply x.diff'",
+  ]) assert.equal(p(cmd)?.apply, true, cmd);
+  assert.deepEqual(targets("bash -c -- 'cp /tmp/x crates/a/src/lib.rs'"), [['cp', at('crates/a/src/lib.rs')]]);
+  assert.deepEqual(targets("bash -euo pipefail -c 'cp /tmp/x out.rs'"), [['cp', at('out.rs')]]);
+  // Without -c, the first operand after the options is a script file, which temper does not read.
+  assert.equal(p("bash -o pipefail 'git apply x.diff'"), null);
+  assert.equal(parseCommands("bash -c -- 'ls'", { cwd: root }).map(opaquePatch).find(Boolean) ?? null, null);
+});
+
 test('shell: commands nested deeper than temper reads leave an opaque marker', () => {
   const nest = (n) => `bash -c '${'eval '.repeat(n)}git apply x.diff'`;
   const deep = parseCommands(nest(12), { cwd: root });

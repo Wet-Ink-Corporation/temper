@@ -541,6 +541,8 @@ test('Bash: a copy onto .rs whose content temper cannot read is refused with the
       'cat body | install /dev/stdin crates/ledger-domain/src/new.rs',
       `cp "${out('missing.rs')}" crates/ledger-domain/src/missing.rs`,
       `cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`,
+      // #151 review 5: a -c script after `--`.
+      "bash -c -- 'cp /tmp/x crates/ledger-domain/src/lib.rs'",
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -664,6 +666,14 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `python3 -c "import os; os.system('cat ${out('doc.diff')}|exec patch')"`,
       `python3 -c "import os; os.system('cat ${out('doc.diff')}|command patch')"`,
       `python3 -c "import os; os.system('cat ${out('doc.diff')}|timeout 5 patch')"`,
+      // #151 review 5: a -c script, here-string, heredoc, eval argument or command name temper
+      // cannot read exactly, and a -c script after more options.
+      'bash -c "$(cat cmd.sh)"', 'sh -c "`cat x`"', 'bash -c "$CMD"', `bash -c $'git\\x20apply ${out('doc.diff')}'`,
+      'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
+      'eval `cat cmd.txt`', 'X=$(cat cmd.txt); $X', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
+      `bash -c -x 'git apply ${out('doc.diff')}'`, `bash -c -- 'git apply ${out('doc.diff')}'`, `bash -euo pipefail -c 'git apply ${out('doc.diff')}'`,
+      // Kept denied: xargs puts each file name into the script's text, where a name could be shell code.
+      "find crates -name '*.rs' | xargs -I{} sh -c 'echo {}; grep -c unwrap {}'",
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -678,6 +688,12 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       'git config --get alias.ap', `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
       'echo hi | grep h', 'cargo test 2>&1 | tail', 'git diff | cat', 'echo foo | sh -c cat', "bash -c 'cargo test'",
       "bash <<'EOF'\ncargo test\nEOF", "cat <<'EOF' | bash\ngit status\nEOF",
+      // #151 review 5: ordinary review commands still run.
+      'cargo clippy --all-targets -- -D warnings', 'cargo test --workspace 2>&1 | tail -n 30', 'git diff HEAD~1 -- crates | head -100',
+      'git log --oneline -20 | wc -l', 'git show HEAD --stat | head', 'grep -rn "unwrap()" crates/ | head', "rg -n 'expect\\(' crates",
+      'node .claude/temper/temper.mjs gate --check', "bash -c 'cargo test -p ledger-domain'", "bash -lc 'cargo clippy 2>&1 | tail'",
+      "bash -euo pipefail -c 'cargo test 2>&1 | tail -n 5'", "bash -c -- 'git diff --stat'", "python3 - <<'EOF'\nprint(1)\nEOF",
+      "echo '{}' | jq .", 'bash <<< "cargo test"', 'bash <<EOF\ncargo test\nEOF', "eval 'git status'",
     ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
@@ -692,6 +708,20 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
+});
+
+// #151 review 5: \s*\[?\s* in the call pattern backtracked quadratically over a run of spaces.
+test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a call is decided in under a second', () => {
+  for (const command of [`python3 -c "system(${' '.repeat(1 << 20)}x"`, `python3 -c "system(${'\\t'.repeat(50000)}x"`,
+    `python3 -c "${'\\t'.repeat(50000)}"`, `python3 -c "system([${' '.repeat(1 << 20)}x"`, `python3 -c "${'system( '.repeat(50000)}x"`]) {
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      const res = preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+      assert.equal(decision(res), 'none', command.slice(0, 24));
+    }
+  }
 });
 
 // #151 review 4: printf reusing its format over many arguments made the old emulation quadratic.
@@ -731,6 +761,12 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       `bash <<'EOF'\ngit apply "${out('rs.diff')}"\nEOF`,
       `cat <<'EOF' | bash\ngit apply "${out('rs.diff')}"\nEOF`,
       `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('rs.diff')}"`,
+      // #151 review 5: the -c script is the first operand after the options, `--` and `-x` among them.
+      `bash -c -- 'git apply "${out('rs.diff')}"'`,
+      `sh -c -- 'patch -p1 < "${out('rs.diff')}"'`,
+      `bash -euo pipefail -c 'git apply "${out('rs.diff')}"'`,
+      `bash -c -x 'git apply "${out('rs.diff')}"'`,
+      `bash -c $'git\\x20apply "${out('rs.diff')}"'`,
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
