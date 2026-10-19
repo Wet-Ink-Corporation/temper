@@ -4,7 +4,11 @@
 
 **`temper stats` counts review rounds per change (#139).** The pilot had to tally by hand how many review rounds each change took to reach approval. `stats` now prints a `review rounds per change` line, and `review.changes` in `stats --json` holds the same: the number of changes, how many were approved, how many on the first round, how many were never approved, and the median and maximum rounds to approval. A change is a session's run of reviewer verdicts up to and including the first approval of the current tree; the next verdict starts another change. A stale approval does not close a change, and approving the same tree again is not a new one. Rounds left open when the telemetry ends count as never approved, which includes a session still under way. The temper lens's Stats tab shows this line in place of rounds per session. The `stats --json` keys already there are unchanged, and no hook decision changes.
 
+**Patch denials stop the retries (#140).** In the pilots, Workflow subagents that move changes between worktrees by patching kept retrying denied patches, and the read-only reviewer tried to apply patches 13 times. A patch onto `.rs` files is still denied, because patched Rust is never scanned. The deny, and the deny for a patch temper cannot read, now name the routes that keep the checks: the Edit or Write tools, or, between worktrees, a commit in the worktree it was made in brought over with `git cherry-pick` or `git merge`, which the Stop gate and CI check. They also say that retrying the patch is denied again. The `temper:rust-reviewer` subagent may not run `git apply`, `git am` or `patch` at all, on any file. The deny says the reviewer is read-only and must not retry, and its prompt says so too. `git apply --check`, `--stat` and `patch --dry-run` still run for it.
+
 Upgrading from 1.4: `scripts/temper.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed.
+
+Upgrading from 1.4.x: files under `scripts/` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed.
 
 ## 1.4.0 (2026-10-19)
 
