@@ -43,12 +43,12 @@ test('redactCommand: likely secrets become ***, and the rest of the command stay
   const cases = [
     ['gh api --token ghp_abcdefghijklmnopqrstuvwx repos', 'gh api --token *** repos'],
     ['npm publish --password=hunter2 --otp 123', 'npm publish --password=*** --otp 123'],
-    ['curl -H "Authorization: Bearer abc.def" https://x', 'curl -H "Authorization: ***" https://x'],
-    ["curl -H 'X-Api-Key: k1' https://u:p4ss@host/x", "curl -H 'X-Api-Key: ***' https://***@host/x"],
+    ['curl -H "Authorization: Bearer abc.def" https://x', 'curl -H "…" https://x'],
+    ["curl -H 'X-Api-Key: k1' https://u:p4ss@host/x", "curl -H '…' https://***@host/x"],
     ['git push https://oauth2:tok@github.com/o/r', 'git push https://***@github.com/o/r'],
     ["GH_TOKEN=abc123 cmd; export API_KEY='s e'; PATH=/bin ls", 'GH_TOKEN=*** cmd; export API_KEY=***; PATH=/bin ls'],
     ['DB_PASSWORD="a b" AWS_SECRET_ACCESS_KEY=x run', 'DB_PASSWORD=*** AWS_SECRET_ACCESS_KEY=*** run'],
-    ['curl -d {"api_key":"zz"} x', 'curl -d {"api_key":"***"} x'],
+    ['curl -d {"api_key":"zz"} x', 'curl -d {"…":"…"} x'],
     ['echo sk-abcdefghijklmnopqrstuvwxyz0123 xoxb-1234567890-abc AKIAABCDEFGHIJKLMNOP', 'echo *** *** ***'],
     // Names that only contain a secret-looking word are left alone.
     ['GIT_AUTHOR_NAME=me git commit --author me -m x', 'GIT_AUTHOR_NAME=me git commit --author me -m x'],
@@ -68,18 +68,18 @@ test('redactCommand: only the first line, up to any heredoc or here-string, is k
 test('redactCommand: the forms a secret takes on a command line', () => {
   const cases = [
     ['curl -u bob:s3cret https://x', 'curl -u *** https://x'],
-    ['curl --user=bob:s3cret x; curl --user "bob:s3 cret" x; curl -ubob:s3cret x', 'curl --user=*** x; curl --user *** x; curl -u*** x'],
-    ['$env:GH_TOKEN="s3cret"; $env:API_KEY = "s3 cret"; $env:PATH = "C:\\bin"', '$env:GH_TOKEN=***; $env:API_KEY = ***; $env:PATH = "C:\\bin"'],
-    ['curl "https://x/a?api_key=s1&page=2&access_token=s2&key=s3#top"', 'curl "https://x/a?api_key=***&page=2&access_token=***&key=***#top"'],
-    ['curl "https://x/?sig=s1&X-Amz-Credential=s2&password=s3"', 'curl "https://x/?sig=***&X-Amz-Credential=***&password=***"'],
-    ['curl -H "Cookie: sid=s3cret; a=b" -H \'Set-Cookie: t=s3cret\' x', 'curl -H "Cookie: ***" -H \'Set-Cookie: ***\' x'],
+    ['curl --user=bob:s3cret x; curl --user "bob:s3 cret" x; curl -ubob:s3cret x', 'curl --user=*** x; curl --user "…" x; curl -u*** x'],
+    ['$env:GH_TOKEN="s3cret"; $env:API_KEY = "s3 cret"; $env:PATH = "C:\\bin"', '$env:GH_TOKEN=***; $env:API_KEY = ***; $env:PATH = "…"'],
+    ['curl "https://x/a?api_key=s1&page=2&access_token=s2&key=s3#top"', 'curl "…"'],
+    ['curl "https://x/?sig=s1&X-Amz-Credential=s2&password=s3"', 'curl "…"'],
+    ['curl -H "Cookie: sid=s3cret; a=b" -H \'Set-Cookie: t=s3cret\' x', 'curl -H "…" -H \'…\' x'],
     ['curl --cookie "sid=s3cret" x', 'curl --cookie *** x'],
     ['psql postgresql://user:p@ss@db.example.com/app', 'psql postgresql://***@db.example.com/app'],
     ['--token="s3 cret" x', '--token=*** x'],
     ['aws configure set aws_secret_access_key s3cret --profile p', 'aws configure set aws_secret_access_key *** --profile p'],
     ['npm config set //registry.npmjs.org/:_authToken s3cret', 'npm config set //registry.npmjs.org/:_authToken ***'],
     ['git config --global github.token s3cret', 'git config --global github.token ***'],
-    ['echo "//registry.npmjs.org/:_authToken=s3cret" >> .npmrc', 'echo "//registry.npmjs.org/:_authToken=*** >> .npmrc'],
+    ['echo "//registry.npmjs.org/:_authToken=s3cret" >> .npmrc', 'echo "…" >> .npmrc'],
     ['mysql -u root -ps3cret app', 'mysql -u root -p*** app'],
     ['mysql -h db -P 3306 -ps3cret app', 'mysql -h db -P 3306 -p*** app'],
     ['mysqldump -h db -p s3cret app', 'mysqldump -h db -p *** app'],
@@ -87,30 +87,64 @@ test('redactCommand: the forms a secret takes on a command line', () => {
     ['docker login -u me -p s3cret ghcr.io', 'docker login -u me -p *** ghcr.io'],
     ['echo npm_abcdefghijklmnopqrstuvwxyz0123 sk_live_abcdef123456 rk_live_abcdef123456', 'echo *** *** ***'],
     ['echo AIzaSyA-abcdefghijklmnopqrstuvwxyz012 ASIAABCDEFGHIJKLMNOP', 'echo *** ***'],
-    ['echo "-----BEGIN RSA PRIVATE KEY-----MIIEs3cret-----END RSA PRIVATE KEY-----" > k', 'echo "***" > k'],
-    ['echo "-----BEGIN OPENSSH PRIVATE KEY----- s3cret" > k', 'echo "***'],
+    ['echo "-----BEGIN RSA PRIVATE KEY-----MIIEs3cret-----END RSA PRIVATE KEY-----" > k', 'echo "…" > k'],
+    ['echo "-----BEGIN OPENSSH PRIVATE KEY----- s3cret" > k', 'echo "…" > k'],
     ['curl -d @m.json https://hooks.slack.com/services/T00/B00/s3cret', 'curl -d @m.json https://hooks.slack.com/services/***'],
-    ['curl -d {\\"token\\":\\"s3cret\\"} x', 'curl -d {\\"token\\":\\"***\\"} x'],
-    ['python -c "print({\'password\': \'s3cret\', \'pin_token\': 1234})"', 'python -c "print({\'password\': \'***\', \'pin_token\': ***})"'],
+    ['curl -d {\\"token\\":\\"s3cret\\"} x', 'curl -d {\\"…\\":\\"…\\"} x'],
+    ['python -c "print({\'password\': \'s3cret\', \'pin_token\': 1234})"', 'python -c "…"'],
     // Names that end in a short secret word, or are one.
     ['OPENAI_KEY=s3 DB_PASS=s3 MYSQL_PWD=s3 X_PASSWD=s3 FOO_PW=s3 KEY=s3 MONKEY=ok BYPASS=ok KEY_ID=ok', 'OPENAI_KEY=*** DB_PASS=*** MYSQL_PWD=*** X_PASSWD=*** FOO_PW=*** KEY=*** MONKEY=ok BYPASS=ok KEY_ID=ok'],
     ['$env:OPENAI_KEY = "s3cret"', '$env:OPENAI_KEY = ***'],
-    ['curl "https://x/?db_pass=s3&X-Amz-Signature=s3&user.pwd=s3&x=1"', 'curl "https://x/?db_pass=***&X-Amz-Signature=***&user.pwd=***&x=1"'],
+    ['curl "https://x/?db_pass=s3&X-Amz-Signature=s3&user.pwd=s3&x=1"', 'curl "…"'],
     // A secret-named name=value inside a quoted or =-joined word.
-    ["curl -d 'password=s3cret' x", "curl -d 'password=*** x"],
-    ['curl -d "a=1&client_secret=s3cret&b=2" x', 'curl -d "a=1&client_secret=***&b=2" x'],
+    ["curl -d 'password=s3cret' x", "curl -d '…' x"],
+    ['curl -d "a=1&client_secret=s3cret&b=2" x', 'curl -d "…" x'],
     ['kubectl create secret generic x --from-literal=password=s3cret', 'kubectl create secret generic x --from-literal=password=***'],
     ['helm install --set db.auth.rootPassword=s3cret x', 'helm install --set db.auth.rootPassword=*** x'],
-    ['terraform apply -var="api_token=s3cret"', 'terraform apply -var="api_token=***'],
+    ['terraform apply -var="api_token=s3cret"', 'terraform apply -var="…"'],
     ['curl -HAuthorization:Bearer\\ s3cret x', 'curl -HAuthorization:***'],
     ['echo eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.s3cretsig', 'echo ***'],
     ['cargo login s3cret; cargo login --registry r s3cret && cargo publish', 'cargo login ***; cargo login *** && cargo publish'],
-    ['openssl enc -aes256 -pass pass:s3cret -in f && openssl rsa -passin pass:s3cret', 'openssl enc -aes256 -pass pass:*** -in f && openssl rsa -passin pass:***'],
+    ['openssl enc -aes256 -pass pass:s3cret -in f && openssl rsa -passin pass:s3cret', 'openssl enc -aes256 -pass *** -in f && openssl rsa -passin pass:***'],
     ['gh secret set NAME -b s3cret; gh secret set NAME --body="s3 cret" -R o/r', 'gh secret set NAME -b ***; gh secret set NAME --body=*** -R o/r'],
+    // The same rules on unquoted text.
+    ['curl -H Cookie:sid=s3cret x', 'curl -H Cookie:***'],
+    ['curl https://x/a?api_key=s1\\&page=2\\&access_token=s2 x', 'curl https://x/a?api_key=***&page=2\\&access_token=*** x'],
+    ['curl -d password=s3cret -d client_secret=s3cret x', 'curl -d password=*** -d client_secret=*** x'],
+    ['terraform apply -var=api_token=s3cret', 'terraform apply -var=api_token=***'],
+    ['echo //registry.npmjs.org/:_authToken=s3cret >> .npmrc', 'echo //registry.npmjs.org/:_authToken=*** >> .npmrc'],
+    ['echo -----BEGIN RSA PRIVATE KEY-----MIIEs3cret > k', 'echo ***'],
+    ['echo hf_abcdefghijklmnopqrstuvwxyz012345 pypi-AgEIcHlwaS5vcmcCJDAwMDAwMDAw glsa_abcdefghijklmnopqrstuvwxyz012345', 'echo *** *** ***'],
+    ['echo dop_v1_0123456789abcdef0123456789abcdef SG.abcdefghijklmnop.qrstuvwxyz0123456789 shpat_0123456789abcdef0123456789abcdef', 'echo *** *** ***'],
+    ['curl -b sid=s3cret x; curl --cookie sid=s3cret x; git checkout -b feature', 'curl -b *** x; curl --cookie *** x; git checkout -b feature'],
+    ['app --pass s3cret --pw=s3cret --key s3cret --api-key s3cret --bypass ok --keep ok', 'app --pass *** --pw=*** --key *** --api-key *** --bypass ok --keep ok'],
+    ['redis-cli -h db -a s3cret ping; az login -u me -p s3cret', 'redis-cli -h db -a *** ping; az login -u me -p ***'],
   ];
   for (const [cmd, want] of cases) {
     assert.equal(redactCommand(cmd), want, cmd);
     assert.ok(!redactCommand(cmd).includes('s3'), cmd);
+  }
+});
+
+test('redactCommand: the contents of quoted strings are dropped, so file content written by a shell never reaches telemetry', () => {
+  const cases = [
+    [`echo 'let api_key = "s3cret";' >> src/main.rs`, "echo '…' >> src/main.rs"],
+    [`echo 'token = "s3cret"' >> Cargo.toml`, "echo '…' >> Cargo.toml"],
+    ['printf "const API_KEY: &str = \\"s3cret\\";\\n" >> src/lib.rs', 'printf "…" >> src/lib.rs'],
+    ['echo const API_KEY: \\&str = \\"s3cret\\"\; >> src/lib.rs', 'echo const API_KEY: ***"…\\"\; >> src/lib.rs'],
+    ["echo $'key = \\'s3cret\\'' >> Cargo.toml", "echo $'…' >> Cargo.toml"],
+    ['sed -i "s/old/s3cret/" src/lib.rs', 'sed -i "…" src/lib.rs'],
+    // Empty strings stay as they are; an unterminated quote drops the rest of the line.
+    [`echo '' "" x`, `echo '' "" x`],
+    ["echo 's3cret >> src/lib.rs", "echo '…"],
+    ['echo "a \\"s3cret\\" b >> f', 'echo "…'],
+    ['echo \\"s3cret >> f', 'echo \\"…'],
+    // A quote inside another kind of quote does not open one.
+    [`echo "it's" s3cret=ok`, 'echo "…" s3cret=ok'],
+  ];
+  for (const [cmd, want] of cases) {
+    assert.equal(redactCommand(cmd), want, cmd);
+    assert.ok(!/s3cret(?!=ok)/.test(redactCommand(cmd)), cmd);
   }
 });
 
@@ -341,7 +375,7 @@ test('shell deny rows carry the command, redacted and clipped', { skip: noGit },
   assert.deepEqual(rows.map((r) => r.event), ['deny-shell-write', 'deny-lockfile', 'deny-shell-write', 'deny-ignore-rust-version']);
   assert.equal(rows[0].cmd, 'GH_TOKEN=*** cat > src/lib.rs <<…');
   assert.equal(rows[1].cmd, 'echo x > Cargo.lock');
-  assert.match(rows[2].cmd, /^curl -H "Authorization: \*\*\*" https:\/\/example\.com\/p+…$/);
+  assert.match(rows[2].cmd, /^curl -H "…" https:\/\/example\.com\/p+…$/);
   assert.equal(rows[2].cmd.length, 201);
   assert.equal(rows[3].cmd, 'cargo test --ignore-rust-version');
   assert.ok(rows.every((r) => !JSON.stringify(r).includes('s3cret')));

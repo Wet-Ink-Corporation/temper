@@ -443,8 +443,8 @@ const REDACTIONS = [
   [new RegExp(String.raw`(${QUOTE}${SECRET_NAME}${QUOTE}\s*:\s*)(?![\s"'\\])[^\s,}]+`, 'gi'), '$1***'],
   // ?api_key=x&token=y&X-Amz-Signature=z in a URL
   [new RegExp(String.raw`([?&](?:[\w.-]{0,64}(?:${SECRET_WORD}|signature)[\w.-]{0,64}|(?:[\w.-]{0,64}[_.-])?(?:key|pass|passwd|pwd|pw)|sig|code|session(?:id)?)=)[^&\s'"#]*`, 'gi'), '$1***'],
-  // --token x, --password=x
-  [new RegExp(String.raw`(^|\s)(--?${SECRET_NAME})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2$3***'],
+  // --token x, --password=x, --pass x, --key=x
+  [new RegExp(String.raw`(^|\s)(--?(?:${SECRET_NAME}|(?:[\w-]{0,64}[-_])?(?:key|pass|passwd|pwd|pw)))(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2$3***'],
   // GH_TOKEN=x, export API_KEY='x', DB_PASS=x (a bare value ends where the shell ends a word); a name
   // may also start inside a word: curl -d 'password=x', --from-literal=password=x, --set db.rootPassword=x,
   // -var="api_token=x". PowerShell's $env:GH_TOKEN = "x".
@@ -458,6 +458,10 @@ const REDACTIONS = [
   [/(_auth(?:Token)?|_password)(\s*=\s*|\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1$2***'],
   // A short -p password: mysql -pX, mysql -p X, sshpass -p X, docker login -p X (not mysql -P, a port)
   [/(\b(?:mysql\w{0,16}|mariadb\w{0,16}|sshpass|(?:docker|podman|nerdctl|helm\s+registry)\s+login)\b[^;&|\n]{0,256}?\s-p)(\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1$2***'],
+  // curl -b x (a cookie; -b elsewhere is often a branch), redis-cli -a x, az login -p x
+  [/(\bcurl\b[^;&|\n]{0,256}?\s-b)(\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1$2***'],
+  [/(\bredis-cli\b[^;&|\n]{0,256}?\s-a)(\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1$2***'],
+  [/(\baz\s+login\b[^;&|\n]{0,256}?\s-p)(\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1$2***'],
   // cargo login x (everything after it, since a flag's value and the token look alike)
   [/(\bcargo\s+login)\s+[^;&|\n]*[^\s;&|]/g, '$1 ***'],
   // openssl -pass pass:x, -passin pass:x
@@ -469,7 +473,7 @@ const REDACTIONS = [
   // Webhook URLs, whose path is the secret.
   [/\b(hooks\.slack\.com\/services\/|discord(?:app)?\.com\/api\/webhooks\/)[\w/-]+/gi, '$1***'],
   // Well-known token shapes, wherever they appear.
-  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{20,}|AIza[\w-]{30,}|xox[abprs]-[\w-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+)\b/g, '***'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{20,}|AIza[\w-]{30,}|xox[abprs]-[\w-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+|hf_[A-Za-z0-9]{30,}|pypi-AgEI[\w-]{20,}|glsa_\w{20,}|dop_v1_[a-f0-9]{20,}|SG\.[\w-]{16,}\.[\w-]{16,}|shpat_[a-fA-F0-9]{20,})\b/g, '***'],
 ];
 
 // How much of a command is redacted at most. Redaction runs only on this much, so a hook's time
@@ -477,23 +481,64 @@ const REDACTIONS = [
 const REDACT_CAP = 2048;
 
 /**
+ * `line` with the contents of every quoted string replaced by `…`: '…', "…", $'…' and, outside
+ * quotes, \"…\". What a denied write puts in a file is usually quoted (echo 'let api_key = "x";'
+ * >> src/main.rs), and so is many a secret, so no quoted text reaches the telemetry. An
+ * unterminated quote drops the rest of the line; `cut` says so.
+ */
+function dropQuoted(line) {
+  let out = '';
+  let plain = 0;
+  let i = 0;
+  while (i < line.length) {
+    const c = line[i];
+    let open = null;
+    if (c === '\\') {
+      if (line[i + 1] !== '"') { i += 2; continue; }
+      open = '\\"';
+    } else if (c === '$' && line[i + 1] === "'") open = "$'";
+    else if (c === "'" || c === '"') open = c;
+    if (!open) { i += 1; continue; }
+    out += line.slice(plain, i);
+    const from = i + open.length;
+    const close = open === "$'" ? "'" : open;
+    let end;
+    if (open === "'" || open === '\\"') end = line.indexOf(close, from);
+    else {
+      // "…" and $'…': a backslash escapes the next character.
+      end = from;
+      while (end < line.length && line[end] !== close) end += line[end] === '\\' ? 2 : 1;
+      if (end >= line.length) end = -1;
+    }
+    if (end < 0) return { s: `${out}${open}`, cut: true };
+    out += `${open}${end > from ? '…' : ''}${close}`;
+    i = end + close.length;
+    plain = i;
+  }
+  return { s: out + line.slice(plain), cut: false };
+}
+
+/**
  * A shell command as a telemetry row keeps it: its first line, up to any heredoc or here-string
- * (`<<`), whose body is often a file or a token; likely secrets replaced by *** (URL userinfo,
- * Authorization, cookie and other secret-named headers, the values of secret-named flags, query
- * parameters, config keys and env assignments, -u user:password, short -p passwords, private keys,
- * webhook URLs, well-known token shapes); then clipped to `max` characters (code points). An
- * ellipsis marks a command cut short. Redaction runs before the clip, so a secret the clip would
- * cut is still removed; a first line longer than REDACT_CAP is cut back to its last whole word
- * first, so no partial secret survives that cut.
+ * (`<<`), whose body is often a file or a token; with the contents of every quoted string
+ * dropped (dropQuoted); likely secrets in the rest replaced by *** (URL userinfo, Authorization,
+ * cookie and other secret-named headers, the values of secret-named flags, query parameters,
+ * config keys and assignments, -u user:password, short -p passwords, private keys, webhook URLs,
+ * well-known token shapes); then clipped to `max` characters (code points). An ellipsis marks a
+ * command cut short. Redaction runs before the clip, so a secret the clip would cut is still
+ * removed; a first line longer than REDACT_CAP is cut back to its last whole word first, so no
+ * partial secret survives that cut.
  */
 export function redactCommand(cmd, max = 200) {
   const all = String(cmd ?? '');
   const eol = all.search(/[\r\n]/);
-  let s = eol < 0 ? all : all.slice(0, eol);
+  // Quotes are dropped from at most 16 × REDACT_CAP: one the slice cuts open drops the rest.
+  const first = (eol < 0 ? all : all.slice(0, eol)).slice(0, 16 * REDACT_CAP);
+  let { s, cut } = dropQuoted(first);
+  cut ||= first.length < all.length;
   const here = s.indexOf('<<');
-  if (here >= 0) s = s.slice(0, here + 2);
-  if (s.length > REDACT_CAP) s = s.slice(0, REDACT_CAP).replace(/\S*$/, '');
-  let cut = s.length < all.length;
+  if (here >= 0 && here + 2 < s.length) { s = s.slice(0, here + 2); cut = true; }
+  if (s.length > REDACT_CAP) { s = s.slice(0, REDACT_CAP).replace(/\S*$/, ''); cut = true; }
   for (const [re, to] of REDACTIONS) s = s.replace(re, to);
   const cps = Array.from(s);
   if (cps.length > max) { s = cps.slice(0, max).join(''); cut = true; }
