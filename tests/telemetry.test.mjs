@@ -231,6 +231,10 @@ test('lostGateRow: timeout when last seen alive near the deadline; interrupted w
     pid: 7, reason: 'interrupted', ranMs: 0, foundMs: 1000, timeoutMs: 1200000, heartbeat: false, progress: false, step: null, steps: {},
   });
   assert.equal(lostGateRow({ t: at(0), pid: 7 }, null, beat(5), t0 + 1000).reason, 'unknown');
+  // A worktree gated after others in the same Stop (#135) had only what was left of the deadline.
+  const later = { ...start, afterMs: 600000 };
+  assert.deepEqual(['reason', 'ranMs', 'timeoutMs'].map((k) => lostGateRow(later, prog, beat(590), t0 + 5000000)[k]), ['timeout', 590000, 600000]);
+  assert.equal(lostGateRow(later, prog, beat(400), t0 + 5000000).reason, 'interrupted');
 });
 
 test('startHeartbeat: a worker thread keeps beating while the main thread waits on a child, and the file outlives a killed hook', { timeout: 30000 }, async (t) => {
