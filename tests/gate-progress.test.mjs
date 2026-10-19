@@ -164,15 +164,21 @@ test('gate progress: a file whose process is gone, or whose step is older than t
   assert.equal(gateProgress(proj, FP, now), null);
 });
 
-test('gate progress: pruning removes files of gates that are gone and keeps a running one', (t) => {
+test('gate progress: pruning removes files over a day old, and keeps younger ones of gates that are gone for their session to read', (t) => {
   const proj = state(t);
   const live = '1111111111111111';
   const dead = '2222222222222222';
   const junk = '3333333333333333';
+  const [oldLive, oldDead, oldJunk] = ['4444444444444444', '5555555555555555', '6666666666666666'];
   const now = new Date().toISOString();
   write(proj, { fp: live, pid: process.pid, startedAt: now, steps: [], current: null }, live);
   write(proj, { fp: dead, pid: deadPid(), startedAt: now, steps: [], current: null }, dead);
   fs.writeFileSync(gateProgressPath(proj, junk), 'x');
+  write(proj, { fp: oldLive, pid: process.pid, startedAt: now, steps: [], current: null }, oldLive);
+  write(proj, { fp: oldDead, pid: deadPid(), startedAt: now, steps: [], current: null }, oldDead);
+  fs.writeFileSync(gateProgressPath(proj, oldJunk), 'x');
+  const dayAgo = new Date(Date.now() - 86400000 - 60000);
+  for (const fp of [oldLive, oldDead, oldJunk]) fs.utimesSync(gateProgressPath(proj, fp), dayAgo, dayAgo);
   pruneFingerprintState(proj, null);
-  assert.deepEqual(fs.readdirSync(proj.stateDir).sort(), [`gate-progress-${live}.json`]);
+  assert.deepEqual(fs.readdirSync(proj.stateDir).sort(), [live, dead, junk].map((fp) => `gate-progress-${fp}.json`));
 });
