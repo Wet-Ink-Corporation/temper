@@ -843,6 +843,7 @@ Phase 7: setup, migration, stats
 - [ ] setup reports, exactly as 1.x: a `manual <path>:<lines>` line for each workflow or contributor doc (`CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, the PR template) that differs from the template and uses `-D warnings`; without `--force`, a `manual clippy.toml` line naming the `allow-*-in-tests` keys an existing `clippy.toml` lacks; and the closing `cargo machete` reminder (ported from "CLI: setup reports strict lint steps and the test exemptions an existing clippy.toml lacks").
 - [ ] setup without a plugin root refuses with exit 2.
 - [ ] pin drift is reported and replaced only with `--force` (replaces the retired vendor drift test).
+- [ ] `setup --force` on a pinned repository updates only `.claude/temper-version` and touches nothing else (replaces the retired "setup --vendor-only" test).
 - [ ] `--migrate`: a 1.x-template `rust.yml`, `pre-commit` and `settings.json` are replaced; customised ones produce manual lines and stay untouched; `.claude/temper/` is removed; `--dry-run` writes nothing.
 - [ ] `--migrate` on a customised `rust.yml` (the case for both 1.x pilots, see Risks): the manual line's N equals the number of lines in the file that contain `node .claude/temper/temper.mjs`, and it names the template path of the "Install temper" step.
 - [ ] `LEGACY_TEMPLATES` covers every historic version of the three files (an xtask test regenerates from git history and compares; the xtask derives the tag list from git, so a later 1.x release is covered without a code change).
@@ -900,7 +901,7 @@ Phase 8: cutover
 | D13 user CI install | install-action / cargo install / curl | install-action (binstall) | owner (wi-37c1df) | A: install-action |
 | D14 pin location | `.claude/temper-version` / temper.json / workflow | `.claude/temper-version` | owner (wi-3b5428) | A: `.claude/temper-version` |
 | D15 1.x migration | hash-guarded rewrite / manual / force | hash-guarded `--migrate` | owner (wi-cdcecc) | A: hash-guarded `--migrate` |
-| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve |
+| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64) |
 | D17 PATH export | yes / no | yes | owner (wi-1d4cd6) | A: export |
 | Crate licence | MIT / MIT OR Apache-2.0 | MIT | owner (wi-4679b3) | B: `MIT OR Apache-2.0` (override); add `LICENSE-APACHE`; plugin stays MIT |
 

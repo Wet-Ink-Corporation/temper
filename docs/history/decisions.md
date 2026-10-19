@@ -96,7 +96,7 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 
 ## Decided outside Weigh-In
 
-Decisions the owner made directly while working through [`docs/plans/v1-readiness.md`](../plans/v1-readiness.md). That plan records the context and options for each.
+Decisions the owner made directly while working through [`docs/plans/v1-readiness.md`](../plans/v1-readiness.md). That plan records the context and options for each. A row may instead cite a decision ID from [`docs/plans/temper-2-rust-port.md`](../plans/temper-2-rust-port.md), such as D16, which that plan records.
 
 | Step | Question | Decision |
 |---|---|---|

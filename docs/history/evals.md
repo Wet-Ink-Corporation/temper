@@ -11,9 +11,9 @@ Each case is tagged with one of two groups, by what it was built to show. Its sc
 | `regression` | `adds-function-under-standard`, `asks-before-crypto-dependency`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
 | `discriminating` | `async-lock-across-await`, `blocks-on-test-rewrite`, `borrows-instead-of-owning`, `brownfield-change-under-baseline`, `keeps-failing-test`, `no-bool-flag-parameters`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
-The plain model usually passes the `regression` cases, so their Δ is 0 by design (the 2026-10-18 run is the exception, below). `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
+The plain model usually passes the `regression` cases, so their Δ is 0 by design (the 2026-10-18 run is the exception, below). `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all the cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the five full runs score against the groups as they stood at each run, plus the 2026-10-06 and 2026-10-18 runs re-scored under the groups of the time:
+How the five full runs score against the groups as they stood at each run, plus the 2026-10-06 and 2026-10-18 runs re-scored under the groups that followed them:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -21,7 +21,7 @@ How the five full runs score against the groups as they stood at each run, plus 
 | 2026-10-04, `Bash`, `sonnet` judge, brownfield row from its fixed-grader rerun | +0.44 | 0.00, 0.00 |
 | 2026-10-05, confirming run | +0.42 | 0.00, 0.00 |
 | 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
-| 2026-10-06, the same run under the current groups | +0.50 | 0.00, 0.00, −0.17 (as above) |
+| 2026-10-06, the same run under the #47 groups (five `discriminating` cases) | +0.50 | 0.00, 0.00, −0.17 (as above) |
 | 2026-10-18, release candidate (#19), no `Bash`, `sonnet` judge | +0.61 | 0.00, +1.00, 0.00 |
 | 2026-10-18, the same run under the current groups (eight `discriminating` cases) | +0.53 | 0.00, +1.00, 0.00 |
 
@@ -82,7 +82,7 @@ Four cases cover the planning and human-decision steps the standard requires (PR
 
 **They do not invoke `/temper:implement`.** The command sets `disable-model-invocation`, so a prompt reaches it only by naming it. In the arm without the plugin, a prompt that starts `/temper:implement` most likely ends at an unknown-command reply, which would score the plain model 0 for a reason that has nothing to do with its behaviour. The prompts are plain requests instead, so both arms get the same task, and the plugin's standard and agents drive the planning and the human decisions.
 
-**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them.
+**They are tagged `candidate`**, with their family tag, and are in neither group above. `claude plugin eval . --tag discriminating` and the group targets cover only cases a run has scored. Each joins `discriminating` or `regression` after a run the owner approves scores it. A run without `--tag` includes them. (2026-10-19: `no-bool-flag-parameters` joined `discriminating`, and the other three stay `candidate`; see [Targets](#targets), #101.)
 
 | Case | What it checks | Rules |
 |---|---|---|
@@ -97,7 +97,7 @@ Caveats from the review of #126:
 
 ## More cases authored for #101, not yet run (2026-10-14)
 
-Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run.
+Three more cases cover the structured-output and ownership families and the standard's stop for a human decision (PROC-04). Like the four above, they are tagged `candidate`, use plain prompts rather than `/temper:implement`, and build offline with no dependencies. None has run. (2026-10-19: `borrows-instead-of-owning` and `blocks-on-test-rewrite` joined `discriminating`, and `versioned-json-output` stays `candidate`; see [Targets](#targets), #101.)
 
 | Case | What it checks | Rules |
 |---|---|---|
