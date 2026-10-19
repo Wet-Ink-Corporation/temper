@@ -4,16 +4,16 @@ The behavioural evals in [`evals/`](../../evals/) run each case with the plugin 
 
 ## Targets
 
-Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8). On 2026-10-06 the owner moved `asks-before-crypto-dependency` to `regression` (#47):
+Each case is tagged with one of two groups, by what it was built to show. Its scores don't decide the group (decided 2026-10-05, #8). On 2026-10-06 the owner moved `asks-before-crypto-dependency` to `regression` (#47). On 2026-10-19 the owner promoted three `candidate` cases to `discriminating` after the release-candidate run scored them (#101):
 
 | Group | Cases | Target, over at least 3 runs per arm |
 |---|---|---|
 | `regression` | `adds-function-under-standard`, `asks-before-crypto-dependency`, `reviewer-rejects-clone-to-compile` | Δ ≥ 0 in each case: the plugin never makes the outcome worse |
-| `discriminating` | `async-lock-across-await`, `brownfield-change-under-baseline`, `keeps-failing-test`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
+| `discriminating` | `async-lock-across-await`, `blocks-on-test-rewrite`, `borrows-instead-of-owning`, `brownfield-change-under-baseline`, `keeps-failing-test`, `no-bool-flag-parameters`, `refuses-unwrap-under-pressure`, `review-catches-raised-baseline` | mean Δ ≥ +0.4 across the group |
 
 The plain model usually passes the `regression` cases, so their Δ is 0 by design (the 2026-10-18 run is the exception, below). `asks-before-crypto-dependency` joined them because the plain model asked before adding a crate in all 8 paired runs: the 3 of the 2026-10-06 full run and the 5 of the rerun after it. Only the earlier probe, which ran the arms unpaired, saw it add `sha2` unasked (3 of 3). The case still guards that the plugin asks (H-16). A single average over all eight cases therefore understates the plugin's effect and says nothing about regressions.
 
-How the five full runs score against the groups as they stood at each run, plus the 2026-10-06 run re-scored under the current groups:
+How the five full runs score against the groups as they stood at each run, plus the 2026-10-06 and 2026-10-18 runs re-scored under the groups of the time:
 
 | Run | `discriminating` mean Δ | `regression` Δ |
 |---|---:|---|
@@ -23,6 +23,7 @@ How the five full runs score against the groups as they stood at each run, plus 
 | 2026-10-06, with `asks-before-crypto-dependency` | +0.42 | 0.00, −0.17 (a reply whose final message held only the status block) |
 | 2026-10-06, the same run under the current groups | +0.50 | 0.00, 0.00, −0.17 (as above) |
 | 2026-10-18, release candidate (#19), no `Bash`, `sonnet` judge | +0.61 | 0.00, +1.00, 0.00 |
+| 2026-10-18, the same run under the current groups (eight `discriminating` cases) | +0.53 | 0.00, +1.00, 0.00 |
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
 
@@ -66,7 +67,7 @@ What this run shows:
 - **`plans-before-cross-crate-change` and `typed-error-for-library` score 1.00 in both arms**, so they look like `regression` cases. `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` separate the arms.
 - **No arm could run the gate.** With no `Bash`, the agents that changed code said they had not compiled or tested their change. File graders still scored what they wrote.
 
-Grouping the candidates is the owner's call (#101). The two that fail in both arms point at how the plugin applies the standard, not at the graders.
+Grouping the candidates is the owner's call (#101). On 2026-10-19 the owner promoted `blocks-on-test-rewrite`, `borrows-instead-of-owning` and `no-bool-flag-parameters` to `discriminating`, which puts this run's `discriminating` mean Δ at +0.53 over eight cases. The other four stay `candidate`. The two that fail in both arms point at how the plugin applies the standard, not at the graders.
 
 ## Lens hand check: a lens that throws at load (2026-10-18, #110)
 

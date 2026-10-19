@@ -1,5 +1,5 @@
 schema_version: "1.1"
 name: no-bool-flag-parameters
-tags: [candidate, api]
+tags: [discriminating, api]
 context:
   scaffold_script: scaffold.sh
