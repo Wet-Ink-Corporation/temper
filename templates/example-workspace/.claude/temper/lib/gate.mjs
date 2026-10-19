@@ -320,7 +320,7 @@ function ratchetStep(proj, step, rs, { base, prefix, fp }) {
   const all = ratchet(rs.collection, rs.baseline, { proj, changed: rs.changed, base, checkRaised: Boolean(step.final) });
   const raised = all.raised.length
     ? [`BASELINE RAISED since ${(all.base ?? '').slice(0, 12)}: ${all.raised.length} count(s) higher in .claude/temper-baseline.json (accepted debt grew; a human decision, H-12):`,
-      ...all.raised.slice(0, 30).map((x) => `  ${x.crate} ${x.lint}: ${x.from} -> ${x.to}`)]
+      ...all.raised.slice(0, 30).map((x) => `  ${x.target ? `[${x.target}] ` : ''}${x.crate} ${x.lint}: ${x.from} -> ${x.to}`)]
     : [];
   const notes = [rs.first, ...res.notes, res.mode === 'totals' ? 'no base revision: only the totals were compared' : null]
     .filter((n) => n && !rs.notes.has(n));
