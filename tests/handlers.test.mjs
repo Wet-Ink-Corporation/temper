@@ -542,7 +542,8 @@ test('Stop: Rust a subagent changed in its own worktree is gated and needs a rev
   fp = w.gate(sid, true);
   const unreviewed = blocked(stop({ cwd: r.dir, session_id: sid }));
   assert.match(unreviewed, new RegExp(`^In the worktree \\.claude/worktrees/agent-a1: The gate is green, but the current tree \\(fingerprint ${fp}\\) has no approving independent review`));
-  assert.ok(unreviewed.includes(`git -C "${w.dir.split(path.sep).join('/')}" diff`), unreviewed);
+  // the path as git reports it (on Windows, the long form of a short 8.3 temp path)
+  assert.ok(unreviewed.includes(`git -C "${w.proj().root.split(path.sep).join('/')}" diff`), unreviewed);
   // the reviewer, started in the main checkout, is told about the worktree
   const rv = { cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
   assert.match(context(subagentStart(rv)), new RegExp(`Also changed in this session: the worktree \\.claude/worktrees/agent-a1 \\(fingerprint ${fp}, 1 Rust file\\(s\\)\\)`));
