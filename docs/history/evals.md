@@ -76,6 +76,31 @@ This paid run is part of the post-pilot close-out the owner asked for on 2026-10
 - **Every settings hook kept running.** SessionStart, UserPromptSubmit, PreToolUse (Edit and Bash), PostToolUse (Read and Skill), SubagentStart, SubagentStop and Stop all fired. The first Stop reported `Status: WIP` while the reviewer ran, and the last reported `gate green and review approved` (fingerprint `2b69587dffe8911f`).
 - `PreToolUse[SubagentHandback]` did not fire, as in earlier headless runs; the verdict was recorded at SubagentStop.
 
+## Cases for the orchestration steps, authored for #101, not yet run (2026-10-19)
+
+Four more cases cover the steps of `/temper:implement` and `/temper:audit` that no case reached: stopping for a decision with no conservative default, planning before code, the conservative default when no human is present, and what an audit finds. Like the cases above, they are tagged `candidate` with a family tag, use plain prompts rather than the commands (both set `disable-model-invocation`), and build offline with no dependencies. None has run.
+
+| Case | What it checks | Rules |
+|---|---|---|
+| `blocks-on-format-migration` | Adding a currency to `Account` changes a versioned record format, with a committed v1 snapshot that two other jobs read. The existing records have no currency, so no conservative default does the task. The crate gains no currency, the snapshot is unchanged, and the reply asks how to migrate. `Status: BLOCKED` is a `with-only` indicator. | H-16, PROC-04, PROC-10 |
+| `plans-before-new-module` | A per-key rate limit over a rolling minute, a new type and module. The prompt asks for no plan; the scaffold's `CLAUDE.md` names `.temper/plans/` as where plans go, so both arms know the place. A plan file exists, and a judge reading the trace checks that it held a test list and came before the first `.rs` edit. `handle` answers `TooManyRequests`. The `rust-architect` call is a `with-only` indicator. | PROC-03, TST-01 |
+| `away-owner-no-new-dependency` | An RFC 3339 parser, where a date-time crate is the obvious choice, and the user is away and says not to wait. No crate is added, `parse_timestamp` is written, and the reply leaves the crate choice to the user. No `Bash`, as for `asks-before-crypto-dependency`. | H-16, PROC-04 |
+| `audit-finds-input-panics` | An audit of a legacy upload parser, written to `AUDIT.md`. Beside an obvious `unwrap`, the audit must name a `HashMap` index, a division by an uploaded count and `Duration::from_secs_f64` on an uploaded number as panics, and an `as u16` length as truncation. No default clippy lint reports any of the four. The code is unchanged. | H-03, H-04, H-11 |
+
+Two items that #101 lists are not covered by a case:
+- **The 3-round review cap is not checkable in an eval.** It lives only in `/temper:implement` step 5, which a plain prompt does not reach. The plain arm runs no review loop at all, so a cap such as `tool_used: Agent` with `max: 3` would pass it trivially and could not fail. A fixture would also need a finding that the reviewer rejects three times and that is not an H-16 question, which the implementer must turn into `BLOCKED` at once. Each round runs the gate and a fresh reviewer, so one run would cost several times a normal case. The cap stays covered by the skill text and the review-round telemetry (`temper stats`).
+- **`/temper:setup`'s interaction is not covered.** It installs temper's own templates and asks with AskUserQuestion, which a headless run cannot answer. The plain arm has nothing to install, so no grader can fail on behaviour there rather than on a missing plugin.
+
+Notes:
+- **Two graders need a newer CLI than the earlier cases.** `plan-before-code` judges the trace (`focus: trace`), and the two `audit-finds-input-panics` judges read `AUDIT.md` (`focus: { source: file, path: AUDIT.md }`). Claude Code 2.1.303 accepts both. The 2026-10-04 runs on 2.1.289 could not give an `llm` grader the trace.
+- **The away and audit cases test the standard, not the commands.** The conservative default ("no new dependency, record the choice, continue") is written only in `/temper:implement` step 2, and H-16 itself says to ask. With the plugin, the agent may stop and ask instead of continuing, and then fails `parse-timestamp-exists`. That would show that the default does not reach a plain prompt. In the same way, `/temper:audit`'s `temper report` and `.temper/audit.md` are not used; the audit case scores what the standard teaches an auditor to look for.
+- **`audit-finds-input-panics` may land in `regression`.** The plain model often catches the division by zero and the map index. `Duration::from_secs_f64` and the truncating cast are the likelier discriminators, so `finds-hidden-panics` needs all three panics.
+- **`plans-before-new-module` names the plans folder in `CLAUDE.md`,** so the plain model is not scored down for not knowing temper's path. That note may lead it to write a plan, and the case would then land in `regression`.
+
+**Validation, with no model call:** each case was checked against the case schema of the `claude plugin eval` loader in Claude Code 2.1.303 (case keys, `prompt.md` frontmatter keys, and each grader type's keys), since `claude plugin validate` does not read `evals/`. Each scaffold was built in a scratch directory: `cargo fmt --check`, the tests, and for the three strict workspaces `clippy -D warnings` and `rustdoc -D warnings` pass. Every regex grader was run as a JS `RegExp` against the scaffold's files (the expected starting score) and against hand-written outcomes: a currency field, a v2 snapshot, each kind of dependency table, a re-exported parser, and fixed audit lines.
+
+**Cost of a paid run.** The 2026-10-18 release-candidate run cost $10.53 for fifteen cases at 3 runs per arm, about $0.70 a case. These four should cost about $0.70 to $1.20 each at 3 runs per arm with the `sonnet` judge, so $3 to $5 for the four (`--case <name>` runs one). `plans-before-new-module` is likely the most expensive, because the architect and the reviewer each run. Each paid run needs the owner's go-ahead.
+
 ## Cases authored for #101, not yet run (2026-10-13)
 
 Four cases cover the planning and human-decision steps the standard requires (PROC-03, PROC-04), and rule families no case exercised yet. Each builds offline with no dependencies.
