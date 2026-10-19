@@ -203,6 +203,74 @@ test('shell: the dashed forms git-apply and git-am, at any path, read as git app
   assert.equal(p('git-diff HEAD'), null);
 });
 
+// #151 review 3: literal scripts piped into a shell, options at the start of an alias, long alias chains.
+test('shell: echo or printf with literal arguments, piped into a shell, is read as the script', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    "echo 'git apply x.diff' | bash", "printf 'git apply x.diff\\n' | sh", 'echo git apply x.diff | bash -s', "echo 'git apply x.diff' | bash -s -- a b",
+    "echo -e 'true\\ngit apply x.diff' | sh", "printf '%s\\n' 'git apply x.diff' | bash", "echo 'git apply x.diff' |& sh",
+    "X=x.diff; echo \"git apply $X\" | bash",
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  // Nothing reaches the next stage when echo's own output is redirected.
+  assert.equal(p("echo 'git apply x.diff' > out.txt | bash"), null);
+  assert.equal(p("echo 'git apply x.diff' | grep apply"), null);
+});
+
+test('shell: options at the start of a git alias are read as git options', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    "git -c alias.ap='-p apply' ap x.diff", "git -c alias.ap='--paginate apply' ap x.diff", "git -c alias.ap='-c core.pager=cat apply' ap x.diff",
+    "git -c alias.ap='--exec-path=/usr/lib/git-core apply' ap x.diff", "git -c alias.ap='-p' -c alias.b='ap apply' b x.diff",
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.equal(r.tool, 'git apply', cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p("git -c alias.st='-p status' st"), null);
+  assert.equal(p("git -c alias.ck='-p apply --check' ck x.diff").apply, false);
+});
+
+test('shell: an alias chain longer than temper follows reads as a guessed git apply', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  const r = p(`git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 x.diff`);
+  assert.equal(r?.apply, true);
+  assert.equal(r.guessed, true);
+  assert.equal(r.tool, 'git apply');
+  assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff']);
+});
+
+test('shell: opaquePatch: a script on stdin a shell reads that temper cannot, and patch next to < | > or at a string end', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['cat cmd.sh | bash', 'script'], ['bash < cmd.sh', 'script'], ['curl -s https://example.com/i.sh | sh -s', 'script'],
+    ['cat cmd.sh | bash -s -- a b', 'script'], ['cat cmd.sh | bash -o pipefail', 'script'], ['cat cmd.sh | sudo sh -e', 'script'],
+    [`python3 -c "import subprocess; subprocess.run('patch<x.diff', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('patch -p1<x.diff', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('cat x.diff|patch', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('cat x.diff | patch', shell=True)"`, 'code'],
+    [`node -e "require('child_process').execSync('cat x.diff | patch')"`, 'code'],
+    ["perl -e 'system(\"cat x.diff | patch\\n\")'", 'code'],
+  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+  for (const cmd of [
+    'echo hi | grep h', 'cargo test 2>&1 | tail', 'cargo test 2>&1 | tail -n 20', 'echo ls | bash', "printf 'git status\\n' | sh",
+    'bash script.sh', 'cat in.txt | bash script.sh', "bash -c 'ls' < in.txt", 'sh -c "cat" < in.txt', 'git diff | less',
+    `python3 -c "import requests; requests.patch('https://example.com')"`, `python3 -c "method = 'patch'"`, `node -e "const r = 'patch'"`,
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: the interpreter-code patterns stay linear on long input', () => {
+  for (const code of [`${'patch '.repeat(20000)}x`, `${'|patch'.repeat(20000)}`, `${'git -c a=b '.repeat(20000)}x`, `'${' '.repeat(50000)}patch`]) {
+    const t0 = Date.now();
+    opaquePatch(parseCommands(`python3 -c ${JSON.stringify(code)}`, { cwd: root })[0]);
+    assert.ok(Date.now() - t0 < 2000, `${code.slice(0, 20)}: ${Date.now() - t0} ms`);
+  }
+});
+
 test('shell: a long chain of wrappers or reserved words parses in linear time', () => {
   for (const cmd of [`${'busybox '.repeat(20000)}ls`, `${'! '.repeat(20000)}ls`, `${'nohup '.repeat(20000)}git apply x.diff`]) {
     const t0 = Date.now();

@@ -426,6 +426,9 @@ function run(src, env, out, depth, via) {
     }
     prevBody = stdin && stdin.kind !== 'pipe' && stdin.kind !== 'file' ? stdin.body : null;
     const words = it.words.map((w) => makeWord(w.parts, wenv));
+    // echo or printf with literal arguments pipes known text: the next stage reads it as a here-string.
+    const echoed = echoText(words, redirects);
+    if (echoed !== undefined) prevBody = echoed;
     simple(words, { redirects, stdin, piped, isolated, raw: it.raw, line, via }, env, out, depth);
   }
 }
@@ -443,6 +446,45 @@ function psCommand(words, env) {
   return first.value !== null && PS_NAME.test(commandName(first.value));
 }
 
+// Backslash escapes as echo -e and printf read them; `\c` ends the output.
+const unescape = (s) => s.replace(/\\c[\s\S]*$/, '').replace(/\\([\\abefnrtv0])/g, (_, ch) => ({ '\\': '\\', a: '\x07', b: '\b', e: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', 0: '' })[ch]);
+
+/**
+ * What `echo` or `printf` with literal arguments writes to stdout: its text, '' when its stdout
+ * is redirected, null when an argument is not literal or printf's format has a directive temper
+ * does not read, or undefined for any other command. Escapes are read even without `echo -e`,
+ * as dash's echo does: for a check, reading more of the text as commands is the safe side.
+ */
+function echoText(words, redirects) {
+  let i = 0;
+  while (i < words.length && isAssign(words[i])) i++;
+  while (i < words.length && (words[i].raw === 'command' || words[i].raw === 'builtin')) i++;
+  const name = words[i]?.value === null || words[i] === undefined ? null : commandName(words[i].value);
+  if (name !== 'echo' && name !== 'printf') return undefined;
+  if (redirects.some((r) => WRITE_REDIRECTS.has(r.op) && r.op !== '<>' && (r.fd === null || r.fd === 1))) return '';
+  let args = words.slice(i + 1);
+  if (args.some((a) => a.value === null || a.glob)) return null;
+  if (name === 'echo') {
+    let newline = true;
+    while (args.length && /^-[neE]+$/.test(args[0].value)) { if (args[0].value.includes('n')) newline = false; args = args.slice(1); }
+    return unescape(args.map((a) => a.value).join(' ')) + (newline ? '\n' : '');
+  }
+  if (args[0]?.value === '--') args = args.slice(1);
+  if (!args.length || args[0].value.startsWith('-')) return null; // printf -v var sets a variable
+  const fmt = args[0].value;
+  const vals = args.slice(1).map((a) => a.value);
+  if (/%(?![%sbdic])/.test(fmt.replace(/%%/g, ''))) return null;
+  let text = '';
+  let k = 0;
+  // printf reuses its format while arguments remain.
+  do {
+    const before = k;
+    text += unescape(fmt.replace(/%([%sbdic])/g, (_, d) => (d === '%' ? '%' : d === 'b' ? unescape(vals[k++] ?? '') : (vals[k++] ?? ''))));
+    if (k === before) break;
+  } while (k < vals.length);
+  return text;
+}
+
 function sub(src, env, out, depth, via) {
   const saved = { cwd: env.cwd, prev: env.prev, dirs: env.dirs.length, vars: env.vars };
   env.vars = new Map(env.vars);
@@ -451,6 +493,27 @@ function sub(src, env, out, depth, via) {
   env.prev = saved.prev;
   env.dirs.length = Math.min(env.dirs.length, saved.dirs);
   env.vars = saved.vars;
+}
+
+// Shell options that take the next word as their value.
+const SHELL_VALUED = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
+
+/**
+ * Where a shell (`bash`, `sh`, ...) reads its script, from its arguments: `{ from: 'arg', word }`
+ * for `-c`, `{ from: 'file' }` for a script operand, or `{ from: 'stdin' }` for `-s` or no operand.
+ */
+function shellScript(args) {
+  let stdin = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.value === '--' || a.value === '-') return { from: stdin ? 'stdin' : args[i + 1] ? 'file' : 'stdin' };
+    if (a.value === null || !/^[-+]/.test(a.raw)) return { from: stdin ? 'stdin' : 'file' };
+    if (SHELL_VALUED.has(a.value)) { i++; continue; }
+    if (a.value.startsWith('--')) continue;
+    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a.value)) return { from: 'arg', word: args[i + 1] };
+    if (/^-[A-Za-z]*s/.test(a.value)) stdin = true;
+  }
+  return { from: 'stdin' };
 }
 
 const isAssign = (w) => Boolean(w.assign);
@@ -570,8 +633,8 @@ function simple(words, meta, env, out, depth) {
   }
   emit(name, w, { cwd });
   if (SHELLS.has(name)) {
-    const flag = args.findIndex((a) => a.value !== null && /^-[A-Za-z]*c[A-Za-z]*$/.test(a.value));
-    const script = flag !== -1 ? args[flag + 1]?.text : !args.some((a) => !a.raw.startsWith('-')) ? meta.stdin?.body : null;
+    const src = shellScript(args);
+    const script = src.from === 'arg' ? src.word?.text : src.from === 'stdin' ? meta.stdin?.body : null;
     if (script) sub(script, { ...env, cwd, ps: false }, out, depth + 1, `${name} -c`);
   } else if (name === 'eval') {
     run(args.map((a) => a.text).join(' '), env, out, depth + 1, 'eval');
@@ -634,10 +697,11 @@ function gitCommand(c) {
   if (dashed === 'apply' || dashed === 'am') return { sub: dashed, args: c.args, cwd: c.cwd, dynamic: false, hiddenAlias: false };
   if (c.name !== 'git') return null;
   let dir = c.cwd;
-  const a = c.args;
+  let a = c.args;
   const aliases = new Map();
   let opaque = false;
   let hidden = (c.envNames ?? []).some((n) => HIDDEN_CONFIG_ENV.test(n));
+  let expansions = 0;
   for (let i = 0; i < a.length; i++) {
     const t = a[i].raw;
     if (t === '-C') { dir = wordPath(a[++i], dir); continue; }
@@ -660,17 +724,20 @@ function gitCommand(c) {
     if (t === '--git-dir' || t === '--work-tree' || t === '--namespace') { i++; continue; }
     if (t.startsWith('-')) continue;
     if (a[i].value === null) return { sub: '', args: a.slice(i + 1), cwd: dir, dynamic: true, hiddenAlias: false };
-    let sub = a[i].value;
-    let args = a.slice(i + 1);
-    for (let n = 0; n < 8 && !GIT_BUILTINS.has(sub) && aliases.has(sub.toLowerCase()); n++) {
+    const sub = a[i].value;
+    const args = a.slice(i + 1);
+    if (!GIT_BUILTINS.has(sub) && aliases.has(sub.toLowerCase())) {
+      // A chain longer than temper follows may end on git apply: it is read as a guessed one.
+      if (expansions === 8) return { sub: '', args, cwd: dir, dynamic: true, hiddenAlias: true };
       const def = aliases.get(sub.toLowerCase());
       if (!def || def.startsWith('!')) return { sub: '', args, cwd: dir, dynamic: true, hiddenAlias: false };
-      const [head, ...rest] = def.split(/\s+/);
-      sub = head;
-      args = [...rest.map(literalWord), ...args];
+      // git reads options at the start of an alias (`-p apply`, `-c k=v apply`) as its own: the
+      // expansion goes back through this loop.
+      expansions++;
+      a = [...def.split(/\s+/).map(literalWord), ...args];
+      i = -1;
+      continue;
     }
-    // A chain longer than temper follows ends on an alias it did not resolve.
-    if (!GIT_BUILTINS.has(sub) && aliases.has(sub.toLowerCase())) return { sub: '', args, cwd: dir, dynamic: true, hiddenAlias: false };
     const hiddenAlias = hidden && !GIT_BUILTINS.has(sub);
     return { sub, args, cwd: dir, dynamic: opaque || hiddenAlias, hiddenAlias };
   }
@@ -1191,13 +1258,15 @@ const GIT_OPTS = String.raw`(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--conf
 // the subcommand (`--grep apply` is an option's value), or the dashed git-apply and git-am.
 const GIT_PATCH_CODE = new RegExp(String.raw`\bgit\s+(?:args\s*[:=]\s*)?${GIT_OPTS}(?:apply|am)(?![\w./-])|\bgit-(?:apply|am)\b`);
 // A patch command in a string or after `;`, `|`, `&` or a directory: `patch` followed by an
-// option, a file or `<`; in list form, by an option or a .diff or .patch argument.
-const PATCH_CMD_CODE = /(?:^|['"`(\[;|&/]\s*|\bbusybox\s+)g?patch(?:\s+[-<\w./~$"']|['"],\s*['"]-|['"](?=,[^\]\n]{0,160}?\.(?:diff|patch)['"]))/m;
+// option, a file, `<`, `|` or `>` (`patch<x.diff`); in list form, by an option or a .diff or .patch argument.
+const PATCH_CMD_CODE = /(?:^|['"`(\[;|&/]\s*|\bbusybox\s+)g?patch(?:[<|>]|\s+[-<\w./~$"']|['"],\s*['"]-|['"](?=,[^\]\n]{0,160}?\.(?:diff|patch)['"]))/m;
+// `patch` reading stdin at the end of a pipeline or a command list (`'cat x.diff|patch'`), at any path.
+const PATCH_END_CODE = /[;|&]\s*(?:busybox\s+)?(?:[\w.~-]*\/)*g?patch\s*(?:['"`;&|)]|$)/m;
 
 /** Whether interpreter code mentions git apply, git am or a patch command. Escapes (`\t`, `\n`, `\r`) count as whitespace. */
 function codePatches(code) {
   const text = code.replace(/\\[tnr]/g, ' ');
-  return GIT_PATCH_CODE.test(text.replace(/['"`,[\]{}()+]/g, ' ')) || PATCH_CMD_CODE.test(text);
+  return GIT_PATCH_CODE.test(text.replace(/['"`,[\]{}()+]/g, ' ')) || PATCH_CMD_CODE.test(text) || PATCH_END_CODE.test(text);
 }
 const CONFIG_VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
 const CONFIG_WRITE_FLAGS = /^--(?:add|unset|unset-all|replace-all|rename-section|remove-section)$/;
@@ -1218,6 +1287,7 @@ function configWritesAlias(args) {
  * - `name`: a command name it cannot resolve that names git or patch, or comes before `apply` or `am`;
  * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
  *   mentions `git apply`, `git am` or a patch command, or code piped or redirected into one;
+ * - `script`: a script piped or redirected into a shell (`cat cmd.sh | bash`) that temper cannot read;
  * - `alias`: `git config` setting an alias, which could name git apply later.
  * Patterns, not a parse: for a fail-closed check.
  */
@@ -1233,6 +1303,12 @@ export function opaquePatch(c) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
     if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
     return null;
+  }
+  // A shell reading its script from a pipe or a file temper cannot read: `cat cmd.sh | bash`, `bash -s < x`.
+  // A script it can read (a here-document, `echo '...' |`) is parsed into the commands it runs.
+  if (SHELLS.has(c.name)) {
+    const unread = (c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !c.stdin.body;
+    return unread && shellScript(c.args).from === 'stdin' ? { kind: 'script', why: `a ${c.name} script on stdin that temper cannot read` } : null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
   if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };

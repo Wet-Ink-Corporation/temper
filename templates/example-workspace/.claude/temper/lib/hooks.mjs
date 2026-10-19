@@ -427,6 +427,7 @@ const REVIEWER_OPAQUE_HINT = {
   git: 'Run one of git\'s own commands with its name written out; the reviewer runs no git alias.',
   name: 'Run the command with its name written out.',
   code: 'Run the git or shell command directly, not through an interpreter, so temper can read it.',
+  script: 'Run the commands directly, not as a script piped or redirected into a shell, so temper can read them.',
   alias: 'The reviewer sets no git alias, because an alias could run `git apply` or `git am` later.',
 };
 const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';

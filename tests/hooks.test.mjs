@@ -631,6 +631,14 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `"$(git --exec-path)/git-apply" "${out('doc.diff')}"`,
       'git-am x.mbox',
       'git-diff HEAD',
+      // #151 review 3: a literal script piped into a shell is read; one temper cannot read is denied.
+      `echo 'git apply ${out('doc.diff')}' | bash`,
+      `printf 'git apply ${out('doc.diff')}\\n' | sh`,
+      `echo git apply ${out('doc.diff')} | bash -s`,
+      'cat cmd.sh | bash',
+      `git -c alias.ap='-p apply' ap "${out('doc.diff')}"`,
+      `python3 -c "import subprocess; subprocess.run('patch<${out('doc.diff')}', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run('cat ${out('doc.diff')}|patch', shell=True)"`,
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -643,6 +651,7 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `gpatch --dry-run -p1 -i "${out('doc.diff')}"`, 'watch -n 5 git status', 'git -c alias.st=status st', 'git -c core.pager=cat log -1',
       'python3 -c "print(1 + 1)"', `node -e "console.log(require('fs').existsSync('x.patch'))"`, "git log --grep 'git apply'",
       'git config --get alias.ap', `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
+      'echo hi | grep h', 'cargo test 2>&1 | tail', "echo 'git status' | bash",
     ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
@@ -650,6 +659,7 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     assert.match(reason(asReviewer('git $x')), /git's own commands/);
     assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);
     assert.match(reason(asReviewer('git config alias.ap apply')), /sets no git alias/);
+    assert.match(reason(asReviewer('cat cmd.sh | bash')), /not as a script piped or redirected into a shell/);
     // Another agent's non-Rust patch still runs, and so do the forms the reviewer alone is denied because temper cannot resolve them.
     for (const cmd of [
       `git apply "${out('doc.diff')}"`, `gpatch -p1 -i "${out('doc.diff')}"`, 'git ${CMD:-status}',
@@ -674,6 +684,11 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       `git-apply "${out('rs.diff')}"`,
       `/usr/lib/git-core/git-apply "${out('rs.diff')}"`,
       `"$(git --exec-path)/git-apply" "${out('rs.diff')}"`,
+      // #151 review 3: a literal script piped into a shell, options at the start of an alias, a long alias chain.
+      `echo 'git apply ${out('rs.diff')}' | bash`,
+      `printf 'git apply ${out('rs.diff')}\\n' | sh`,
+      `git -c alias.ap='-p apply' ap "${out('rs.diff')}"`,
+      `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('rs.diff')}"`,
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -686,6 +701,8 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.lg GIT_CONFIG_VALUE_0=log git lg --oneline',
       'git config alias.ap apply',
       `/usr/lib/git-core/git-apply --check "${out('rs.diff')}"`, `git-apply "${out('doc.diff')}"`, 'git-diff HEAD',
+      `echo 'git apply ${out('doc.diff')}' | bash`, 'cat cmd.sh | bash', 'echo hi | grep h', 'cargo test 2>&1 | tail',
+      `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('doc.diff')}"`,
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
 });
