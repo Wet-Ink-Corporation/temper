@@ -12,7 +12,7 @@ import {
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript, NEW_CODE_ONLY } from './scan.mjs';
 import { parseToml } from './toml.mjs';
 import { memberProblems, membersFromToml, ownLintsMember, splitProblems } from './manifest.mjs';
-import { collectFindings, mergeCollections, isComplete, writeCachedFindings } from './findings.mjs';
+import { collectFindings, mergeCollections, isComplete, writeCachedFindings, ruleMap } from './findings.mjs';
 import { readBaseline, baselineExists, ratchet, renderRatchet, debtLine, changedLines, renamedSince } from './baseline.mjs';
 
 const has = (cmd, args) => run(cmd, args, { timeoutMs: 20000 }).code === 0;
@@ -120,6 +120,20 @@ export function scanChanged(proj, base) {
     }
   }
   return out;
+}
+
+const ADVISORY_MAX = 12;
+
+/**
+ * Advisories (soft scan hits) under MUST rules, as `ID file:line message`, at
+ * most ADVISORY_MAX and a count of the rest. Several MUST rules have only an
+ * advisory scan behind them (ASY-04, ASY-07, ARC-09, ARC-11, ...), so the gate
+ * lists the ones a change adds for the reviewer to judge; they never fail it.
+ */
+export function mustAdvisories(soft, map = ruleMap()) {
+  const must = soft.filter((h) => map.rules[h.id]?.level === 'MUST').map((h) => `${h.id} ${h.file}:${h.line} ${h.msg}`);
+  if (must.length <= ADVISORY_MAX) return must;
+  return [...must.slice(0, ADVISORY_MAX), `... and ${must.length - ADVISORY_MAX} more (temper scan lists them all)`];
 }
 
 /**
@@ -294,6 +308,8 @@ export function runGate(proj, opts = {}) {
         name: 'scan', ok, ms: Date.now() - t,
         summary: ok ? `${s.soft.length} advisory, ${s.ask.length} exception request(s)` : s.hard.slice(0, 12).map((h) => formatHit(h, h.file)).join('\n'),
         exceptions: s.ask.map((h) => `${h.file}:${h.line} ${h.exception ?? h.id}`),
+        // Without git or a base every hit looks new, so only the count is given.
+        advisories: proj.gitRoot && opts.base ? mustAdvisories(s.soft) : [],
       });
       if (!ok) return finish(proj, fp, steps, true, cachePath);
     }
@@ -463,11 +479,13 @@ export function renderGate(res) {
   const fails = res.steps.filter((s) => !s.ok).map((s) => `--- ${s.name} ---\n${s.summary}${s.log ? `\n(full log: ${s.log})` : ''}`).join('\n');
   const passes = res.steps.filter((s) => s.ok && (s.name.includes('test') || s.ratchet)).map((s) => `${s.name}: ${s.summary}`).join('\n');
   const exc = res.steps.flatMap((s) => s.exceptions ?? []);
+  const adv = res.steps.flatMap((s) => s.advisories ?? []);
   const debt = res.steps.filter((s) => s.debt).at(-1)?.debt;
   return [
     `temper gate: ${res.ok ? 'GREEN' : 'RED'} (fingerprint ${res.fp ?? 'n/a'}${res.cached ? ', cached' : ''})`,
     head, fails, passes,
     exc.length ? `lint exceptions in the diff (need human approval, H-05): ${exc.join('; ')}` : '',
+    adv.length ? `advisories this change adds under MUST rules (each is fixed or justified, or the reviewer reports it): ${adv.join('; ')}` : '',
     res.ok && debt ? `ratchet against the baseline: ${debt}` : '',
   ].filter(Boolean).join('\n');
 }

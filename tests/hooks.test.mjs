@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { preEdit, preBash, lintConfigChanged } from '../scripts/lib/hooks.mjs';
-import { checkManifests, checkManifestsToml, runGate, renderGate, scanChanged } from '../scripts/lib/gate.mjs';
+import { checkManifests, checkManifestsToml, runGate, renderGate, scanChanged, mustAdvisories } from '../scripts/lib/gate.mjs';
 import { discover } from '../scripts/lib/project.mjs';
 
 const ROOT = `# Workspace manifest (from the temper template).
@@ -1324,6 +1324,32 @@ test('gate manifests step with git: only problems new since the base fail', { sk
     assert.equal(own.ok, true, own.summary);
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('gate scan: advisories the change adds under MUST rules are listed for the reviewer; SHOULD ones and legacy ones are not', { skip: !git && 'git not installed' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-advisories-'));
+  const put = (rel, text) => { const p = path.join(dir, ...rel.split('/')); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const g = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+  try {
+    put('Cargo.toml', '[package]\nname = "x"\nedition = "2024"\n');
+    put('src/lib.rs', '//! X.\npub fn old() {\n    let (_tx, _rx) = tokio::sync::mpsc::unbounded_channel::<u8>();\n}\n');
+    g('init', '-q');
+    g('add', '-A');
+    g('-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-qm', 'base');
+    const base = g('rev-parse', 'HEAD').stdout.trim();
+    put('src/lib.rs', '//! X.\npub fn old() {\n    let (_tx, _rx) = tokio::sync::mpsc::unbounded_channel::<u8>();\n}\npub struct Guard(std::sync::Mutex<()>);\npub fn new() {\n    let (_a, _b) = tokio::sync::mpsc::unbounded_channel::<u16>();\n}\n');
+    const proj = discover(dir);
+    const s = scanChanged(proj, base);
+    assert.ok(s.soft.some((h) => h.key === 'mutex-unit'), 'the SHOULD advisory is found');
+    assert.deepEqual(mustAdvisories(s.soft), ['ASY-07 src/lib.rs:7 unbounded channel']);
+    const text = renderGate({ ok: true, fp: 'f', steps: [{ name: 'scan', ok: true, summary: '2 advisory', advisories: mustAdvisories(s.soft) }] });
+    assert.match(text, /advisories this change adds under MUST rules \(each is fixed or justified, or the reviewer reports it\): ASY-07 src\/lib\.rs:7 unbounded channel/);
+    const many = Array.from({ length: 15 }, (_, i) => ({ id: 'ASY-07', key: 'unbounded', file: 'a.rs', line: i + 1, msg: 'm' }));
+    assert.equal(mustAdvisories(many).length, 13);
+    assert.equal(mustAdvisories(many).at(-1), '... and 3 more (temper scan lists them all)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
