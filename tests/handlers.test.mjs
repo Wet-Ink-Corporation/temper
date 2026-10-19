@@ -544,11 +544,16 @@ test('Stop: Rust a subagent changed in its own worktree is gated and needs a rev
   assert.match(unreviewed, new RegExp(`^In the worktree \\.claude/worktrees/agent-a1: The gate is green, but the current tree \\(fingerprint ${fp}\\) has no approving independent review`));
   // the path as git reports it (on Windows, the long form of a short 8.3 temp path)
   assert.ok(unreviewed.includes(`git -C "${w.proj().root.split(path.sep).join('/')}" diff`), unreviewed);
-  // the reviewer, started in the main checkout, is told about the worktree
+  // the reviewer, started in the main checkout, is pointed at the worktree, the only tree with changes
   const rv = { cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
-  assert.match(context(subagentStart(rv)), new RegExp(`Also changed in this session: the worktree \\.claude/worktrees/agent-a1 \\(fingerprint ${fp}, 1 Rust file\\(s\\)\\)`));
-  // its verdict for the worktree's fingerprint is checked against the worktree's changed files and is current
-  assert.deepEqual(subagentStop({ ...rv, last_assistant_message: fenced(verdict(fp)) }), {});
+  const said = context(subagentStart(rv));
+  assert.match(said, /^- Target: the worktree \.claude\/worktrees\/agent-a1\. /m);
+  assert.match(said, new RegExp(`^- Changed Rust files \\(1\\): ${LIB}$`, 'm'));
+  const told = said.match(/^- Your verdict's "fingerprint" field must be ([0-9a-f]{16})\./m)?.[1];
+  assert.equal(told, fp, 'the fingerprint the reviewer is told to use is the worktree\'s');
+  // a verdict missing the worktree's changed file is refused; one built from the context is current
+  assert.match(blocked(subagentStop({ ...rv, last_assistant_message: fenced(verdict(told, { evidence: { files_read: ['crates/core/Cargo.toml'], commands_run: ['gate'] } })) })), /changed files not reviewed: crates\/core\/src\/lib\.rs/);
+  assert.deepEqual(subagentStop({ ...rv, last_assistant_message: fenced(verdict(told)) }), {});
   assert.equal(verdictFor(r.proj(), fp).stale, false);
   assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: In the worktree .claude/worktrees/agent-a1: gate green and review approved (fingerprint ${fp}).`);
   const rows = readTelemetry(r.proj()).filter((x) => x.event === 'stop-green');
@@ -585,6 +590,44 @@ test('Stop: a worktree the session never changed, one merged into the main check
   subagentEdits(gone, sid, 'g1', LIB, `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`);
   r.git('worktree', 'remove', '--force', gone.dir);
   assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${mainFp}).`);
+});
+
+test('SubagentStart (reviewer): with changes in the main checkout and a worktree, the main tree is the target and the worktree is listed', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-both';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  r.put(LIB, LIB_RS_2);
+  const w = worktree(r, 'agent-c1');
+  subagentEdits(w, sid, 'c1', LIB, `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`);
+  const said = context(subagentStart({ cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' }));
+  assert.doesNotMatch(said, /^- Target:/m);
+  assert.match(said, new RegExp(`Also changed in this session: the worktree \\.claude/worktrees/agent-c1 \\(fingerprint ${w.fp(sid)}, 1 Rust file\\(s\\)\\)`));
+  assert.match(said, new RegExp(`must be ${fingerprint(r.proj(), r.git('rev-parse', 'HEAD'))}, or, if you were asked to review one of the worktrees listed above, that worktree's fingerprint\\.`));
+});
+
+test('Stop: a removed worktree whose branch holds unmerged commits is reported, not gated', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-gone';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const dir = r.file('.claude/worktrees/agent-d1');
+  r.git('worktree', 'add', '-q', '-b', 'agent-d1', dir);
+  const w = { dir, file: (rel) => path.join(dir, ...rel.split('/')) };
+  preEdit({ cwd: dir, session_id: sid, agent_id: 'd1', agent_type: 'general-purpose', tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: LIB_RS_2 } });
+  fs.writeFileSync(w.file(LIB), LIB_RS_2);
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qam', 'two'], { cwd: dir });
+  r.git('worktree', 'remove', dir);
+  assert.equal(message(stop({ cwd: r.dir, session_id: sid })), 'temper: the worktree .claude/worktrees/agent-d1 was removed, and its branch agent-d1 holds commits the main checkout does not have. They were not gated or reviewed here; CI checks them on their pull request.');
+  // once merged into the main checkout, there is nothing to report (and the main checkout is gated instead)
+  r.git('merge', '-q', '--ff-only', 'agent-d1');
+  assert.equal(message(stop({ cwd: r.dir, session_id: sid, last_assistant_message: 'Status: WIP' })), 'temper: Rust changes left in progress; the gate and review were not enforced for this turn.');
+});
+
+test('Stop: a loop-breaker record from before #135 (one fp and kind) is still read', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.gate(false);
+  writeAtomic(path.join(sessionDir(r.proj(), 's-old'), 'stop-main.json'), JSON.stringify({ fp, kind: 'gate', at: Date.now() }));
+  assert.match(message(stop({ cwd: r.dir, session_id: 's-old', stop_hook_active: true })), /^temper: stopped with a RED gate/);
 });
 
 test('Stop: with two red trees each is let through once stuck, without alternating blocks', { skip: noCargo }, (t) => {

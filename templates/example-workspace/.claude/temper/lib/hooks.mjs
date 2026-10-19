@@ -1143,15 +1143,13 @@ export function reportFromTranscript(file) {
 }
 
 function checkVerdict(proj, input, v) {
-  const tree = reviewedTree(proj, input, v?.fingerprint);
-  const base = baseRev(tree, input.session_id);
+  const { proj: tree, base } = reviewedTree(proj, input, v?.fingerprint);
   const gate = v?.fingerprint ? cachedGate(proj, v.fingerprint) : null;
   return validateVerdict(v, { changedRust: rustChanges(tree, base).filter((f) => f.endsWith('.rs')), gate });
 }
 
 function storeVerdict(proj, input, v, via) {
-  const tree = reviewedTree(proj, input, v.fingerprint);
-  const base = baseRev(tree, input.session_id);
+  const { proj: tree, base } = reviewedTree(proj, input, v.fingerprint);
   const current = fingerprint(tree, base);
   recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
@@ -1207,20 +1205,28 @@ function lastBlock(proj, input) {
 
 const treeId = (root) => createHash('sha256').update(norm(path.resolve(root))).digest('hex').slice(0, 12);
 
-/** Record that this agent context changes Rust-relevant files in `proj`'s checkout. */
+/**
+ * Record that this agent context changes Rust-relevant files in `proj`'s checkout. A worktree's
+ * scope starts at its HEAD at that moment (it may come from another ref than the session base);
+ * its branch is kept so a removed worktree's unmerged commits can still be reported.
+ */
 function noteTree(proj, input) {
   if (!proj.gitRoot || !input.session_id) return;
   const p = path.join(sessionDir(proj, input.session_id), `tree-${treeId(proj.root)}-${agentKey(input)}.json`);
   if (fs.existsSync(p)) return;
-  writeAtomic(p, JSON.stringify({ root: proj.root, startFp: fingerprint(proj, baseRev(proj, input.session_id)), at: Date.now() }));
+  const head = resolveRev(proj, 'HEAD');
+  const br = run('git', ['symbolic-ref', '--short', '-q', 'HEAD'], { cwd: proj.gitRoot });
+  const branch = br.code === 0 ? br.stdout.trim() || null : null;
+  writeAtomic(p, JSON.stringify({ root: proj.root, head, branch, startFp: fingerprint(proj, head ?? baseRev(proj, input.session_id)), at: Date.now() }));
 }
 
 /**
- * The other checkouts of `proj`'s repository that this session changed, each with the
- * fingerprint it had before the session's first edit there. `agent` limits them to the trees
- * that agent context edited; without it, every agent context counts.
+ * The other checkouts of `proj`'s repository that this session changed, each with its base (its
+ * HEAD when first noted) and the fingerprint it had then. `agent` limits them to the trees that
+ * agent context edited; without it, every agent context counts. With `gone`, a noted checkout
+ * that no longer exists is returned too, as `{ gone: true, rec }`.
  */
-function otherTrees(proj, input, { agent } = {}) {
+function otherTrees(proj, input, { agent, gone = false } = {}) {
   if (!proj.gitRoot || !input.session_id) return [];
   const dir = sessionDir(proj, input.session_id);
   let names = [];
@@ -1236,10 +1242,10 @@ function otherTrees(proj, input, { agent } = {}) {
   }
   const out = [];
   for (const rec of [...byRoot.values()].sort((a, b) => a.root.localeCompare(b.root))) {
-    if (!fs.existsSync(rec.root)) continue; // removed: its work was merged or discarded
+    if (!fs.existsSync(rec.root)) { if (gone) out.push({ gone: true, rec }); continue; }
     const tree = discover(rec.root);
     if (!tree || path.resolve(tree.root) !== path.resolve(rec.root) || tree.stateDir !== proj.stateDir) continue;
-    out.push({ proj: tree, startFp: rec.startFp ?? null });
+    out.push({ proj: tree, startFp: rec.startFp ?? null, base: resolveRev(tree, rec.head) ?? baseRev(tree, input.session_id) });
   }
   return out;
 }
@@ -1253,11 +1259,46 @@ function mergedInto(tree, main) {
   return rustChanges(tree, head).length === 0;
 }
 
+/**
+ * The trees whose Rust this turn changed and that still need the gate: the main checkout, then
+ * each other checkout this session (or, with `agent`, that agent context) changed and that is not
+ * merged into the main checkout. Each comes with its base and current fingerprint.
+ */
+function dueTrees(proj, input, { agent } = {}) {
+  const candidates = [
+    { proj, startFp: startFingerprint(proj, input.session_id), base: baseRev(proj, input.session_id), main: true },
+    ...otherTrees(proj, input, { agent }),
+  ];
+  const due = [];
+  for (const t of candidates) {
+    if (!rustChanges(t.proj, t.base).length) continue;
+    const fp = fingerprint(t.proj, t.base);
+    if (t.startFp && t.startFp === fp) continue; // nothing changed by this session
+    if (!t.main && mergedInto(t.proj, proj)) continue; // the main checkout holds it, and is gated itself
+    due.push({ ...t, fp });
+  }
+  return due;
+}
+
+/** Notices for removed worktrees whose branch still holds commits the main checkout lacks: they were never gated here. */
+function goneNotices(proj, input, agent) {
+  const mainHead = resolveRev(proj, 'HEAD');
+  const out = [];
+  for (const t of otherTrees(proj, input, { agent, gone: true }).filter((x) => x.gone)) {
+    const tip = t.rec.branch ? resolveRev(proj, `refs/heads/${t.rec.branch}`) : null;
+    if (!tip || !mainHead || tip === t.rec.head) continue;
+    if (run('git', ['merge-base', '--is-ancestor', tip, mainHead], { cwd: proj.gitRoot }).code === 0) continue;
+    out.push(`temper: the worktree ${treeLabel(proj, { root: t.rec.root })} was removed, and its branch ${t.rec.branch} holds commits the main checkout does not have. They were not gated or reviewed here; CI checks them on their pull request.`);
+  }
+  return out;
+}
+
 /** The checkout whose current tree has fingerprint `fp`: `proj`, or another checkout this session changed. */
 function reviewedTree(proj, input, fp) {
-  if (!fp) return proj;
-  if (fingerprint(proj, baseRev(proj, input.session_id)) === fp) return proj;
-  return otherTrees(proj, input).find((t) => fingerprint(t.proj, baseRev(t.proj, input.session_id)) === fp)?.proj ?? proj;
+  if (!fp) return { proj, base: baseRev(proj, input.session_id) };
+  const base = baseRev(proj, input.session_id);
+  if (fingerprint(proj, base) === fp) return { proj, base };
+  return otherTrees(proj, input).find((t) => fingerprint(t.proj, t.base) === fp) ?? { proj, base };
 }
 
 /** A checkout's path for messages: relative to the main checkout when it is inside it. */
@@ -1266,31 +1307,32 @@ const treeLabel = (main, tree) => {
   return rel.startsWith('..') ? norm(tree.root) : rel;
 };
 
+// A Stop that gated one tree for this long starts no other uncached tree's gate: it blocks, and
+// the next Stop (with the first result cached) runs it, so the hook's 1200 s timeout is not hit.
+const TREE_BUDGET_MS = 540000;
+
 function completionGate(input, { requireReview }) {
   const proj = discover(input.cwd);
   if (!proj || input.permission_mode === 'plan') return none();
+  const t0 = Date.now();
   // The main session answers for every tree its turn changed; an implementer, for the trees it edited.
-  const candidates = [
-    { proj, startFp: startFingerprint(proj, input.session_id), main: true },
-    ...otherTrees(proj, input, { agent: requireReview ? undefined : agentKey(input) }),
-  ];
-  const due = [];
-  for (const t of candidates) {
-    const base = baseRev(t.proj, input.session_id);
-    if (!rustChanges(t.proj, base).length) continue;
-    if (t.startFp && t.startFp === fingerprint(t.proj, base)) continue; // nothing changed by this session
-    if (!t.main && mergedInto(t.proj, proj)) continue; // the main checkout holds it, and is gated itself
-    due.push({ ...t, base });
-  }
-  if (!due.length) return none();
+  const agent = requireReview ? undefined : agentKey(input);
+  const due = dueTrees(proj, input, { agent });
+  const gone = goneNotices(proj, input, agent);
+  if (!due.length) return gone.length ? notice(gone.join('\n')) : none();
   const status = parseStatus(input.last_assistant_message);
   if (status === 'WIP' || status === 'BLOCKED') {
     telemetry(proj, input, 'stop-declared', { status });
     return notice(`temper: Rust changes left ${status === 'WIP' ? 'in progress' : 'blocked'}; the gate and review were not enforced for this turn.`);
   }
   const blocks = lastBlock(proj, input);
-  const notes = [];
-  for (const t of due) {
+  const notes = [...gone];
+  for (const [i, t] of due.entries()) {
+    if (i > 0 && Date.now() - t0 > TREE_BUDGET_MS && !cachedGate(proj, t.fp) && !blocks.stuck(t.fp, 'pending')) {
+      blocks.save(t.fp, 'pending');
+      telemetry(proj, input, 'stop-blocked', { reason: 'pending', fp: t.fp, tree: treeLabel(proj, t.proj) });
+      return block(`temper: the gate has not run yet for the worktree ${treeLabel(proj, t.proj)}: this Stop already spent ${Math.round((Date.now() - t0) / 1000)} s on other trees. End the turn again to run it.`);
+    }
     const res = gateTree(proj, t, input, { requireReview, blocks });
     if (res.json?.decision === 'block') return res;
     if (res.json?.systemMessage) notes.push(res.json.systemMessage);
@@ -1407,30 +1449,35 @@ export function subagentStart(input) {
   telemetry(proj, input, 'subagent-start', { type }); // before filtering (#97)
   noteTree(proj, input); // a subagent working in its own worktree starts there (#135)
   if (!PRELOADED.test(type)) return none();
-  const base = baseRev(proj, input.session_id);
-  if (REVIEWER.test(type)) run('cargo', ['fmt', '--all'], { cwd: proj.root, timeoutMs: 120000 });
-  const changes = rustChanges(proj, base);
-  const fp = fingerprint(proj, base);
+  // The tree to work on: the main checkout, unless only worktrees hold this session's Rust changes (#135).
+  const due = dueTrees(proj, input);
+  const others = due.filter((t) => !t.main);
+  const target = due.some((t) => t.main) || !others.length ? { proj, base: baseRev(proj, input.session_id), main: true } : others[0];
+  const tp = target.proj;
+  const base = target.base;
+  if (REVIEWER.test(type)) run('cargo', ['fmt', '--all'], { cwd: tp.root, timeoutMs: 120000 });
+  const changes = rustChanges(tp, base);
+  const fp = fingerprint(tp, base);
   const g = cachedGate(proj, fp);
   const plans = listPlans(proj);
+  const at = norm(tp.root);
   const lines = [
     `temper context for ${type}:`,
-    `- Project root: ${proj.root}`,
-    `- Base revision: ${base ?? 'none (no git)'}; review scope: \`git diff ${base ?? ''}\` plus untracked files.`,
+    ...(target.main ? [] : [`- Target: the worktree ${treeLabel(proj, tp)}. This session changed Rust there and not in the main checkout, so that worktree is the tree to work on: run every command in it (\`git -C "${at}" …\`, and the gate as \`cd "${at}" && ${gateCmd()}\`).`]),
+    `- Project root: ${tp.root}`,
+    `- Base revision: ${base ?? 'none (no git)'}; review scope: \`git ${target.main ? '' : `-C "${at}" `}diff ${base ?? ''}\` plus untracked files.`,
     `- Current tree fingerprint: ${fp}`,
     `- Changed Rust files (${changes.length}): ${changes.slice(0, 40).join(', ') || 'none'}`,
     `- Gate for this fingerprint: ${g ? (g.ok ? 'green' : `red (${g.steps.filter((s) => !s.ok).map((s) => s.name).join(', ')})`) : 'not run yet'}. Gate command: ${gateCmd()}`,
     plans.length ? `- Plans: ${plans.join(', ')}` : '- Plans: none under .temper/plans/',
   ];
-  for (const t of otherTrees(proj, input)) {
-    const tb = baseRev(t.proj, input.session_id);
-    const rust = rustChanges(t.proj, tb);
-    if (!rust.length) continue;
-    lines.push(`- Also changed in this session: the worktree ${treeLabel(proj, t.proj)} (fingerprint ${fingerprint(t.proj, tb)}, ${rust.length} Rust file(s)). Its scope is \`git -C "${norm(t.proj.root)}" diff ${tb ?? ''}\` plus its untracked files; a review of it uses that fingerprint.`);
+  const also = others.filter((t) => t !== target);
+  for (const t of also) {
+    lines.push(`- Also changed in this session: the worktree ${treeLabel(proj, t.proj)} (fingerprint ${t.fp}, ${rustChanges(t.proj, t.base).length} Rust file(s)). Its scope is \`git -C "${norm(t.proj.root)}" diff ${t.base ?? ''}\` plus its untracked files, and its gate runs from inside it; a review of it uses that fingerprint.`);
   }
   if (REVIEWER.test(type)) {
-    lines.push(`- Your verdict's "fingerprint" field must be ${fp}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.`);
-    const stat = diffStat(proj, base);
+    lines.push(`- Your verdict's "fingerprint" field must be ${fp}${also.length ? ', or, if you were asked to review one of the worktrees listed above, that worktree\'s fingerprint' : ''}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.`);
+    const stat = diffStat(tp, base);
     if (stat) lines.push(`- Diff stat:\n${stat.split('\n').slice(-25).join('\n')}`);
   }
   return ctx('SubagentStart', lines.join('\n'));
