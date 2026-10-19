@@ -499,6 +499,125 @@ test('Stop: review "advisory" and "off" in .claude/temper.json', { skip: noCargo
   assert.ok(blocked(stop({ cwd: r.dir, session_id: 's-off' })));
 });
 
+// ------------------------------- Stop: Rust changed in another worktree (#135)
+
+/** A worktree of `r` under .claude/worktrees/<name>, with helpers like repo()'s. */
+function worktree(r, name) {
+  const dir = r.file(`.claude/worktrees/${name}`);
+  r.git('worktree', 'add', '-q', '--detach', dir);
+  const w = {
+    dir,
+    file: (rel) => path.join(dir, ...rel.split('/')),
+    put: (rel, text) => fs.writeFileSync(w.file(rel), text),
+    proj: () => discover(dir),
+    /** Fingerprint of the worktree against the session base, as Stop computes it. */
+    fp: (sid) => fingerprint(w.proj(), fs.readFileSync(path.join(sessionDir(r.proj(), sid), 'base'), 'utf8').trim()),
+    gate: (sid, ok) => {
+      const fp = w.fp(sid);
+      const steps = [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }, { name: 'clippy', ok, ms: 0, summary: ok ? 'clean' : 'error: seeded failure' }];
+      writeAtomic(path.join(r.proj().stateDir, 'gate', `${fp}.json`), JSON.stringify({ ok, fp, at: new Date().toISOString(), steps }));
+      return fp;
+    },
+  };
+  return w;
+}
+
+/** A subagent's Edit of `rel` in the worktree, as PreToolUse sees it (the skill gate denies it; the tree is noted first), then the write itself. */
+function subagentEdits(w, sid, agent_id, rel, text) {
+  preEdit({ cwd: w.dir, session_id: sid, agent_id, agent_type: 'general-purpose', tool_name: 'Write', tool_input: { file_path: w.file(rel), content: text } });
+  w.put(rel, text);
+}
+
+test('Stop: Rust a subagent changed in its own worktree is gated and needs a review of that worktree', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const w = worktree(r, 'agent-a1');
+  subagentEdits(w, sid, 'a1', LIB, LIB_RS_2);
+  // the main checkout has no Rust change, yet the turn is not done
+  let fp = w.gate(sid, false);
+  const red = blocked(stop({ cwd: r.dir, session_id: sid }));
+  assert.ok(red, 'blocked on the worktree gate');
+  assert.match(red, new RegExp(`^In the worktree \\.claude/worktrees/agent-a1: temper gate: RED \\(fingerprint ${fp}, cached\\)`));
+  fp = w.gate(sid, true);
+  const unreviewed = blocked(stop({ cwd: r.dir, session_id: sid }));
+  assert.match(unreviewed, new RegExp(`^In the worktree \\.claude/worktrees/agent-a1: The gate is green, but the current tree \\(fingerprint ${fp}\\) has no approving independent review`));
+  assert.ok(unreviewed.includes(`git -C "${w.dir.split(path.sep).join('/')}" diff`), unreviewed);
+  // the reviewer, started in the main checkout, is told about the worktree
+  const rv = { cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' };
+  assert.match(context(subagentStart(rv)), new RegExp(`Also changed in this session: the worktree \\.claude/worktrees/agent-a1 \\(fingerprint ${fp}, 1 Rust file\\(s\\)\\)`));
+  // its verdict for the worktree's fingerprint is checked against the worktree's changed files and is current
+  assert.deepEqual(subagentStop({ ...rv, last_assistant_message: fenced(verdict(fp)) }), {});
+  assert.equal(verdictFor(r.proj(), fp).stale, false);
+  assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: In the worktree .claude/worktrees/agent-a1: gate green and review approved (fingerprint ${fp}).`);
+  const rows = readTelemetry(r.proj()).filter((x) => x.event === 'stop-green');
+  assert.equal(rows.at(-1).tree, '.claude/worktrees/agent-a1');
+});
+
+test('Stop: a worktree the session never changed, one merged into the main checkout, and a removed one are not gated', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-skip';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  // another session's worktree with Rust changes: not this session's
+  const other = worktree(r, 'agent-other');
+  other.put(LIB, LIB_RS_2);
+  assert.deepEqual(stop({ cwd: r.dir, session_id: sid }), {});
+  // a subagent started in a worktree and changed nothing there
+  const idle = worktree(r, 'agent-idle');
+  subagentStart({ cwd: idle.dir, session_id: sid, agent_type: 'general-purpose', agent_id: 'i1' });
+  assert.deepEqual(stop({ cwd: r.dir, session_id: sid }), {});
+  // committed in the worktree and merged into the main checkout: the main checkout is gated, once
+  const w = worktree(r, 'agent-m1');
+  subagentEdits(w, sid, 'm1', LIB, LIB_RS_2);
+  execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qam', 'two'], { cwd: w.dir });
+  r.git('merge', '-q', '--ff-only', execFileSync('git', ['rev-parse', 'HEAD'], { cwd: w.dir, encoding: 'utf8' }).trim());
+  const fp = r.gate(true);
+  recordVerdict(r.proj(), verdict(fp));
+  // r.gate keys on HEAD; the session base is the commit before the merge, so seed that fingerprint too
+  const base = fs.readFileSync(path.join(sessionDir(r.proj(), sid), 'base'), 'utf8').trim();
+  const mainFp = fingerprint(r.proj(), base);
+  writeAtomic(path.join(r.proj().stateDir, 'gate', `${mainFp}.json`), JSON.stringify({ ok: true, fp: mainFp, at: new Date().toISOString(), steps: [{ name: 'fmt', ok: true, ms: 0, summary: 'applied' }] }));
+  recordVerdict(r.proj(), verdict(mainFp));
+  assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${mainFp}).`);
+  // a removed worktree is skipped
+  const gone = worktree(r, 'agent-gone');
+  subagentEdits(gone, sid, 'g1', LIB, `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`);
+  r.git('worktree', 'remove', '--force', gone.dir);
+  assert.equal(message(stop({ cwd: r.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${mainFp}).`);
+});
+
+test('Stop: with two red trees each is let through once stuck, without alternating blocks', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-two';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  r.put(LIB, LIB_RS_2);
+  r.gate(false);
+  const w = worktree(r, 'agent-b1');
+  subagentEdits(w, sid, 'b1', LIB, `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`);
+  w.gate(sid, false);
+  const input = { cwd: r.dir, session_id: sid };
+  assert.match(blocked(stop(input)), /^temper gate: RED/);
+  assert.match(blocked(stop({ ...input, stop_hook_active: true })), /^In the worktree \.claude\/worktrees\/agent-b1: temper gate: RED/);
+  const through = message(stop({ ...input, stop_hook_active: true }));
+  assert.equal(through, 'temper: stopped with a RED gate (no progress after the previous block). clippy failing.\ntemper: In the worktree .claude/worktrees/agent-b1: stopped with a RED gate (no progress after the previous block). clippy failing.');
+});
+
+test('SubagentStop (implementer): only the worktrees that implementer edited are gated', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-im';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const mine = worktree(r, 'agent-im1');
+  subagentEdits(mine, sid, 'im1', LIB, LIB_RS_2);
+  const theirs = worktree(r, 'agent-x1');
+  subagentEdits(theirs, sid, 'x1', LIB, `${LIB_RS_2}\n/// Three.\n#[must_use]\npub fn three() -> u8 {\n    3\n}\n`);
+  theirs.gate(sid, false);
+  const fp = mine.gate(sid, true);
+  const im = { cwd: r.dir, session_id: sid, agent_type: 'temper:rust-implementer', agent_id: 'im1' };
+  assert.equal(message(subagentStop(im)), `temper: In the worktree .claude/worktrees/agent-im1: gate green (fingerprint ${fp}).`);
+  // the main session answers for both
+  assert.match(blocked(stop({ cwd: r.dir, session_id: sid })), /^In the worktree \.claude\/worktrees\/agent-im1: The gate is green|^In the worktree \.claude\/worktrees\/agent-x1: temper gate: RED/);
+});
+
 // -------------------------------------------------------------- SubagentStart
 
 test('SubagentStart: the reviewer, implementer and architect get the fingerprint and base; other agents get nothing', { skip: noGit }, (t) => {

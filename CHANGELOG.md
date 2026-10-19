@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Stop gates Rust that subagents change in their own worktrees (#135).** Before, `Stop` looked only at the main checkout, so Rust changed by a subagent in a worktree of its own (`.claude/worktrees/agent-…`, as Workflow subagents do) was never gated or review-bound, and CI's required check was the only backstop. Now the hooks record each checkout an agent context edits Rust in, or starts in, with the tree it had then. The main session's `Stop` runs the gate and requires an approving review for each such worktree that still has the session's changes, and its messages start with `In the worktree <path>:`. An implementer's `SubagentStop` does the same for the worktrees it edited. A worktree whose work is merged into the main checkout, or that was removed, is skipped. The reviewer's `SubagentStart` context lists the changed worktrees with their fingerprints, and a verdict for a worktree's fingerprint is checked against that worktree's changed files. The loop breaker now remembers each tree it blocked in a turn, so two red trees are each let through once stuck rather than blocking in turn. Telemetry rows for a worktree carry `tree`.
+
+**Upgrading from 1.4.** The vendored `.claude/temper/` copy changes; re-run `/temper:setup` (or `setup --vendor-only`) to update it. A turn that changed Rust in a subagent worktree can now be blocked at `Stop` where 1.4.0 let it end.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
