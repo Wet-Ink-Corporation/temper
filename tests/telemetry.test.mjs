@@ -81,6 +81,7 @@ test('redactCommand: the forms a secret takes on a command line', () => {
     ['git config --global github.token s3cret', 'git config --global github.token ***'],
     ['echo "//registry.npmjs.org/:_authToken=s3cret" >> .npmrc', 'echo "//registry.npmjs.org/:_authToken=*** >> .npmrc'],
     ['mysql -u root -ps3cret app', 'mysql -u root -p*** app'],
+    ['mysql -h db -P 3306 -ps3cret app', 'mysql -h db -P 3306 -p*** app'],
     ['mysqldump -h db -p s3cret app', 'mysqldump -h db -p *** app'],
     ['sshpass -p s3cret ssh host', 'sshpass -p *** ssh host'],
     ['docker login -u me -p s3cret ghcr.io', 'docker login -u me -p *** ghcr.io'],
@@ -91,6 +92,21 @@ test('redactCommand: the forms a secret takes on a command line', () => {
     ['curl -d @m.json https://hooks.slack.com/services/T00/B00/s3cret', 'curl -d @m.json https://hooks.slack.com/services/***'],
     ['curl -d {\\"token\\":\\"s3cret\\"} x', 'curl -d {\\"token\\":\\"***\\"} x'],
     ['python -c "print({\'password\': \'s3cret\', \'pin_token\': 1234})"', 'python -c "print({\'password\': \'***\', \'pin_token\': ***})"'],
+    // Names that end in a short secret word, or are one.
+    ['OPENAI_KEY=s3 DB_PASS=s3 MYSQL_PWD=s3 X_PASSWD=s3 FOO_PW=s3 KEY=s3 MONKEY=ok BYPASS=ok KEY_ID=ok', 'OPENAI_KEY=*** DB_PASS=*** MYSQL_PWD=*** X_PASSWD=*** FOO_PW=*** KEY=*** MONKEY=ok BYPASS=ok KEY_ID=ok'],
+    ['$env:OPENAI_KEY = "s3cret"', '$env:OPENAI_KEY = ***'],
+    ['curl "https://x/?db_pass=s3&X-Amz-Signature=s3&user.pwd=s3&x=1"', 'curl "https://x/?db_pass=***&X-Amz-Signature=***&user.pwd=***&x=1"'],
+    // A secret-named name=value inside a quoted or =-joined word.
+    ["curl -d 'password=s3cret' x", "curl -d 'password=*** x"],
+    ['curl -d "a=1&client_secret=s3cret&b=2" x', 'curl -d "a=1&client_secret=***&b=2" x'],
+    ['kubectl create secret generic x --from-literal=password=s3cret', 'kubectl create secret generic x --from-literal=password=***'],
+    ['helm install --set db.auth.rootPassword=s3cret x', 'helm install --set db.auth.rootPassword=*** x'],
+    ['terraform apply -var="api_token=s3cret"', 'terraform apply -var="api_token=***'],
+    ['curl -HAuthorization:Bearer\\ s3cret x', 'curl -HAuthorization:***'],
+    ['echo eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.s3cretsig', 'echo ***'],
+    ['cargo login s3cret; cargo login --registry r s3cret && cargo publish', 'cargo login ***; cargo login *** && cargo publish'],
+    ['openssl enc -aes256 -pass pass:s3cret -in f && openssl rsa -passin pass:s3cret', 'openssl enc -aes256 -pass pass:*** -in f && openssl rsa -passin pass:***'],
+    ['gh secret set NAME -b s3cret; gh secret set NAME --body="s3 cret" -R o/r', 'gh secret set NAME -b ***; gh secret set NAME --body=*** -R o/r'],
   ];
   for (const [cmd, want] of cases) {
     assert.equal(redactCommand(cmd), want, cmd);
@@ -363,6 +379,8 @@ test('stats: gates cut short by reason and step, step times, and verdicts once p
   log('s1', 'gate-lost', { pid: 3, reason: 'unknown', step: null, progress: false });
   log('s1', 'gate-start', { pid: 7 });
   log('s1', 'gate-lost', { pid: 7, reason: 'interrupted', step: null, progress: true });
+  log('s1', 'gate-start', { pid: 8 });
+  log('s1', 'gate-lost', { pid: 8, reason: 'timeout', step: null, progress: true, steps: { scan: 40, manifests: 300 } });
   log('s1', 'gate-start', { pid: 4 });
   log('s1', 'stop-green', { pid: 4, ms: 9000, cached: false, steps: { fmt: 1000, clippy: 5000, test: 3000 } });
   log('s1', 'stop-blocked', { pid: 5, ms: 4000, cached: false, steps: { fmt: 2000, clippy: 2000 } });
@@ -377,15 +395,15 @@ test('stats: gates cut short by reason and step, step times, and verdicts once p
   const r = spawnSync(process.execPath, [CLI, 'stats', '--json'], { cwd: ws, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const doc = JSON.parse(r.stdout);
-  assert.equal(doc.gate.cutShort, 4);
-  assert.deepEqual(doc.gate.lost, { timeout: 1, interrupted: 2, unknown: 1 });
-  assert.deepEqual(doc.gate.lostSteps, { test: 2, 'fmt or before': 1, 'after fmt, before any step': 1 });
+  assert.equal(doc.gate.cutShort, 5);
+  assert.deepEqual(doc.gate.lost, { timeout: 2, interrupted: 2, unknown: 1 });
+  assert.deepEqual(doc.gate.lostSteps, { test: 2, 'fmt or before': 1, 'after fmt, before any step': 1, 'after manifests': 1 });
   assert.deepEqual(doc.gate.stepP50Ms, { clippy: 5000, test: 3000, fmt: 2000 });
   assert.deepEqual([doc.review.sessions, doc.review.roundsP50, doc.review.roundsMax, doc.review.firstApproved], [1, 2, 2, 0]);
   assert.equal(doc.review.changes.count, 1);
   const text = spawnSync(process.execPath, [CLI, 'stats'], { cwd: ws, encoding: 'utf8' }).stdout;
-  assert.match(text, /; 4 cut short \(1 timeout, 2 interrupted, 1 unknown\)$/m);
-  assert.match(text, /^gates cut short, by the step they were on:\n {2}test {23}2\n {2}fmt or before {14}1\n {2}after fmt, before any step 1$/m);
+  assert.match(text, /; 5 cut short \(2 timeout, 2 interrupted, 1 unknown\)$/m);
+  assert.match(text, /^gates cut short, by the step they were on:\n {2}test {23}2\n {2}fmt or before {14}1\n {2}after fmt, before any step 1\n {2}after manifests {12}1$/m);
   assert.match(text, /^gate step times at Stop \(p50\):\n {2}clippy {21}5\.0 s\n {2}test {23}3\.0 s\n {2}fmt {24}2\.0 s$/m);
 });
 

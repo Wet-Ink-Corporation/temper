@@ -665,7 +665,15 @@ function statsOf(rows) {
   const lost = { timeout: 0, interrupted: 0, unknown: 0 };
   for (const r of lostRows) { const k = Object.hasOwn(lost, r.reason) ? r.reason : 'unknown'; lost[k] += 1; }
   const lostSteps = {};
-  for (const r of lostRows) { const k = r.step ?? (r.progress === false ? 'fmt or before' : 'after fmt, before any step'); lostSteps[k] = (lostSteps[k] ?? 0) + 1; }
+  // With no step current: no progress file means fmt or before; one with no step done, after fmt;
+  // else between steps (the nextest probe runs after manifests), named by the last step done.
+  const lostAt = (r) => {
+    if (r.step) return r.step;
+    if (r.progress === false) return 'fmt or before';
+    const last = Object.keys(r.steps ?? {}).at(-1);
+    return last ? `after ${last}` : 'after fmt, before any step';
+  };
+  for (const r of lostRows) { const k = lostAt(r); lostSteps[k] = (lostSteps[k] ?? 0) + 1; }
   const stepMs = {};
   for (const r of timed) for (const [k, v] of Object.entries(r.steps ?? {})) if (typeof v === 'number') (stepMs[k] ??= []).push(v);
   const stepP50Ms = Object.fromEntries(Object.entries(stepMs).map(([k, v]) => [k, pct(v.sort((a, b) => a - b), 50)]).sort((a, b) => b[1] - a[1]));

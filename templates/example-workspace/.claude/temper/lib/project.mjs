@@ -424,42 +424,52 @@ export function telemetry(proj, input, event, detail = {}) {
   } catch { /* best effort */ }
 }
 
-// A name that looks like it holds a secret: of a `--flag`, a header, a query parameter or an env
+// A name that looks like it holds a secret: of a `--flag`, a header, a query parameter or an
 // assignment. Every run of name characters is bounded, so no pattern rescans a long word from
 // each of its positions (an unbounded `[\w-]*` made a long hyphenated line quadratic).
 const SECRET_WORD = String.raw`(?:token|secret|passw(?:or)?d|passphrase|api[-_]?key|private[-_]?key|access[-_]?key|credential|cookie|auth(?![a-z]))`;
 const SECRET_NAME = String.raw`[\w-]{0,64}${SECRET_WORD}[\w-]{0,64}`;
+// A name that ends in a short secret word after an underscore, or is one: OPENAI_KEY, DB_PASS, MYSQL_PWD.
+const SECRET_SUFFIX = String.raw`(?:\w{0,64}_)?(?:key|pass|passwd|pwd|pw)`;
 const SECRET_VALUE = String.raw`(?:"[^"]*"|'[^']*'|\S+)`;
 const QUOTE = String.raw`\\?["']`;
 const REDACTIONS = [
   // scheme://user:password@host, up to the last @ before the host (a password may hold an @).
   [/\b([a-z][\w+.-]{0,31}:\/\/)[^\s/'"]+@/gi, '$1***@'],
-  // Authorization: Bearer x, X-Api-Key: x, Cookie: a=b, up to the closing quote or the end of the line.
-  [new RegExp(String.raw`\b((?:proxy-)?authorization|${SECRET_NAME})(\s*:\s*)[^'"\n]+`, 'gi'), '$1$2***'],
+  // Authorization: Bearer x, X-Api-Key: x, Cookie: a=b (also curl's -HAuthorization:), up to the closing quote or the end of the line.
+  [new RegExp(String.raw`(?:\b|(?<=-H))((?:proxy-)?authorization|${SECRET_NAME})(\s*:\s*)[^'"\n]+`, 'gi'), '$1$2***'],
   // "token": "x" in JSON (or a Python dict), its quotes escaped or not; and "pin": 1234.
   [new RegExp(String.raw`(${QUOTE}${SECRET_NAME}${QUOTE}\s*:\s*)(${QUOTE})(?:(?!\2)[^\n])*\2`, 'gi'), '$1$2***$2'],
   [new RegExp(String.raw`(${QUOTE}${SECRET_NAME}${QUOTE}\s*:\s*)(?![\s"'\\])[^\s,}]+`, 'gi'), '$1***'],
-  // ?api_key=x&token=y in a URL
-  [new RegExp(String.raw`([?&](?:[\w.-]{0,64}${SECRET_WORD}[\w.-]{0,64}|key|sig|signature|pwd|code|session(?:id)?)=)[^&\s'"#]*`, 'gi'), '$1***'],
+  // ?api_key=x&token=y&X-Amz-Signature=z in a URL
+  [new RegExp(String.raw`([?&](?:[\w.-]{0,64}(?:${SECRET_WORD}|signature)[\w.-]{0,64}|(?:[\w.-]{0,64}[_.-])?(?:key|pass|passwd|pwd|pw)|sig|code|session(?:id)?)=)[^&\s'"#]*`, 'gi'), '$1***'],
   // --token x, --password=x
   [new RegExp(String.raw`(^|\s)(--?${SECRET_NAME})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2$3***'],
-  // GH_TOKEN=x, export API_KEY='x' (a bare value ends where the shell ends a word); PowerShell's $env:GH_TOKEN = "x"
-  [new RegExp(String.raw`(^|[\s;&|(])(\w{0,64}${SECRET_WORD}\w{0,64})=(?!\*\*\*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)`, 'gi'), '$1$2=***'],
-  [new RegExp(String.raw`(\$env:\w{0,64}${SECRET_WORD}\w{0,64})(\s*=\s*)${SECRET_VALUE}`, 'gi'), '$1$2***'],
+  // GH_TOKEN=x, export API_KEY='x', DB_PASS=x (a bare value ends where the shell ends a word); a name
+  // may also start inside a word: curl -d 'password=x', --from-literal=password=x, --set db.rootPassword=x,
+  // -var="api_token=x". PowerShell's $env:GH_TOKEN = "x".
+  [new RegExp(String.raw`(^|[\s;&|("'=.:-])(\w{0,64}${SECRET_WORD}\w{0,64}|${SECRET_SUFFIX})=(?!\*\*\*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)`, 'gi'), '$1$2=***'],
+  [new RegExp(String.raw`(\$env:(?:\w{0,64}${SECRET_WORD}\w{0,64}|${SECRET_SUFFIX}))(\s*=\s*)(?!\*\*\*)${SECRET_VALUE}`, 'gi'), '$1$2***'],
   // curl -u user:password, --user=user:password, -uuser:password
   [/(\s(?:-u|--user)(?:=|\s*))(?:"[^"\s]*:[^"]*"|'[^'\s]*:[^']*'|[^\s'"]*:\S*)/g, '$1***'],
   // aws configure set aws_secret_access_key x, npm config set //host/:_authToken x, git config github.token x
   [new RegExp(String.raw`(\bconfig(?:ure)?(?:\s+-[\w-]{1,32})*\s+(?:set\s+)?[^\s=]{0,128}${SECRET_WORD}[^\s=]{0,128})(=|\s+)${SECRET_VALUE}`, 'gi'), '$1$2***'],
   // _authToken=x and _password=x, as in .npmrc
   [/(_auth(?:Token)?|_password)(\s*=\s*|\s+)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1$2***'],
-  // A short -p password: mysql -pX, mysql -p X, sshpass -p X, docker login -p X
-  [/(\b(?:mysql\w{0,16}|mariadb\w{0,16}|sshpass|(?:docker|podman|nerdctl|helm\s+registry)\s+login)\b[^;&|\n]{0,256}?\s-p)(\s*)(?:"[^"]*"|'[^']*'|\S+)/gi, '$1$2***'],
+  // A short -p password: mysql -pX, mysql -p X, sshpass -p X, docker login -p X (not mysql -P, a port)
+  [/(\b(?:mysql\w{0,16}|mariadb\w{0,16}|sshpass|(?:docker|podman|nerdctl|helm\s+registry)\s+login)\b[^;&|\n]{0,256}?\s-p)(\s*)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1$2***'],
+  // cargo login x (everything after it, since a flag's value and the token look alike)
+  [/(\bcargo\s+login)\s+[^;&|\n]*[^\s;&|]/g, '$1 ***'],
+  // openssl -pass pass:x, -passin pass:x
+  [/(\s-pass(?:in|out)?\s+pass:)(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1***'],
+  // gh secret set NAME -b x, --body=x
+  [/(\bgh\s+secret\s+set\b[^;&|\n]{0,256}?\s(?:-b|--body)(?:=|\s*))(?:"[^"]*"|'[^']*'|[^\s;&|]+)/g, '$1***'],
   // A private key, from its BEGIN line to its END line or the end of the text.
   [/-----BEGIN[A-Z ]{0,32}PRIVATE KEY-----.*?(?:-----END[A-Z ]{0,32}PRIVATE KEY-----|$)/g, '***'],
   // Webhook URLs, whose path is the secret.
   [/\b(hooks\.slack\.com\/services\/|discord(?:app)?\.com\/api\/webhooks\/)[\w/-]+/gi, '$1***'],
   // Well-known token shapes, wherever they appear.
-  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{20,}|AIza[\w-]{30,}|xox[abprs]-[\w-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16})\b/g, '***'],
+  [/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{20,}|[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{20,}|AIza[\w-]{30,}|xox[abprs]-[\w-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+)\b/g, '***'],
 ];
 
 // How much of a command is redacted at most. Redaction runs only on this much, so a hook's time
