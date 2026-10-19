@@ -23,7 +23,7 @@ Rules covered: PROC-07, PROC-08 and the review side of the rules in `rules.md`. 
    ```
    Read the plan in `.temper/plans/`, if there is one, and the `AGENTS.md` charter of every crate touched.
 2. **Gate.** Run the temper gate yourself in check mode (`gate --check`, which verifies formatting without rewriting files). If it is red, the verdict is already `changes-requested`, but continue so the implementer gets every finding.
-3. **Scan.** Run `temper scan` and judge every advisory: justified, or a finding.
+3. **Scan.** Run `temper scan` and judge every advisory: justified, or a finding. The gate's output lists the advisories the change adds under MUST rules (`advisories this change adds under MUST rules`); each one is fixed, justified in a comment at the code, or reported as a finding under its rule.
 4. **Tests first.** Read the added and changed tests before the code. Red-first (TST-01) is checked through the plan's Progress section, which records each red run (test name and failure line). No record for a new behavior is a finding. Would they fail if the behavior broke? Are they deterministic? Were any removed or loosened? Check with `git diff <base> -- '*.rs' | grep -E '^-.*(#\[test\]|assert|expect_err|matches!)'`.
 5. **API.** Read public signatures (`git diff <base> | grep -E '^\+\s*pub '`). Consider ownership, naming, error types, visibility and semver impact.
 6. **Implementation.** Read each changed file in full, top to bottom, and work through the checklist below.
@@ -151,7 +151,7 @@ Correctness
 - [ ] No `map[&k]` on `HashMap`/`BTreeMap` or `deque[i]` on `VecDeque`; no lint catches them. (H-04)
 
 Escape hatches
-- [ ] No new scan hits, and every advisory is judged. (H-01..H-11)
+- [ ] No new scan hits, and every advisory is judged; each one the gate lists under a MUST rule is fixed, justified at the code, or a finding. (H-01..H-11)
 - [ ] Every `#[expect]` is minimal, reasoned and approved. (H-05)
 
 Ownership
