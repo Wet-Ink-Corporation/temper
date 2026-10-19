@@ -65,6 +65,7 @@ declare module 'claude-code' {
       tab: 'review' | 'activity' | 'stats'
       stats: LensStatsView | null
       branchStats: LensStatsView | null
+      polledAt: number
     }
   }
 }

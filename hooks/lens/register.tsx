@@ -16,6 +16,8 @@ const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
 const tab = atom({ plugin: 'temper', key: 'tab' } as const, 'review')
 const stats = atom({ plugin: 'temper', key: 'stats' } as const, null)
 const branchStats = atom({ plugin: 'temper', key: 'branchStats' } as const, null)
+// The time of the last poll while a gate runs at Stop: the drawing's clock for the elapsed time.
+const polledAt = atom({ plugin: 'temper', key: 'polledAt' } as const, 0)
 
 type Tab = 'review' | 'activity' | 'stats'
 const TABS: readonly Tab[] = ['review', 'activity', 'stats']
@@ -43,19 +45,38 @@ const DRAWS = new Set(['terminal', 'desktop'])
 let off = true
 let pending: { cancel: () => void } | null = null
 let commandRegistered = false
+let polling: { cancel: () => void } | null = null
+// The Stops and SubagentStops running now: parallel subagents stop at the same time. One timer
+// polls for all of them, and each watch notes whether it saw temper's gate run.
+type Watch = { startedAt: number; sawGate: boolean }
+const watches = new Set<Watch>()
+/** The telemetry rows temper writes when its own Stop or SubagentStop hook blocks. */
+const TEMPER_BLOCKS = new Set(['stop-blocked', 'verdict-invalid'])
+const POLL_MS = 1000
+// Refreshes started and the newest one written to the view; one poll at a time.
+let refreshes = 0
+let written = 0
+let pollRunning: Promise<void> | null = null
 // The rule registry, parsed once per load from the plugin's own rules.md: ID to its Markdown.
 let rules: Map<string, string> | null = null
 
-async function refresh($: EngineInterface): Promise<void> {
+/** Refreshes the view; resolves to what `status --json` said (null where nothing draws). */
+async function refresh($: EngineInterface): Promise<LensView | null> {
+  const seq = ++refreshes
   const surfaces = await $.session.surfaces()
-  if (!surfaces.some(s => DRAWS.has(s))) return
+  if (!surfaces.some(s => DRAWS.has(s))) return null
   const fresh = await statusView($)
   if (fresh === 'no-project') {
     off = true
-    return
+    return null
   }
+  // Refreshes overlap (a slow poll, the refresh after a Stop): only a newer one may write, so a
+  // late answer from while the gate ran never paints over the final state.
+  if (seq < written) return fresh
+  written = seq
   await update($, view, () => fresh)
   await registerCommand($)
+  return fresh
 }
 
 /** `/temper-lens` opens the pane; registered once the lens knows it is in a Rust project. */
@@ -116,21 +137,138 @@ async function afterTurn($: EngineInterface): Promise<void> {
 
 /** Refreshes once the current hook has returned. */
 function refreshNow($: EngineInterface): void {
-  $.clock.after(0, () => refresh($))
+  $.clock.after(0, async () => {
+    await refresh($)
+  })
 }
 
 /** Refreshes once, DEBOUNCE_MS after the first change: later changes in that spell ride along. */
 function refreshSoon($: EngineInterface): void {
   if (pending) return
-  pending = $.clock.after(DEBOUNCE_MS, () => {
+  pending = $.clock.after(DEBOUNCE_MS, async () => {
     pending = null
-    return refresh($)
+    await refresh($)
   })
+}
+
+/**
+ * A Stop starts: poll `status --json` each second, so the band and spinner show the gate's step,
+ * until the last running Stop ends.
+ */
+async function watchStop($: EngineInterface): Promise<Watch> {
+  const watch = { startedAt: await $.clock.now(), sawGate: false }
+  // Every await comes before the add: a call that throws must not leave a watch behind, or the
+  // poll would never stop.
+  const drawing = await draws($)
+  watches.add(watch)
+  if (drawing) startPolling($)
+  return watch
+}
+
+/** Starts the one poll timer, if none runs. No await between the check and the assignment. */
+function startPolling($: EngineInterface): void {
+  if (polling === null) polling = $.clock.every(POLL_MS, () => poll($))
+}
+
+/** Whether a terminal or the desktop app draws this session: elsewhere the lens runs nothing. */
+async function draws($: EngineInterface): Promise<boolean> {
+  return (await $.session.surfaces()).some(s => DRAWS.has(s))
+}
+
+function unwatchStop(watch: Watch): void {
+  watches.delete(watch)
+  if (watches.size === 0) stopPolling()
+}
+
+/**
+ * One tick: skipped while the last is still running, so slow `status` runs never pile up. The
+ * Stops watching when it starts are the ones credited if it sees the gate run.
+ */
+async function poll($: EngineInterface): Promise<void> {
+  if (pollRunning) return
+  pollRunning = pollOnce($, [...watches]).finally(() => {
+    pollRunning = null
+  })
+  await pollRunning
+}
+
+async function pollOnce($: EngineInterface, mine: Watch[]): Promise<void> {
+  if (!(await draws($))) return
+  // Credit from this poll's own answer: a newer refresh may have written the view since.
+  const v = await refresh($)
+  if (v?.kind === 'status' && v.status.gate?.running) for (const w of mine) w.sawGate = true
+  const now = await $.clock.now()
+  await update($, polledAt, () => now)
+}
+
+function stopPolling(): void {
+  polling?.cancel()
+  polling = null
+  watches.clear()
+}
+
+/**
+ * After a Stop has returned: refresh once and raise at most one toast. A blocked Stop gets the
+ * reason's first line when temper's own telemetry recorded the block (another hook's block is not
+ * temper's to report); otherwise, when this Stop saw temper's gate run, the outcome.
+ */
+async function afterStop($: EngineInterface, watch: Watch, reason: string | undefined): Promise<void> {
+  if (!(await draws($))) return
+  // A poll still running saw the gate before this Stop ended: let it finish and credit the watch.
+  try {
+    if (pollRunning) await pollRunning
+  } catch {
+    // A failed poll changes nothing here: the refresh below reads the state afresh.
+  }
+  await refresh($)
+  if (reason !== undefined && (await temperBlocked($, watch.startedAt))) {
+    const line = reason.split('\n')[0] ?? ''
+    $.ui.toast(line.startsWith('temper') ? line : `temper: ${line}`)
+    return
+  }
+  const v = await read($, view)
+  if (watch.sawGate && v?.kind === 'status') $.ui.toast(`temper: ${outcome(v.status)}`)
+}
+
+/** Whether temper's telemetry has a block of its own in this session since `since` (ms). */
+async function temperBlocked($: EngineInterface, since: number): Promise<boolean> {
+  const r = await runStats($, ['--session', await $.session.id()])
+  if (!r.ok) return false
+  const rows: { t?: unknown; event?: unknown }[] = r.doc.session?.rows ?? []
+  // A second of slack for the hook process's clock against this one.
+  return rows.some(row => TEMPER_BLOCKS.has(String(row.event)) && Date.parse(String(row.t)) >= since - 1000)
+}
+
+/** `gate green, review approved`, and the like, for the toast after a Stop. */
+export function outcome(s: LensStatus): string {
+  const g = s.gate
+  const gate = !g ? 'gate not run' : g.unavailable ? 'gate unavailable' : g.ok ? 'gate green' : g.ok === false ? 'gate red' : 'gate not run'
+  const r = s.review
+  const review = !r ? 'no review' : r.stale ? 'review stale' : r.verdict === 'approved' ? 'review approved' : 'review asks for changes'
+  return `${gate}, ${review}`
+}
+
+/** `1m 12s` or `8s`. */
+export function elapsed(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000))
+  return secs >= 60 ? `${Math.floor(secs / 60)}m ${secs % 60}s` : `${secs}s`
+}
+
+/** `gate 4 clippy · 1m 12s`: the step the gate is on, its place, and the time since the gate started. */
+export function runningLine(s: LensStatus, now: number): string | null {
+  const run = s.gate?.running
+  if (!run) return null
+  const since = Date.parse(run.startedAt)
+  const time = Number.isFinite(since) && now > since ? ` · ${elapsed(now - since)}` : ''
+  const step = run.current ? ` ${run.steps.length + 1} ${run.current.name}` : ''
+  return `gate${step}${time}`
 }
 
 export const register: Register = on => {
   off = true
   pending = null
+  stopPolling()
+  pollRunning = null
   commandRegistered = false
   rules = null
 
@@ -179,11 +317,59 @@ export const register: Register = on => {
     )
   })
 
+  // The gate runs inside temper's own Stop and SubagentStop settings hooks. The lens watches it
+  // from beside them: it polls while `next(e)` runs and returns that result unchanged, and reports
+  // after the Stop has returned, so it never holds the block message. Its .catch replays `next`, so
+  // a lens failure can never decide a Stop.
+  on('classic.Stop', async ($, e, next) => {
+    if (off) return next(e)
+    const watch = await watchStop($)
+    let result
+    try {
+      result = await next(e)
+    } finally {
+      unwatchStop(watch)
+    }
+    $.clock.after(0, () => afterStop($, watch, result.block))
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('classic.SubagentStop', async ($, e, next) => {
+    if (off) return next(e)
+    const watch = await watchStop($)
+    let result
+    try {
+      result = await next(e)
+    } finally {
+      unwatchStop(watch)
+    }
+    $.clock.after(0, () => afterStop($, watch, result.block))
+    return result
+  }).catch(($, e, next) => next(e))
+
+  on('session.end', async ($, e, next) => {
+    stopPolling()
+    return next(e)
+  })
+
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (off) return next(e)
+    const v = await read($, view)
+    if (v?.kind !== 'status') return next(e)
+    const line = runningLine(v.status, await read($, polledAt))
+    if (line === null) return next(e)
+    return next({ ...e, props: { ...e.props, suffix: ` · temper: ${line}` } })
+  })
+
   // A client that draws attached after the session started (the desktop app connects as an SDK
   // host, so session.start saw no surface): draw now rather than at the first turn end.
   on('session.attach', async ($, e, next) => {
     const result = await next(e)
-    if (!off && DRAWS.has(e.surface)) refreshNow($)
+    if (!off && DRAWS.has(e.surface)) {
+      refreshNow($)
+      // A Stop already running when the surface arrived: show its progress from now on.
+      if (watches.size > 0) startPolling($)
+    }
     return result
   })
 
@@ -212,7 +398,7 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const parts = bandParts(v.status, e.props.bodyColumns)
+    const parts = bandParts(v.status, e.props.bodyColumns, await read($, polledAt))
     return (
       <Box>
         <Text bold>temper </Text>
@@ -491,16 +677,22 @@ type Part = { text: string; color?: 'success' | 'error' | 'warning'; drop: numbe
  * then the review's counts, then the gate's step name, and last whole segments from the end, so
  * the band never wraps to a second row. `drop` orders the shortening (higher first; 0 is never shortened).
  */
-export function bandParts(status: LensStatus, columns: number): { text: string; color?: Part['color'] }[] {
+export function bandParts(status: LensStatus, columns: number, now = 0): { text: string; color?: Part['color'] }[] {
   const n = status.changed.length
   const parts: Part[] = [{ text: n ? `${n} .rs changed` : 'no .rs changes', drop: 0 }]
-  parts.push(gatePart(status))
+  parts.push(gatePart(status, now))
+  const done = status.gate?.running?.steps ?? []
+  if (done.length) {
+    const secs = (ms: number | null) => (ms === null ? '?' : `${(ms / 1000).toFixed(1)}s`)
+    parts.push({ text: `done: ${done.map(d => `${d.name} ${secs(d.ms)}`).join(', ')}`, drop: 4 })
+  }
   const review = reviewPart(status)
   if (review) parts.push(review)
   const b = status.baseline
   if (b) parts.push('error' in b ? { text: 'baseline unreadable', color: 'warning', drop: 3 } : { text: `baseline ${b.total}`, drop: 3 })
   const width = (ps: Part[]) => 'temper '.length + ps.reduce((w, p, i) => w + p.text.length + (i === 0 ? 1 : 3), 0)
   let fitted = parts
+  if (width(fitted) > columns) fitted = fitted.filter(p => p.drop < 4)
   if (width(fitted) > columns) fitted = fitted.filter(p => p.drop < 3)
   if (width(fitted) > columns) fitted = fitted.map(p => (p.drop === 2 ? { ...p, text: p.text.replace(/,.*$/, '') } : p))
   if (width(fitted) > columns) fitted = fitted.map(p => (p.drop === 1 ? { ...p, text: p.text.replace(/ \(.*\)$/, '') } : p))
@@ -508,12 +700,10 @@ export function bandParts(status: LensStatus, columns: number): { text: string; 
   return fitted.map(({ text, color }) => (color ? { text, color } : { text }))
 }
 
-function gatePart(status: LensStatus): Part {
+function gatePart(status: LensStatus, now: number): Part {
   const g = status.gate
-  if (g?.running) {
-    const step = g.running.current?.name
-    return { text: step ? `gate running (${step})` : 'gate running', color: 'warning', drop: 1 }
-  }
+  const line = runningLine(status, now)
+  if (line !== null) return { text: line.replace(/^gate/, 'gate running:'), color: 'warning', drop: 0 }
   if (!g) return { text: 'gate not run', color: 'warning', drop: 0 }
   if (g.unavailable) return { text: 'gate unavailable', color: 'warning', drop: 0 }
   if (g.ok) return { text: 'gate green', color: 'success', drop: 0 }

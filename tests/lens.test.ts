@@ -105,7 +105,7 @@ for (const surface of SURFACES) {
   test(`band on ${surface}: a gate running names its step`, async ($, on) => {
     world(on, { surfaces: [surface], stdout: doc({ gate: { ok: null, unavailable: false, at: null, steps: [], running: { startedAt: 't', steps: [], current: { name: 'clippy', startedAt: 't' } } } }) })
     await start($, surface)
-    expect(await bandText($, surface)).toContain('gate running (clippy)')
+    expect(await bandText($, surface)).toContain('gate running: 1 clippy')
   })
 
   test(`band on ${surface}: narrow, it drops the baseline, the review's counts, the gate's step, then whole segments`, async ($, on) => {
@@ -468,6 +468,289 @@ test('the pane opens on the tab it was left on', async ($, on) => {
   await ui.unmount()
 })
 
+// Live gate progress at Stop (#111): the lens polls while the settings hooks' Stop runs, shows the
+// step in the spinner and the band, toasts once after, and passes the Stop's result on unchanged.
+const RUNNING = (current: string, done: { name: string; ms: number }[]) => doc({
+  gate: { ok: null, unavailable: false, at: null, steps: [], running: {
+    startedAt: new Date(0).toISOString(),
+    steps: done.map(d => ({ ...d, ok: true })),
+    current: { name: current, startedAt: new Date(0).toISOString() },
+  } },
+})
+
+const SPINNER = { plugin: 'temper', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
+
+/** Telemetry rows for `stats --json --session`: temper's own record of a block, at `ms`. */
+const temperBlock = (event: string, ms: number) => ({ t: new Date(ms).toISOString(), event, agent: 'main', file: null, rules: [], via: null })
+
+/**
+ * A Stop world: `status --json` answers `answer()` at each run, `stats --json` lists `rows()` as
+ * this session's telemetry; toasts and surfaces are recorded.
+ */
+function stopWorld(on: On, answer: () => string, surface: RenderSurface = 'terminal', rows: () => unknown[] = () => []) {
+  const toasts: string[] = []
+  let surfacesFail = false
+  on('process.run', async (_$, e) => {
+    const stdout = e.argv[2] === 'stats' ? STATS({ session: { id: 'test-session', rows: rows() } }) : answer()
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => {
+    if (surfacesFail) throw new Error('surfaces broke')
+    return { value: [surface] } as any
+  })
+  on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
+  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`) as any)
+  on('session.end', async () => ({}) as any)
+  on('command.register', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  return { toasts, breakSurfaces: () => { surfacesFail = true } }
+}
+
+const spinnerText = async ($: any, surface: RenderSurface) => {
+  const ui = await $.ui.mount({ ...SPINNER, surface })
+  const t = (await ui.find({ type: 'Text' }))?.text
+  await ui.unmount()
+  return t
+}
+
+for (const surface of SURFACES) {
+  test(`Stop on ${surface}: the spinner names the gate's step while it runs, then one toast`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    let answer = doc()
+    const w = stopWorld(on, () => answer, surface)
+    let during = ''
+    let band = ''
+    on('classic.Stop', async () => {
+      answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }, { name: 'scan', ms: 200 }])
+      await clock.advance(1000)
+      during = (await spinnerText($, surface)) ?? ''
+      band = await bandText($, surface)
+      answer = doc({ gate: GREEN, review: { verdict: 'approved', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [] } })
+      return {}
+    })
+    await start($, surface)
+    expect(await spinnerText($, surface)).toBe('Working…')
+    const result = await $.classic.Stop({ stop_hook_active: false } as any)
+    expect(result).toEqual({})
+    await clock.advance(0)
+    expect(during).toBe('Working · temper: gate 3 clippy · 1m 13s')
+    expect(band).toContain('gate running: 3 clippy · 1m 13s')
+    expect(band).toContain('done: fmt 1.0s, scan 0.2s')
+    expect(await spinnerText($, surface)).toBe('Working…')
+    expect(w.toasts).toEqual(['temper: gate green, review approved'])
+    await clock.advance(5000)
+    expect(w.toasts).toHaveLength(1)
+  })
+}
+
+const APPROVED = { verdict: 'approved', stale: false, fingerprint: 'f', recorded_at: 't', scores: {}, findings: [] }
+
+// What the engine adds to a Stop's input on its way down; the lens adds nothing.
+const ENGINE_KEYS = ['session_id', 'transcript_path', 'cwd', 'hook_event_name']
+
+test('Stop: a block passes down and back unchanged, and its first line is the toast after', async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  const w = stopWorld(on, () => doc({ gate: RED }), 'terminal', () => [temperBlock('stop-blocked', 72000)])
+  const block = 'temper: the Rust gate is red (clippy).\nFix it before finishing.'
+  const input = { stop_hook_active: false }
+  const seen: unknown[] = []
+  on('classic.Stop', async (_$, e) => {
+    seen.push(e)
+    return { block }
+  })
+  await start($)
+  expect(await $.classic.Stop(input as any)).toEqual({ block })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toMatchObject(input)
+  expect(Object.keys(seen[0] as object).sort()).toEqual([...Object.keys(input), ...ENGINE_KEYS].sort())
+  expect(w.toasts).toEqual([])
+  await clock.advance(0)
+  expect(w.toasts).toEqual(['temper: the Rust gate is red (clippy).'])
+})
+
+test('SubagentStop is watched the same way', async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  const w = stopWorld(on, () => doc(), 'terminal', () => [temperBlock('verdict-invalid', 72500)])
+  const input = { stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' }
+  const seen: unknown[] = []
+  on('classic.SubagentStop', async (_$, e) => {
+    seen.push(e)
+    return { block: 'review the change first' }
+  })
+  await start($)
+  expect(await $.classic.SubagentStop(input as any)).toEqual({ block: 'review the change first' })
+  expect(seen).toHaveLength(1)
+  expect(seen[0]).toMatchObject(input)
+  expect(Object.keys(seen[0] as object).sort()).toEqual([...Object.keys(input), ...ENGINE_KEYS].sort())
+  await clock.advance(0)
+  expect(w.toasts).toEqual(['temper: review the change first'])
+})
+
+for (const [what, tree] of [['an approved tree', doc({ gate: GREEN, review: APPROVED })], ['an unreviewed tree', doc({ gate: GREEN })]] as const) {
+  test(`Stop and SubagentStop: another hook's block on ${what} is not toasted as temper's`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    // temper blocked an earlier Stop, before this one began: that row is not this block.
+    const w = stopWorld(on, () => tree, 'terminal', () => [temperBlock('stop-blocked', 60000)])
+    on('classic.Stop', async () => ({ block: 'lint-bot: run the formatter first' }))
+    on('classic.SubagentStop', async () => ({ block: 'lint-bot: run the formatter first' }))
+    await start($)
+    await $.classic.Stop({ stop_hook_active: false } as any)
+    await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'temper:rust-implementer' } as any)
+    await clock.advance(0)
+    expect(w.toasts).toEqual([])
+  })
+}
+
+test("Stop: a block after the gate ran passes back unchanged, and the toast is the block's", async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  let answer = doc()
+  const w = stopWorld(on, () => answer, 'terminal', () => [temperBlock('stop-blocked', 74000)])
+  const block = 'temper gate: fmt ok | clippy FAILED\nThe work is not done while the gate is red.'
+  on('classic.Stop', async () => {
+    answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }])
+    await clock.advance(2000)
+    answer = doc({ gate: RED })
+    return { block }
+  })
+  await start($)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block })
+  await clock.advance(0)
+  expect(w.toasts).toEqual(['temper gate: fmt ok | clippy FAILED'])
+})
+
+test('Stop: a quiet Stop with no gate raises no toast', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = stopWorld(on, () => doc({ gate: GREEN }))
+  on('classic.Stop', async () => ({}))
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(0)
+  expect(w.toasts).toEqual([])
+})
+
+test('SubagentStops that overlap share one poll, and each one keeps polling until it ends', async ($, on) => {
+  const clock = mock.clock(on)
+  let answer = RUNNING('clippy', [])
+  let polls = 0
+  const w = stopWorld(on, () => {
+    polls += 1
+    return answer
+  })
+  let releaseB = () => {}
+  const bHeld = new Promise<void>(r => { releaseB = r })
+  on('classic.SubagentStop', async (_$, e: any) => {
+    if (e.agent_id === 'b') await bHeld
+    return {}
+  })
+  await start($)
+  const b = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'b', agent_type: 'x' } as any)
+  await clock.advance(1000)
+  await $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'x' } as any)
+  const before = polls
+  await clock.advance(3000)
+  expect(polls - before).toBeGreaterThanOrEqual(3)
+  answer = doc({ gate: GREEN, review: APPROVED })
+  releaseB()
+  await b
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(3000)
+  expect(polls).toBe(after)
+  expect(w.toasts).toContain('temper: gate green, review approved')
+})
+
+test('SubagentStops that start together share one poll, and it stops when both end', async ($, on) => {
+  const clock = mock.clock(on)
+  let polls = 0
+  stopWorld(on, () => {
+    polls += 1
+    return RUNNING('clippy', [])
+  })
+  let release = () => {}
+  const held = new Promise<void>(r => { release = r })
+  on('classic.SubagentStop', async () => {
+    await held
+    return {}
+  })
+  await start($)
+  const a = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'a', agent_type: 'x' } as any)
+  const b = $.classic.SubagentStop({ stop_hook_active: false, agent_id: 'b', agent_type: 'x' } as any)
+  await clock.advance(3000)
+  const during = polls
+  expect(during).toBeGreaterThanOrEqual(3)
+  expect(during).toBeLessThanOrEqual(5)
+  release()
+  await Promise.all([a, b])
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(5000)
+  expect(polls).toBe(after)
+})
+
+test('a terminal attaching during a Stop gets its progress from then on', async ($, on) => {
+  const clock = mock.clock(on)
+  let surfaces: RenderSurface[] = []
+  let polls = 0
+  const runs: string[][] = []
+  on('process.run', async (_$, e) => {
+    runs.push([...e.argv])
+    polls += 1
+    return { value: { exitCode: 0, stdout: RUNNING('clippy', []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: surfaces }) as any)
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  on('classic.Stop', async () => {
+    await clock.advance(1000)
+    surfaces = ['terminal']
+    await $.session.attach({ surface: 'terminal', clientId: 'terminal:default' })
+    await clock.advance(4000)
+    return {}
+  })
+  await start($, null)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(polls).toBeGreaterThanOrEqual(4)
+})
+
+test('Stop where nothing draws: the lens runs nothing, and the block passes back unchanged', async ($, on) => {
+  const clock = mock.clock(on, { now: 72000 })
+  const runs = world(on, { surfaces: [] })
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  on('classic.Stop', async () => {
+    await clock.advance(3000)
+    return { block: 'temper: the gate is red' }
+  })
+  await start($, null)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block: 'temper: the gate is red' })
+  await clock.advance(3000)
+  expect(runs).toEqual([])
+})
+
+test('Stop: a failing surfaces call during the Stop leaves the result as the settings hooks decided', async ($, on) => {
+  mock.clock(on)
+  const w = stopWorld(on, () => doc())
+  on('classic.Stop', async () => {
+    w.breakSurfaces()
+    return { block: 'the settings hook said no' }
+  })
+  await start($)
+  expect(await $.classic.Stop({ stop_hook_active: false } as any)).toEqual({ block: 'the settings hook said no' })
+})
+
+test('Stop under TEMPER_DISABLE=1: nothing polls', async ($, on) => {
+  const clock = mock.clock(on)
+  const runs = world(on, { env: { TEMPER_DISABLE: '1' } })
+  on('classic.Stop', async () => {
+    await clock.advance(3000)
+    return {}
+  })
+  await start($)
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  expect(runs).toHaveLength(0)
+})
+
 for (const env of OFF_ENVS) {
   test(`the command is not registered under ${envName(env)}`, async ($, on) => {
     world(on, { stdout: doc({ review: VERDICT }), env })
@@ -495,3 +778,114 @@ test('an open finding stays with its finding when a refresh adds another before 
   expect(await ui.find({ key: 'finding:ERR-02:src/c.rs:1-rule' })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a surfaces call failing as a Stop starts leaves no watch behind: a later Stop stops its poll', async ($, on) => {
+  const clock = mock.clock(on)
+  let fail = false
+  let polls = 0
+  on('process.run', async () => {
+    polls += 1
+    return { value: { exitCode: 0, stdout: RUNNING('clippy', []), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => {
+    if (fail) throw new Error('surfaces broke')
+    return { value: ['terminal'] } as any
+  })
+  on('ui.toast', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  on('classic.Stop', async () => {
+    await clock.advance(2000)
+    return {}
+  })
+  await start($)
+  fail = true
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  fail = false
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await clock.advance(0)
+  const after = polls
+  await clock.advance(10000)
+  expect(polls).toBe(after)
+})
+
+/**
+ * A world where `status --json` is slow: a run that answers a running gate takes `delay(answer)`
+ * ms of the mock clock. `tick` moves the clock in 100 ms steps and lets due runs answer.
+ */
+function slowWorld(on: On, clock: any, answer: () => string, delay: (snap: string) => number) {
+  const held: { due: number; go: () => void }[] = []
+  const toasts: string[] = []
+  const st = { inflight: 0, max: 0 }
+  on('process.run', async (_$, e) => {
+    const isStatus = e.argv[2] === 'status'
+    const snap = isStatus ? answer() : STATS({ session: { id: 'test-session', rows: [] } })
+    if (isStatus) {
+      st.inflight += 1
+      st.max = Math.max(st.max, st.inflight)
+      const d = delay(snap)
+      if (d > 0) await new Promise<void>(r => held.push({ due: clock.now() + d, go: r }))
+      st.inflight -= 1
+    }
+    return { value: { exitCode: 0, stdout: snap, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.surfaces', async () => ({ value: ['terminal'] }) as any)
+  on('ui.toast', async (_$, e: any) => { toasts.push(typeof e === 'string' ? e : e.text); return { value: undefined } as any })
+  on('ui.render', { component: 'Spinner' }, async (_$, e: any) => h('Text', {}, `${e.props.word}${e.props.suffix}`) as any)
+  on('command.register', async () => ({ value: undefined }) as any)
+  bottoms(on)
+  mock.env(on, {})
+  const tick = async (ms: number) => {
+    for (let t = 0; t < ms; t += 100) {
+      await clock.advance(100)
+      for (const h of held.filter(x => x.due <= clock.now())) {
+        held.splice(held.indexOf(h), 1)
+        h.go()
+      }
+      await clock.advance(0)
+    }
+  }
+  return { toasts, st, tick }
+}
+
+test('a slow status run is not stacked: one poll at a time', async ($, on) => {
+  const clock = mock.clock(on)
+  const w = slowWorld(on, clock, () => RUNNING('clippy', []), () => 3500)
+  on('classic.Stop', async () => {
+    await w.tick(10000)
+    return {}
+  })
+  const s = start($)
+  await w.tick(4000)
+  await s
+  w.st.max = 0
+  await $.classic.Stop({ stop_hook_active: false } as any)
+  await w.tick(6000)
+  // The poll, and at most the refresh after the Stop beside it.
+  expect(w.st.max).toBeLessThanOrEqual(2)
+})
+
+for (const [kind, ms, gate, turnEnds] of [
+  ['Stop', 900, 1500, false], ['SubagentStop', 400, 3000, false], ['Stop', 900, 1500, true], ['SubagentStop', 400, 3000, true],
+] as const) {
+  test(`${kind}${turnEnds ? ', then a turn end' : ''}: a poll still running when the gate ends neither paints over the final state nor loses the toast`, async ($, on) => {
+    const clock = mock.clock(on, { now: 72000 })
+    let answer = doc()
+    const w = slowWorld(on, clock, () => answer, snap => (snap.includes('"running":{') ? ms : 0))
+    on(`classic.${kind}` as 'classic.Stop', async () => {
+      answer = RUNNING('clippy', [{ name: 'fmt', ms: 1000 }])
+      await w.tick(gate)
+      answer = doc({ gate: GREEN, review: APPROVED })
+      return {}
+    })
+    await start($)
+    const input = kind === 'Stop' ? { stop_hook_active: false } : { stop_hook_active: false, agent_id: 'a', agent_type: 'x' }
+    await (kind === 'Stop' ? $.classic.Stop(input as any) : $.classic.SubagentStop(input as any))
+    // A newer refresh (the turn end's) writes first; the slow poll's sighting must still count.
+    if (turnEnds) await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+    await w.tick(5000)
+    expect(w.toasts).toEqual(['temper: gate green, review approved'])
+    expect(await bandText($, 'terminal')).toContain('gate green')
+    expect(await spinnerText($, 'terminal')).toBe('Working…')
+  })
+}
