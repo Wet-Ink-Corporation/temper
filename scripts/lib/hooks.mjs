@@ -430,11 +430,13 @@ const PATCH_ROUTE = 'To bring a change over from another worktree, commit it in 
 // What the reviewer runs instead of a command temper cannot resolve (#151), by opaquePatch's kind.
 const REVIEWER_OPAQUE_HINT = {
   git: 'Run one of git\'s own commands with its name written out; the reviewer runs no git alias.',
-  name: 'Run the command with its name written out.',
   code: 'Run the git or shell command directly, not through an interpreter, so temper can read it.',
   script: 'Run the commands directly, not as a script piped or redirected into a shell, so temper can read them.',
   alias: 'The reviewer sets no git alias, because an alias could run `git apply` or `git am` later.',
 };
+// A command name temper cannot read (#151 review 6): the command may be fine, written so temper can read it.
+const REVIEWER_NAME_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so a command whose name temper cannot read was not run.';
+const REVIEWER_NAME_HINT = 'Write the command name out (`~/.cargo/bin/cargo test`, not `"$CARGO" test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
 const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**
@@ -1030,6 +1032,7 @@ export function preBash(input) {
     const opaque = cmds.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
     if (opaque) {
       telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
+      if (opaque.kind === 'name') return deny(`${REVIEWER_NAME_DENY} This command holds ${opaque.why}. ${REVIEWER_NAME_HINT}`);
       return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque.why}, so temper cannot tell that it applies no patch. ${REVIEWER_OPAQUE_HINT[opaque.kind]}`);
     }
   }

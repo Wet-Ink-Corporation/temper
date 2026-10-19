@@ -670,10 +670,13 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       // cannot read exactly, and a -c script after more options.
       'bash -c "$(cat cmd.sh)"', 'sh -c "`cat x`"', 'bash -c "$CMD"', `bash -c $'git\\x20apply ${out('doc.diff')}'`,
       'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
-      'eval `cat cmd.txt`', 'X=$(cat cmd.txt); $X', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
+      'eval `cat cmd.txt`', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
       `bash -c -x 'git apply ${out('doc.diff')}'`, `bash -c -- 'git apply ${out('doc.diff')}'`, `bash -euo pipefail -c 'git apply ${out('doc.diff')}'`,
       // Kept denied: xargs puts each file name into the script's text, where a name could be shell code.
       "find crates -name '*.rs' | xargs -I{} sh -c 'echo {}; grep -c unwrap {}'",
+      // #151 review 6: a brace list or a glob is an expansion, and so is interpreter code built from one.
+      `eval {git,apply,${out('doc.diff')}}`, `bash -c {'git apply ${out('doc.diff')}',x}`, `eval git*`, `bash -c gi?' apply ${out('doc.diff')}'`,
+      'python3 -c "$X"', 'node -e "$(cat f)"', 'perl -e "$X"', 'awk "$X"',
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -697,6 +700,23 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
     ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
+    // #151 review 6: a command name temper cannot read has its own message, which says to write the name out.
+    for (const cmd of [
+      `{git,apply,${out('doc.diff')}}`, `{bash,-c,'git apply ${out('doc.diff')}'}`, `{eval,'git apply ${out('doc.diff')}'}`,
+      `{patch,-p1,-i,${out('doc.diff')}}`, 'X=$(cat cmd.txt); $X', `X='git apply ${out('doc.diff')}'; $X`, '"${CARGO:-cargo}" test', '$(which cargo) test',
+    ]) {
+      const res = asReviewer(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /reviewer is read-only/, cmd);
+      assert.match(reason(res), /Write the command name out/, cmd);
+      assert.doesNotMatch(reason(res), /Do not retry|piped or redirected/, cmd);
+    }
+    // Ordinary review commands, and command names whose value temper knows, still run.
+    for (const cmd of [
+      "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' Cargo.toml", "git log --format='%H' -5", "rg 'foo\\{' crates",
+      '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo --version', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
+      "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", "awk '{print $1}' Cargo.toml",
+    ]) assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     // Each fail-closed deny says what to run instead.
     assert.match(reason(asReviewer('git $x')), /git's own commands/);
     assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);

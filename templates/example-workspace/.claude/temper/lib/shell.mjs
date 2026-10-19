@@ -283,14 +283,16 @@ function lex(src) {
 /**
  * A word as the rules see it: `raw` (quotes removed, expansions as written), `text` (known
  * expansions replaced, unknown ones as written), `value` (the text, or null when any part is
- * unknown), `literal` (no expansion at all: the text is exactly what the shell passes), `glob`
- * (an unquoted `*`, `?`, `[` or brace list) and `quoted`.
+ * unknown), `literal` (no expansion, brace list or glob at all: the text is exactly what the
+ * shell passes), `glob` (an unquoted `*`, `?`, `[...]` or brace list) and `quoted`. An
+ * unquoted expansion after an `IFS=` assignment is unknown: bash splits it where temper does not.
  */
 function makeWord(parts, env = {}) {
   let raw = '';
   let text = '';
   let known = true;
   let glob = false;
+  let bracket = -1; // where an unquoted `[` is in raw: a glob when a `]` follows it (`[` alone is the test command)
   parts.forEach((p, k) => {
     if (p.bs && !env.ps) return; // bash removes the escaping backslash
     raw += p.s;
@@ -298,15 +300,18 @@ function makeWord(parts, env = {}) {
       let s = p.s;
       if (!p.q && k === 0 && /^~(?=\/|\\|$)/.test(s) && env.home) s = env.home + s.slice(1);
       else if (!p.q && k === 0 && s.startsWith('~')) known = false;
-      if (!p.q && (/[*?[]/.test(s) || braceList(s))) glob = true;
+      if (!p.q && (/[*?]/.test(s) || braceList(s))) glob = true;
+      if (!p.q && bracket === -1 && p.s.includes('[')) bracket = raw.length - p.s.length + p.s.indexOf('[');
       text += s;
       return;
     }
     const v = partValue(p, env);
-    if (v === null) { known = false; text += p.s; } else text += v;
+    if (v === null || (!p.q && env.vars?.has('IFS'))) { known = false; text += p.s; } else text += v;
   });
-  const assign = parts[0]?.t === 'lit' && !parts[0].q ? /^[A-Za-z_]\w*(?==)/.exec(parts[0].s)?.[0] : undefined;
-  const literal = parts.every((p) => p.t === 'lit');
+  if (bracket !== -1 && raw.includes(']', bracket + 1)) glob = true;
+  const assign = parts[0]?.t === 'lit' && !parts[0].q ? /^[A-Za-z_]\w*(?=\+?=)/.exec(parts[0].s)?.[0] : undefined;
+  // An unquoted `{` may open a brace list, one that spans a quoted part too (`{'git apply x',y}`).
+  const literal = parts.every((p) => p.t === 'lit') && !glob && !parts.some((p) => !p.q && p.s.includes('{'));
   return { raw, text, value: known ? text : null, literal, glob, quoted: parts.some((p) => p.q), assign };
 }
 
@@ -533,7 +538,10 @@ function shellScript(args) {
 
 const isAssign = (w) => Boolean(w.assign);
 const assignTo = (env, w) => {
-  if (w.value === null) env.vars.delete(w.assign);
+  if (w.value?.[w.assign.length] === '+') { // `X+=y` appends, to a value temper may not know
+    const old = env.vars.get(w.assign);
+    env.vars.set(w.assign, typeof old === 'string' ? old + w.value.slice(w.assign.length + 2) : null);
+  } else if (w.value === null) env.vars.delete(w.assign);
   else env.vars.set(w.assign, w.value.slice(w.assign.length + 1));
 };
 
@@ -1035,20 +1043,24 @@ const INTERPRETERS = /^(?:python[\d.]*|py|node|nodejs|deno|bun|ruby|perl|php|pws
 const PS_CONTENT = /^(?:set-content|add-content|out-file|new-item|tee-object|sc|ac|ni)$/;
 const PS_COPY = /^(?:copy-item|move-item|cpi|mi|copy|move)$/;
 
-/** The code an interpreter runs from its arguments (-c, -e, -E, -p, -r, --eval, -Command, `deno eval`) and stdin. */
-function interpreterCode(c) {
-  if (!INTERPRETERS.test(c.name ?? '')) return [];
+/** The words an interpreter runs as code from its arguments (-c, -e, -E, -p, -r, --eval, -Command, `deno eval`). */
+function codeArgs(c) {
   const code = [];
-  if (c.stdin?.body) code.push(c.stdin.body);
   const a = c.args;
   if (c.name === 'deno' && a[0]?.value === 'eval') {
     const k = a.findIndex((x, j) => j > 0 && !x.raw.startsWith('-'));
-    if (k !== -1) code.push(a[k].text);
+    if (k !== -1) code.push(a[k]);
   }
   for (let j = 0; j < a.length; j++) {
-    if ((/^-[a-zA-Z]*[ceEp]$/.test(a[j].raw) || /^(?:-r|--eval|--print|-command)$/i.test(a[j].raw)) && a[j + 1]) code.push(a[++j].text);
+    if ((/^-[a-zA-Z]*[ceEp]$/.test(a[j].raw) || /^(?:-r|--eval|--print|-command)$/i.test(a[j].raw)) && a[j + 1]) code.push(a[++j]);
   }
   return code;
+}
+
+/** The code an interpreter runs from its arguments (see codeArgs) and stdin. */
+function interpreterCode(c) {
+  if (!INTERPRETERS.test(c.name ?? '')) return [];
+  return [...(c.stdin?.body ? [c.stdin.body] : []), ...codeArgs(c).map((w) => w.text)];
 }
 
 /**
@@ -1321,13 +1333,15 @@ function configWritesAlias(args) {
  * Why temper cannot rule out that `c` applies a patch, as `{ kind, why }`, or null. `kind` is:
  * - `git`: a git subcommand it cannot resolve (`git $x`, `git ${CMD:-apply}`, a shell alias, a
  *   `-c` value it cannot read), or one git does not have, which may be an alias set anywhere;
- * - `name`: a command name it cannot resolve that names git or patch, or comes before `apply` or `am`;
- * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
- *   mentions `git apply`, `git am` or a patch command, or code piped or redirected into one;
+ * - `name`: a command name it cannot read (see readName: `$X`, `"${CARGO:-cargo}"`, `{git,apply,x}`,
+ *   `git*`), or one it cannot resolve that names git or patch, or comes before `apply` or `am`;
+ * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, awk, ...) that
+ *   mentions `git apply`, `git am` or a patch command or is built from an expansion (`python3 -c "$X"`),
+ *   or code piped or redirected into one that temper cannot read;
  * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
  *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`,
- *   `bash -c "$CMD"`, `bash <<< "$X"`), a command name or `eval` argument built from an expansion
- *   (`$X`, `eval "$(cat cmd.txt)"`), or commands nested deeper than temper reads;
+ *   `bash -c "$CMD"`, `bash <<< "$X"`, `bash -c {x,y}`), an `eval` argument built from an expansion
+ *   (`eval "$(cat cmd.txt)"`, `eval git*`), or commands nested deeper than temper reads;
  * - `alias`: `git config` setting an alias, which could name git apply later.
  * Patterns, not a parse: for a fail-closed check.
  */
@@ -1339,8 +1353,8 @@ export function opaquePatch(c) {
   if (!g && c.name === null && (/\b(?:git|g?patch)\b/.test(c.argv0?.raw ?? '') || c.args.some((x) => x.value === 'apply' || x.value === 'am'))) {
     return { kind: 'name', why: 'an unresolved command name' };
   }
-  // A command name or an eval argument built from an expansion runs text temper cannot read exactly (wi-0e226b).
-  if (!g && c.argv0?.literal !== true) return { kind: 'script', why: 'a command name built from an expansion' };
+  // A command name temper cannot read, or an eval argument built from an expansion, runs text temper cannot read exactly (wi-0e226b).
+  if (!g && !readName(c.argv0)) return { kind: 'name', why: 'a command name built from an expansion' };
   if (c.name === 'eval' && c.args.some((x) => x.literal !== true)) return { kind: 'script', why: 'an eval argument built from an expansion' };
   if (g) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
@@ -1351,7 +1365,13 @@ export function opaquePatch(c) {
     const why = unreadScript(c);
     return why ? { kind: 'script', why: `a ${c.name} script ${why} that temper cannot read` } : null;
   }
+  if (AWK.test(c.name)) {
+    const prog = awkProgram(c.args);
+    if (prog && !prog.literal) return { kind: 'code', why: `${c.name} code built from an expansion` };
+    return prog && codePatches(prog.text) ? { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` } : null;
+  }
   if (!INTERPRETERS.test(c.name)) return null;
+  if (codeArgs(c).some((w) => !w.literal)) return { kind: 'code', why: `${c.name} code built from an expansion` };
   if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
   // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`.
   const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
@@ -1360,6 +1380,25 @@ export function opaquePatch(c) {
 }
 
 const SOURCES = new Set(['source', '.']);
+/**
+ * Whether temper reads a command name exactly: a literal, or an expansion whose value it knows
+ * (`"$HOME/.cargo/bin/cargo"`, `$PWD/x`) with no space, glob or brace in it to split or expand.
+ */
+const readName = (w) => Boolean(w) && (w.literal || (w.value !== null && !w.glob && !/[\s*?[{]/.test(w.value)));
+const AWK = /^(?:awk|gawk|mawk|nawk)$/;
+// awk options that take a separate value; -f names the program file, so there is no program argument.
+const AWK_VALUED = /^(?:-[Fvil]|--(?:field-separator|assign|include|load))$/;
+/** The program word of an awk command, or null when it reads its program from a file (`-f`). */
+function awkProgram(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.value === '--') return args[i + 1] ?? null;
+    if (a.value === null || !a.raw.startsWith('-') || a.raw === '-') return a;
+    if (/^-f|^--file\b|^-E/.test(a.raw)) return null;
+    if (AWK_VALUED.test(a.raw)) i++;
+  }
+  return null;
+}
 // Paths that name the shell's own stdin.
 const STDIN_PATH = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
 /** Whether temper read a command's stdin exactly: a literal heredoc or here-string body, or one a plain `cat` passed on. */

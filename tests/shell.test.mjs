@@ -254,8 +254,11 @@ test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument 
     'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'X=ls; bash <<< "$X"', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
     'bash <<EOF\ngit $X\nEOF', 'cat <<EOF | bash\n$X\nEOF', 'cat <<< "$X" | bash',
     'eval `cat cmd.txt`', 'eval "$(cat cmd.txt)"', 'X=ls; eval "$X"', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
-    'X=$(cat cmd.txt); $X', '$X x.diff', '"$CMD" x.diff', '${X:-ls}', '$(cat cmd.txt)', 'X=ls; X+=";git apply x.diff"; $X',
   ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  // A command name temper cannot read is its own kind (#151 review 6).
+  for (const cmd of ['X=$(cat cmd.txt); $X', '$X x.diff', '"$CMD" x.diff', '${X:-ls}', '$(cat cmd.txt)', 'X=ls; X+=";git apply x.diff"; $X']) {
+    assert.equal(o(cmd)?.kind, 'name', cmd);
+  }
   // An interpreter's stdin is read the same way.
   for (const cmd of ['python3 <<< "$X"', 'python3 - <<EOF\nprint("$(cat x.py)")\nEOF']) assert.equal(o(cmd)?.kind, 'code', cmd);
   for (const cmd of [
@@ -264,6 +267,31 @@ test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument 
     "eval 'ls'", 'eval ls -la', "python3 - <<'EOF'\nprint(1)\nEOF", 'echo "$HOME"', '~/.cargo/bin/cargo test', 'cargo test -- "$X"',
     "find crates -name '*.rs' | head", 'X=1; echo $X',
   ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 6 (wi-0e226b): a brace list or a glob is an expansion too; a command name is read
+// when temper knows its value; interpreter code built from an expansion is code temper cannot read.
+test('shell: opaquePatch: brace and glob words, command names temper reads, and interpreter code from an expansion', () => {
+  const o = (cmd, opts = {}) => parseCommands(cmd, { cwd: root, ...opts }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['{git,apply,doc.diff}', 'name'], ['eval {git,apply,doc.diff}', 'script'], ["bash -c {'git apply doc.diff',x}", 'script'],
+    ["{bash,-c,'git apply doc.diff'}", 'name'], ["{eval,'git apply doc.diff'}", 'name'], ['{patch,-p1,-i,doc.diff}', 'name'],
+    ['eval git*', 'script'], ["bash -c gi?' apply doc.diff'", 'script'], ["eval {'git apply',x}", 'script'], ["eval {'git apply'\\,x}", 'script'],
+    ["sh -c {x,'git apply doc.diff'}", 'script'], ['git* apply doc.diff', 'name'], ['gi? apply doc.diff', 'name'], ["bash <<< {x,'git apply y'}", 'script'],
+    ["X='git apply x'; $X", 'name'], ["X='git apply x'; \"$X\"", 'name'], ['X=g*; $X', 'name'], ['IFS=/; X=git/apply/x.diff; $X', 'name'],
+    ['"${CARGO:-cargo}" test', 'name'], ['$(which cargo) test', 'name'],
+    ['python3 -c "$X"', 'code'], ['node -e "$(cat f)"', 'code'], ['perl -e "$X"', 'code'], ['perl -ne "$X" f', 'code'], ['ruby -e "$X"', 'code'],
+    ['php -r "$X"', 'code'], ['deno eval "$X"', 'code'], ['awk "$X"', 'code'], ['awk -F: "$X" f', 'code'], ['gawk -v a=1 "$X" f', 'code'],
+    ["awk 'BEGIN { system(\"git apply x.diff\") }'", 'code'],
+  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+  for (const cmd of [
+    "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' x.json", "git log --format='%H' -5", "rg 'foo\\{' crates",
+    'rg foo\\{ crates', 'find crates -name x -exec grep -n unwrap {} +', 'git show HEAD@{1} --stat', "eval 'git status'", 'ls crates/*/src',
+    '"$HOME/.cargo/bin/cargo" test', '$HOME/.cargo/bin/cargo test', '"$PWD/target/debug/a" --help', '~/.cargo/bin/cargo test',
+    '"$(git rev-parse --show-toplevel)/scripts/check.sh"', 'X=cargo; $X test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
+    'python3 -c "print(1)"', "node -e 'console.log(1)'", "awk '{print $1}' x.txt", "awk -F: '{print $1}' x.txt", 'awk -f prog.awk x.txt',
+    "perl -ne 'print if /unwrap/' x.rs",
+  ]) assert.equal(o(cmd, { top: root }), null, cmd);
 });
 
 // #151 review 5: `$'...'` is decoded as bash decodes it; an escape temper does not decode exactly leaves the word unknown.
