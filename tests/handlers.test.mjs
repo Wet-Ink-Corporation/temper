@@ -605,6 +605,45 @@ test('SubagentStart (reviewer): with changes in the main checkout and a worktree
   assert.match(said, new RegExp(`must be ${fingerprint(r.proj(), r.git('rev-parse', 'HEAD'))}, or, if you were asked to review one of the worktrees listed above, that worktree's fingerprint\\.`));
 });
 
+test('SubagentStart: parallel agents in their own worktrees each keep their own tree as the target', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-par';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  const w1 = worktree(r, 'agent-p1');
+  const w2 = worktree(r, 'agent-p2');
+  subagentStart({ cwd: w1.dir, session_id: sid, agent_type: 'temper:rust-implementer', agent_id: 'p1' });
+  subagentEdits(w1, sid, 'p1', LIB, LIB_RS_2);
+  // the second implementer starts in its own, clean worktree: it is not sent to the first one's
+  const second = context(subagentStart({ cwd: w2.dir, session_id: sid, agent_type: 'temper:rust-implementer', agent_id: 'p2' }));
+  assert.doesNotMatch(second, /^- (Target|Also changed)/m);
+  assert.ok(second.includes(`- Project root: ${w2.proj().root}`), second);
+  assert.match(second, /^- Changed Rust files \(0\): none$/m);
+  // a reviewer started inside the first worktree reviews that worktree, read-only
+  const rv = context(subagentStart({ cwd: w1.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' }));
+  assert.doesNotMatch(rv, /^- (Target|Also changed)/m);
+  assert.ok(rv.includes(`- Project root: ${w1.proj().root}`), rv);
+  assert.match(rv, new RegExp(`^- Your verdict's "fingerprint" field must be ${w1.fp(sid)}\\.`, 'm'));
+  assert.match(rv, /Gate command: node "[^"]+" gate --check$/m);
+});
+
+test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-ahead';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  // the main session commits, then a worktree starts from the new HEAD
+  r.put('README.md', 'later\n');
+  r.git('add', '-A');
+  r.git('-c', 'user.email=t@example.com', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'later');
+  const head = r.git('rev-parse', 'HEAD');
+  const w = worktree(r, 'agent-e1');
+  subagentEdits(w, sid, 'e1', LIB, LIB_RS_2);
+  const said = context(subagentStart({ cwd: r.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv1' }));
+  assert.match(said, /^- Target: the worktree \.claude\/worktrees\/agent-e1\. /m);
+  assert.ok(said.includes(`&& TEMPER_BASE=${head} node "`), said);
+  assert.match(said, new RegExp(`^- Base revision: ${head}; `, 'm'));
+  assert.match(said, /^- Changed Rust files \(1\): /m);
+});
+
 test('Stop: a removed worktree whose branch holds unmerged commits is reported, not gated', { skip: noGit }, (t) => {
   const r = repo(t);
   const sid = 's-wt-gone';
