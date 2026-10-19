@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Patch denials stop the retries (#140).** In the pilots, Workflow subagents that move changes between worktrees by patching kept retrying denied patches, and the read-only reviewer tried to apply patches 13 times. A patch onto `.rs` files is still denied, because patched Rust is never scanned. The deny, and the deny for a patch temper cannot read, now name the routes that keep the checks: the Edit or Write tools, or, between worktrees, a commit in the worktree it was made in brought over with `git cherry-pick` or `git merge`, which the Stop gate and CI check. They also say that retrying the patch is denied again. The `temper:rust-reviewer` subagent may not run `git apply`, `git am` or `patch` at all, on any file. The deny says the reviewer is read-only and must not retry, and its prompt says so too. `git apply --check`, `--stat` and `patch --dry-run` still run for it.
+
+Upgrading from 1.4.x: files under `scripts/` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
