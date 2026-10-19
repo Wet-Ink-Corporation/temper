@@ -132,13 +132,15 @@ Advisories such as `H-08 … new .clone() call(s)` and `ARC-12` caret-requiremen
 
 A verdict whose fingerprint no longer matches the tree is recorded as stale. Any change after the review needs a fresh one.
 
+Repeat reviews of one unchanged tree converge. A reviewer of a tree that already has a verdict is told that verdict, when it was recorded and its blocker and major findings, and re-checks each one. A `changes-requested` verdict with no blocker or major finding does not replace an approval of the same tree: the approval stays the verdict Stop reads, the later verdict is appended to `.git/temper/verdicts/<fingerprint>.history.jsonl`, and its telemetry row carries `"kept": "approved"`. A blocker or major finding replaces the approval, and an approval always replaces a `changes-requested` verdict.
+
 ## Finishing a turn (the `Stop` hook)
 
 | Message | Meaning | What to do |
 |---|---|---|
 | `temper gate: RED …` and `The work is not done while the gate is red` | A gate step failed | Fix the failure. Never weaken tests or lints to do it (H-12). |
 | `The gate is green, but the current tree (fingerprint …) has no approving independent review (PROC-08)` | Review is required, and no approval is bound to this exact tree | Delegate to `temper:rust-reviewer` (`/temper:review`) |
-| `The reviewer requested changes for this tree` | The latest verdict is `changes-requested` | Address or rebut each finding, then ask for a fresh review |
+| `The reviewer requested changes for this tree` | The recorded verdict is `changes-requested` | Address or rebut each finding, then ask for a fresh review |
 | `stopped with a RED gate (no progress after the previous block)`, or `stopped without an approving review` | The loop breaker: the hook blocked once, and the tree did not change, so it lets the turn end rather than loop | Read the reported failures yourself |
 | `Rust changes left in progress/blocked; the gate and review were not enforced` | The agent ended with `Status: WIP` or `Status: BLOCKED` | This is the honest exit for unfinished work. A `BLOCKED` status carries a question for you. |
 | `temper gate: UNAVAILABLE (cargo is not usable in this environment …)` | `cargo --version` failed | Fix the toolchain, as `rust-toolchain.toml` pins it. Only the TOML manifest check ran. |

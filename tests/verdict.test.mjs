@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { DIMENSIONS, ALWAYS_SCORED, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from '../scripts/lib/verdict.mjs';
+import { DIMENSIONS, ALWAYS_SCORED, extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings, earlierReview } from '../scripts/lib/verdict.mjs';
 import { discover, rustChanges } from '../scripts/lib/project.mjs';
 
 const FP = '0123456789abcdef';
@@ -240,6 +240,50 @@ test('recordVerdict and verdictFor round-trip by fingerprint', (t) => {
   // an unreadable record reads as no verdict
   fs.writeFileSync(path.join(stateDir, 'verdicts', `${FP}.json`), '{');
   assert.equal(verdictFor(proj, FP), null);
+});
+
+test('recordVerdict: a changes-requested verdict without a blocker or major finding keeps an approval of the same tree (#136)', (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-verdict-'));
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
+  const proj = { stateDir };
+  const history = path.join(stateDir, 'verdicts', `${FP}.history.jsonl`);
+  const historyRows = () => fs.readFileSync(history, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const approval = recordVerdict(proj, verdict(), { agent_id: 'a1', stale: false });
+  assert.equal(approval.kept, undefined);
+  assert.ok(!fs.existsSync(history));
+  // minor and nit findings only: the approval stays, and the later verdict goes to the history file
+  const minor = recordVerdict(proj, verdict({ verdict: 'changes-requested', findings: [finding(), finding({ severity: 'nit' })] }), { agent_id: 'a2', stale: false });
+  assert.equal(minor.kept, 'approved');
+  assert.deepEqual(verdictFor(proj, FP), approval);
+  assert.deepEqual(historyRows().map((r) => [r.agent_id, r.verdict, r.kept]), [['a2', 'changes-requested', 'approved']]);
+  // a major finding replaces the approval, as before
+  const major = recordVerdict(proj, verdict({ verdict: 'changes-requested', findings: [finding({ severity: 'major' })] }), { agent_id: 'a3', stale: false });
+  assert.equal(major.kept, undefined);
+  assert.equal(verdictFor(proj, FP).agent_id, 'a3');
+  // with changes requested on record, a minor-only verdict replaces it; an approval always does
+  recordVerdict(proj, verdict({ verdict: 'changes-requested', findings: [] }), { agent_id: 'a4', stale: false });
+  assert.equal(verdictFor(proj, FP).agent_id, 'a4');
+  recordVerdict(proj, verdict(), { agent_id: 'a5', stale: false });
+  assert.equal(verdictFor(proj, FP).verdict, 'approved');
+  assert.equal(historyRows().length, 1);
+  // a stale approval does not hold
+  recordVerdict(proj, verdict(), { agent_id: 'a6', stale: true });
+  recordVerdict(proj, verdict({ verdict: 'changes-requested', findings: [finding()] }), { agent_id: 'a7', stale: false });
+  assert.equal(verdictFor(proj, FP).agent_id, 'a7');
+});
+
+test('earlierReview: the earlier verdict, when, its blocker and major findings, and how to treat them (#136)', () => {
+  const at = '2026-10-18T08:37:00.000Z';
+  const cr = earlierReview({ ...verdict({ verdict: 'changes-requested', findings: [finding({ severity: 'major', rule: 'ERR-01', line: 7, fix: 'return a typed error' }), finding()] }), recorded_at: at });
+  assert.ok(cr.startsWith(`- An earlier review of this same tree is recorded: changes-requested at ${at}.\n- [major] ERR-01 crates/core/src/lib.rs:7: return a typed error\n(1 minor/nit finding(s) in the full verdict)\n`), cr);
+  assert.match(cr, /Re-check each earlier finding/);
+  assert.doesNotMatch(cr, /approval/);
+  const ok = earlierReview({ ...verdict({ findings: [finding()] }), recorded_at: at });
+  assert.ok(ok.startsWith(`- An earlier review of this same tree is recorded: approved at ${at}, with no blocker or major finding.\n(1 minor/nit finding(s) in the full verdict)\n`), ok);
+  assert.match(ok, /Overturn that approval only with a blocker or major finding, quoting the evidence/);
+  // clipped to ten findings
+  const many = earlierReview({ ...verdict({ verdict: 'changes-requested', findings: Array.from({ length: 14 }, (_, i) => finding({ severity: 'blocker', line: i + 1 })) }), recorded_at: at });
+  assert.equal((many.match(/^- \[blocker\]/gm) ?? []).length, 10);
 });
 
 test('summarizeFindings lists blockers and majors and counts the rest', () => {

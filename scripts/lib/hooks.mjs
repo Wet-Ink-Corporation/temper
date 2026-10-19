@@ -20,7 +20,7 @@ import {
 import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
-import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
+import { extractVerdict, validateVerdict, recordVerdict, verdictFor, summarizeFindings, earlierReview } from './verdict.mjs';
 import {
   parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
   landing as protectedLanding, patchFiles as protectedPatchFiles, commandDeletes as protectedDeletes,
@@ -1149,9 +1149,9 @@ function checkVerdict(proj, input, v) {
 function storeVerdict(proj, input, v, via) {
   const base = baseRev(proj, input.session_id);
   const current = fingerprint(proj, base);
-  recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
+  const rec = recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
-  telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
+  telemetry(proj, input, 'verdict', { via, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length, ...(rec.kept ? { kept: rec.kept } : {}) });
 }
 
 // ----------------------------------------------------------------- PostToolUse
@@ -1315,6 +1315,8 @@ export function subagentStart(input) {
   ];
   if (REVIEWER.test(type)) {
     lines.push(`- Your verdict's "fingerprint" field must be ${fp}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.`);
+    const prior = verdictFor(proj, fp);
+    if (prior && !prior.stale) lines.push(earlierReview(prior));
     const stat = diffStat(proj, base);
     if (stat) lines.push(`- Diff stat:\n${stat.split('\n').slice(-25).join('\n')}`);
   }

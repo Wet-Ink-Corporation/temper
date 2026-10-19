@@ -527,6 +527,27 @@ test('SubagentStart: the reviewer, implementer and architect get the fingerprint
 
   assert.deepEqual(subagentStart({ cwd: r.dir, session_id: 's-sub', agent_type: 'general-purpose' }), {});
   assert.deepEqual(subagentStart({ cwd: r.dir, session_id: 's-sub' }), {});
+  assert.doesNotMatch(text, /earlier review/);
+});
+
+test('SubagentStart: a reviewer of a tree that already has a verdict is told the earlier verdict and its findings (#136)', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.fp();
+  const start = () => context(subagentStart({ cwd: r.dir, session_id: 's-sub-prior', agent_type: 'temper:rust-reviewer', agent_id: 'rv2' }));
+  const rec = recordVerdict(r.proj(), verdict(fp), { agent_id: 'rv1', stale: false });
+  const text = start();
+  assert.ok(text.includes(`\n- An earlier review of this same tree is recorded: approved at ${rec.recorded_at}, with no blocker or major finding.\n`), text);
+  assert.match(text, /Re-check each earlier finding/);
+  assert.match(text, /Overturn that approval only with a blocker or major finding, quoting the evidence/);
+  const cr = recordVerdict(r.proj(), verdict(fp, { verdict: 'changes-requested', findings: [{ rule: 'API-01', severity: 'major', file: LIB, line: 10, evidence: 'pub fn two', fix: 'name it for what it returns' }] }), { agent_id: 'rv2', stale: false });
+  assert.ok(start().includes(`\n- An earlier review of this same tree is recorded: changes-requested at ${cr.recorded_at}.\n- [major] API-01 ${LIB}:10: name it for what it returns\n`));
+  // a stale record says nothing about this tree's review
+  recordVerdict(r.proj(), verdict(fp), { agent_id: 'rv3', stale: true });
+  assert.doesNotMatch(start(), /earlier review/);
+  // nor do the implementer and architect hear of it
+  recordVerdict(r.proj(), verdict(fp), { agent_id: 'rv4', stale: false });
+  assert.doesNotMatch(context(subagentStart({ cwd: r.dir, session_id: 's-sub-prior', agent_type: 'rust-implementer', agent_id: 'im1' })), /earlier review/);
 });
 
 // -------------------------------------------------------------- SubagentStop
@@ -571,6 +592,35 @@ test('SubagentStop (reviewer): a valid verdict is recorded, flagged stale when t
   const old = 'fedcba9876543210';
   assert.deepEqual(subagentStop({ ...input, agent_id: 'rv2', last_assistant_message: fenced(verdict(old, { verdict: 'changes-requested' })) }), {});
   assert.equal(verdictFor(proj, old).stale, true);
+});
+
+test('SubagentStop (reviewer): changes requested without a blocker or major finding keep an approval of the same tree (#136)', { skip: noGit }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.fp();
+  const proj = r.proj();
+  const input = { cwd: r.dir, session_id: 's-rv-keep', agent_type: 'temper:rust-reviewer' };
+  const minor = { rule: 'OWN-08', severity: 'minor', file: LIB, line: 10, evidence: 'x.clone()', fix: 'borrow it' };
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv1', last_assistant_message: fenced(verdict(fp)) }), {});
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv2', last_assistant_message: fenced(verdict(fp, { verdict: 'changes-requested', findings: [minor] })) }), {});
+  assert.equal(verdictFor(proj, fp).verdict, 'approved');
+  assert.equal(verdictFor(proj, fp).agent_id, 'rv1');
+  const history = fs.readFileSync(path.join(proj.stateDir, 'verdicts', `${fp}.history.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(history.map((x) => [x.agent_id, x.verdict]), [['rv2', 'changes-requested']]);
+  // a major finding overturns the approval, as before
+  assert.deepEqual(subagentStop({ ...input, agent_id: 'rv3', last_assistant_message: fenced(verdict(fp, { verdict: 'changes-requested', findings: [{ ...minor, severity: 'major' }] })) }), {});
+  assert.equal(verdictFor(proj, fp).agent_id, 'rv3');
+  const rows = readTelemetry(proj).filter((x) => x.sid === 's-rv-keep' && x.event === 'verdict');
+  assert.deepEqual(rows.map((x) => [x.verdict, x.kept]), [['approved', undefined], ['changes-requested', 'approved'], ['changes-requested', undefined]]);
+});
+
+test('Stop: an approval kept over a later minor-only changes-requested verdict ends the turn (#136)', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  r.put(LIB, LIB_RS_2);
+  const fp = r.gate(true);
+  recordVerdict(r.proj(), verdict(fp), { stale: false });
+  recordVerdict(r.proj(), verdict(fp, { verdict: 'changes-requested', findings: [{ rule: 'OWN-08', severity: 'minor', file: LIB, line: 10, evidence: 'x.clone()', fix: 'borrow it' }] }), { stale: false });
+  assert.equal(message(stop({ cwd: r.dir, session_id: 's-kept' })), `temper: gate green and review approved (fingerprint ${fp}).`);
 });
 
 test('SubagentStop (implementer): the gate is enforced without requiring review', { skip: noCargo }, (t) => {

@@ -1,4 +1,5 @@
 // Review verdicts: parsing, validation and storage keyed by tree fingerprint.
+import fs from 'node:fs';
 import path from 'node:path';
 import { readText, writeAtomic } from './project.mjs';
 
@@ -100,9 +101,26 @@ export function validateVerdict(v, ctx = {}) {
   return p;
 }
 
+const serious = (f) => f?.severity === 'blocker' || f?.severity === 'major';
+
+/**
+ * Record `v` as the verdict for its fingerprint, the one Stop reads. A
+ * changes-requested verdict with no blocker or major finding does not replace a
+ * non-stale approval of the same tree (#136): the approval stays, and `v` is
+ * appended to verdicts/<fp>.history.jsonl, which is pruned with the verdict.
+ * The returned record then carries `kept: 'approved'`.
+ */
 export function recordVerdict(proj, v, meta = {}) {
   const rec = { ...v, recorded_at: new Date().toISOString(), ...meta };
-  writeAtomic(path.join(proj.stateDir, 'verdicts', `${v.fingerprint}.json`), JSON.stringify(rec, null, 2));
+  const dir = path.join(proj.stateDir, 'verdicts');
+  const prev = verdictFor(proj, v.fingerprint);
+  if (prev?.verdict === 'approved' && !prev.stale && v.verdict === 'changes-requested' && !(v.findings ?? []).some(serious)) {
+    const kept = { ...rec, kept: 'approved' };
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, `${v.fingerprint}.history.jsonl`), `${JSON.stringify(kept)}\n`);
+    return kept;
+  }
+  writeAtomic(path.join(dir, `${v.fingerprint}.json`), JSON.stringify(rec, null, 2));
   return rec;
 }
 
@@ -113,8 +131,22 @@ export function verdictFor(proj, fp) {
 }
 
 export function summarizeFindings(v, max = 10) {
-  const fs = (v.findings ?? []).filter((f) => f.severity === 'blocker' || f.severity === 'major');
-  const rest = (v.findings ?? []).length - fs.length;
-  return fs.slice(0, max).map((f) => `- [${f.severity}] ${f.rule} ${f.file}${f.line ? `:${f.line}` : ''}: ${f.fix}`).join('\n')
+  const bad = (v.findings ?? []).filter(serious);
+  const rest = (v.findings ?? []).length - bad.length;
+  return bad.slice(0, max).map((f) => `- [${f.severity}] ${f.rule} ${f.file}${f.line ? `:${f.line}` : ''}: ${f.fix}`).join('\n')
     + (rest > 0 ? `\n(${rest} minor/nit finding(s) in the full verdict)` : '');
+}
+
+/**
+ * The reviewer's SubagentStart lines for a tree that already has verdict `v` (#136): the earlier
+ * verdict, when it was recorded and its blocker and major findings, so a repeat review re-checks
+ * them, and an approval of the unchanged tree is overturned only by a blocker or major finding.
+ */
+export function earlierReview(v) {
+  const list = summarizeFindings(v).trim();
+  const head = `- An earlier review of this same tree is recorded: ${v.verdict} at ${v.recorded_at ?? 'an unknown time'}`;
+  const lines = [(v.findings ?? []).some(serious) ? `${head}.\n${list}` : `${head}, with no blocker or major finding.${list ? `\n${list}` : ''}`];
+  lines.push('  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.');
+  if (v.verdict === 'approved') lines.push('  Overturn that approval only with a blocker or major finding, quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval.');
+  return lines.join('\n');
 }

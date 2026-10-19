@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Repeat reviews of one tree converge (#136).** A pilot's reviewer approved one unchanged tree, then requested changes twice, then approved again, and whichever verdict came last decided Stop. Two changes make repeat reviews of one fingerprint converge:
+- When `temper:rust-reviewer` starts on a tree that already has a non-stale verdict, its `SubagentStart` context gives that verdict, when it was recorded and its blocker and major findings (up to 10). The reviewer re-checks each one, and overturns an earlier approval of the unchanged tree only with a blocker or major finding, quoting the evidence. `agents/rust-reviewer.md` says the same.
+- A `changes-requested` verdict with no blocker or major finding no longer replaces a non-stale approval of the same fingerprint. The approval stays the verdict Stop reads, and the later verdict is appended to `verdicts/<fingerprint>.history.jsonl`, which SessionStart prunes together with the verdict. Its telemetry row still counts, with `"kept": "approved"`. A blocker or major finding replaces the approval as before, and an approval still replaces a `changes-requested` verdict.
+
+Upgrading from 1.4: `scripts/lib/hooks.mjs` and `scripts/lib/verdict.mjs` changed, so `temper setup --dry-run` reports the vendored copy as drift. Refresh it with `temper setup --vendor-only`. Nothing in `templates/workspace/` changed.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
