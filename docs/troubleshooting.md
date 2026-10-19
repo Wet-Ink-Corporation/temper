@@ -108,8 +108,9 @@ Advisories such as `H-08 … new .clone() call(s)` and `ARC-12` caret-requiremen
 |---|---|---|
 | `write Rust sources with the Edit or Write tools, not the shell` | A redirect, `tee`, `sed -i`, `perl -i`, a script or a PowerShell cmdlet that writes a `.rs` file. Also a copy or move onto a `.rs` file whose content temper cannot read: a variable, a glob, stdin, a missing source, a file the same command rewrites first, or a directory after a `cd` it cannot follow | Use the Edit tool, so the scanner sees the change, or copy from a literal path that exists |
 | `this command writes N escape hatch(es) into Rust sources, so it was not run` | A `cp`, `mv`, `install`, `ln`, `rsync`, `git mv`, `Copy-Item` or `Move-Item` onto a `.rs` file is scanned like a Write of the source's content. A copy of a file with legacy findings duplicates them, so it is refused too; a move inside the repository is compared with the source's own content, so renaming a file with legacy findings passes while it stays the same kind of code. A new `#[expect]`, a removed test or a new `#[ignore]` asks instead, as for an edit. | Rewrite the source without the escape hatch, or make the change with the Edit tool |
-| `this patch changes Rust sources (…)` | `git apply`, `git am` or `patch` with a patch that touches a `.rs` file | Make the change with the Edit tool. `git apply --check`, `git apply --stat` and `patch --dry-run` still run. |
-| `temper cannot read the patch that … applies` | The patch comes from stdin, a variable, a missing file, a file the same command writes first, or `git am --continue`, so temper cannot tell whether it changes Rust sources | Save the patch to a file in one command, check it with `git apply --stat <file>`, and make `.rs` changes with the Edit tool |
+| `this patch changes Rust sources (…)` | `git apply`, `git am` or `patch` with a patch that touches a `.rs` file | Make the change with the Edit or Write tools. To move a change between worktrees, commit it in the worktree it was made in and bring it over with `git cherry-pick <commit>` or `git merge <branch>`; the Stop gate and CI check what it brings in. Do not retry the patch in another form: it is denied again. `git apply --check`, `git apply --stat` and `patch --dry-run` still run. |
+| `temper cannot read the patch that … applies` | The patch comes from stdin, a variable, a missing file, a file the same command writes first, or `git am --continue`, so temper cannot tell whether it changes Rust sources | Save the patch to a file in one command, check it with `git apply --stat <file>`, and make `.rs` changes with the Edit or Write tools, or bring a commit over with `git cherry-pick` as above |
+| `the reviewer is read-only, and git apply, git am and patch change files` | `temper:rust-reviewer` ran `git apply`, `git am` or `patch` on any file | Nothing; the reviewer reads the change with `git diff` or `git show` and reports what should change as a finding. `git apply --check` and `--stat` still run for it. |
 | `… temper cannot read the patch, so it cannot tell whether it changes protected configuration` (asks) | The same unreadable patch, judged for protected configuration. The deny above comes first, so in practice you see that one. | Approve only if you know what the patch changes |
 | `temper's state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it` | A redirect, `cp`, `tee`, `sed -i`, interpreter code or another write into the state dir, which could forge a verdict or a green gate | Nothing; verdicts come only from `temper:rust-reviewer` and gate results only from the gate. Reading the files, copying them elsewhere and deleting them with `rm` stay allowed. |
 | `this shell command writes <file>. <file> is verification/agent configuration` (asks) | A shell write to a file that matches `protected` in `.claude/temper.json` (lint, fmt and deny config, the toolchain pin, `.cargo/`, `.claude/`, `.github/`, `.githooks/`, `CLAUDE.md`, `AGENTS.md`), as an Edit or Write to it asks | Approve only a change you asked for |
@@ -161,6 +162,16 @@ What helps, starting with the cheapest:
    - `"allFeatures": false` checks default features only. CI still runs the feature combinations.
    - A lower `stepTimeoutSec` makes a hung step fail fast instead of eating the hook's budget.
    - `"steps": [{ "name": "…", "cmd": ["cargo", …] }]` replaces the default steps entirely. It also turns off the baseline ratchet, so use it only when you have no baseline.
+
+## The lens shows nothing
+
+temper lens draws its row above the prompt only where all of these hold:
+- **A surface that draws mods.** The desktop app on Claude Code 2.1.286 or later, or the terminal on 2.1.287 or later. Cloud sessions, VS Code's chat panel and `claude -p` draw no mods.
+- **A Rust project.** The session's directory is inside one, so `node <plugin>/scripts/temper.mjs status --json` prints a document whose `project` is not `null`.
+- **temper is on.** `TEMPER_DISABLE` is not `1`, `TEMPER_LENS` is not `0`, `disableAllHooks` is off, and the organization does not set `allowManagedModsOnly`.
+- **A refresh has run.** The row appears when the session starts, or in the desktop app when it attaches to the session. Once the lens finds no Rust project, it stays off until the session restarts.
+
+If the row reads `temper: status unavailable`, `status --json` failed or printed something that is not its document. Run it by hand from the project root to see why: `node "$TEMPER_CLI" status --json`. Run `claude --debug` to see a lens hook that failed or a module that did not load. A lens failure never blocks or allows anything, so temper's hooks run as before.
 
 ## Windows
 

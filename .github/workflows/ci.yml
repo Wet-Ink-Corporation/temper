@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       # The toolchain templates/workspace/rust-toolchain.toml and
@@ -41,6 +41,14 @@ jobs:
         run: |
           npx --yes @anthropic-ai/claude-code@2.1.286 plugin validate --strict .claude-plugin/plugin.json
           npx --yes @anthropic-ai/claude-code@2.1.286 plugin validate --strict .
+      # The lens's plugin tests and its read-only allow-list (#110), on the same pinned CLI,
+      # and a strict type check of the lens against tests/lens-types/ (wi-78d987).
+      - name: temper lens
+        env:
+          DISABLE_AUTOUPDATER: "1"
+          CLAUDE: npx --yes @anthropic-ai/claude-code@2.1.286
+          TSC: npx --yes -p typescript@7.0.2 tsc
+        run: bash tests/lens-check.sh
       - name: Checks (tests/ci.sh)
         run: bash tests/ci.sh
 
@@ -54,7 +62,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, 2026-09-28

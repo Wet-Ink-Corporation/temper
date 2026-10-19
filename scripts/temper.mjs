@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import * as H from './lib/hooks.mjs';
 import { discover, baseRev, rustChanges, fingerprint, relTo, crateOf, readText, headRev, resolveRev, run, safeOutputPath, findUp, norm, readTelemetry, pushTelemetry, fetchTelemetryBranch,
 } from './lib/project.mjs';
-import { runGate, renderGate, cachedGate, scanChanged } from './lib/gate.mjs';
+import { runGate, renderGate, cachedGate, gateProgress, scanChanged } from './lib/gate.mjs';
 import { scanSource, classifyPath, formatHit, isBuildScript } from './lib/scan.mjs';
 import { verdictFor } from './lib/verdict.mjs';
 import { collectFindings, cachedFindings, isComplete } from './lib/findings.mjs';
@@ -212,7 +212,9 @@ const baselineTotal = (b) => Object.values(b.totals).reduce((s, l) => s + Object
  * `status --json`: the state of the current tree as one versioned document (`temper_status: 1`),
  * so a reader such as temper lens never parses the state dir itself. Outside a Rust project it is
  * `{ temper_status: 1, project: null }` with exit 0. With `--session ID` the base is the one that
- * session's hooks use. Verdict findings omit `evidence` to keep the document small.
+ * session's hooks use. Verdict findings omit `evidence` to keep the document small. `gate.running`
+ * is the progress of a gate running now for this fingerprint (null when none), so `gate` is
+ * `{ ok: null, steps: [], running }` while a first gate for the tree runs.
  */
 function statusJson(sid) {
   const proj = discover(process.cwd());
@@ -222,6 +224,7 @@ function statusJson(sid) {
   const fp = fingerprint(proj, base);
   // A state file that parses to something other than a record (hand-edited, truncated) reads as none.
   const g = record(cachedGate(proj, fp));
+  const running = gateProgress(proj, fp);
   const v = record(verdictFor(proj, fp));
   let baseline = null;
   try {
@@ -234,9 +237,10 @@ function statusJson(sid) {
     base: base ?? null,
     fingerprint: fp,
     changed: rustChanges(proj, base),
-    gate: g ? {
-      ok: g.ok, unavailable: Boolean(g.unavailable), at: g.at ?? null,
-      steps: list(g.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+    gate: g || running ? {
+      ok: g ? g.ok : null, unavailable: Boolean(g?.unavailable), at: g?.at ?? null,
+      steps: list(g?.steps).map((s) => ({ name: s.name, ok: s.ok, ms: s.ms ?? null, summary: s.summary ?? '' })),
+      running,
     } : null,
     review: v ? {
       verdict: v.verdict, stale: Boolean(v.stale), fingerprint: v.fingerprint ?? fp, recorded_at: v.recorded_at ?? null, scores: v.scores ?? {},
@@ -598,9 +602,16 @@ function stats(args) {
   const rv = s.review;
   if (rv.sessions) {
     out.push(`review loop: ${rv.sessions} session(s) with verdicts; rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved}`);
+    out.push(changesLine(rv.changes));
   }
   process.stdout.write(`${out.join('\n')}\n`);
   return 0;
+}
+
+/** The review-rounds-per-change line of `temper stats`; the lens's Stats tab prints the same. */
+function changesLine(c) {
+  const done = c.approved ? `p50 ${c.roundsP50}, max ${c.roundsMax} (${c.approved} approved, ${c.firstRound} on the first round)` : 'none approved';
+  return `review rounds per change: ${done}; ${c.neverApproved} never approved`;
 }
 
 /**
@@ -617,7 +628,8 @@ function statsOf(rows) {
   const times = rows.map((r) => r.t).sort();
   // Gate latency at Stop (older rows carry no ms). A gate-start that the same session and agent
   // never follows with an outcome was a hook killed mid-gate, most likely by its timeout.
-  const fresh = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached).map((r) => r.ms).sort((a, b) => a - b);
+  const timed = rows.filter((r) => STOP_OUTCOMES.has(r.event) && typeof r.ms === 'number' && !r.cached);
+  const fresh = timed.map((r) => r.ms).sort((a, b) => a - b);
   const cached = rows.filter((r) => STOP_OUTCOMES.has(r.event) && r.cached === true).length;
   let killed = 0;
   for (const list of bySession.values()) {
@@ -638,6 +650,8 @@ function statsOf(rows) {
     .map((list) => list.filter((r) => r.event === 'verdict').filter((r, k, v) => !handbackEcho(r, v[k - 1])))
     .filter((v) => v.length);
   const n = rounds.map((v) => v.length).sort((a, b) => a - b);
+  const changes = rounds.flatMap(changesOf);
+  const toApproval = changes.filter((c) => c.approved).map((c) => c.rounds).sort((a, b) => a - b);
   const byCount = (o) => Object.fromEntries(Object.entries(o).sort((a, b) => b[1] - a[1]));
   return {
     sessions: bySession.size,
@@ -648,13 +662,43 @@ function statsOf(rows) {
     gate: {
       runs: fresh.length, cached, cutShort: killed,
       p50Ms: fresh.length ? pct(fresh, 50) : null, p90Ms: fresh.length ? pct(fresh, 90) : null, maxMs: fresh.at(-1) ?? null,
+      // The last 30 fresh runs' times, oldest first, for a sparkline. `--branch` reads file after
+      // file, so sort by time rather than trust the row order.
+      recentMs: [...timed].sort((a, b) => String(a.t).localeCompare(String(b.t))).slice(-30).map((r) => r.ms),
     },
     review: {
       sessions: rounds.length,
       roundsP50: n.length ? pct(n, 50) : null, roundsMax: n.at(-1) ?? null,
       firstApproved: rounds.filter((v) => v[0].verdict === 'approved').length,
+      changes: {
+        count: changes.length, approved: toApproval.length, neverApproved: changes.length - toApproval.length,
+        firstRound: toApproval.filter((k) => k === 1).length,
+        roundsP50: toApproval.length ? pct(toApproval, 50) : null, roundsMax: toApproval.at(-1) ?? null,
+      },
     },
   };
+}
+
+/**
+ * One session's review rounds, split into changes. A change is the run of rounds up to and
+ * including the first approval of a current tree; the next verdict starts another change. A stale
+ * approval (recorded for a tree that changed before it landed) does not close one, and an approval
+ * of the tree just approved is that tree reviewed again, not a new change. The rounds left open
+ * when the telemetry ends are a change never approved, which includes a session still under way.
+ */
+function changesOf(verdicts) {
+  const out = [];
+  let open = 0;
+  let approvedFp = null;
+  for (const v of verdicts) {
+    const approves = v.verdict === 'approved' && v.stale !== true;
+    if (approves && typeof v.fp === 'string' && v.fp === approvedFp) continue;
+    open += 1;
+    approvedFp = null;
+    if (approves) { out.push({ rounds: open, approved: true }); open = 0; approvedFp = v.fp ?? null; }
+  }
+  if (open) out.push({ rounds: open, approved: false });
+  return out;
 }
 
 function telemetryCmd(args) {
