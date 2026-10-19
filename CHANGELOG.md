@@ -5,11 +5,13 @@
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
 
 **temper lens: live gate progress at `Stop` (#111).** While temper's gate runs at `Stop` or `SubagentStop`, the lens shows its progress, read from the gate's progress file through `status --json`:
-- The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 3 clippy · 1m 12s`).
+- The spinner gains the step the gate is on, its place among the steps and the time since the gate started (`temper: gate 4 clippy · 1m 12s`).
 - The band shows the same, with the steps already done and their times.
 - When the gate ends, one toast gives the outcome (`temper: gate green, review approved`), or the first line of the block reason when temper's own telemetry recorded that block. Parallel subagents stopping at once share one poll.
 
 The lens polls only while a Stop runs, and stops on `session.end` and on reload. Its Stop hooks return the settings hooks' result unchanged, and a lens failure replays that result, so the lens can never decide a Stop.
+
+The README now says that Claude Code is still rolling out plugin modules. Until they are on for an account, the lens does not load and `/temper-lens` is an unknown command, while the hooks run as usual.
 
 **temper lens: Activity and Stats tabs (#113).** The `/temper-lens` pane gains two tabs:
 - **Activity** lists this session's denials and asks, newest first, from `temper stats --json --session <id>`. Each row has its event, rule IDs, file and agent, and pressing a row shows the rule. A legend points each kind of event to its section of the troubleshooting guide.
