@@ -554,12 +554,14 @@ async function statsTab($: EngineInterface, els: Els, surface: string) {
 export function statsLines(t: LensStats): string[] {
   const secs = (ms: number | null) => (ms === null ? 'n/a' : `${(ms / 1000).toFixed(1)} s`)
   const g = t.gate
-  const rv = t.review
+  const c = t.review.changes
   const top = Object.entries(t.rules).slice(0, 5).map(([id, n]) => `${id} ${n}`).join(', ')
   return [
     `sessions: ${t.sessions}`,
     g.runs ? `gate at Stop: p50 ${secs(g.p50Ms)}, p90 ${secs(g.p90Ms)}, max ${secs(g.maxMs)} over ${g.runs} run(s); ${g.cutShort} cut short` : `gate at Stop: no timed runs; ${g.cutShort} cut short`,
-    rv.sessions ? `review: rounds per session p50 ${rv.roundsP50}, max ${rv.roundsMax}; approved on the first verdict in ${rv.firstApproved} of ${rv.sessions}` : 'review: no verdicts yet',
+    // As `temper stats` prints it: rounds to approval per change, not per session (#139).
+    !c.count ? 'review: no verdicts yet'
+      : `review rounds per change: ${c.approved ? `p50 ${c.roundsP50}, max ${c.roundsMax} (${c.approved} approved, ${c.firstRound} on the first round)` : 'none approved'}; ${c.neverApproved} never approved`,
     `top rules blocked: ${top || 'none'}`,
   ]
 }
