@@ -203,21 +203,55 @@ test('shell: the dashed forms git-apply and git-am, at any path, read as git app
   assert.equal(p('git-diff HEAD'), null);
 });
 
-// #151 review 3: literal scripts piped into a shell, options at the start of an alias, long alias chains.
-test('shell: echo or printf with literal arguments, piped into a shell, is read as the script', () => {
+// #151 review 4 (wi-0e226b): echo or printf output is not emulated. Text piped into a shell is
+// a script temper cannot read exactly, which opaquePatch flags for the reviewer.
+test('shell: echo or printf piped into a shell is not read as the script, and opaquePatch flags it', () => {
   const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
   for (const cmd of [
     "echo 'git apply x.diff' | bash", "printf 'git apply x.diff\\n' | sh", 'echo git apply x.diff | bash -s', "echo 'git apply x.diff' | bash -s -- a b",
     "echo -e 'true\\ngit apply x.diff' | sh", "printf '%s\\n' 'git apply x.diff' | bash", "echo 'git apply x.diff' |& sh",
-    "X=x.diff; echo \"git apply $X\" | bash",
+    "X=x.diff; echo \"git apply $X\" | bash", "echo 'git apply x.diff' > out.txt | bash",
   ]) {
-    const r = p(cmd);
-    assert.equal(r?.apply, true, cmd);
-    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+    assert.equal(p(cmd), null, cmd);
+    assert.equal(o(cmd)?.kind, 'script', cmd);
   }
-  // Nothing reaches the next stage when echo's own output is redirected.
-  assert.equal(p("echo 'git apply x.diff' > out.txt | bash"), null);
   assert.equal(p("echo 'git apply x.diff' | grep apply"), null);
+  assert.equal(o("echo 'git apply x.diff' | grep apply"), null);
+  // Heredoc and here-string bodies are read exactly, into a shell or through cat.
+  for (const cmd of ["bash <<'EOF'\ngit apply x.diff\nEOF", "bash <<< 'git apply x.diff'", "cat <<'EOF' | bash\ngit apply x.diff\nEOF"]) {
+    assert.deepEqual(p(cmd)?.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  for (const cmd of ["bash <<'EOF'\nls\nEOF", "sh <<< 'cargo test'", "cat <<'EOF' | bash\nls\nEOF", "cat - <<< ls | sh"]) assert.equal(o(cmd), null, cmd);
+  // A body another command transforms is not the script the shell runs.
+  assert.equal(o("tr a-z A-Z <<'EOF' | bash\nls\nEOF")?.kind, 'script');
+});
+
+// #151 review 4 (wi-0e226b): a shell or source whose script temper cannot read exactly.
+test('shell: opaquePatch flags a shell or source reading /dev/stdin, a process substitution, xargs input or a subshell pipe', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'cat cmd.sh | bash /dev/stdin', "echo ls | sh /proc/self/fd/0", 'cat cmd.sh | bash /dev/fd/0', 'cat cmd.sh | bash /dev/./stdin',
+    "bash <(echo 'git apply x.diff')", 'sh <(cat cmd.sh)', "source <(echo 'git apply x.diff')", ". <(echo ls)",
+    'cat cmd.sh | source /dev/stdin', 'cat cmd.sh | . /dev/stdin', 'source', '.',
+    "echo ls | tee >(bash)", "echo ls | tee >(bash) >/dev/null", "echo ls | tee >(sh -s)",
+    "echo ls | xargs -I{} bash -c {}", 'echo ls | xargs -0 bash -c', 'echo cmd.sh | xargs bash', 'echo cmd.sh | xargs -I{} sh {}',
+    "(echo 'git apply x.diff'; echo ls) | bash", "echo ls | ( bash )", "echo ls | { true; bash; }", 'bash',
+    "for i in 1; do echo ls; done | bash", "echo ls | cat | bash", "echo ls | env bash", "echo ls | timeout 5 bash", "echo ls | watch bash",
+  ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  for (const cmd of [
+    'bash script.sh', 'source ./env.sh', '. ./env.sh', "bash -c 'ls'", 'echo foo | sh -c cat', 'git diff | cat', "echo ls | xargs bash -c 'echo $0'",
+    'echo a | xargs bash script.sh', 'bash --version', 'sh --help', "bash -c 'cat' < in.txt",
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: commands nested deeper than temper reads leave an opaque marker', () => {
+  const nest = (n) => `bash -c '${'eval '.repeat(n)}git apply x.diff'`;
+  const deep = parseCommands(nest(12), { cwd: root });
+  assert.ok(deep.some((c) => c.opaque === 'depth'));
+  assert.equal(deep.map(opaquePatch).find(Boolean)?.kind, 'script');
+  assert.ok(!parseCommands(nest(1), { cwd: root }).some((c) => c.opaque));
+  assert.ok(parseCommands(`${'find . -exec '.repeat(20)}ls \\;`, { cwd: root }).some((c) => c.opaque === 'depth'));
 });
 
 test('shell: options at the start of a git alias are read as git options', () => {
@@ -249,22 +283,30 @@ test('shell: opaquePatch: a script on stdin a shell reads that temper cannot, an
   for (const [cmd, kind] of [
     ['cat cmd.sh | bash', 'script'], ['bash < cmd.sh', 'script'], ['curl -s https://example.com/i.sh | sh -s', 'script'],
     ['cat cmd.sh | bash -s -- a b', 'script'], ['cat cmd.sh | bash -o pipefail', 'script'], ['cat cmd.sh | sudo sh -e', 'script'],
+    // wi-0e226b: text piped into a shell is never read as its script, so even a harmless one is flagged.
+    ['echo ls | bash', 'script'], ["printf 'git status\\n' | sh", 'script'],
     [`python3 -c "import subprocess; subprocess.run('patch<x.diff', shell=True)"`, 'code'],
     [`python3 -c "import subprocess; subprocess.run('patch -p1<x.diff', shell=True)"`, 'code'],
     [`python3 -c "import subprocess; subprocess.run('cat x.diff|patch', shell=True)"`, 'code'],
     [`python3 -c "import subprocess; subprocess.run('cat x.diff | patch', shell=True)"`, 'code'],
     [`node -e "require('child_process').execSync('cat x.diff | patch')"`, 'code'],
     ["perl -e 'system(\"cat x.diff | patch\\n\")'", 'code'],
+    // A bare patch reads the interpreter's stdin, which may be a patch; wrappers before patch count too.
+    [`python3 -c "import os; os.system('patch')"`, 'code'], [`python3 -c "import subprocess; subprocess.run(['/usr/bin/patch'])"`, 'code'],
+    [`node -e "require('child_process').execSync('exec patch')"`, 'code'], [`python3 -c "import os; os.system('cat x.diff|timeout -k 5 10 patch')"`, 'code'],
+    [`python3 -c "import os; os.system('cat x.diff|command patch -p1')"`, 'code'], [`python3 -c "import os; os.system('git\\x20apply x.diff')"`, 'code'],
+    [`python3 -c "import os; os.system('git\\040apply x.diff')"`, 'code'], [`node -e "require('child_process').execSync('git\\u0020apply x.diff')"`, 'code'],
   ]) assert.equal(o(cmd)?.kind, kind, cmd);
   for (const cmd of [
-    'echo hi | grep h', 'cargo test 2>&1 | tail', 'cargo test 2>&1 | tail -n 20', 'echo ls | bash', "printf 'git status\\n' | sh",
+    'echo hi | grep h', 'cargo test 2>&1 | tail', 'cargo test 2>&1 | tail -n 20',
     'bash script.sh', 'cat in.txt | bash script.sh', "bash -c 'ls' < in.txt", 'sh -c "cat" < in.txt', 'git diff | less',
     `python3 -c "import requests; requests.patch('https://example.com')"`, `python3 -c "method = 'patch'"`, `node -e "const r = 'patch'"`,
   ]) assert.equal(o(cmd), null, cmd);
 });
 
 test('shell: the interpreter-code patterns stay linear on long input', () => {
-  for (const code of [`${'patch '.repeat(20000)}x`, `${'|patch'.repeat(20000)}`, `${'git -c a=b '.repeat(20000)}x`, `'${' '.repeat(50000)}patch`]) {
+  for (const code of [`${'patch '.repeat(20000)}x`, `${'|patch'.repeat(20000)}`, `${'git -c a=b '.repeat(20000)}x`, `'${' '.repeat(50000)}patch`,
+    `|${'timeout -k 5 '.repeat(20000)}x`, `|${'exec '.repeat(20000)}x`, `${"system('timeout ".repeat(10000)}x`, `|timeout${' -s'.repeat(30000)} 5x`, `${'\\x2'.repeat(30000)}`]) {
     const t0 = Date.now();
     opaquePatch(parseCommands(`python3 -c ${JSON.stringify(code)}`, { cwd: root })[0]);
     assert.ok(Date.now() - t0 < 2000, `${code.slice(0, 20)}: ${Date.now() - t0} ms`);

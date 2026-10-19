@@ -639,6 +639,31 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `git -c alias.ap='-p apply' ap "${out('doc.diff')}"`,
       `python3 -c "import subprocess; subprocess.run('patch<${out('doc.diff')}', shell=True)"`,
       `python3 -c "import subprocess; subprocess.run('cat ${out('doc.diff')}|patch', shell=True)"`,
+      // #151 review 4 (wi-0e226b): a shell or source whose script temper cannot read exactly.
+      "echo 'git status' | bash",
+      `{ echo 'git apply ${out('doc.diff')}'; echo ls; } | bash`,
+      `(echo 'git apply ${out('doc.diff')}'; echo ls) | bash`,
+      `echo '\\c; git apply ${out('doc.diff')}' | bash`,
+      `printf '%s\\n' '\\c; git apply ${out('doc.diff')}' | bash`,
+      `echo -e 'git\\x20apply ${out('doc.diff')}' | bash`,
+      `printf 'git\\040apply ${out('doc.diff')}\\n' | bash`,
+      `printf '%cgit apply ${out('doc.diff')}\\n' ' #' | bash`,
+      `printf '%d;git apply ${out('doc.diff')}\\n' '#' | bash`,
+      `echo 'git apply ${out('doc.diff')}' | bash /dev/stdin`,
+      `echo 'git apply ${out('doc.diff')}' | sh /proc/self/fd/0`,
+      `bash <(echo 'git apply ${out('doc.diff')}')`,
+      `source <(echo 'git apply ${out('doc.diff')}')`,
+      `. <(echo 'git apply ${out('doc.diff')}')`,
+      `echo 'git apply ${out('doc.diff')}' | source /dev/stdin`,
+      `echo 'git apply ${out('doc.diff')}' | tee >(bash) >/dev/null`,
+      `echo 'git apply ${out('doc.diff')}' | xargs -I{} bash -c {}`,
+      `echo 'git apply ${out('doc.diff')}' | xargs -0 bash -c`,
+      `echo "git apply ${out('doc.diff')}" | bash -c 'cat | bash'`,
+      `echo "git apply ${out('doc.diff')}" | env bash`,
+      `bash -c '${'eval '.repeat(12)}git apply ${out('doc.diff')}'`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|exec patch')"`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|command patch')"`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|timeout 5 patch')"`,
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -651,7 +676,8 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `gpatch --dry-run -p1 -i "${out('doc.diff')}"`, 'watch -n 5 git status', 'git -c alias.st=status st', 'git -c core.pager=cat log -1',
       'python3 -c "print(1 + 1)"', `node -e "console.log(require('fs').existsSync('x.patch'))"`, "git log --grep 'git apply'",
       'git config --get alias.ap', `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
-      'echo hi | grep h', 'cargo test 2>&1 | tail', "echo 'git status' | bash",
+      'echo hi | grep h', 'cargo test 2>&1 | tail', 'git diff | cat', 'echo foo | sh -c cat', "bash -c 'cargo test'",
+      "bash <<'EOF'\ncargo test\nEOF", "cat <<'EOF' | bash\ngit status\nEOF",
     ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
@@ -666,6 +692,21 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
     ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
+});
+
+// #151 review 4: printf reusing its format over many arguments made the old emulation quadratic.
+test('Bash: a 48 KB printf command piped into a shell is decided in well under a second', () => {
+  const n = 16000;
+  for (const command of [`printf '%s${'x'.repeat(n)};' ${'a '.repeat(n)}| bash`, `printf '%s ls;' ${'a '.repeat(n)}`]) {
+    assert.ok(command.length >= 32000, String(command.length));
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      const res = preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${agent ?? 'main'}: ${ms} ms`);
+      assert.equal(decision(res), agent && command.endsWith('| bash') ? 'deny' : 'none', agent);
+    }
+  }
 });
 
 test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files are refused for any agent (#151)', () => {
@@ -684,10 +725,11 @@ test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files
       `git-apply "${out('rs.diff')}"`,
       `/usr/lib/git-core/git-apply "${out('rs.diff')}"`,
       `"$(git --exec-path)/git-apply" "${out('rs.diff')}"`,
-      // #151 review 3: a literal script piped into a shell, options at the start of an alias, a long alias chain.
-      `echo 'git apply ${out('rs.diff')}' | bash`,
-      `printf 'git apply ${out('rs.diff')}\\n' | sh`,
+      // #151 review 3: options at the start of an alias, a long alias chain. A script piped into a
+      // shell is not read (wi-0e226b): the reviewer is denied it, and other agents leave it to the Stop gate and CI.
       `git -c alias.ap='-p apply' ap "${out('rs.diff')}"`,
+      `bash <<'EOF'\ngit apply "${out('rs.diff')}"\nEOF`,
+      `cat <<'EOF' | bash\ngit apply "${out('rs.diff')}"\nEOF`,
       `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('rs.diff')}"`,
     ]) {
       const res = bash(cmd);

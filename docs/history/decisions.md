@@ -86,6 +86,7 @@ Each of these is a two-way door. An agent took the default shown, recorded why, 
 | wi-dc7770 | How is the temper lens turned off on its own, given `disableAllHooks` turns off every hook? | `TEMPER_LENS=0` | One env switch, read when the lens loads; `TEMPER_DISABLE=1` and `disableAllHooks` still turn it off with the rest. | `hooks/lens/register.tsx` |
 | wi-2e8bbc | When does the lens toast a Stop as blocked? | Only when temper's telemetry recorded the block | A block by another plugin's hook is not temper's to report. | `hooks/lens/register.tsx`, `temperBlocked` |
 | wi-2beadb | Fix #118's two review nits (the docstring on what binds `e`, `field()` reading the first gating note)? | Left as they are | Neither changes what the allow-list accepts. | `tests/lens_allowlist.py` |
+| wi-0e226b | Should the patch checks emulate `echo` and `printf` to read the script they pipe into a shell (#151)? | No: for the reviewer, a shell or `source` whose script temper cannot read exactly is denied | The emulation was unsound (escapes, `\c`, formats differ between shells) and quadratic on printf's format reuse. Other agents keep 1.4's behaviour; the Stop gate and CI check what their scripts leave. | `scripts/lib/shell.mjs`, `unreadScript` |
 
 ## Dismissed
 

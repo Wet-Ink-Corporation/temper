@@ -377,7 +377,10 @@ const commandName = (v) => String(v ?? '').replace(/\\/g, '/').split('/').pop().
  * `$HOME`, `$PWD` and `$(git rev-parse --git-dir|--git-common-dir|--git-path p|--show-toplevel)`
  * are known. Commands inside `bash -c`, `sh -c`, `eval`, `pwsh -Command`, `find -exec`,
  * `$(...)` and a script fed to a shell on stdin are included, with `via` saying how.
- * `stdin` is `{ kind: 'file'|'heredoc'|'string'|'pipe', word?, body?, literal? }`.
+ * `stdin` is `{ kind: 'file'|'heredoc'|'string'|'pipe', word?, body?, literal?, exact? }`: a pipe's
+ * `body` is a heredoc or here-string body an earlier stage read, `exact` when that stage was a
+ * plain `cat`. A command run under xargs has `xargs: true`. Past the nesting temper follows
+ * (MAX_DEPTH), one command with `opaque: 'depth'` and no name stands for what is not read.
  *
  * `$TMPDIR`, `$TMP`, `$TEMP`, `$env:TEMP` and `$(mktemp [-d])` name the temp directory.
  *
@@ -394,13 +397,14 @@ export function parseCommands(cmd, opts = {}) {
 }
 
 function run(src, env, out, depth, via) {
-  if (depth > MAX_DEPTH) return;
+  if (depth > MAX_DEPTH) { out.push(depthMarker(src, env, via)); return; }
   const items = lex(src);
   // The line as code, without its heredoc bodies (a PowerShell expression is read from it).
   let line = src;
   for (const [a, b] of [...items.bodies].reverse()) line = line.slice(0, a) + line.slice(b);
   const scopes = [];
   let prevBody = null;
+  let prevExact = false;
   for (const it of items) {
     if (it.open) { scopes.push({ cwd: env.cwd, prev: env.prev, dirs: env.dirs.length, vars: new Map(env.vars) }); continue; }
     if (it.close) {
@@ -418,7 +422,7 @@ function run(src, env, out, depth, via) {
     const piped = it.sep === '|' || it.sep === '|&';
     const isolated = piped || it.after === '|' || it.after === '|&' || it.after === '&';
     const redirects = it.redirects.map((r) => ({ op: r.op, fd: r.fd, word: r.word ? makeWord(r.word.parts, wenv) : null, body: r.body, quoted: r.quoted }));
-    let stdin = piped ? { kind: 'pipe', body: prevBody } : null;
+    let stdin = piped ? { kind: 'pipe', body: prevBody, exact: prevExact } : null;
     for (const r of redirects) {
       if (r.op === '<' && r.word) stdin = { kind: 'file', word: r.word };
       else if (r.op === '<<' || r.op === '<<-') stdin = { kind: 'heredoc', body: r.body ?? null, literal: r.body !== null && r.body !== undefined && (r.quoted || !/[$`]|\\[\\$`\n]/.test(r.body)) ? r.body : null };
@@ -426,9 +430,8 @@ function run(src, env, out, depth, via) {
     }
     prevBody = stdin && stdin.kind !== 'pipe' && stdin.kind !== 'file' ? stdin.body : null;
     const words = it.words.map((w) => makeWord(w.parts, wenv));
-    // echo or printf with literal arguments pipes known text: the next stage reads it as a here-string.
-    const echoed = echoText(words, redirects);
-    if (echoed !== undefined) prevBody = echoed;
+    // A body piped on is the next stage's script exactly only when `cat` passes it through unchanged.
+    prevExact = prevBody !== null && catsStdin(words);
     simple(words, { redirects, stdin, piped, isolated, raw: it.raw, line, via }, env, out, depth);
   }
 }
@@ -446,44 +449,18 @@ function psCommand(words, env) {
   return first.value !== null && PS_NAME.test(commandName(first.value));
 }
 
-// Backslash escapes as echo -e and printf read them; `\c` ends the output.
-const unescape = (s) => s.replace(/\\c[\s\S]*$/, '').replace(/\\([\\abefnrtv0])/g, (_, ch) => ({ '\\': '\\', a: '\x07', b: '\b', e: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', 0: '' })[ch]);
-
-/**
- * What `echo` or `printf` with literal arguments writes to stdout: its text, '' when its stdout
- * is redirected, null when an argument is not literal or printf's format has a directive temper
- * does not read, or undefined for any other command. Escapes are read even without `echo -e`,
- * as dash's echo does: for a check, reading more of the text as commands is the safe side.
- */
-function echoText(words, redirects) {
+/** Whether a stage is `cat` with no operand but `-`: it passes its stdin on unchanged. */
+function catsStdin(words) {
   let i = 0;
   while (i < words.length && isAssign(words[i])) i++;
-  while (i < words.length && (words[i].raw === 'command' || words[i].raw === 'builtin')) i++;
-  const name = words[i]?.value === null || words[i] === undefined ? null : commandName(words[i].value);
-  if (name !== 'echo' && name !== 'printf') return undefined;
-  if (redirects.some((r) => WRITE_REDIRECTS.has(r.op) && r.op !== '<>' && (r.fd === null || r.fd === 1))) return '';
-  let args = words.slice(i + 1);
-  if (args.some((a) => a.value === null || a.glob)) return null;
-  if (name === 'echo') {
-    let newline = true;
-    while (args.length && /^-[neE]+$/.test(args[0].value)) { if (args[0].value.includes('n')) newline = false; args = args.slice(1); }
-    return unescape(args.map((a) => a.value).join(' ')) + (newline ? '\n' : '');
-  }
-  if (args[0]?.value === '--') args = args.slice(1);
-  if (!args.length || args[0].value.startsWith('-')) return null; // printf -v var sets a variable
-  const fmt = args[0].value;
-  const vals = args.slice(1).map((a) => a.value);
-  if (/%(?![%sbdic])/.test(fmt.replace(/%%/g, ''))) return null;
-  let text = '';
-  let k = 0;
-  // printf reuses its format while arguments remain.
-  do {
-    const before = k;
-    text += unescape(fmt.replace(/%([%sbdic])/g, (_, d) => (d === '%' ? '%' : d === 'b' ? unescape(vals[k++] ?? '') : (vals[k++] ?? ''))));
-    if (k === before) break;
-  } while (k < vals.length);
-  return text;
+  return words[i]?.value === 'cat' && words.slice(i + 1).every((w) => w.value === '-');
 }
+
+/** The command that stands for what is nested deeper than temper reads. */
+const depthMarker = (src, env, via) => ({
+  name: null, argv0: unknownWord(''), args: [], redirects: [], stdin: null, piped: false, cwd: null,
+  raw: String(src).trim(), line: String(src), via, envNames: [], opaque: 'depth',
+});
 
 function sub(src, env, out, depth, via) {
   const saved = { cwd: env.cwd, prev: env.prev, dirs: env.dirs.length, vars: env.vars };
@@ -500,14 +477,16 @@ const SHELL_VALUED = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']
 
 /**
  * Where a shell (`bash`, `sh`, ...) reads its script, from its arguments: `{ from: 'arg', word }`
- * for `-c`, `{ from: 'file' }` for a script operand, or `{ from: 'stdin' }` for `-s` or no operand.
+ * for `-c`, `{ from: 'file', word }` for a script operand, `{ from: 'stdin' }` for `-s` or no
+ * operand, or `{ from: 'none' }` for `--version` and `--help`.
  */
 function shellScript(args) {
   let stdin = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a.value === '--' || a.value === '-') return { from: stdin ? 'stdin' : args[i + 1] ? 'file' : 'stdin' };
-    if (a.value === null || !/^[-+]/.test(a.raw)) return { from: stdin ? 'stdin' : 'file' };
+    if (a.value === '--version' || a.value === '--help') return { from: 'none' };
+    if (a.value === '--' || a.value === '-') return stdin || !args[i + 1] ? { from: 'stdin' } : { from: 'file', word: args[i + 1] };
+    if (a.value === null || !/^[-+]/.test(a.raw)) return stdin ? { from: 'stdin' } : { from: 'file', word: a };
     if (SHELL_VALUED.has(a.value)) { i++; continue; }
     if (a.value.startsWith('--')) continue;
     if (/^-[A-Za-z]*c[A-Za-z]*$/.test(a.value)) return { from: 'arg', word: args[i + 1] };
@@ -533,10 +512,11 @@ function simple(words, meta, env, out, depth) {
   // The variables the command's environment sets: `VAR=value` prefixes, `env VAR=value`, and
   // GIT_CONFIG_* set earlier (git reads them as configuration, aliases included).
   const envNames = [];
+  let xargs = null;
   const emit = (name, rest, extra = {}) => out.push({
     name, argv0: rest[0], args: rest.slice(1), redirects: meta.redirects, stdin: meta.stdin, piped: meta.piped,
     cwd: extra.cwd !== undefined ? extra.cwd : env.cwd, raw: meta.raw, line: meta.line, via: meta.via,
-    envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))],
+    envNames: [...envNames, ...[...env.vars.keys()].filter((n) => n.startsWith('GIT_CONFIG'))], xargs: Boolean(xargs),
   });
   w = w.slice(skipKeywords(w, 0));
   if (!w.length) { if (meta.redirects.length) emit('', [{ raw: '', text: '', value: '' }]); return; }
@@ -563,7 +543,6 @@ function simple(words, meta, env, out, depth) {
   }
   for (const a of w.slice(0, k)) envNames.push(a.assign);
   let cwd = env.cwd;
-  let xargs = null;
   // Wrappers are walked with an index, so a long chain (`busybox busybox ...`) stays linear.
   let i = k;
   for (;;) {
@@ -641,9 +620,10 @@ function simple(words, meta, env, out, depth) {
   } else if (name === 'pwsh' || name === 'powershell') {
     const flag = args.findIndex((a) => /^-(?:c|command)$/i.test(a.raw));
     if (flag !== -1 && args[flag + 1]) sub(args.slice(flag + 1).map((a) => a.text).join(' '), { ...env, cwd, ps: true }, out, depth + 1, `${name} -Command`);
-  } else if (name === 'find' && depth < MAX_DEPTH) {
+  } else if (name === 'find') {
     for (let k2 = 0; k2 < args.length; k2++) {
       if (!['-exec', '-execdir', '-ok', '-okdir'].includes(args[k2].raw)) continue;
+      if (depth >= MAX_DEPTH) { out.push(depthMarker(meta.raw, env, 'find -exec')); break; }
       const j = args.findIndex((a, x) => x > k2 && (a.value === ';' || a.value === '+'));
       const inner = args.slice(k2 + 1, j === -1 ? args.length : j).map((a) => (a.raw.includes('{}') ? unknownWord(a.raw) : a));
       if (inner.length) simple(inner, { ...meta, redirects: [], stdin: null, via: 'find -exec' }, { ...env, cwd: args[k2].raw.endsWith('dir') ? null : cwd, vars: new Map(env.vars), dirs: [] }, out, depth + 1);
@@ -1257,16 +1237,30 @@ const GIT_OPTS = String.raw`(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--conf
 // In code with quotes, commas and brackets made spaces: git, its options, then apply or am as
 // the subcommand (`--grep apply` is an option's value), or the dashed git-apply and git-am.
 const GIT_PATCH_CODE = new RegExp(String.raw`\bgit\s+(?:args\s*[:=]\s*)?${GIT_OPTS}(?:apply|am)(?![\w./-])|\bgit-(?:apply|am)\b`);
-// A patch command in a string or after `;`, `|`, `&` or a directory: `patch` followed by an
+// Wrappers that run the patch after them: `busybox`, `exec`, `command`, `nohup`, `timeout [-k 5] 10`.
+// Each starts with its own word and the timeout's options and durations alternate with spaces, so the match stays linear.
+const PATCH_WRAP = String.raw`(?:(?:busybox|exec|command|nohup|timeout(?:\s+-\S+)*(?:\s+\d[\w.]*){1,2})\s+)`;
+// A patch command in a string or after `;`, `|`, `&`, a directory or a wrapper: `patch` followed by an
 // option, a file, `<`, `|` or `>` (`patch<x.diff`); in list form, by an option or a .diff or .patch argument.
-const PATCH_CMD_CODE = /(?:^|['"`(\[;|&/]\s*|\bbusybox\s+)g?patch(?:[<|>]|\s+[-<\w./~$"']|['"],\s*['"]-|['"](?=,[^\]\n]{0,160}?\.(?:diff|patch)['"]))/m;
-// `patch` reading stdin at the end of a pipeline or a command list (`'cat x.diff|patch'`), at any path.
-const PATCH_END_CODE = /[;|&]\s*(?:busybox\s+)?(?:[\w.~-]*\/)*g?patch\s*(?:['"`;&|)]|$)/m;
+const PATCH_CMD_CODE = new RegExp(String.raw`(?:^|['"\`(\[;|&/]\s*|\b${PATCH_WRAP})g?patch(?:[<|>]|\s+[-<\w./~$"']|['"],\s*['"]-|['"](?=,[^\]\n]{0,160}?\.(?:diff|patch)['"]))`, 'm');
+// `patch` reading stdin at the end of a pipeline or a command list (`'cat x.diff|patch'`,
+// `'cat x.diff|exec patch'`, `'cat x.diff|timeout 5 patch'`), at any path.
+const PATCH_END_CODE = new RegExp(String.raw`[;|&]\s*${PATCH_WRAP}{0,3}(?:[\w.~-]*\/)*g?patch\s*(?:['"\`;&|)]|$)`, 'm');
+// A bare patch handed to a call that runs a command (`os.system('patch')`, `run(['/usr/bin/patch'])`):
+// it reads the interpreter's stdin, which may be a patch.
+const PATCH_CALL_CODE = new RegExp(String.raw`\b(?:system|popen|run|call|check_call|check_output|Popen|exec\w*|spawn\w*)\s*\(\s*\[?\s*['"\`]\s*${PATCH_WRAP}{0,3}(?:[\w.~-]*\/)*g?patch\s*['"\`]`);
 
-/** Whether interpreter code mentions git apply, git am or a patch command. Escapes (`\t`, `\n`, `\r`) count as whitespace. */
+/** The string escapes interpreters read (`\x20`, `\040`, `\u0020`, `\u{20}`) decoded; `\t`, `\n`, `\r`, `\f`, `\v` as spaces. */
+const decodeEscapes = (code) => code.replace(/\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|([0-7]{1,3})|[tnrfv])/g, (m, x, ub, u, o) => {
+  if (x === undefined && ub === undefined && u === undefined && o === undefined) return ' ';
+  const n = o !== undefined ? parseInt(o, 8) : parseInt(x ?? ub ?? u, 16);
+  return n <= 0x10ffff ? String.fromCodePoint(n) : m;
+});
+
+/** Whether interpreter code mentions git apply, git am or a patch command, with its string escapes decoded. */
 function codePatches(code) {
-  const text = code.replace(/\\[tnr]/g, ' ');
-  return GIT_PATCH_CODE.test(text.replace(/['"`,[\]{}()+]/g, ' ')) || PATCH_CMD_CODE.test(text) || PATCH_END_CODE.test(text);
+  const text = decodeEscapes(code);
+  return GIT_PATCH_CODE.test(text.replace(/['"`,[\]{}()+]/g, ' ')) || PATCH_CMD_CODE.test(text) || PATCH_END_CODE.test(text) || PATCH_CALL_CODE.test(text);
 }
 const CONFIG_VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
 const CONFIG_WRITE_FLAGS = /^--(?:add|unset|unset-all|replace-all|rename-section|remove-section)$/;
@@ -1287,11 +1281,14 @@ function configWritesAlias(args) {
  * - `name`: a command name it cannot resolve that names git or patch, or comes before `apply` or `am`;
  * - `code`: interpreter code (`python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, ...) that
  *   mentions `git apply`, `git am` or a patch command, or code piped or redirected into one;
- * - `script`: a script piped or redirected into a shell (`cat cmd.sh | bash`) that temper cannot read;
+ * - `script`: a shell or `source` whose script temper cannot read exactly (see unreadScript:
+ *   `cat cmd.sh | bash`, `echo '...' | sh`, `bash /dev/stdin`, `source <(...)`, `xargs bash -c`),
+ *   or commands nested deeper than temper reads;
  * - `alias`: `git config` setting an alias, which could name git apply later.
  * Patterns, not a parse: for a fail-closed check.
  */
 export function opaquePatch(c) {
+  if (c.opaque === 'depth') return { kind: 'script', why: 'commands nested deeper than temper reads' };
   const dashed = dashedGit(c);
   if (dashed !== null && dashed !== 'apply' && dashed !== 'am') return { kind: 'git', why: `a dashed git command (git-${dashed})` };
   const g = gitCommand(c);
@@ -1304,18 +1301,45 @@ export function opaquePatch(c) {
     if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
     return null;
   }
-  // A shell reading its script from a pipe or a file temper cannot read: `cat cmd.sh | bash`, `bash -s < x`.
-  // A script it can read (a here-document, `echo '...' |`) is parsed into the commands it runs.
-  if (SHELLS.has(c.name)) {
-    const unread = (c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !c.stdin.body;
-    return unread && shellScript(c.args).from === 'stdin' ? { kind: 'script', why: `a ${c.name} script on stdin that temper cannot read` } : null;
+  if (SHELLS.has(c.name) || SOURCES.has(c.name)) {
+    const why = unreadScript(c);
+    return why ? { kind: 'script', why: `a ${c.name} script ${why} that temper cannot read` } : null;
   }
   if (!INTERPRETERS.test(c.name)) return null;
   if (interpreterCode(c).some(codePatches)) return { kind: 'code', why: `${c.name} code that runs git apply, git am or patch` };
   // A script on stdin that temper cannot read: `cat x.py | python3`, `python3 - < x.py`.
   const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || c.args.some((x) => /^-[a-zA-Z]*[ceEp]$|^(?:-r|--eval|--print|-command)$/i.test(x.raw));
-  if ((c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !c.stdin.body && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
+  if ((c.stdin?.kind === 'pipe' || c.stdin?.kind === 'file') && !readStdin(c.stdin) && !scriptArg) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
   return null;
+}
+
+const SOURCES = new Set(['source', '.']);
+// Paths that name the shell's own stdin.
+const STDIN_PATH = /^(?:\/dev\/stdin|\/dev\/fd\/\d+|\/proc\/[^/]+\/fd\/\d+)$/;
+/** Whether temper read a command's stdin exactly: a heredoc or here-string body, or one a plain `cat` passed on. */
+const readStdin = (s) => Boolean(s) && s.body !== null && s.body !== undefined && (s.kind === 'heredoc' || s.kind === 'string' || s.exact === true);
+
+/**
+ * Where a shell, or `source` and `.`, reads a script temper cannot read exactly (#151, wi-0e226b),
+ * or null: stdin that is not a heredoc or here-string body (a pipe, a file, a subshell's or a
+ * process substitution's stdin), `/dev/stdin` and the like, a process substitution, or under
+ * xargs a script from its input. `bash -c '...'` and a script file (`bash x.sh`) are not flagged.
+ */
+function unreadScript(c) {
+  let src;
+  if (SOURCES.has(c.name)) {
+    const k = c.args[0]?.value === '--' ? 1 : 0;
+    src = c.args[k] ? { from: 'file', word: c.args[k] } : { from: 'stdin' };
+  } else src = shellScript(c.args);
+  if (src.from === 'none') return null;
+  if (src.from === 'arg') return c.xargs && (!src.word || src.word.value === null) ? 'from xargs input' : null;
+  if (src.from === 'file') {
+    const w = src.word;
+    if (/[<>]\(/.test(w.raw)) return 'from a process substitution';
+    if (w.value === null) return c.xargs ? 'from xargs input' : null;
+    return STDIN_PATH.test(path.posix.normalize(w.value)) ? `from ${w.value}` : null;
+  }
+  return readStdin(c.stdin) ? null : 'on stdin';
 }
 
 /**
