@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
-import { parseCommands, writeTargets, landing, patchCommand, patchFiles, codeWriteTargets, resolvePath, pathspecPattern, commandDeletes } from '../scripts/lib/shell.mjs';
+import { parseCommands, writeTargets, landing, patchCommand, opaquePatch, patchFiles, codeWriteTargets, resolvePath, pathspecPattern, commandDeletes } from '../scripts/lib/shell.mjs';
 
 const root = path.resolve(os.tmpdir(), 'shell-test-root');
 const at = (...p) => path.join(root, ...p);
@@ -100,6 +100,461 @@ test('shell: patchCommand reads git apply, git am and patch; inspecting forms ap
   assert.equal(pt.cwd, at('sub'));
   assert.deepEqual(pt.inputs.map((w) => w.value), ['x.diff']);
   assert.deepEqual(patchFiles('--- a/x.rs\t2026-01-01 00:00:00\n+++ b/x.rs\n'), ['a/x.rs', 'b/x.rs']);
+});
+
+// #151: forms that got past the patch checks.
+test('shell: patchCommand reads gpatch, busybox patch, watch and git -c aliases', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    'gpatch -p1 -i x.diff', 'busybox patch -p1 -i x.diff', '/usr/bin/gpatch -p1 -i x.diff',
+    'watch git apply x.diff', 'watch -n 1 -d git apply x.diff', 'watch -n1 "git apply x.diff"', 'watch --interval=2 -x git apply x.diff',
+    'git -c alias.ap=apply ap x.diff', "git -c 'alias.ap=apply --index' ap x.diff", 'git -c alias.a=b -c alias.b=apply a x.diff', 'git -c alias.AP=apply ap x.diff',
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p('git -c alias.x=am x a.mbox').tool, 'git am');
+  for (const cmd of ['gpatch --dry-run -p1 -i x.diff', 'busybox patch --dry-run -i x.diff', 'watch git apply --check x.diff', "git -c 'alias.ck=apply --check' ck x.diff"]) {
+    assert.equal(p(cmd)?.apply, false, cmd);
+  }
+  for (const cmd of ['git -c alias.st=status st', 'watch -n 5 git status', 'busybox ls', 'git -c alias.ap=apply status', 'git ap x.diff']) assert.equal(p(cmd), null, cmd);
+});
+
+test('shell: opaquePatch flags git subcommands and interpreter code temper cannot resolve', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'git ${CMD:-apply} x.diff', 'git $x x.diff', 'git -C sub $SUB x.diff', 'git -c "$CFG" ap x.diff', "git -c 'alias.x=!git apply x.diff' x", 'git -c alias.ap=$A ap x.diff', 'git -c $K=apply ap x.diff',
+    '$GIT apply x.diff', '${P:-patch} -p1 < x.diff',
+    `python3 -c "import subprocess; subprocess.run(['git', 'apply', 'x.diff'])"`,
+    `python -c "import os; os.system('patch -p1 < x.diff')"`,
+    `node -e "require('child_process').execSync('git apply x.diff')"`,
+    `node --eval "require('child_process').execFileSync('git', ['am', 'x.mbox'])"`,
+    `node -p "require('child_process').execSync('gpatch -p1 -i x.diff')"`,
+    `perl -e 'system("git", "apply", "x.diff")'`, `perl -E 'system("cd sub && patch -p1 < x.diff")'`,
+    `ruby -e 'system("git am x.mbox")'`,
+    "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['busybox', 'patch', '-i', 'x.diff'])\nEOF",
+  ]) assert.ok(o(cmd), cmd);
+  for (const cmd of [
+    'git diff', 'git apply --check x.diff', 'git -c core.pager=cat log', 'git -c color.ui=$C diff', "git log --grep 'git apply'", 'git -c alias.ap=apply ap x.diff',
+    `python3 -c "print(1)"`, `python3 -c "from unittest import mock; mock.patch('os.getcwd')"`, `node -e "console.log('x.patch')"`,
+    `perl -e 'print "--patch\n"'`, `ruby -e 'puts "I am here"'`, 'echo "git apply x.diff"', 'deno run main.ts',
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review: aliases from configuration temper cannot read, and the reviewer's fail-closed forms.
+test('shell: a subcommand git does not have, under configuration temper cannot read, reads as a guessed git apply', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    'X=apply git --config-env=alias.ap=X ap x.diff', 'git --config-env alias.ap=X ap x.diff',
+    'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap x.diff',
+    'export GIT_CONFIG_COUNT=1; git ap x.diff', `env GIT_CONFIG_PARAMETERS="'alias.ap=apply'" git ap x.diff`,
+    'git -c include.path=/tmp/c ap x.diff', 'git -c includeIf.onbranch:main.path=/tmp/c ap x.diff',
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.equal(r.guessed, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  for (const cmd of ['GIT_CONFIG_COUNT=1 git status', 'git --config-env=alias.ap=X log', 'git -c alias.status=apply status', 'git ap x.diff']) {
+    assert.equal(p(cmd), null, cmd);
+  }
+  assert.equal(p('git -c alias.ap=apply ap x.diff').guessed, false);
+});
+
+test('shell: opaquePatch: subcommands git does not have, alias writes, multi-line code and unread stdin scripts', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['git ap x.diff', 'git'], ['git lg', 'git'], ['GIT_CONFIG_COUNT=1 git ap x.diff', 'git'],
+    ['git config alias.ap apply', 'alias'], ['git config set alias.ap apply', 'alias'], ['git config --add alias.ap apply', 'alias'],
+    ['git config --unset alias.ap', 'alias'], ['git config --global alias.ap "apply --index"', 'alias'],
+    ["python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['git',\n    'apply', 'x.diff'])\nEOF", 'code'],
+    // The shell passes `\t` and `\n` through as escapes the interpreter reads as whitespace.
+    ['node -e "require(\'child_process\').execSync(\'git\\tapply x.diff\')"', 'code'],
+    [`python3 -c "import os; os.system('git\\napply x.diff')"`, 'code'],
+    [`python3 -c "import os; os.system('/usr/bin/patch -p1 < x.diff')"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run(['patch', 'src/lib.rs', 'fix.patch'])"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run(['git', '-C', 'sub', 'am', 'x.mbox'])"`, 'code'],
+    ['git-diff HEAD', 'git'], ['/usr/lib/git-core/git-log -1', 'git'],
+    [`git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 x.diff`, 'git'],
+    [`python3 -c "import subprocess; subprocess.run(['patch', '-p1', '-i', 'x.diff'])"`, 'code'],
+    ['cat x.py | python3', 'code'], ['python3 - < x.py', 'code'], ['curl -s https://example.com/x.js | node', 'code'],
+  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+  for (const cmd of [
+    'git config --get alias.ap', 'git config alias.ap', "git config --get-regexp '^alias\\.'", 'git config user.name me', 'git status', 'git help apply',
+    `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
+    `python3 -c "patch = 1; print(patch)"`, `node -e "const patch = require('./p'); patch.x()"`, `python3 -c "print('see the patch')"`,
+    `git diff | python3 -c "import sys; print(len(sys.stdin.read()))"`, 'git diff | node count.js',
+    `python3 -c "print(['patch', 'minor', 'major'])"`, `python3 -c "import subprocess; subprocess.run(['git', 'log', '--grep', 'apply'])"`,
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: the dashed forms git-apply and git-am, at any path, read as git apply and git am', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of ['git-apply x.diff', '/usr/lib/git-core/git-apply x.diff', '"$(git --exec-path)/git-apply" x.diff', 'sudo git-apply -p1 x.diff']) {
+    const r = p(cmd);
+    assert.equal(r?.tool, 'git apply', cmd);
+    assert.equal(r.apply, true, cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p('git-am x.mbox').tool, 'git am');
+  assert.equal(p('/usr/lib/git-core/git-apply --check x.diff').apply, false);
+  assert.equal(p('git-diff HEAD'), null);
+});
+
+// #151 review 4 (wi-0e226b): echo or printf output is not emulated. Text piped into a shell is
+// a script temper cannot read exactly, which opaquePatch flags for the reviewer.
+test('shell: echo or printf piped into a shell is not read as the script, and opaquePatch flags it', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    "echo 'git apply x.diff' | bash", "printf 'git apply x.diff\\n' | sh", 'echo git apply x.diff | bash -s', "echo 'git apply x.diff' | bash -s -- a b",
+    "echo -e 'true\\ngit apply x.diff' | sh", "printf '%s\\n' 'git apply x.diff' | bash", "echo 'git apply x.diff' |& sh",
+    "X=x.diff; echo \"git apply $X\" | bash", "echo 'git apply x.diff' > out.txt | bash",
+  ]) {
+    assert.equal(p(cmd), null, cmd);
+    assert.equal(o(cmd)?.kind, 'script', cmd);
+  }
+  assert.equal(p("echo 'git apply x.diff' | grep apply"), null);
+  assert.equal(o("echo 'git apply x.diff' | grep apply"), null);
+  // Heredoc and here-string bodies are read exactly, into a shell or through cat.
+  for (const cmd of ["bash <<'EOF'\ngit apply x.diff\nEOF", "bash <<< 'git apply x.diff'", "cat <<'EOF' | bash\ngit apply x.diff\nEOF"]) {
+    assert.deepEqual(p(cmd)?.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  for (const cmd of ["bash <<'EOF'\nls\nEOF", "sh <<< 'cargo test'", "cat <<'EOF' | bash\nls\nEOF", "cat - <<< ls | sh"]) assert.equal(o(cmd), null, cmd);
+  // A body another command transforms is not the script the shell runs.
+  assert.equal(o("tr a-z A-Z <<'EOF' | bash\nls\nEOF")?.kind, 'script');
+});
+
+// #151 review 4 (wi-0e226b): a shell or source whose script temper cannot read exactly.
+test('shell: opaquePatch flags a shell or source reading /dev/stdin, a process substitution, xargs input or a subshell pipe', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'cat cmd.sh | bash /dev/stdin', "echo ls | sh /proc/self/fd/0", 'cat cmd.sh | bash /dev/fd/0', 'cat cmd.sh | bash /dev/./stdin',
+    "bash <(echo 'git apply x.diff')", 'sh <(cat cmd.sh)', "source <(echo 'git apply x.diff')", ". <(echo ls)",
+    'cat cmd.sh | source /dev/stdin', 'cat cmd.sh | . /dev/stdin', 'source', '.',
+    "echo ls | tee >(bash)", "echo ls | tee >(bash) >/dev/null", "echo ls | tee >(sh -s)",
+    "echo ls | xargs -I{} bash -c {}", 'echo ls | xargs -0 bash -c', 'echo cmd.sh | xargs bash', 'echo cmd.sh | xargs -I{} sh {}',
+    "(echo 'git apply x.diff'; echo ls) | bash", "echo ls | ( bash )", "echo ls | { true; bash; }", 'bash',
+    "for i in 1; do echo ls; done | bash", "echo ls | cat | bash", "echo ls | env bash", "echo ls | timeout 5 bash", "echo ls | watch bash",
+  ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  for (const cmd of [
+    'bash script.sh', 'source ./env.sh', '. ./env.sh', "bash -c 'ls'", 'echo foo | sh -c cat', 'git diff | cat', "echo ls | xargs bash -c 'echo $0'",
+    'echo a | xargs bash script.sh', 'bash --version', 'sh --help', "bash -c 'cat' < in.txt",
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 5 (wi-0e226b): a -c script, a here-string, a heredoc, an eval argument or a command
+// name built from an expansion is text temper cannot read exactly.
+test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument or command name that is not literal', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    'bash -c "$(cat cmd.sh)"', 'sh -c "`cat x`"', 'bash -c "$CMD"', 'X=ls; bash -c "$X"', 'bash -c', 'bash -c "ls; $(cat cmd.sh)"',
+    'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'X=ls; bash <<< "$X"', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
+    'bash <<EOF\ngit $X\nEOF', 'cat <<EOF | bash\n$X\nEOF', 'cat <<< "$X" | bash',
+    'eval `cat cmd.txt`', 'eval "$(cat cmd.txt)"', 'X=ls; eval "$X"', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
+  ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  // A command name temper cannot read is its own kind (#151 review 6).
+  for (const cmd of ['X=$(cat cmd.txt); $X', '$X x.diff', '"$CMD" x.diff', '${X:-ls}', '$(cat cmd.txt)', 'X=ls; X+=";git apply x.diff"; $X']) {
+    assert.equal(o(cmd)?.kind, 'name', cmd);
+  }
+  // An interpreter's stdin is read the same way.
+  for (const cmd of ['python3 <<< "$X"', 'python3 - <<EOF\nprint("$(cat x.py)")\nEOF']) assert.equal(o(cmd)?.kind, 'code', cmd);
+  for (const cmd of [
+    "bash -c 'ls'", "bash -lc 'cargo test 2>&1 | tail -n 20'", "bash -euo pipefail -c 'cargo test'", "bash -c -- 'cargo test'",
+    "bash <<< 'cargo test'", 'bash <<< ls', "bash <<'EOF'\ncargo test\nEOF", 'bash <<EOF\ncargo test\nEOF', "cat <<'EOF' | bash\nls\nEOF",
+    "eval 'ls'", 'eval ls -la', "python3 - <<'EOF'\nprint(1)\nEOF", 'echo "$HOME"', '~/.cargo/bin/cargo test', 'cargo test -- "$X"',
+    "find crates -name '*.rs' | head", 'X=1; echo $X',
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 6 (wi-0e226b): a brace list or a glob is an expansion too; only a literal command
+// name is read (wi-9792d6); interpreter code built from an expansion is code temper cannot read.
+test('shell: opaquePatch: brace and glob words, command names temper reads, and interpreter code from an expansion', () => {
+  const o = (cmd, opts = {}) => parseCommands(cmd, { cwd: root, ...opts }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['{git,apply,doc.diff}', 'name'], ['eval {git,apply,doc.diff}', 'script'], ["bash -c {'git apply doc.diff',x}", 'script'],
+    ["{bash,-c,'git apply doc.diff'}", 'name'], ["{eval,'git apply doc.diff'}", 'name'], ['{patch,-p1,-i,doc.diff}', 'name'],
+    ['eval git*', 'script'], ["bash -c gi?' apply doc.diff'", 'script'], ["eval {'git apply',x}", 'script'], ["eval {'git apply'\\,x}", 'script'],
+    ["sh -c {x,'git apply doc.diff'}", 'script'], ['git* apply doc.diff', 'name'], ['gi? apply doc.diff', 'name'], ["bash <<< {x,'git apply y'}", 'script'],
+    ["X='git apply x'; $X", 'name'], ["X='git apply x'; \"$X\"", 'name'], ['X=g*; $X', 'name'], ['IFS=/; X=git/apply/x.diff; $X', 'name'],
+    ['"${CARGO:-cargo}" test', 'name'], ['$(which cargo) test', 'name'], ['$HOME/.cargo/bin/cargo test', 'name'], ['$PWD/target/debug/a', 'name'],
+    ['python3 -c "$X"', 'code'], ['node -e "$(cat f)"', 'code'], ['perl -e "$X"', 'code'], ['perl -ne "$X" f', 'code'], ['ruby -e "$X"', 'code'],
+    ['php -r "$X"', 'code'], ['node --eval "$X"', 'code'], ['node -p "$X"', 'code'], ['bun -e "$X"', 'code'], ['python3 -Ic "$X"', 'code'],
+    // A value temper knows is not enough: the name must be literal (wi-9792d6).
+    ['"$HOME/.cargo/bin/cargo" test', 'name'], ['"$PWD/target/debug/a" --help', 'name'], ['"$(git rev-parse --show-toplevel)/scripts/check.sh"', 'name'],
+  ]) assert.equal(o(cmd, { top: root })?.kind, kind, cmd);
+  for (const cmd of [
+    "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' x.json", "git log --format='%H' -5", "rg 'foo\\{' crates",
+    'rg foo\\{ crates', 'find crates -name x -exec grep -n unwrap {} +', 'git show HEAD@{1} --stat', "eval 'git status'", 'ls crates/*/src',
+    '~/.cargo/bin/cargo test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < x.json",
+    'python3 -c "print(1)"', "node -e 'console.log(1)'", "perl -ne 'print if /unwrap/' x.rs",
+  ]) assert.equal(o(cmd, { top: root }), null, cmd);
+});
+
+// #151 review 7 (wi-0e226b): temper's variable model is not bash (`read`, `printf -v`, arrays, an
+// assignment that never runs, ...), so for the reviewer a command name is never read from a tracked
+// assignment: only a literal (wi-9792d6, which supersedes review 8's wi-ec88b9). A wrapper's command
+// word is read the same way, and its other words when they start with literal text.
+test('shell: opaquePatch never reads a command name from a variable', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    // A value from an assignment: never read, whatever temper's model says it is.
+    'X=cargo; $X test', 'X=cargo; export X; $X test', 'X=git; $X status', "X='git'; X=\"${X}\"; $X status",
+    // Builtins that write a variable temper does not follow, and values it would read wrong.
+    'X=cargo; read X <<< git; $X apply x.diff', 'X=cargo; printf -v X git; $X apply x.diff', 'X=cargo; mapfile -t X <<< git; $X apply x.diff',
+    'Y=git; X=cargo; declare -n X=Y; $X apply x.diff', 'X=cargo; X[0]=git; $X apply x.diff', 'X=cargo; X=(git); $X apply x.diff',
+    'X=cargo; ${X/cargo/git} apply x.diff', 'X=GIT; ${X,,} apply x.diff', 'Y=git; X=Y; ${!X} apply x.diff', 'X=cargo; unset X; $X git apply x.diff',
+    'X=; $X git apply x.diff', "X=''; $X git apply x.diff", '$X git apply x.diff', 'set -- git; "$@" apply x.diff', 'X=cargo; : ${X:=git}; $X test',
+    // Assignments that never run, or run elsewhere.
+    'X=git; false && X=cargo; $X apply x.diff', 'X=git; if false; then X=cargo; fi; $X apply x.diff', 'X=git; f() { X=cargo; }; $X apply x.diff',
+    'X=git; { X=cargo; } | cat; $X apply x.diff', 'X=git; { X=cargo; } & $X apply x.diff', 'X=git\nX=cargo &\n$X apply x.diff',
+    'X=git; case a in b) X=cargo;; esac; $X apply x.diff', 'X=git; local X=cargo 2>/dev/null; $X apply x.diff', 'X=cargo; time X=git; $X apply x.diff',
+    'X=cargo; X=git eval :; $X apply x.diff', 'X=cargo; X=git export Y; $X apply x.diff', 'X=cargo; source ./set.sh; $X apply x.diff',
+    'X=gitxapply; IFS=x; $X x.diff', 'X=gitxapply; read IFS <<< x; $X x.diff', "X=cargo; trap 'X=git' DEBUG; $X apply x.diff",
+    // A name the model would read as cd, export or a wrapper, and a wrapper's word built from an expansion.
+    'X=cd; $X apply x.diff', 'X=export; $X apply x.diff', 'X=nice; $X git apply x.diff', 'timeout $T apply x.diff', 'nice -n $N apply x.diff',
+    'timeout "$T" 5 git apply x.diff', 'env A=$X apply x.diff', 'watch -n $N apply x.diff',
+    "alias cargo='git apply'", 'hash -p /usr/bin/git cargo',
+    // An expansion in the name, quoted or not, whatever temper knows of its value (wi-9792d6).
+    'export HOME=/x; $HOME/cargo test', 'unset HOME; $HOME/cargo test', ': ${HOME:=/x}; $HOME/cargo test', 'for HOME in /x; do $HOME/cargo test; done',
+    'IFS=/; $HOME/cargo test', 'read IFS <<< /; $HOME/cargo test', '$HOME/cargo test', '$PWD/x',
+    '$HOME', '"$HOME"', '"$HOME/"', '"$HOME/x$Y"', '$HOME/{x,y}', '$(git rev-parse --show-toplevel)/x',
+    '"$HOME/.cargo/bin/cargo" test', '"${HOME}"/.cargo/bin/cargo test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
+    'X=/usr/bin; "$X/cargo" test', 'read HOME <<< /x; "$HOME/cargo" test', 'printf -v HOME /x; "$HOME/cargo" test', 'HOME=/x; "$HOME/cargo" test',
+    'declare -n R=HOME; "$HOME/cargo" test', 'Y=ME; read HO$Y <<< /x; "$HOME/cargo" test', "mapfile -t HO''ME <<< /x; \"$HOME/cargo\" test",
+    'cd /tmp; "$PWD/x"', 'pushd /tmp; "$PWD/x"', 'source ./set.sh; "$HOME/cargo" test', '(( HOME = 1 )); "$HOME/cargo" test',
+    '"$HOME$PWD/x"', '"$TMPDIR/x"', '"$OLDPWD/x"', '"$(git rev-parse --show-toplevel)$X/x"', '"${HOME:-/x}/cargo" test', '"$(git rev-parse --git-dir)/x"',
+    'echo "$HOME"; "$HOME/.cargo/bin/cargo" test', 'X=1; echo $X; "$HOME/.cargo/bin/cargo" test', '"$HOME/My Tools/x" --help',
+  ]) assert.equal(o(cmd)?.kind, 'name', cmd);
+  for (const cmd of [
+    '~/.cargo/bin/cargo test', 'cd crates && cargo test', 'timeout 60 cargo test',
+    'nice -n 5 cargo test', 'env A="$X" cargo test', 'X=crates; ls $X',
+    // An interpreter's -c or -e after its script or module is the script's own argument (#151 review 7).
+    // python's, that is: node's, ruby's and the others' code options are read in every argument.
+    'python3 tool.py -c "$CFG"', 'python3 -m pytest -p "$PLUGIN"', 'python3 -u tool.py -c "$CFG"',
+    'deno run x.ts -e "$X"', 'python3 -c "import sys; print(sys.argv)" "$X"',
+    // A shell's or source's script operand whose value temper knows.
+    'source "$HOME/.cargo/env"', 'bash "$HOME/x.sh"',
+    'PATH+=":$HOME/.cargo/bin"; cargo test',
+  ]) assert.equal(o(cmd), null, cmd);
+  // A script operand temper cannot name exactly may be /dev/stdin.
+  for (const cmd of ['F=/dev/stdin; bash "$F" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'bash "$X"', '. "$X"', 'bash "$CLAUDE_PLUGIN_ROOT/x.sh"']) {
+    assert.equal(o(cmd)?.kind, 'script', cmd);
+  }
+  // Code before the script is still read: an option's value is not the script.
+  for (const cmd of ['python3 -W ignore -c "$X"', 'python3 -X dev -c "$X"', 'node -r ./x.js -e "$X"', 'node --require ./x.js -e "$X"', 'perl -pi -e "$X" x',
+    'python3 -E -c "$X"', 'python3 -Ic "$X"', 'perl -W -e "$X"', 'ruby -W -e "$X"', 'perl -I lib -e "$X"',
+    // perl's -W is a flag, so the code after it is read.
+    `perl -W -e 'system("git apply x.diff")'`]) {
+    assert.equal(o(cmd)?.kind, 'code', cmd);
+  }
+});
+
+// wi-9792d6 (superseding review 8's wi-ec88b9): a command name built from an expansion is never
+// read, even when it ends in a literal `/name` segment; only the dashed git-apply and git-am are
+// read at any path. A script operand is read by its value.
+test('shell: a command name built from an expansion is not read, whatever its last segment', () => {
+  const ps = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true });
+  const o = (cmd) => ps(cmd).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of ['"$X/git-apply" x.diff', '"$X"/../git-apply x.diff']) {
+    assert.equal(ps(cmd).map(patchCommand).find(Boolean)?.tool, 'git apply', cmd);
+    assert.equal(parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.tool, 'git apply', cmd);
+  }
+  for (const cmd of [
+    '"$X/git" apply x.diff', '"$X/patch" -p1 < x.diff', '"$X"/../git am x.mbox', '"$X/bin/sudo" git apply x.diff', 'timeout 5 "$X/git" apply x.diff',
+    '"$HOME/.cargo/bin/cargo" test', 'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test',
+    'cd crates/a && "$PWD/../../target/debug/a"', 'HOME=/x; "$HOME/cargo" test', 'read X; "$X/cargo" test', '"${X:-/usr}/bin/cargo" test',
+    '"$(git rev-parse --show-toplevel)/scripts/check.sh"', '"$X"/cargo test', '"$X"/\'cargo\' test', 'timeout 60 "$X/cargo" test',
+    '$HOME/.cargo/bin/cargo test', '$PWD/target/debug/a', '${HOME}/.cargo/bin/cargo test', '"$X"', '"$X$Y"', '"$(which cargo)"', '"$X/"',
+    '"$X/c$Y"', '"$X"/{a,b}', '"$X"/c*', '"$@/cargo"', '"${A[@]}/cargo"', '"$X"/$Y',
+    'env "$X/cargo" test', 'nice "$X/cargo" test', 'xargs "$X/cargo" test', '"$HOME/bin/timeout" 5 cargo test', 'nohup "$HOME/bin/timeout" 5 cargo test',
+  ]) assert.equal(o(cmd)?.kind, 'name', cmd);
+  // Other agents' commands keep main's reading: a name temper cannot read is not git apply or patch.
+  for (const cmd of ['"$X/git" apply x.diff', '"$X/patch" -p1 < x.diff']) {
+    assert.equal(parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean), undefined, cmd);
+  }
+  for (const cmd of ['bash "$HOME/x.sh"', 'bash "$(git rev-parse --show-toplevel)/scripts/check.sh"', 'source "$HOME/.cargo/env"']) assert.equal(o(cmd), null, cmd);
+  // A script operand whose value temper does not know, or whose last segment names a standard stream, may be the shell's stdin.
+  for (const cmd of ['bash "$X/stdin" < cmd.sh', 'bash "$X/fd/0" < cmd.sh', 'read HOME <<< /dev; bash "$HOME/stdin" < cmd.sh', 'source "$X/env"',
+    // A glob or brace list in it is an expansion too.
+    'bash /dev/std* < cmd.sh', 'bash /dev/st?in < cmd.sh', 'source {/dev/stdin,x}', 'bash "$HOME"/x* < cmd.sh']) {
+    assert.equal(o(cmd)?.kind, 'script', cmd);
+  }
+});
+
+// A name with a slash in it runs a file, never a builtin: `/usr/bin/cd x` changes no directory.
+test('shell: a command name with a slash in it is never a builtin', () => {
+  const cwdOf = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.cwd;
+  assert.equal(cwdOf('cd sub; git apply x.diff'), path.join(root, 'sub'));
+  for (const cmd of ['/usr/bin/cd sub; git apply x.diff', '"$HOME/cd" sub; git apply x.diff', './pushd sub; git apply x.diff']) {
+    assert.equal(cwdOf(cmd), root, cmd);
+  }
+  const names = (cmd) => parseCommands(cmd, { cwd: root }).map((c) => c.name);
+  assert.deepEqual(names('/x/eval "git apply x.diff"'), ['/x/eval']);
+  assert.deepEqual(names('/x/export X=git; $X apply x.diff'), ['/x/export', null]);
+  assert.deepEqual(names('/x/source ./set.sh'), ['/x/source']);
+});
+
+// Interpreter code options are read as on main: the word after -c, -e, -E, -p, -r, --eval or
+// --print, in any argument. For the reviewer, a code word built from an expansion is code temper
+// cannot read (wi-9792d6); an option attached to its code, a word that may be a code option, and
+// pwsh's encoded command wait on #155. A script operand is not code.
+test('shell: interpreter code options and a code word built from an expansion', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    `node --disable-warning DEP0040 -e "require('child_process').execSync('git apply x.diff')"`,
+    `node --unhandled-rejections strict -e "require('child_process').execSync('git apply x.diff')"`,
+    `node --env-file-if-exists .env -e "require('child_process').execSync('git apply x.diff')"`,
+    `bun --cwd . -e "require('child_process').execSync('git apply x.diff')"`, `ruby --encoding UTF-8 -e 'system("git apply x.diff")'`,
+    `deno repl --eval "new Deno.Command('git', { args: ['apply', 'x.diff'] }).outputSync()"`,
+    'node --disable-warning X -e "$X"', 'node script.js -e "$ENVNAME"', 'ruby x.rb -e "$X"', 'php -r "$X"', 'node -p "$X"', 'perl -ne "$X"',
+    'python3 -W ignore -c "$X"', 'python3 -Ic "$X"', 'perl -p -e "$X"',
+    // A code option that a word before it would take as its value is read too (`-Wignore` ends in e).
+    `python3 -Wignore -c 'import os; os.system("git apply x.diff")'`, `perl -p -e 'system("git apply x.diff")'`,
+    // A script read from stdin by name or from a process substitution.
+    'echo x | python3 /dev/stdin', 'cat x.js | node /dev/fd/0', "node <(echo 'x')",
+  ]) assert.equal(o(cmd)?.kind, 'code', cmd);
+  for (const cmd of [
+    'python3 tool.py -c "$CFG"', 'python3 -m pytest -p "$PLUGIN"', 'python3 -u tool.py -c "$CFG"', 'node script.js "$X"', 'ruby x.rb "$X"',
+    'node "/opt/$X/a.js"', "perl -Mstrict -e 'print 1'", "node -pe '1 + 1'", 'deno run x.ts -e "$X"',
+    'node .claude/temper/temper.mjs gate --check', "perl -ne 'print if /unwrap/' x.rs", "python3 /dev/stdin <<'EOF'\nprint(1)\nEOF",
+    'pwsh -NoProfile -File x.ps1', 'node -r ./x.js script.js "$X"', "ruby -e 'require \"x\"' x.rb \"$X\"",
+    // A script operand built from an expansion is the script, not code (the reviewer's gate and scan, #151 round 9).
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" gate --check', 'node "$CLAUDE_PLUGIN_ROOT/scripts/temper.mjs" scan',
+    'X=--eval=x; node "$X/a.js"', 'python3 "$X/a.py"', 'python3 -u "$HOME/x.py"', 'node "$TEMPER_CLI" gate --check',
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 8: env -S in every spelling env accepts. Other agents' commands read its string, with
+// `\_`, `\t`, `\n`, `\v`, `\f` and `\r` as whitespace; for the reviewer it is denied, since its syntax is not the shell's.
+test('shell: env -S and --split-string in every spelling', () => {
+  const tool = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean)?.tool;
+  for (const cmd of [
+    "env -S 'git apply x.diff'", "env -iS 'git apply x.diff'", "env -vS 'git apply x.diff'", "env -iS'git apply x.diff'", "env -0vS 'git apply x.diff'",
+    "env --s 'git apply x.diff'", "env --sp='git apply x.diff'", "env --split 'git apply x.diff'", "env --split-string='git apply x.diff'",
+    "env -S 'git\\_apply x.diff'", "env -S 'git\\_apply\\_x.diff'", "env -u X -S 'git apply x.diff'", "env -iu X -S 'git apply x.diff'",
+    // `\t`, `\n`, `\v`, `\f` and `\r` are whitespace in its string too.
+    "env -S 'git\\tapply x.diff'", "env -S 'git\\napply x.diff'", "env -S 'git\\vapply\\fx.diff'", "env -S 'git\\rapply x.diff'",
+    // env's other options, in their prefixes and clusters, are read too.
+    'env --unse X git apply x.diff', 'env - git apply x.diff', 'env -iu X git apply x.diff', 'env --ch=/tmp git apply x.diff', 'env -C /tmp git apply x.diff',
+  ]) assert.equal(tool(cmd), 'git apply', cmd);
+  const o = (cmd) => parseCommands(cmd, { cwd: root, top: root, untracked: true }).map(opaquePatch).find(Boolean) ?? null;
+  for (const cmd of [
+    "env -S 'cargo test'", "env -S'cargo test'", "env -iS 'cargo test'", "env --split=cargo", "env --sp 'cargo test'", 'env -S"$X"',
+    "env -u X -S 'cargo test'", "env -S 'X=1 cargo test'",
+  ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  for (const cmd of ['env cargo test', 'env -i PATH=/usr/bin cargo test', 'env -u X cargo test', 'env A="$X" cargo test']) assert.equal(o(cmd), null, cmd);
+});
+
+// #151 review 8: an unquoted expansion that is empty is no word at all, as in bash.
+test('shell: an unquoted empty expansion is dropped from the command', () => {
+  assert.equal(parseCommands('X=; $X git apply x.diff', { cwd: root }).map(patchCommand).find(Boolean)?.tool, 'git apply');
+  assert.equal(parseCommands("X=''; $X git apply x.diff", { cwd: root }).map(patchCommand).find(Boolean)?.tool, 'git apply');
+  assert.equal(parseCommands('X=; git "$X" apply x.diff', { cwd: root }).map(patchCommand).find(Boolean)?.tool, undefined);
+});
+
+// #151 review 5: `$'...'` is decoded as bash decodes it; an escape temper does not decode exactly leaves the word unknown.
+test("shell: ANSI-C quoting is decoded exactly, or its word is unknown", () => {
+  const v = (cmd) => parseCommands(cmd, { cwd: root })[0].args.map((a) => a.value);
+  assert.deepEqual(v("echo $'git\\x20apply' $'a\\tb' $'\\101\\x41\\u0041\\U00000041' $'\\'\\\"\\\\\\?' $'\\a\\b\\e\\E\\f\\v' $'\\q'"),
+    ['git apply', 'a\tb', 'AAAA', '\'"\\?', '\x07\x08\x1b\x1b\x0c\x0b', '\\q']);
+  for (const word of ["$'\\cA'", "$'\\u00e9'", "$'\\xff'", "$'a\\0b'", "$'\\x'", "$'\\x0'"]) assert.deepEqual(v(`echo ${word}`), [null], word);
+  const p = parseCommands("bash -c $'git\\x20apply x.diff'", { cwd: root }).map(patchCommand).find(Boolean);
+  assert.equal(p?.tool, 'git apply');
+  assert.equal(parseCommands("bash -c $'git\\cAapply x.diff'", { cwd: root }).map(opaquePatch).find(Boolean)?.kind, 'script');
+});
+
+// #151 review 5: bash and sh take options after -c, and `--` or `-` ends them; the first operand is the script.
+test('shell: the -c script is the first operand after the options', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    "bash -c -- 'git apply x.diff'", "bash -c -x 'git apply x.diff'", "sh -c -- 'patch -p1 < x.diff'", "bash -c - 'git apply x.diff'",
+    "bash -c -o pipefail 'git apply x.diff'", "bash -co pipefail 'git apply x.diff'", "bash -euo pipefail -c 'git apply x.diff'",
+    "bash -c -O extglob -- 'git apply x.diff' arg0", "bash -xc 'git apply x.diff'", "dash -c -e 'git apply x.diff'",
+  ]) assert.equal(p(cmd)?.apply, true, cmd);
+  assert.deepEqual(targets("bash -c -- 'cp /tmp/x crates/a/src/lib.rs'"), [['cp', at('crates/a/src/lib.rs')]]);
+  assert.deepEqual(targets("bash -euo pipefail -c 'cp /tmp/x out.rs'"), [['cp', at('out.rs')]]);
+  // Without -c, the first operand after the options is a script file, which temper does not read.
+  assert.equal(p("bash -o pipefail 'git apply x.diff'"), null);
+  assert.equal(parseCommands("bash -c -- 'ls'", { cwd: root }).map(opaquePatch).find(Boolean) ?? null, null);
+});
+
+test('shell: commands nested deeper than temper reads leave an opaque marker', () => {
+  const nest = (n) => `bash -c '${'eval '.repeat(n)}git apply x.diff'`;
+  const deep = parseCommands(nest(12), { cwd: root });
+  assert.ok(deep.some((c) => c.opaque === 'depth'));
+  assert.equal(deep.map(opaquePatch).find(Boolean)?.kind, 'script');
+  assert.ok(!parseCommands(nest(1), { cwd: root }).some((c) => c.opaque));
+  assert.ok(parseCommands(`${'find . -exec '.repeat(20)}ls \\;`, { cwd: root }).some((c) => c.opaque === 'depth'));
+});
+
+test('shell: options at the start of a git alias are read as git options', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  for (const cmd of [
+    "git -c alias.ap='-p apply' ap x.diff", "git -c alias.ap='--paginate apply' ap x.diff", "git -c alias.ap='-c core.pager=cat apply' ap x.diff",
+    "git -c alias.ap='--exec-path=/usr/lib/git-core apply' ap x.diff", "git -c alias.ap='-p' -c alias.b='ap apply' b x.diff",
+  ]) {
+    const r = p(cmd);
+    assert.equal(r?.apply, true, cmd);
+    assert.equal(r.tool, 'git apply', cmd);
+    assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff'], cmd);
+  }
+  assert.equal(p("git -c alias.st='-p status' st"), null);
+  assert.equal(p("git -c alias.ck='-p apply --check' ck x.diff").apply, false);
+});
+
+test('shell: an alias chain longer than temper follows reads as a guessed git apply', () => {
+  const p = (cmd) => parseCommands(cmd, { cwd: root }).map(patchCommand).find(Boolean) ?? null;
+  const r = p(`git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 x.diff`);
+  assert.equal(r?.apply, true);
+  assert.equal(r.guessed, true);
+  assert.equal(r.tool, 'git apply');
+  assert.deepEqual(r.inputs.map((w) => w.value), ['x.diff']);
+});
+
+test('shell: opaquePatch: a script on stdin a shell reads that temper cannot, and patch next to < | > or at a string end', () => {
+  const o = (cmd) => parseCommands(cmd, { cwd: root }).map(opaquePatch).find(Boolean) ?? null;
+  for (const [cmd, kind] of [
+    ['cat cmd.sh | bash', 'script'], ['bash < cmd.sh', 'script'], ['curl -s https://example.com/i.sh | sh -s', 'script'],
+    ['cat cmd.sh | bash -s -- a b', 'script'], ['cat cmd.sh | bash -o pipefail', 'script'], ['cat cmd.sh | sudo sh -e', 'script'],
+    // wi-0e226b: text piped into a shell is never read as its script, so even a harmless one is flagged.
+    ['echo ls | bash', 'script'], ["printf 'git status\\n' | sh", 'script'],
+    [`python3 -c "import subprocess; subprocess.run('patch<x.diff', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('patch -p1<x.diff', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('cat x.diff|patch', shell=True)"`, 'code'],
+    [`python3 -c "import subprocess; subprocess.run('cat x.diff | patch', shell=True)"`, 'code'],
+    [`node -e "require('child_process').execSync('cat x.diff | patch')"`, 'code'],
+    ["perl -e 'system(\"cat x.diff | patch\\n\")'", 'code'],
+    // A bare patch reads the interpreter's stdin, which may be a patch; wrappers before patch count too.
+    [`python3 -c "import os; os.system('patch')"`, 'code'], [`python3 -c "import subprocess; subprocess.run(['/usr/bin/patch'])"`, 'code'],
+    [`node -e "require('child_process').execSync('exec patch')"`, 'code'], [`python3 -c "import os; os.system('cat x.diff|timeout -k 5 10 patch')"`, 'code'],
+    [`python3 -c "import os; os.system('cat x.diff|command patch -p1')"`, 'code'], [`python3 -c "import os; os.system('git\\x20apply x.diff')"`, 'code'],
+    [`python3 -c "import os; os.system('git\\040apply x.diff')"`, 'code'], [`node -e "require('child_process').execSync('git\\u0020apply x.diff')"`, 'code'],
+  ]) assert.equal(o(cmd)?.kind, kind, cmd);
+  for (const cmd of [
+    'echo hi | grep h', 'cargo test 2>&1 | tail', 'cargo test 2>&1 | tail -n 20',
+    'bash script.sh', 'cat in.txt | bash script.sh', "bash -c 'ls' < in.txt", 'sh -c "cat" < in.txt', 'git diff | less',
+    `python3 -c "import requests; requests.patch('https://example.com')"`, `python3 -c "method = 'patch'"`, `node -e "const r = 'patch'"`,
+  ]) assert.equal(o(cmd), null, cmd);
+});
+
+test('shell: the interpreter-code patterns stay linear on long input', () => {
+  for (const code of [`${'patch '.repeat(20000)}x`, `${'|patch'.repeat(20000)}`, `${'git -c a=b '.repeat(20000)}x`, `'${' '.repeat(50000)}patch`,
+    `|${'timeout -k 5 '.repeat(20000)}x`, `|${'exec '.repeat(20000)}x`, `${"system('timeout ".repeat(10000)}x`, `|timeout${' -s'.repeat(30000)} 5x`, `${'\\x2'.repeat(30000)}`]) {
+    const t0 = Date.now();
+    opaquePatch(parseCommands(`python3 -c ${JSON.stringify(code)}`, { cwd: root })[0]);
+    assert.ok(Date.now() - t0 < 2000, `${code.slice(0, 20)}: ${Date.now() - t0} ms`);
+  }
+});
+
+test('shell: a long chain of wrappers or reserved words parses in linear time', () => {
+  for (const cmd of [`${'busybox '.repeat(20000)}ls`, `${'! '.repeat(20000)}ls`, `${'nohup '.repeat(20000)}git apply x.diff`]) {
+    const t0 = Date.now();
+    const cs = parseCommands(cmd, { cwd: root });
+    assert.ok(Date.now() - t0 < 2000, `${cmd.slice(0, 20)}: ${Date.now() - t0} ms`);
+    assert.equal(cs.length, 1);
+  }
 });
 
 test('shell: codeWriteTargets finds literals in write positions only', () => {

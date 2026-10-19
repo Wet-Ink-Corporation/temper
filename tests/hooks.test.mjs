@@ -541,6 +541,8 @@ test('Bash: a copy onto .rs whose content temper cannot read is refused with the
       'cat body | install /dev/stdin crates/ledger-domain/src/new.rs',
       `cp "${out('missing.rs')}" crates/ledger-domain/src/missing.rs`,
       `cd "$CRATE" && cp "${out('clean.rs')}" src/clean.rs`,
+      // #151 review 5: a -c script after `--`.
+      "bash -c -- 'cp /tmp/x crates/ledger-domain/src/lib.rs'",
     ]) {
       const res = bash(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -608,6 +610,72 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       `patch -p1 < "${out('doc.diff')}"`,
       `git am "${out('doc.diff')}"`,
       'git diff | git apply -R',
+      // #151: other names for patch, watch, git -c aliases, and forms temper cannot resolve.
+      `gpatch -p1 -i "${out('doc.diff')}"`,
+      `busybox patch -p1 -i "${out('doc.diff')}"`,
+      `watch -n 1 git apply "${out('doc.diff')}"`,
+      `git -c alias.ap=apply ap "${out('doc.diff')}"`,
+      `git \${CMD:-apply} "${out('doc.diff')}"`,
+      `git $x "${out('doc.diff')}"`,
+      `pwsh -Command "git apply ${out('doc.diff')}"`,
+      `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
+      `node -e "require('child_process').execSync('git am x.mbox')"`,
+      `perl -e 'system("patch -p1 < x.diff")'`,
+      `ruby -e 'system("git apply x.diff")'`,
+      `git ap "${out('doc.diff')}"`,
+      'git config alias.ap apply',
+      'cat x.py | python3',
+      `X=apply git --config-env=alias.ap=X ap "${out('doc.diff')}"`,
+      // The dashed forms, at any path; any other git-* name is one temper does not resolve.
+      `git-apply "${out('doc.diff')}"`,
+      `/usr/lib/git-core/git-apply "${out('doc.diff')}"`,
+      `"$(git --exec-path)/git-apply" "${out('doc.diff')}"`,
+      'git-am x.mbox',
+      'git-diff HEAD',
+      // #151 review 3: a literal script piped into a shell is read; one temper cannot read is denied.
+      `echo 'git apply ${out('doc.diff')}' | bash`,
+      `printf 'git apply ${out('doc.diff')}\\n' | sh`,
+      `echo git apply ${out('doc.diff')} | bash -s`,
+      'cat cmd.sh | bash',
+      `git -c alias.ap='-p apply' ap "${out('doc.diff')}"`,
+      `python3 -c "import subprocess; subprocess.run('patch<${out('doc.diff')}', shell=True)"`,
+      `python3 -c "import subprocess; subprocess.run('cat ${out('doc.diff')}|patch', shell=True)"`,
+      // #151 review 4 (wi-0e226b): a shell or source whose script temper cannot read exactly.
+      "echo 'git status' | bash",
+      `{ echo 'git apply ${out('doc.diff')}'; echo ls; } | bash`,
+      `(echo 'git apply ${out('doc.diff')}'; echo ls) | bash`,
+      `echo '\\c; git apply ${out('doc.diff')}' | bash`,
+      `printf '%s\\n' '\\c; git apply ${out('doc.diff')}' | bash`,
+      `echo -e 'git\\x20apply ${out('doc.diff')}' | bash`,
+      `printf 'git\\040apply ${out('doc.diff')}\\n' | bash`,
+      `printf '%cgit apply ${out('doc.diff')}\\n' ' #' | bash`,
+      `printf '%d;git apply ${out('doc.diff')}\\n' '#' | bash`,
+      `echo 'git apply ${out('doc.diff')}' | bash /dev/stdin`,
+      `echo 'git apply ${out('doc.diff')}' | sh /proc/self/fd/0`,
+      `bash <(echo 'git apply ${out('doc.diff')}')`,
+      `source <(echo 'git apply ${out('doc.diff')}')`,
+      `. <(echo 'git apply ${out('doc.diff')}')`,
+      `echo 'git apply ${out('doc.diff')}' | source /dev/stdin`,
+      `echo 'git apply ${out('doc.diff')}' | tee >(bash) >/dev/null`,
+      `echo 'git apply ${out('doc.diff')}' | xargs -I{} bash -c {}`,
+      `echo 'git apply ${out('doc.diff')}' | xargs -0 bash -c`,
+      `echo "git apply ${out('doc.diff')}" | bash -c 'cat | bash'`,
+      `echo "git apply ${out('doc.diff')}" | env bash`,
+      `bash -c '${'eval '.repeat(12)}git apply ${out('doc.diff')}'`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|exec patch')"`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|command patch')"`,
+      `python3 -c "import os; os.system('cat ${out('doc.diff')}|timeout 5 patch')"`,
+      // #151 review 5: a -c script, here-string, heredoc, eval argument or command name temper
+      // cannot read exactly, and a -c script after more options.
+      'bash -c "$(cat cmd.sh)"', 'sh -c "`cat x`"', 'bash -c "$CMD"', `bash -c $'git\\x20apply ${out('doc.diff')}'`,
+      'bash <<< "$(cat cmd.sh)"', 'bash <<< "$X"', 'bash <<< `cat x`', 'bash <<EOF\n$(cat cmd.sh)\nEOF',
+      'eval `cat cmd.txt`', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
+      `bash -c -x 'git apply ${out('doc.diff')}'`, `bash -c -- 'git apply ${out('doc.diff')}'`, `bash -euo pipefail -c 'git apply ${out('doc.diff')}'`,
+      // Kept denied: xargs puts each file name into the script's text, where a name could be shell code.
+      "find crates -name '*.rs' | xargs -I{} sh -c 'echo {}; grep -c unwrap {}'",
+      // #151 review 6: a brace list or a glob is an expansion, and so is interpreter code built from one.
+      `eval {git,apply,${out('doc.diff')}}`, `bash -c {'git apply ${out('doc.diff')}',x}`, `eval git*`, `bash -c gi?' apply ${out('doc.diff')}'`,
+      'python3 -c "$X"', 'node -e "$(cat f)"', 'perl -e "$X"',
     ]) {
       const res = asReviewer(cmd);
       assert.equal(decision(res), 'deny', cmd);
@@ -615,11 +683,194 @@ test('Bash: the read-only reviewer may not apply any patch, and is told not to r
       assert.match(reason(res), /Do not retry/, cmd);
     }
     // Inspecting a patch is review work.
-    for (const cmd of [`git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat']) {
+    for (const cmd of [
+      `git apply --check "${out('rs.diff')}"`, `git apply --stat "${out('rs.diff')}"`, `patch --dry-run -p1 < "${out('doc.diff')}"`, 'git diff --stat',
+      `gpatch --dry-run -p1 -i "${out('doc.diff')}"`, 'watch -n 5 git status', 'git -c alias.st=status st', 'git -c core.pager=cat log -1',
+      'python3 -c "print(1 + 1)"', `node -e "console.log(require('fs').existsSync('x.patch'))"`, "git log --grep 'git apply'",
+      'git config --get alias.ap', `python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])"`,
+      'echo hi | grep h', 'cargo test 2>&1 | tail', 'git diff | cat', 'echo foo | sh -c cat', "bash -c 'cargo test'",
+      "bash <<'EOF'\ncargo test\nEOF", "cat <<'EOF' | bash\ngit status\nEOF",
+      // #151 review 5: ordinary review commands still run.
+      'cargo clippy --all-targets -- -D warnings', 'cargo test --workspace 2>&1 | tail -n 30', 'git diff HEAD~1 -- crates | head -100',
+      'git log --oneline -20 | wc -l', 'git show HEAD --stat | head', 'grep -rn "unwrap()" crates/ | head', "rg -n 'expect\\(' crates",
+      'node .claude/temper/temper.mjs gate --check', "bash -c 'cargo test -p ledger-domain'", "bash -lc 'cargo clippy 2>&1 | tail'",
+      "bash -euo pipefail -c 'cargo test 2>&1 | tail -n 5'", "bash -c -- 'git diff --stat'", "python3 - <<'EOF'\nprint(1)\nEOF",
+      "echo '{}' | jq .", 'bash <<< "cargo test"', 'bash <<EOF\ncargo test\nEOF', "eval 'git status'",
+    ]) {
       assert.equal(decision(asReviewer(cmd)), 'none', cmd);
     }
-    // Another agent's non-Rust patch still runs.
-    assert.equal(decision(bash(`git apply "${out('doc.diff')}"`)), 'none');
+    // #151 review 6: a command name temper cannot read has its own message, which says to write the name out.
+    for (const cmd of [
+      `{git,apply,${out('doc.diff')}}`, `{bash,-c,'git apply ${out('doc.diff')}'}`, `{eval,'git apply ${out('doc.diff')}'}`,
+      `{patch,-p1,-i,${out('doc.diff')}}`, 'X=$(cat cmd.txt); $X', `X='git apply ${out('doc.diff')}'; $X`, '"${CARGO:-cargo}" test', '$(which cargo) test',
+      // wi-9792d6: a name built from an expansion is not read, even when temper knows its value or it ends in a literal /name.
+      '"$HOME/.cargo/bin/cargo" test', '"$PWD/target/debug/a" --help', '"$(git rev-parse --show-toplevel)/scripts/check.sh"',
+      'source "$HOME/.cargo/env"; "$HOME/.cargo/bin/cargo" test', '"$CARGO_HOME/bin/cargo" test', 'cd crates/a && "$PWD/../../target/debug/a"',
+      'read HOME <<< /x; "$HOME/cargo" test', `"$X/git" apply ${out('doc.diff')}`, '"$HOME/bin/timeout" 60 cargo test',
+    ]) {
+      const res = asReviewer(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /reviewer is read-only/, cmd);
+      assert.match(reason(res), /Write the command name out/, cmd);
+      assert.doesNotMatch(reason(res), /Do not retry|piped or redirected/, cmd);
+    }
+    // Ordinary review commands, with names written out, still run.
+    for (const cmd of [
+      "find crates -name '*.rs' | head", 'cargo test -- --nocapture', "jq '{a:.b}' Cargo.toml", "git log --format='%H' -5", "rg 'foo\\{' crates",
+      '~/.cargo/bin/cargo test', "python3 -c 'import json, sys; print(json.load(sys.stdin))' < Cargo.toml", 'python3 tool.py -c "$CFG"',
+      'python3 -m pytest -p "$PLUGIN"', 'source "$HOME/.cargo/env" && cargo test', 'PATH+=":$HOME/.cargo/bin"; cargo test',
+      'node .claude/temper/temper.mjs gate --check', 'node script.js "$X"', 'env RUST_LOG="$LVL" cargo test',
+      "env -i PATH=/usr/bin cargo test", 'X=--eval=x; node "$X/a.js"',
+    ]) assert.equal(decision(asReviewer(cmd)), 'none', cmd);
+    // #151 review 7: temper's variable model is not bash, so a command name from an assignment is
+    // never read, nor $HOME or $PWD on a line that writes them; each of these is denied.
+    for (const cmd of [
+      'X=cargo; $X test', `X=cargo; read X <<< git; $X apply ${out('doc.diff')}`, `X=cargo; printf -v X git; $X apply ${out('doc.diff')}`,
+      `X=cargo; readarray -t X <<< git; $X apply ${out('doc.diff')}`, `Y=git; declare -n X=Y; $X apply ${out('doc.diff')}`,
+      `X=cargo; declare X[0]=git; $X apply ${out('doc.diff')}`, `X=cargo; unset -v X; $X git apply ${out('doc.diff')}`, `X=; $X git apply ${out('doc.diff')}`,
+      `X=git; true || X=cargo; $X apply ${out('doc.diff')}`, `X=git; while false; do X=cargo; done; $X apply ${out('doc.diff')}`,
+      `X=git; (X=cargo); $X apply ${out('doc.diff')}`, `X=cargo; time X=git; $X apply ${out('doc.diff')}`, `X=git; local X=cargo; $X apply ${out('doc.diff')}`,
+      `X=cargo; X=git builtin :; $X apply ${out('doc.diff')}`, `X=cargo; . ./set.sh; $X apply ${out('doc.diff')}`, `X=gitxapply; IFS=x; $X ${out('doc.diff')}`,
+      `X=cd; $X apply ${out('doc.diff')}`, `timeout $T apply ${out('doc.diff')}`, `X=status; read X <<< apply; git $X ${out('doc.diff')}`,
+      'X=cargo; cd /tmp; $PWD/x', 'IFS=/; $HOME/cargo test', `hash -p /usr/bin/git cargo; cargo apply ${out('doc.diff')}`,
+      `env -S 'git apply ${out('doc.diff')}'`, `shopt -s expand_aliases\nalias cargo='git apply'\ncargo ${out('doc.diff')}`,
+      // #151 review 8: an expansion in a command name or a wrapper's word.
+      '$HOME/.cargo/bin/cargo --version', '"$X"', '"$X$Y"', '"$(which cargo)" test', 'timeout "${T:-60}" cargo test', 'nice -n "$N" cargo test',
+      // A name built from an expansion is not read, whatever its last segment (wi-9792d6); the dashed git-apply is read at any path.
+      `"$X/git" apply ${out('doc.diff')}`, `"$X/git-apply" ${out('doc.diff')}`, `"$X/patch" -p1 < ${out('doc.diff')}`, `"$HOME/bin/sudo" git apply ${out('doc.diff')}`,
+      // Code options in any argument of node, bun and ruby, and a code word built from an expansion.
+      `node --disable-warning DEP0040 -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `node --unhandled-rejections strict -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `node --env-file-if-exists .env -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`,
+      `bun --cwd . -e "require('child_process').execSync('git apply ${out('doc.diff')}')"`, `ruby --encoding UTF-8 -e 'system("git apply ${out('doc.diff')}")'`,
+      'node script.js -e "$ENVNAME"', 'node --eval "$X"', 'php -r "$X"', 'python3 -Ic "$X"',
+      // env -S, in any spelling, splits a string with its own syntax.
+      "env -S 'cargo test'", "env -iS 'cargo test'", "env --split 'cargo test'", "env --sp='cargo test'", `env -S 'git\\_apply ${out('doc.diff')}'`,
+      `env - git apply ${out('doc.diff')}`, `env --unse X git apply ${out('doc.diff')}`,
+    ]) assert.equal(decision(asReviewer(cmd)), 'deny', cmd);
+    // For other agents env -S is read, `\_` as a space, and a patch onto a .rs file is denied.
+    for (const cmd of [
+      `env -iS 'git apply ${out('rs.diff')}'`, `env --split 'git apply ${out('rs.diff')}'`, `env -S 'git\\_apply ${out('rs.diff')}'`,
+      `X=; $X git apply ${out('rs.diff')}`, `"$X/git-apply" ${out('rs.diff')}`,
+    ]) assert.equal(decision(bash(cmd)), 'deny', cmd);
+    // Each fail-closed deny says what to run instead.
+    assert.match(reason(asReviewer('git $x')), /git's own commands/);
+    assert.match(reason(asReviewer('cat x.py | python3')), /not through an interpreter/);
+    assert.match(reason(asReviewer('git config alias.ap apply')), /sets no git alias/);
+    assert.match(reason(asReviewer('cat cmd.sh | bash')), /not as a script piped or redirected into a shell/);
+    // Another agent's non-Rust patch still runs, and so do the forms the reviewer alone is denied because temper cannot resolve them.
+    for (const cmd of [
+      `git apply "${out('doc.diff')}"`, `gpatch -p1 -i "${out('doc.diff')}"`, 'git ${CMD:-status}',
+      `python3 -c "import subprocess; subprocess.run(['git', 'apply', '${out('doc.diff')}'])"`,
+      // A name built from an expansion keeps main's reading for other agents (wi-9792d6).
+      `"$X/git" apply ${out('rs.diff')}`, '"$HOME/.cargo/bin/cargo" test',
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
+  });
+});
+
+// #151 round 9 (wi-9792d6): every command temper tells the reviewer to run, in its agent file, the
+// review skill, the rubric and its SubagentStart context, runs for it, as on main.
+test('Bash: every command temper tells the reviewer to run is not denied', () => {
+  const asReviewer = (command) => preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: 'temper:rust-reviewer', tool_input: { command } });
+  const docs = ['agents/rust-reviewer.md', 'skills/review/SKILL.md', 'skills/rust-craft/references/review-rubric.md']
+    .map((f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), 'utf8')).join('\n');
+  const said = [...docs.matchAll(/`((?:node|git|cargo|temper) [^`]+)`/g)].map((m) => m[1])
+    // What the reviewer is told never to run.
+    .filter((c) => !/^git (?:apply|am|cherry-pick|merge|checkout)$/.test(c))
+    // `git diff/log/show/status` and `cargo clippy/test/doc/tree/metadata` name several commands.
+    .flatMap((c) => (/^(git|cargo) (\w+(?:\/\w+)+)$/.test(c) ? c.split(' ')[1].split('/').map((x) => `${c.split(' ')[0]} ${x}`) : [c]))
+    .map((c) => c.replace(/<base>/g, 'HEAD~1').replace(/<crate>/g, 'ledger-domain').replace(/<worktree> …/g, `"${ws}" diff`).replace(/\$ARGUMENTS/g, 'main'));
+  const gate = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" gate --check';
+  const scan = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/temper.mjs" scan';
+  assert.ok(said.includes(gate) && said.includes(scan), said.join('\n'));
+  assert.ok(said.length >= 15, said.join('\n'));
+  // The SubagentStart context's gate command (TEMPER_BASE when the tree has its own base, cd into a
+  // worktree), its scope command, and the CLI path the SessionStart env file exports.
+  const cli = path.join(ws, 'plugin', 'scripts', 'temper.mjs').split(path.sep).join('/');
+  const context = [
+    `node "${cli}" gate --check`, `TEMPER_BASE=0123456789abcdef0123456789abcdef01234567 node "${cli}" gate --check`,
+    `cd "${ws}" && TEMPER_BASE=0123456789abcdef0123456789abcdef01234567 node "${cli}" gate --check`,
+    `git -C "${ws}" diff 0123456789abcdef0123456789abcdef01234567`, 'node "$TEMPER_CLI" gate --check',
+  ];
+  for (const cmd of [...said, ...context]) {
+    for (const form of [cmd, cmd.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, '$CLAUDE_PLUGIN_ROOT'), `${cmd} || true`, `${cmd} 2>&1 | tail -n 40`]) {
+      assert.equal(decision(asReviewer(form)), 'none', form);
+    }
+  }
+});
+
+// #151 review 5: \s*\[?\s* in the call pattern backtracked quadratically over a run of spaces.
+test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a call is decided in under a second', () => {
+  for (const command of [`python3 -c "system(${' '.repeat(1 << 20)}x"`, `python3 -c "system(${'\\t'.repeat(50000)}x"`,
+    `python3 -c "${'\\t'.repeat(50000)}"`, `python3 -c "system([${' '.repeat(1 << 20)}x"`, `python3 -c "${'system( '.repeat(50000)}x"`]) {
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      const res = preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+      assert.equal(decision(res), 'none', command.slice(0, 24));
+    }
+  }
+});
+
+// #151 review 4: printf reusing its format over many arguments made the old emulation quadratic.
+test('Bash: a 48 KB printf command piped into a shell is decided in well under a second', () => {
+  const n = 16000;
+  for (const command of [`printf '%s${'x'.repeat(n)};' ${'a '.repeat(n)}| bash`, `printf '%s ls;' ${'a '.repeat(n)}`]) {
+    assert.ok(command.length >= 32000, String(command.length));
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      const res = preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${agent ?? 'main'}: ${ms} ms`);
+      assert.equal(decision(res), agent && command.endsWith('| bash') ? 'deny' : 'none', agent);
+    }
+  }
+});
+
+test('Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files are refused for any agent (#151)', () => {
+  withOutside((out) => {
+    for (const cmd of [
+      `gpatch -p1 -i "${out('rs.diff')}"`,
+      `busybox patch -p1 -i "${out('rs.diff')}"`,
+      `watch git apply "${out('rs.diff')}"`,
+      `watch -n 1 -x git apply "${out('rs.diff')}"`,
+      `git -c alias.ap=apply ap "${out('rs.diff')}"`,
+      `git -c 'alias.ap=apply --index' ap "${out('rs.diff')}"`,
+      // An alias temper cannot read, on a subcommand git does not have, reads as git apply.
+      `X=apply git --config-env=alias.ap=X ap "${out('rs.diff')}"`,
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('rs.diff')}"`,
+      // The dashed forms, at any path.
+      `git-apply "${out('rs.diff')}"`,
+      `/usr/lib/git-core/git-apply "${out('rs.diff')}"`,
+      `"$(git --exec-path)/git-apply" "${out('rs.diff')}"`,
+      // #151 review 3: options at the start of an alias, a long alias chain. A script piped into a
+      // shell is not read (wi-0e226b): the reviewer is denied it, and other agents leave it to the Stop gate and CI.
+      `git -c alias.ap='-p apply' ap "${out('rs.diff')}"`,
+      `bash <<'EOF'\ngit apply "${out('rs.diff')}"\nEOF`,
+      `cat <<'EOF' | bash\ngit apply "${out('rs.diff')}"\nEOF`,
+      `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('rs.diff')}"`,
+      // #151 review 5: the -c script is the first operand after the options, `--` and `-x` among them.
+      `bash -c -- 'git apply "${out('rs.diff')}"'`,
+      `sh -c -- 'patch -p1 < "${out('rs.diff')}"'`,
+      `bash -euo pipefail -c 'git apply "${out('rs.diff')}"'`,
+      `bash -c -x 'git apply "${out('rs.diff')}"'`,
+      `bash -c $'git\\x20apply "${out('rs.diff')}"'`,
+    ]) {
+      const res = bash(cmd);
+      assert.equal(decision(res), 'deny', cmd);
+      assert.match(reason(res), /crates\/ledger-domain\/src\/lib\.rs/, cmd);
+    }
+    for (const cmd of [
+      `gpatch --dry-run -p1 -i "${out('rs.diff')}"`, `watch git apply --check "${out('rs.diff')}"`, `git -c 'alias.ck=apply --check' ck "${out('rs.diff')}"`,
+      `busybox patch -p1 -i "${out('doc.diff')}"`,
+      `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ap GIT_CONFIG_VALUE_0=apply git ap "${out('doc.diff')}"`,
+      'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.lg GIT_CONFIG_VALUE_0=log git lg --oneline',
+      'git config alias.ap apply',
+      `/usr/lib/git-core/git-apply --check "${out('rs.diff')}"`, `git-apply "${out('doc.diff')}"`, 'git-diff HEAD',
+      `echo 'git apply ${out('doc.diff')}' | bash`, 'cat cmd.sh | bash', 'echo hi | grep h', 'cargo test 2>&1 | tail',
+      `git ${Array.from({ length: 10 }, (_, k) => `-c alias.a${k}=a${k + 1}`).join(' ')} -c alias.a10=apply a0 "${out('doc.diff')}"`,
+    ]) assert.equal(decision(bash(cmd)), 'none', cmd);
   });
 });
 

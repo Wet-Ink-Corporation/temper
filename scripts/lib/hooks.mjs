@@ -13,7 +13,7 @@ import {
   fingerprint, diffStat, run, startFingerprint, pruneFingerprintState, resolveRev, redactCommand, sessionTelemetry, pidAlive,
 } from './project.mjs';
 import { scanSource, newHits, classifyPath, formatHit, isBuildScript } from './scan.mjs';
-import { parseCommands, commandWrites, patchCommand, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
+import { parseCommands, commandWrites, patchCommand, opaquePatch, patchFiles, wordPath, landing, resolvePath as rsResolvePath } from './shell.mjs';
 import { parseToml } from './toml.mjs';
 import {
   workspaceRootFor, memberProblems, watchedKeys, benignWhenNew, depRequirements, nonCaretRequirement, inheritsLints,
@@ -427,7 +427,17 @@ function patchTouches(p, c, written, want = (f) => /\.rs$/.test(f)) {
 const RS_COPY_SCANNED = Symbol('temper-rs-copies-scanned');
 // The sanctioned way to move Rust between worktrees (#140): a commit brought in with git, which the Stop gate and CI check.
 const PATCH_ROUTE = 'To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in.';
-const REVIEWER_PATCH_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
+// What the reviewer runs instead of a command temper cannot resolve (#151), by opaquePatch's kind.
+const REVIEWER_OPAQUE_HINT = {
+  git: 'Run one of git\'s own commands with its name written out; the reviewer runs no git alias.',
+  code: 'Run the git or shell command directly, not through an interpreter, so temper can read it.',
+  script: 'Run the commands directly, not as a script piped or redirected into a shell, so temper can read them.',
+  alias: 'The reviewer sets no git alias, because an alias could run `git apply` or `git am` later.',
+};
+// A command name that is not a literal word (#151 review 6, wi-9792d6): the command may be fine, written out.
+const REVIEWER_NAME_DENY = 'temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so a command whose name temper cannot read was not run.';
+const REVIEWER_NAME_HINT = 'Write the command name out, with no variable or `$(...)` in it (`cargo test`, `~/.cargo/bin/cargo test`, not `"$CARGO" test`, `"$HOME/.cargo/bin/cargo" test` or `$(which cargo) test`), so temper can tell that it applies no patch.';
+const REVIEWER_PATCH_DENY ='temper: the reviewer is read-only, and `git apply`, `git am` and `patch` change files, so the command was not run. Do not retry it in any form. Review the change where it is (`git diff`, `git show`; `git apply --check` and `--stat` inspect a patch), and report what should change as a finding.';
 
 /**
  * cp/mv/install/rsync/git mv/Copy-Item/Move-Item onto .rs files, and git apply/am/patch of
@@ -622,8 +632,9 @@ function shellRustWrites(cmd, proj, input) {
     const p = patchCommand(c);
     if (p?.apply) {
       const r = patchTouches(p, c, written);
-      if (!r.read) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
-      else patched.push(...r.touched);
+      // A guessed alias (see patchCommand) counts only with a patch file temper can read.
+      if (r.read) patched.push(...r.touched);
+      else if (!p.guessed) unknown.push({ t: [c.argv0, ...c.args].map((x) => x.raw).join(' '), why: r.later ? 'later' : 'patch' });
     }
     const lnFlag = (letter, long) => c.name === 'ln' && c.args.some((a) => new RegExp(`^-[a-zA-Z]*${letter}`).test(a.raw) || a.raw === long);
     const symbolic = lnFlag('s', '--symbolic');
@@ -844,7 +855,8 @@ function protectedShellWrites(proj, cmd, cwd) {
     const p = protectedPatch(c);
     if (p?.apply) {
       const r = configPatchTouches(p, c);
-      if (!r.read && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
+      // A guessed alias (see patchCommand) counts only with a patch file temper can read.
+      if (!r.read && !p.guessed && unreadPatch === null) unreadPatch = [c.argv0, ...c.args].map((w) => w.raw).join(' ');
       const named = [...p.outputs, ...(p.target ? [p.target] : [])].map((w) => w.value);
       const listed = r.read ? r.touched.filter((f) => !named.includes(f)) : [];
       for (const base of p.cwd ? [p.cwd] : [start, proj.root]) {
@@ -1008,10 +1020,24 @@ export function preBash(input) {
   const cmd = String(input.tool_input?.command ?? '');
   const proj = discover(input.cwd);
   if (!proj) return none();
-  // The reviewer reviews the tree as it is: it applies no patch, Rust or not (#140).
-  if (REVIEWER.test(input.agent_type ?? '') && readerRule(() => parseCommands(cmd, { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root }).some((c) => patchCommand(c)?.apply), false)) {
-    telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
-    return deny(REVIEWER_PATCH_DENY);
+  // The reviewer reviews the tree as it is: it applies no patch, Rust or not (#140). For it alone,
+  // a command temper cannot resolve that may apply one is denied too (#151); other agents'
+  // dynamic commands are left to the Stop gate and CI, which check the Rust they leave.
+  if (REVIEWER.test(input.agent_type ?? '')) {
+    const opts = { cwd: input.cwd ?? proj.root, top: proj.gitRoot ?? proj.root };
+    const cmds = readerRule(() => parseCommands(cmd, opts), []);
+    if (cmds.some((c) => readerRule(() => patchCommand(c)?.apply, false))) {
+      telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch' });
+      return deny(REVIEWER_PATCH_DENY);
+    }
+    // The fail-closed check takes no value from temper's model of variables, which is not bash's (#151 review 7).
+    const unread = readerRule(() => parseCommands(cmd, { ...opts, untracked: true }), []);
+    const opaque = unread.map((c) => readerRule(() => opaquePatch(c), null)).find(Boolean);
+    if (opaque) {
+      telemetry(proj, input, 'deny-shell-write', { via: 'reviewer-patch-opaque' });
+      if (opaque.kind === 'name') return deny(`${REVIEWER_NAME_DENY} This command holds ${opaque.why}. ${REVIEWER_NAME_HINT}`);
+      return deny(`${REVIEWER_PATCH_DENY} This command holds ${opaque.why}, so temper cannot tell that it applies no patch. ${opaque.hint ?? REVIEWER_OPAQUE_HINT[opaque.kind]}`);
+    }
   }
   if (SHELL_WRITE_RS.some((re) => re.test(cmd))) {
     telemetry(proj, input, 'deny-shell-write', { cmd: redactCommand(cmd) });
