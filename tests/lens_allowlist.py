@@ -56,8 +56,8 @@ GATING_BLOCK = re.compile(GATING_HOOK.pattern + r".*?\.catch\(\(\$, e, next\) =>
 # The gating hooks, whitespace collapsed. Each passes `e` down, returns `next(e)`'s result as it
 # came, and only then starts a refresh (the Stops: a poll while next(e) runs, a report after). Changing one means changing this pin, in review.
 GATING_SOURCE = [
-    "on('classic.Stop', async ($, e, next) => { if (off) return next(e) const watch = await watchStop($) let result try { result = await next(e) } finally { unwatchStop(watch) } $.clock.after(0, () => afterStop($, watch, result.block)) return result }).catch(($, e, next) => next(e))",
-    "on('classic.SubagentStop', async ($, e, next) => { if (off) return next(e) const watch = await watchStop($) let result try { result = await next(e) } finally { unwatchStop(watch) } $.clock.after(0, () => afterStop($, watch, result.block)) return result }).catch(($, e, next) => next(e))",
+    "on('classic.Stop', async ($, e, next) => { if (off) return next(e) const watch = await watchStop($, e.agent_type ?? 'main') let result try { result = await next(e) } finally { unwatchStop(watch) } $.clock.after(0, () => afterStop($, watch, result.block)) return result }).catch(($, e, next) => next(e))",
+    "on('classic.SubagentStop', async ($, e, next) => { if (off) return next(e) const watch = await watchStop($, e.agent_type ?? 'main') let result try { result = await next(e) } finally { unwatchStop(watch) } $.clock.after(0, () => afterStop($, watch, result.block)) return result }).catch(($, e, next) => next(e))",
     "on('tool.call', async ($, e, next) => { const result = await next(e) if (!off && CHANGING_TOOLS.has(String(e.tool))) refreshSoon($) return result }).catch(($, e, next) => next(e))",
 ]
 
