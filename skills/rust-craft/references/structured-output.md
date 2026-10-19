@@ -395,11 +395,11 @@ pub fn report(text: &str, now_unix: u64) -> Report<'_> {
 }
 ```
 **Don't.**
-```rust,ignore
+```rust,ignore,expect=scan:serde-hashmap
 #[derive(Serialize)]
 struct Report { counts: HashMap<String, u64>, generated_at: SystemTime } // order varies per run; clock read inside
 ```
-**Detect.** `HashMap`/`HashSet` in `Serialize` types; `SystemTime::now`, `Uuid::new_v4`, `rand` inside output-producing functions; snapshot tests that flake.
+**Detect.** `HashMap`/`HashSet` in `Serialize` types (scan advisory `serde-hashmap`); `SystemTime::now`, `Utc::now`, `Uuid::new_v4` in library code outside the trait impl of an injected clock or id port (scan advisory `ambient-now`); `rand` inside output-producing functions; snapshot tests that flake.
 
 ## CLI output modes
 

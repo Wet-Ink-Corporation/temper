@@ -118,11 +118,13 @@ export function scanChanged(proj, base) {
 }
 
 /**
- * Member manifests against their base-revision text (MOD-09, ARC-01, PERF-09).
+ * Member manifests against their base-revision text (MOD-09, ARC-01, PERF-09,
+ * TST-09), and each member's charter (ARC-08).
  * Only problems a manifest did not have at the base fail (the ratchet), so a
  * legacy member does not turn the gate red; a new, untracked or changed member
  * (or a changed root manifest) is checked in full. Without a base, every
- * problem counts.
+ * problem counts, except the checks added in 1.x (mocking crates, charters),
+ * which then only advise.
  * @returns {{ ok: boolean, summary: string }}
  */
 export function checkManifestPaths(proj, base, rootPath, manifestPaths) {
@@ -133,6 +135,16 @@ export function checkManifestPaths(proj, base, rootPath, manifestPaths) {
   const rootBase = rootBaseText === null ? null : parseToml(rootBaseText);
   const fresh = [];
   const legacy = [];
+  // A manifest at its base path, or at the path it was moved from (a crate moved or renamed with its directory).
+  let renames = null;
+  const atBase = (rel) => {
+    const text = showAt(proj, base, rel);
+    if (text !== null) return { rel, text };
+    renames ??= renamedSince(proj, base);
+    const old = renames.get(norm(rel));
+    const was = old ? showAt(proj, base, old) : null;
+    return was === null ? null : { rel: old, text: was };
+  };
   for (const mp of manifestPaths) {
     const rel = relTo(proj.root, mp);
     const now = parseToml(readText(mp));
@@ -143,11 +155,18 @@ export function checkManifestPaths(proj, base, rootPath, manifestPaths) {
     let before = [];
     if (changed && !changed.has(rel) && !changed.has(rootRel)) before = after; // untouched since the base
     else if (changed && rootBase) {
-      const baseText = showAt(proj, base, rel);
-      const was = baseText === null ? null : parseToml(baseText);
+      const prior = atBase(rel);
+      const was = prior ? parseToml(prior.text) : null;
       if (was) before = memberProblems(was, { path: rootPath, manifest: rootBase, self }, opts);
     }
     const split = splitProblems(before, after);
+    // A check added in 1.x (`newOnly`) has nothing to compare with when there is no base: advise only.
+    if (!changed) {
+      split.legacy.push(...split.fresh.filter((p) => p.newOnly));
+      split.fresh = split.fresh.filter((p) => !p.newOnly);
+    }
+    const c = charterProblem(proj, base, mp, changed && atBase);
+    if (c) split[c.fresh ? 'fresh' : 'legacy'].push(c);
     for (const p of split.fresh) fresh.push(`${p.id} ${rel}: ${p.msg}.\n    fix: ${p.fix}`);
     for (const p of split.legacy) legacy.push(`${p.id} ${rel}`);
   }
@@ -156,7 +175,26 @@ export function checkManifestPaths(proj, base, rootPath, manifestPaths) {
     ok: fresh.length === 0,
     summary: fresh.length
       ? fresh.join('\n') + (old ? `\n(${old})` : '')
-      : `${manifestPaths.length} member manifest(s): no new lint-inheritance or profile problems${old ? `; ${old}` : ''}`,
+      : `${manifestPaths.length} member manifest(s): no new lint-inheritance, profile, mocking-crate or charter problems${old ? `; ${old}` : ''}`,
+  };
+}
+
+/**
+ * ARC-08: a member without `AGENTS.md` beside its manifest. It fails only when
+ * the crate is new since the base, or its charter existed at the base; a crate
+ * that already lacked one (also after a move), or any crate when there is no
+ * base (`atBase` null), is advisory.
+ * @returns {{ id: string, msg: string, fix: string, fresh: boolean } | null}
+ */
+function charterProblem(proj, base, manifestPath, atBase) {
+  const dir = path.dirname(path.resolve(manifestPath));
+  if (fs.existsSync(path.join(dir, 'AGENTS.md'))) return null;
+  const was = atBase ? atBase(relTo(proj.root, manifestPath)) : null;
+  const legacy = !atBase || (was !== null && showAt(proj, base, path.posix.join(path.posix.dirname(was.rel), 'AGENTS.md')) === null);
+  return {
+    id: 'ARC-08', fresh: !legacy,
+    msg: 'the crate has no charter (`AGENTS.md` beside its Cargo.toml)',
+    fix: 'add `AGENTS.md` (purpose, layer, allowed dependencies, public surface, invariants, error types, test strategy, do-not list, decisions log: the template in architecture.md, ARC-08) and a `CLAUDE.md` containing `@AGENTS.md`. Filling in its layer and allowed dependencies is part of the crate-boundary decision (H-16, ARC-07).',
   };
 }
 

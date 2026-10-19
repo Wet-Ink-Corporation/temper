@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Checks for five review-only MUST rules, and the rest marked review-only by design (#58, wi-3fa7cf).** Thirty MUST rules were enforced by the reviewer alone. Each new check fails only new or changed code, so a repository on 1.4 stays green on code it does not touch (decisions.md 3.2):
+- **TST-09, test-only branches.** A new scanner rule, `test-branch`, refuses a `cfg!(test)` or `#[cfg(test)]` inside a production function body. It is hard at Write and Edit, and in the gate's scan of changed files, which compare with the code before. It is left out of the whole-workspace findings (CI's `baseline --check`, `temper report`), because no existing baseline counts it.
+- **TST-09, mocking crates.** A mocking crate (`faux`, `httpmock`, `mockall`, `mockall_double`, `mockito`, `mry`, `unimock`, `wiremock`) newly added to `[dependencies]` is refused by the manifest hook and fails the gate's manifests step. `[dev-dependencies]`, an optional dependency behind a `test-util` feature, and a mocking crate the manifest already had are not refused.
+- **ARC-08, charters.** The gate's manifests step fails for a member crate without `AGENTS.md` when the crate is new since the base or its charter was deleted. An older crate without one is reported as advisory, and so is every crate when there is no base revision. The hook's question for a new crate says that it needs a charter.
+- **OUT-04 and ASY-17, advisories.** Three soft scanner rules: `serde-hashmap` (a `HashMap`/`HashSet` field in a `Serialize` type), `ambient-now` (`SystemTime::now`, `Utc::now`, `Uuid::new_v4` and similar in library code, outside a trait impl) and `spin-lock` (`spin_loop()`, or an atomic `swap(true, ..)` or `compare_exchange` inside a loop).
+- **ARC-02 and API-17 stay review.** cargo-deny's `[bans]` `wrappers` cannot state a layer rule without the workspace's own crate names, so the template's `deny.toml` is unchanged, and architecture.md says why. API-17's Enforced-by cell no longer claims CI, since no template job runs `cargo semver-checks`; ARC-16's names the template's per-member `cargo check`.
+- **The standard.** rules.md lists the 17 MUST rules that are review-only by design, and the review rubric names each of them, plus OUT-02, TST-09 and ARC-16 (92 of 182 rules by ID, up from 80).
+
+Upgrading from 1.4: the hooks and the gate change with the plugin. CI runs the vendored copy, so `.claude/temper/` drifts until `/temper:setup --force` refreshes it. The new checks fail nothing on code that is not changed, so no baseline update is needed.
+
 ## 1.4.0 (2026-10-19)
 
 **CI type-checks the temper lens (wi-78d987).** `tests/lens-check.sh`, and so CI's `temper lens` step, now runs a strict `tsc` pass (`strict`, `noUncheckedIndexedAccess`) over the lens and its tests, so a type error fails CI rather than showing only when Claude Code loads the lens. CI fetches TypeScript 7.0.2 through npx, pinned like the Claude Code CLI. The plugin API types it checks against are vendored in `tests/lens-types/`, because Claude Code writes them only when an interactive session loads a mod.
