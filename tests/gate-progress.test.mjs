@@ -83,6 +83,58 @@ test('gate progress: the file names the current step while it runs, status --jso
   assert.deepEqual(after.gate.steps.map((s) => s.name), ['fmt', 'scan', 'manifests', 'first', 'pause']);
 });
 
+/**
+ * A directory holding a `cargo` that delays `fmt` and the nextest probe by `ms` (and has no
+ * nextest), passes the cargo steps at once, and runs the real cargo for everything else.
+ */
+function slowCargo(t, ms) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-cargo-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const real = spawnSync('sh', ['-c', 'command -v cargo'], { encoding: 'utf8' }).stdout.trim();
+  const secs = (ms / 1000).toFixed(1);
+  fs.writeFileSync(path.join(dir, 'cargo'), [
+    '#!/bin/sh',
+    'case "$1" in',
+    `  fmt) sleep ${secs}; exec '${real}' "$@" ;;`,
+    `  nextest) sleep ${secs}; exit 1 ;;`,
+    '  clippy|test|doc) exit 0 ;;',
+    `  *) exec '${real}' "$@" ;;`,
+    'esac',
+    '',
+  ].join('\n'), { mode: 0o755 });
+  return dir;
+}
+
+test('gate progress: the start is the gate\'s own, before the toolchain probe and fmt, and the nextest probe runs under no step', { skip: (!hasGit || !hasCargo || process.platform === 'win32') && 'git, cargo or a POSIX shell not available' }, async (t) => {
+  const { ws, proj } = workspace(t, undefined);
+  const slow = 1500;
+  const launched = Date.now();
+  const child = spawn(process.execPath, [CLI, 'gate', '--no-cache'], {
+    cwd: ws, env: { ...env(), PATH: `${slowCargo(t, slow)}${path.delimiter}${process.env.PATH}` }, stdio: 'ignore',
+  });
+  let code = null;
+  const exited = new Promise((done) => { child.on('exit', (c) => { code = c; done(); }); });
+  t.after(() => child.kill());
+
+  const file = gateProgressPath(proj, fingerprint(proj, headRev(proj)));
+  const seen = [];
+  for (let i = 0; i < 1200 && code === null; i += 1) {
+    await sleep(25);
+    try { seen.push(JSON.parse(fs.readFileSync(file, 'utf8'))); } catch { /* not written yet, or gone */ }
+  }
+  await exited;
+  assert.equal(code, 0);
+  assert.ok(seen.length > 0, 'the progress file was seen');
+  // fmt alone sleeps 1.5 s here: a start taken after it would be at least that late.
+  const lag = Date.parse(seen[0].startedAt) - launched;
+  assert.ok(lag < slow * 2 / 3, `the gate's start is before fmt (${lag} ms after launch)`);
+  // The 1.5 s nextest probe runs once manifests is done and before clippy starts, with no step current.
+  const names = (p) => p.steps.map((s) => s.name).join(',');
+  assert.ok(seen.some((p) => names(p) === 'fmt,scan,manifests' && p.current === null), 'a snapshot between manifests and clippy');
+  const underManifests = seen.filter((p) => p.current?.name === 'manifests').length;
+  assert.ok(underManifests * 25 < slow / 2, `manifests is current only while it runs (${underManifests} snapshots)`);
+});
+
 /** A state dir as discover() returns it, with the default step timeout. */
 function state(t) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-pstate-'));

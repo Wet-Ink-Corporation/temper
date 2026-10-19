@@ -390,7 +390,7 @@ export function scanFindings(proj, crates, { cfg = proj.config, map = ruleMap(),
 }
 
 /** The toolchain release and host triple (`rustc -vV`), honouring rust-toolchain.toml. */
-function toolchainOf(proj) {
+export function toolchainOf(proj) {
   const r = run('rustc', ['-vV'], { cwd: proj.root, timeoutMs: 60000 });
   return { toolchain: /^release:\s*(\S+)/m.exec(r.stdout)?.[1] ?? null, host: /^host:\s*(\S+)/m.exec(r.stdout)?.[1] ?? null };
 }
