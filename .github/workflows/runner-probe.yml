@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-15]
+        runner: [blacksmith-4vcpu-ubuntu-2404, blacksmith-4vcpu-ubuntu-2404-arm, blacksmith-4vcpu-windows-2025, blacksmith-4vcpu-windows-2025, blacksmith-6vcpu-macos-15]
     defaults:
       run:
         shell: bash
