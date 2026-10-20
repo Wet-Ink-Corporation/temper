@@ -22,7 +22,7 @@ import {
 import { runtimeWarnings } from './requirements.mjs';
 import { runGate, renderGate, cachedGate } from './gate.mjs';
 import { writeTargets, msysPath } from './shell.mjs';
-import { extractVerdict, verdictProblems, problemKinds, recordVerdict, verdictFor, summarizeFindings } from './verdict.mjs';
+import { extractVerdict, verdictProblems, problemKinds, recordVerdict, verdictFor, historyFor, verdictHash, summarizeFindings, earlierReview } from './verdict.mjs';
 import {
   parseCommands as protectedCommands, commandWrites as protectedWrites, patchCommand as protectedPatch, pathspecPattern, resolvePath,
   landing as protectedLanding, patchFiles as protectedPatchFiles, commandDeletes as protectedDeletes,
@@ -1189,9 +1189,11 @@ function checkVerdict(proj, input, v) {
 function storeVerdict(proj, input, v, via) {
   const { proj: tree, base } = reviewedTree(proj, input, v.fingerprint);
   const current = fingerprint(tree, base);
-  recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
+  const rec = recordVerdict(proj, v, { agent_id: input.agent_id, stale: v.fingerprint !== current });
   writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}`), v.fingerprint);
-  telemetry(proj, input, 'verdict', { via, agent_id: input.agent_id, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length });
+  // One-shot: this agent's SubagentStop uses it to skip the same report read back from the transcript.
+  if (via === 'handback') writeAtomic(path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`), verdictHash(v));
+  telemetry(proj, input, 'verdict', { via, agent_id: input.agent_id, verdict: v.verdict, fp: v.fingerprint, stale: v.fingerprint !== current, findings: (v.findings ?? []).length, ...(rec.kept ? { kept: rec.kept } : {}) });
 }
 
 // ----------------------------------------------------------------- PostToolUse
@@ -1678,7 +1680,13 @@ export function subagentStop(input) {
     // A subagent that hands back (cloud sessions) has no last_assistant_message: read its report from the transcript.
     const report = input.last_assistant_message ?? reportFromTranscript(input.agent_transcript_path);
     const v = extractVerdict(report);
-    if (!v && already) return none(); // recorded by SubagentHandback or an earlier SubagentStop for this agent
+    // Recorded by SubagentHandback or an earlier SubagentStop for this agent: a hand-back's report
+    // read back from the transcript is not recorded twice (#136), while a resumed reviewer's new
+    // verdict, even on the same tree, is checked and recorded.
+    const hashFile = path.join(sessionDir(proj, input.session_id), `verdict-${agentKey(input)}.hash`);
+    const seen = readText(hashFile);
+    if (seen !== null) fs.rmSync(hashFile, { force: true });
+    if (already && (!v || (seen !== null && seen === verdictHash(v)))) return none();
     const problems = checkVerdict(proj, input, v);
     if (problems.length) {
       const detail = { problems: problems.length, kinds: problemKinds(problems), agent_id: input.agent_id };
@@ -1742,6 +1750,9 @@ export function subagentStart(input) {
   }
   if (reviewer) {
     lines.push(`- Your verdict's "fingerprint" field must be ${fp}${also.length ? ', or, if you were asked to review one of the worktrees listed above, that worktree\'s fingerprint' : ''}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.`);
+    // The verdict store is shared by every worktree, so a worktree's earlier verdict is found by its fingerprint.
+    const prior = verdictFor(proj, fp);
+    if (prior && !prior.stale) lines.push(earlierReview(prior, historyFor(proj, fp, prior.recorded_at).length));
     const stat = diffStat(tp, base);
     if (stat) lines.push(`- Diff stat:\n${stat.split('\n').slice(-25).join('\n')}`);
   }

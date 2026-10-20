@@ -135,6 +135,8 @@ Advisories such as `H-08 … new .clone() call(s)` and `ARC-12` caret-requiremen
 
 A verdict whose fingerprint no longer matches the tree is recorded as stale. Any change after the review needs a fresh one.
 
+Repeat reviews of one unchanged tree converge. A reviewer of a tree that already has a verdict is told that verdict, when it was recorded, its blocker and major findings, its scores below 3 and its gate entries that are not `pass`, and re-checks each one. A `changes-requested` verdict with none of those (no blocker or major finding, no score below 3, every gate entry `pass` or `n/a`) does not replace an approval of the same tree: the approval stays the verdict Stop reads, the later verdict is appended to `.git/temper/verdicts/<fingerprint>.history.jsonl`, and its telemetry row carries `"kept": "approved"`. A verdict with any of them replaces the approval, and an approval always replaces a `changes-requested` verdict.
+
 ## Finishing a turn (the `Stop` hook)
 
 | Message | Meaning | What to do |
@@ -142,7 +144,7 @@ A verdict whose fingerprint no longer matches the tree is recorded as stale. Any
 | `temper gate: RED …` and `The work is not done while the gate is red` | A gate step failed | Fix the failure. Never weaken tests or lints to do it (H-12). |
 | `manifests FAILED`, then `ARC-08 <crate>/Cargo.toml: the crate has no charter` | A crate that is new since the session's base, or whose charter was deleted, has no `AGENTS.md` | Add `AGENTS.md` (the template is in the standard's `architecture.md`, ARC-08) and a `CLAUDE.md` containing `@AGENTS.md`. Older crates without one are only reported. A crate moved to a new directory counts as old only when git sees its `Cargo.toml` as a rename; a move that also rewrites most of the manifest makes it a new crate here. |
 | `The gate is green, but the current tree (fingerprint …) has no approving independent review (PROC-08)` | Review is required, and no approval is bound to this exact tree | Delegate to `temper:rust-reviewer` (`/temper:review`) |
-| `The reviewer requested changes for this tree` | The latest verdict is `changes-requested` | Address or rebut each finding, then ask for a fresh review |
+| `The reviewer requested changes for this tree` | The recorded verdict is `changes-requested` | Address or rebut each finding, then ask for a fresh review |
 | `stopped with a RED gate (no progress after the previous block)`, or `stopped without an approving review` | The loop breaker: the hook blocked once, and the tree did not change, so it lets the turn end rather than loop | Read the reported failures yourself |
 | `Rust changes left in progress/blocked; the gate and review were not enforced` | The agent ended with `Status: WIP` or `Status: BLOCKED` | This is the honest exit for unfinished work. A `BLOCKED` status carries a question for you. |
 | `In the worktree .claude/worktrees/…:` before any of these | A subagent changed Rust in a worktree of its own, and the message is about that worktree's tree | The same as for the main checkout. For a review, tell `temper:rust-reviewer` the worktree path. When only worktrees changed, its context makes the worktree its target; otherwise it lists each changed worktree with its scope and fingerprint. |

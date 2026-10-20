@@ -735,17 +735,19 @@ function statsOf(rows) {
  * One session's review rounds, split into changes. A change is the run of rounds up to and
  * including the first approval of a current tree; the next verdict starts another change. A stale
  * approval (recorded for a tree that changed before it landed) does not close one, and an
- * approval, stale or not, of the tree just approved is that tree reviewed again, not a new change.
- * The rounds left open when the telemetry ends are a change never approved, which includes a
- * session still under way.
+ * approval, stale or not, of the tree just approved, or a verdict kept beside that approval
+ * (`kept: 'approved'`), is that tree reviewed again, not a new change. The rounds left open when
+ * the telemetry ends are a change never approved, which includes a session still under way.
  */
 function changesOf(verdicts) {
   const out = [];
   let open = 0;
   let approvedFp = null;
   for (const v of verdicts) {
-    // Any re-approval of the tree just approved, stale or not, is the same change.
-    if (v.verdict === 'approved' && typeof v.fp === 'string' && v.fp === approvedFp) continue;
+    // Any re-approval of the tree just approved, stale or not, or a verdict kept beside that
+    // approval (#136), is the same change.
+    const again = v.verdict === 'approved' || v.kept === 'approved';
+    if (again && typeof v.fp === 'string' && v.fp === approvedFp) continue;
     const approves = v.verdict === 'approved' && v.stale !== true;
     open += 1;
     approvedFp = null;

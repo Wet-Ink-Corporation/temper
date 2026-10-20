@@ -1,4 +1,6 @@
 // Review verdicts: parsing, validation and storage keyed by tree fingerprint.
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { readText, writeAtomic } from './project.mjs';
 
@@ -107,14 +109,64 @@ export function verdictProblems(v, ctx = {}) {
   return p;
 }
 
+const serious = (f) => f?.severity === 'blocker' || f?.severity === 'major';
+
+/** The dimensions `v` scores below 3. */
+const lowScores = (v) => DIMENSIONS.filter((d) => Number.isInteger(v.scores?.[d]) && v.scores[d] < 3);
+
+/** The gate entries of `v` that are neither "pass" nor "n/a". */
+const failedGate = (v) => Object.entries(v.gate ?? {}).filter(([, x]) => x !== 'pass' && x !== 'n/a').map(([k]) => k);
+
 /** The distinct problem kinds of a verdictProblems list, in order, for a telemetry row. */
 export const problemKinds = (problems) => [...new Set(problems.map((x) => x.kind))];
 
+/** The verdictProblems kinds that keep a verdict from being an approval of its tree. */
+const OVERTURN_KINDS = new Set(['approved-with-findings', 'approved-low-score', 'approved-gate-entry']);
+
+/**
+ * Whether `v` gives a reason to overturn an approval of its tree: the problems it would have as an
+ * approval, a blocker or major finding, a score below 3, or a gate entry that is not "pass" or "n/a".
+ */
+const overturns = (v) => verdictProblems({ ...v, verdict: 'approved' }).some((x) => OVERTURN_KINDS.has(x.kind));
+
+/** `s` on one line, so a multi-line field cannot add lines to a hook's message. */
+const oneLine = (s) => String(s ?? '').replace(/\s*[\r\n\u2028\u2029\u0085]+\s*/g, ' ');
+
+/**
+ * Record `v` as the verdict for its fingerprint, the one Stop reads. A
+ * changes-requested verdict that gives no reason to overturn (no blocker or
+ * major finding, no score below 3, no failing gate entry) does not replace a
+ * non-stale approval of the same tree (#136): the approval stays, and `v` is
+ * appended to verdicts/<fp>.history.jsonl, which is pruned with the verdict.
+ * The returned record then carries `kept: 'approved'`.
+ */
 export function recordVerdict(proj, v, meta = {}) {
   const rec = { ...v, recorded_at: new Date().toISOString(), ...meta };
-  writeAtomic(path.join(proj.stateDir, 'verdicts', `${v.fingerprint}.json`), JSON.stringify(rec, null, 2));
+  const dir = path.join(proj.stateDir, 'verdicts');
+  const prev = verdictFor(proj, v.fingerprint);
+  if (prev?.verdict === 'approved' && !prev.stale && v.verdict === 'changes-requested' && !overturns(v)) {
+    const kept = { ...rec, kept: 'approved' };
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, `${v.fingerprint}.history.jsonl`), `${JSON.stringify(kept)}\n`);
+    return kept;
+  }
+  writeAtomic(path.join(dir, `${v.fingerprint}.json`), JSON.stringify(rec, null, 2));
   return rec;
 }
+
+/** The verdicts kept as history beside an approval of `fp` and recorded after `since` (an ISO time), oldest first. */
+export function historyFor(proj, fp, since = '') {
+  const t = readText(path.join(proj.stateDir, 'verdicts', `${fp}.history.jsonl`)) ?? '';
+  return t.split('\n').flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } })
+    .filter((h) => String(h.recorded_at ?? '') > since);
+}
+
+/** `x` with its object keys sorted, at every depth. */
+const canonical = (x) => (Array.isArray(x) ? x.map(canonical)
+  : x && typeof x === 'object' ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, canonical(x[k])])) : x);
+
+/** A short hash of verdict `v`'s canonical JSON: the same report read twice hashes the same. */
+export const verdictHash = (v) => createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex').slice(0, 16);
 
 export function verdictFor(proj, fp) {
   const t = readText(path.join(proj.stateDir, 'verdicts', `${fp}.json`));
@@ -123,8 +175,28 @@ export function verdictFor(proj, fp) {
 }
 
 export function summarizeFindings(v, max = 10) {
-  const fs = (v.findings ?? []).filter((f) => f.severity === 'blocker' || f.severity === 'major');
-  const rest = (v.findings ?? []).length - fs.length;
-  return fs.slice(0, max).map((f) => `- [${f.severity}] ${f.rule} ${f.file}${f.line ? `:${f.line}` : ''}: ${f.fix}`).join('\n')
+  const bad = (v.findings ?? []).filter(serious);
+  const rest = (v.findings ?? []).length - bad.length;
+  return bad.slice(0, max).map((f) => `- [${f.severity}] ${oneLine(f.rule)} ${oneLine(f.file)}${f.line ? `:${oneLine(f.line)}` : ''}: ${oneLine(f.fix)}`).join('\n')
     + (rest > 0 ? `\n(${rest} minor/nit finding(s) in the full verdict)` : '');
+}
+
+/**
+ * The reviewer's SubagentStart lines for a tree that already has verdict `v` (#136): the earlier
+ * verdict, when it was recorded, its blocker and major findings, low scores and failing gate
+ * entries, so a repeat review re-checks them, and an approval of the unchanged tree is overturned
+ * only for one of those reasons. `kept` is the number of later verdicts kept as history beside it.
+ */
+export function earlierReview(v, kept = 0) {
+  const list = summarizeFindings(v).trim();
+  const head = `- An earlier review of this same tree is recorded: ${v.verdict} at ${oneLine(v.recorded_at ?? 'an unknown time')}`;
+  const lines = [(v.findings ?? []).some(serious) ? `${head}.\n${list}` : `${head}${overturns(v) ? '.' : ', with no blocker or major finding.'}${list ? `\n${list}` : ''}`];
+  const low = lowScores(v);
+  if (low.length) lines.push(`  Scores below 3: ${low.join(', ')}.`);
+  const gate = failedGate(v);
+  if (gate.length) lines.push(`  Gate entries not "pass": ${gate.map(oneLine).join(', ')}.`);
+  if (v.verdict === 'approved' && kept > 0) lines.push(`  ${kept} later changes-requested verdict(s) gave no reason to overturn it and are kept as history beside it.`);
+  lines.push('  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.');
+  if (v.verdict === 'approved') lines.push('  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not "pass", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval.');
+  return lines.join('\n');
 }

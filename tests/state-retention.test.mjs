@@ -68,13 +68,15 @@ test('prune: gate results, verdicts and logs past their age go; fresher ones sta
   put(proj, `verdicts/${fp(1)}.json`, 61);
   put(proj, `verdicts/${fp(2)}.json`, 59);
   put(proj, `verdicts/${fp(3)}.json`, 31); // older than the gate limit, younger than the verdict limit
+  put(proj, `verdicts/${fp(1)}.history.jsonl`, 61); // a verdict's history goes with it (#136)
+  put(proj, `verdicts/${fp(2)}.history.jsonl`, 59);
   put(proj, `logs/${fp(1)}-clippy.log`, 31);
   put(proj, `logs/${fp(2)}-test.log`, 29);
   put(proj, `logs/${fp(4)}-test.log`, 31); // a log whose gate result is gone
   put(proj, `logs/${fp(5)}-test.log`, 15); // ... and one younger than the gate limit
   pruneFingerprintState(proj, null);
   assert.deepEqual(list(proj, 'gate'), [`${fp(2)}.json`]);
-  assert.deepEqual(list(proj, 'verdicts'), [`${fp(2)}.json`, `${fp(3)}.json`]);
+  assert.deepEqual(list(proj, 'verdicts'), [`${fp(2)}.history.jsonl`, `${fp(2)}.json`, `${fp(3)}.json`]);
   assert.deepEqual(list(proj, 'logs'), [`${fp(2)}-test.log`, `${fp(5)}-test.log`]);
 });
 
