@@ -29,7 +29,7 @@ concurrency:
 jobs:
   check:
     name: Release checks
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       notes: ${{ steps.notes.outputs.notes }}
@@ -83,7 +83,7 @@ jobs:
   publish:
     name: GitHub release
     needs: check
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # Requires the owner's approval. The environment and its required reviewer
     # are set in the repository settings.
