@@ -1,5 +1,6 @@
 ---
 type: regex
 target: { source: file, path: crates/sessions/src/lib.rs }
-pattern: 'pub fn \w*expire\w*\s*\('
+# An expiry check exists, generic over a clock or not.
+pattern: 'pub (?:const )?fn \w*(?:expire|idle)\w*\s*[<(]'
 ---
