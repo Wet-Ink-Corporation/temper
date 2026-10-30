@@ -56,9 +56,6 @@ jobs:
   # from cargo, and symlink rights differ there.
   windows:
     name: Unit tests (Windows)
-    # Runs only while the org variable CI_NON_LINUX is 'true' (paused 2026-10 while
-    # hosted Actions minutes are exhausted). Skipped, the required check still passes.
-    if: vars.CI_NON_LINUX == 'true'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
