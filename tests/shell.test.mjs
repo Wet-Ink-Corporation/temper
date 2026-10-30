@@ -46,6 +46,21 @@ test('shell: compound keywords, wrappers, bash -c, eval, find -exec and $(...) a
   assert.deepEqual(targets('command -v cp'), []);
 });
 
+// #155 (wi-779016): $"..." quoting, eval --, trap and an awk system() run commands for every agent.
+test('shell: $"...", eval --, trap and awk system() reach the command inside', () => {
+  for (const cmd of [
+    'bash -c $"cp x k1"', '$"cp" x k1', 'eval $"cp x k1"', 'eval -- "cp x k1"', "trap 'cp x k1' EXIT", "trap -- 'cp x k1' EXIT INT",
+    `awk 'BEGIN{system("cp x k1")}'`, `gawk -e 'BEGIN { system("cp x k1") }'`, `awk -F: 'NR==1 { system("cp x k1"); print }' f`, `awk --source='BEGIN{system("cp x k1")}'`,
+    `awk 'BEGIN{system("cp\\040x\\ k1")}'`, `gawk -i lib.awk 'BEGIN{system("cp x k1")}'`, `gawk '-eBEGIN{system("cp x k1")}'`,
+  ]) {
+    assert.deepEqual(targets(cmd).map((t) => t[1]), [at('k1')], cmd);
+  }
+  for (const cmd of ['trap - EXIT', 'trap -p', 'trap -l', "trap 'rm -f k1' EXIT", 'echo $"x"', "awk '{print $1}' f", 'awk -f prog.awk f',
+    `gawk -E prog.awk 'BEGIN{system("cp x k1")}'`]) {
+    assert.deepEqual(targets(cmd).filter((t) => t[0] !== 'rm'), [], cmd);
+  }
+});
+
 test('shell: cd, pushd/popd, subshells and pipelines set the directory each command runs in', () => {
   const dirOf = (cmd) => parseCommands(cmd, { cwd: root, home: at('home') }).filter((c) => c.name === 'touch').map((c) => c.cwd);
   assert.deepEqual(dirOf('cd a && touch x; cd .. && touch y'), [at('a'), root]);
@@ -254,6 +269,17 @@ test('shell: opaquePatch flags a -c script, here-string, heredoc, eval argument 
     'bash <<EOF\ngit $X\nEOF', 'cat <<EOF | bash\n$X\nEOF', 'cat <<< "$X" | bash',
     'eval `cat cmd.txt`', 'eval "$(cat cmd.txt)"', 'X=ls; eval "$X"', 'xargs -0 -n1 eval < cmd.sh', 'while read -r l; do eval "$l"; done < cmd.sh',
   ]) assert.equal(o(cmd)?.kind, 'script', cmd);
+  // #155: a trap action, and an awk program that runs commands temper cannot read.
+  for (const cmd of ['trap "$X" EXIT', 'trap -- "$(cat x)" EXIT', `awk '{system($0)}' cmd.txt`, `awk '{ print | "sh" }' cmd.txt`, `echo x | awk -f /dev/stdin`,
+    'awk -f - < p.awk', 'awk -f <(cat p.awk) f', 'awk "$P" f', `awk 'BEGIN { "cat x" | getline l }'`, `awk 'BEGIN { c = "git apply x.diff"; system(c) }'`,
+    'gawk -i /dev/stdin 1 f < lib.awk', 'gawk -E /dev/fd/3 f', 'gawk --exec=- f', 'gawk -l "$L" 1 f', "gawk '-f/dev/stdin' f", "gawk -f '/dev/stdin' f", 'gawk --load /proc/self/fd/0 1 f',
+    `awk 'BEGIN { FS = "|" } { print $1 | "sh" }' f`]) {
+    assert.equal(o(cmd)?.kind, 'script', cmd);
+  }
+  for (const cmd of ["trap 'rm -f tmp' EXIT", "awk '{print $1}' f", "awk -F: '$3 > 10 || $4 < 2 { print $1 }' f", `awk 'BEGIN{system("ls")}'`, 'awk -f prog.awk f',
+    `awk 'BEGIN { FS = "|"; OFS = "a|b" } { print $1 }' f`, 'gawk -E prog.awk f', 'gawk -i lib.awk 1 f', `awk 'BEGIN { print "\\"|" }'`]) {
+    assert.equal(o(cmd), null, cmd);
+  }
   // A command name temper cannot read is its own kind (#151 review 6).
   for (const cmd of ['X=$(cat cmd.txt); $X', '$X x.diff', '"$CMD" x.diff', '${X:-ls}', '$(cat cmd.txt)', 'X=ls; X+=";git apply x.diff"; $X']) {
     assert.equal(o(cmd)?.kind, 'name', cmd);

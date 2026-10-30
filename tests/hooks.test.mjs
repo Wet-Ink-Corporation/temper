@@ -813,6 +813,23 @@ test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a
   }
 });
 
+// #155: `\s*\)?\s*` in codeWriteTargets' argument pattern, `\s*\(?\s*` after `open`, and the `\s*`
+// and `(?:\S*[\\/])?` prefix of the search-command pattern in blankProse backtracked quadratically, past
+// the 15 s hook timeout.
+test('Bash: a megabyte of spaces, parentheses or call openers is decided in under a second', () => {
+  for (const command of [`python3 -c "'busybox${' '.repeat(1 << 20)}"`, `python3 -c "x${' '.repeat(1 << 20)}.touch()"`,
+    `python3 -c "${"system('".repeat(150000)}"`, `${'('.repeat(1 << 20)}x`, `${';a='.repeat(20000)}x`, `${'(/'.repeat(20000)}x`,
+    `python3 -c "x${'\n'.repeat(1 << 19)}"`, `python3 -c "x${' \n'.repeat(1 << 18)}"`, `python3 -c "open${' '.repeat(1 << 16)}"`, `perl -e "open${' '.repeat(1 << 16)}"`,
+    `awk '${'"\\'.repeat(1 << 19)}'`]) {
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+    }
+  }
+});
+
 // #151 review 4: printf reusing its format over many arguments made the old emulation quadratic.
 test('Bash: a 48 KB printf command piped into a shell is decided in well under a second', () => {
   const n = 16000;
