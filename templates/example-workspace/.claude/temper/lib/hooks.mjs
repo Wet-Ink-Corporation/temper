@@ -931,6 +931,26 @@ function protectedShellWrites(proj, cmd, cwd) {
 const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
   .map((seg) => seg.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_m, a, b) => a ?? b ?? ''));
 
+// The CLI and its options, then `baseline`. `[^\s=]` stops each start's scan at the next start, and
+// an option is `-\S+` (not `--?\S+`, which reads `--x` two ways and backtracked exponentially).
+const BASELINE_CLI = /(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:-\S+\s+)*/g;
+const BASELINE_REST = /baseline\b(.*)$/y;
+/**
+ * The first `<cli> [options] baseline <rest>` in `seg`, with `rest` as group 1. A start inside an
+ * option chain (`-a=$0`) reaches the same end as the chain, so the scan resumes at the chain's last
+ * character rather than at each start, which re-read the chain from every one (#155).
+ */
+function baselineCall(seg) {
+  BASELINE_CLI.lastIndex = 0;
+  for (let m; (m = BASELINE_CLI.exec(seg));) {
+    BASELINE_REST.lastIndex = BASELINE_CLI.lastIndex;
+    const call = BASELINE_REST.exec(seg);
+    if (call) return call;
+    BASELINE_CLI.lastIndex = Math.max(m.index + 1, BASELINE_CLI.lastIndex - 1);
+  }
+  return null;
+}
+
 /**
  * `temper baseline --init` / `--update` through the plugin CLI, the vendored copy
  * (`node .claude/temper/temper.mjs`), `$TEMPER_CLI`, or any variable holding the
@@ -939,9 +959,7 @@ const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
  */
 export function baselineRaise(cmd) {
   for (const seg of unquotedSegments(cmd)) {
-    // `[^\s=]` stops each start's scan at the next start, so a run of `=` stays linear, and an
-    // option is `-\S+` (not `--?\S+`), which reads `--x` one way only (#155).
-    const call = /(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:-\S+\s+)*baseline\b(.*)$/.exec(seg);
+    const call = baselineCall(seg);
     if (!call) continue;
     const flag = /(?:^|\s)--?(init|update)(?![\w-])/.exec(call[1]);
     if (flag) return `--${flag[1]}`;
