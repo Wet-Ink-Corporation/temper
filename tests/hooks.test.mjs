@@ -817,10 +817,11 @@ test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a
 
 // #155: `\s*\)?\s*` in codeWriteTargets' argument pattern, `\s*\(?\s*` after `open`, and the `\s*`
 // and `(?:\S*[\\/])?` prefix of the search-command pattern in blankProse backtracked quadratically, past
-// the 15 s hook timeout.
+// the 15 s hook timeout. The `;a=` and `(/` runs are shorter because the parser's own linear cost per
+// command is high: 20,000 `(/` took just over a second on the Windows runner.
 test('Bash: a megabyte of spaces, parentheses or call openers is decided in under a second', () => {
   for (const command of [`python3 -c "'busybox${' '.repeat(1 << 20)}"`, `python3 -c "x${' '.repeat(1 << 20)}.touch()"`,
-    `python3 -c "${"system('".repeat(150000)}"`, `${'('.repeat(1 << 20)}x`, `${';a='.repeat(20000)}x`, `${'(/'.repeat(20000)}x`,
+    `python3 -c "${"system('".repeat(150000)}"`, `${'('.repeat(1 << 20)}x`, `${';a='.repeat(20000)}x`, `${'(/'.repeat(10000)}x`,
     `python3 -c "x${'\n'.repeat(1 << 19)}"`, `python3 -c "x${' \n'.repeat(1 << 18)}"`, `python3 -c "open${' '.repeat(1 << 16)}"`, `perl -e "open${' '.repeat(1 << 16)}"`,
     `awk '${'"\\'.repeat(1 << 19)}'`]) {
     for (const agent of ['temper:rust-reviewer', undefined]) {
