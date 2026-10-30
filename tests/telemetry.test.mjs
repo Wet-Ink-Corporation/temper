@@ -143,6 +143,7 @@ test('redactCommand: the contents of quoted strings are dropped, so file content
     ['echo \\"s3cret >> f', 'echo \\"…'],
     // A command substitution inside "…" can hold quotes of its own, so it drops the rest of the line.
     ['echo "$(printf "%s" "s3cret")" >> src/main.rs', 'echo "…'],
+    ['echo "${X:-"let k = hunter2xyz;"}" >> src/main.rs', 'echo "…'],
     ['echo "pub const K: &str = `echo "s3cret"`;" >> src/lib.rs', 'echo "…'],
     ['echo "a \\$(b) \\`c\\`" s3cret=ok', 'echo "…" s3cret=ok'],
     // A quote before the closing \" of a \"…\" drops the rest of the line too.

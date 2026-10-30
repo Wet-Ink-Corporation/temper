@@ -485,7 +485,8 @@ const REDACT_CAP = 2048;
  * quotes, \"…\". What a denied write puts in a file is usually quoted (echo 'let api_key = "x";'
  * >> src/main.rs), and so is many a secret, so no quoted text reaches the telemetry. An
  * unterminated quote drops the rest of the line; `cut` says so. So does a command substitution
- * ($( or `) inside "…", and a bare quote inside \"…\", since either can hide where the string ends.
+ * ($( or `) or a parameter expansion (${) inside "…", and a bare quote inside \"…\", since any
+ * of them can hide where the string ends.
  */
 function dropQuoted(line) {
   let out = '';
@@ -515,10 +516,11 @@ function dropQuoted(line) {
       if (end >= line.length) end = -1;
     } else {
       // "…" and $'…': a backslash escapes the next character. In "…", $( and ` start a command
-      // substitution, whose own quotes would end the scan early, so they cut.
+      // substitution and ${ a parameter expansion, whose own quotes would end the scan early, so
+      // they cut.
       end = from;
       while (end < line.length && line[end] !== close) {
-        if (open === '"' && (line[end] === '`' || (line[end] === '$' && line[end + 1] === '('))) { end = line.length; break; }
+        if (open === '"' && (line[end] === '`' || (line[end] === '$' && (line[end + 1] === '(' || line[end + 1] === '{')))) { end = line.length; break; }
         end += line[end] === '\\' ? 2 : 1;
       }
       if (end >= line.length) end = -1;
