@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: new-crate-gets-charter
+tags: [candidate, architecture]
+context:
+  scaffold_script: scaffold.sh

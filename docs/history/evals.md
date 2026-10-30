@@ -76,6 +76,20 @@ This paid run is part of the post-pilot close-out the owner asked for on 2026-10
 - **Every settings hook kept running.** SessionStart, UserPromptSubmit, PreToolUse (Edit and Bash), PostToolUse (Read and Skill), SubagentStart, SubagentStop and Stop all fired. The first Stop reported `Status: WIP` while the reviewer ran, and the last reported `gate green and review approved` (fingerprint `2b69587dffe8911f`).
 - `PreToolUse[SubagentHandback]` did not fire, as in earlier headless runs; the verdict was recorded at SubagentStop.
 
+## Three more cases for #101, not yet run (2026-10-30)
+
+These three add rule families that no case scored yet: test-first regression tests (TST-01, TST-05), deterministic tests with time injected (TST-10), and crate charters (ARC-08). They are tagged `candidate`. Under wi-0cfadc they run in the same paid pass as the 1.5.0 release checks.
+
+| Case | Rules | What separates the arms |
+|---|---|---|
+| `bugfix-adds-regression-test` | TST-01, TST-05 | The fix is one line (`div_ceil`). The standard also wants a test of the reported case, 25 items at 10 per page giving exactly 3 pages, that fails first; `test-first` reads the trace for the order. |
+| `injects-clock-for-tests` | TST-10 | The expiry check takes the current time from its caller, or from an injected clock, so the exact 30-minute boundary is tested without sleeping and without the real clock. |
+| `new-crate-gets-charter` | ARC-08 | The new crate gets its own `AGENTS.md`. The existing crate and the workspace `AGENTS.md` show the shape, so the plain model may follow the example, in which case the case lands in `regression`. |
+
+**Expected weak spots.** `no-sleep` passes on the scaffold and on any answer that never sleeps (and fails on a comment that says `sleep (`), so `injected-time` carries that case. `regression-test-exact` misses a test that holds 25 in a variable first; `test-first` covers it from the trace. With the plugin, 1.5.0's manifests step fails the gate for a new crate without a charter. That makes `new-crate-gets-charter` partly a test of the gate, not only of the standard.
+
+**Validation, with no model call:** each scaffold was built in a scratch directory, where the tests, `cargo fmt --check`, `clippy --all-targets -D warnings` and `rustdoc -D warnings` pass. Each regex grader was run as a JS `RegExp` against the scaffold's code (the starting score) and against hand-written outcomes: `div_ceil`, an exact `assert_eq!` of 25 to 3 in both argument orders, a wrong expected value, a test that sleeps, an `is_expired(&self, now)` signature, and two `render` signatures. After review: `3_u64` and `3u64`, a remainder on a destructured `per_page`, an `is_expired<C: Clock>(&self, clock: &C)` signature, `is_idle`, a generic `render<W: Write>` and a `Display` impl. About $0.70 to $1.20 a case at 3 runs per arm.
+
 ## Cases for the orchestration steps, authored for #101, not yet run (2026-10-19)
 
 Four more cases cover the steps of `/temper:implement` and `/temper:audit` that no case reached: stopping for a decision with no conservative default, planning before code, the conservative default when no human is present, and what an audit finds. Like the cases above, they are tagged `candidate` with a family tag, use plain prompts rather than the commands (both set `disable-model-invocation`), and build offline with no dependencies. None has run.
