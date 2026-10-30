@@ -964,7 +964,11 @@ const MESSAGE_VALUE = new RegExp(`((?:^|\\s)(?:--(?:message|body|title|notes|des
 // Command substitution runs, except a bare `$(cat <<'EOF' ... EOF)` whose body is already blanked.
 const CAT_HEREDOC = /\$\(\s*cat\s+<<-?(['"]?)([\w.-]+)\1[ \t]*\n\2\s*\)/g;
 const runsCode = (text) => /\$\(|\x60/.test(text.replace(CAT_HEREDOC, ''));
-const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])\\s*(?:\\w+=\\S*\\s+|(?:sudo|env|time|xargs)\\s+)*(?:\\S*[\\\\/])?(?:git\\s+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
+// A word that stops at the characters a search command can start after, so each start's scan
+// ends where the next start begins, and blanks and tabs rather than \s so a run of newlines
+// (each one a start) is not rescanned from every start (#155).
+const WORD = '[^\\s;&|(\\x60]';
+const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])[ \\t]*(?:\\w+=${WORD}*[ \\t]+|(?:sudo|env|time|xargs)[ \\t]+)*(?:${WORD}*[\\\\/])?(?:git[ \\t]+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
 
 /** `cmd` with here-document bodies, message option values and search patterns blanked. */
 function blankProse(cmd) {

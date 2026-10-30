@@ -195,6 +195,8 @@ function lex(src) {
       i = j + 1;
       continue;
     }
+    // Locale quoting, `$"..."`, is a double-quoted string to bash, which translates nothing here (#155).
+    if (c === '$' && s[i + 1] === '"') { i++; continue; }
     if (c === '$' && s[i + 1] === "'") { // ANSI-C quoting
       const [text, j] = ansiC(s, i + 2);
       if (text === null) startWord().parts.push({ t: 'param', s: s.slice(i, j + 1), q: true });
@@ -728,7 +730,16 @@ function simple(words, meta, env, out, depth) {
     const script = src.from === 'arg' ? src.word?.text : src.from === 'stdin' ? meta.stdin?.body : null;
     if (script) sub(script, { ...env, cwd, ps: false }, out, depth + 1, `${name} -c`);
   } else if (name === 'eval') {
-    run(args.map((a) => a.text).join(' '), env, out, depth + 1, 'eval');
+    run((args[0]?.value === '--' ? args.slice(1) : args).map((a) => a.text).join(' '), env, out, depth + 1, 'eval');
+  } else if (name === 'trap') {
+    // The action runs on a signal or at exit (#155).
+    const action = trapAction(args);
+    if (action?.text) run(action.text, env, out, depth + 1, 'trap');
+  } else if (AWKS.has(name)) {
+    // A literal `system("...")` in the program runs that command (#155).
+    for (const prog of awkPrograms(args).progs.filter((x) => x.literal)) {
+      for (const m of prog.text.matchAll(AWK_SYSTEM)) sub(awkString(m[1]), { ...env, cwd, ps: false }, out, depth + 1, `${name} system`);
+    }
   } else if (name === 'pwsh' || name === 'powershell') {
     const flag = args.findIndex((a) => /^-(?:c|command)$/i.test(a.raw));
     if (flag !== -1 && args[flag + 1]) sub(args.slice(flag + 1).map((a) => a.text).join(' '), { ...env, cwd, ps: true }, out, depth + 1, `${name} -Command`);
@@ -742,6 +753,63 @@ function simple(words, meta, env, out, depth) {
       k2 = j === -1 ? args.length : j;
     }
   }
+}
+
+/** The action word of `trap action signal...`, or null for `trap -p`, `trap -l`, `trap - SIG` and a lone argument. */
+function trapAction(args) {
+  const a = args[0]?.value === '--' ? args.slice(1) : args;
+  if (a.length < 2 || a[0].value === '-' || /^-[lp]/.test(a[0].raw)) return null;
+  return a[0];
+}
+
+const AWKS = new Set(['awk', 'gawk', 'mawk', 'nawk']);
+// `system("...")` with a string literal alone as its argument.
+const AWK_SYSTEM = /\bsystem\s*\(\s*"((?:[^"\\]|\\.)*)"\s*\)/g;
+// An awk string literal's text: its escapes, octal `\ddd` among them, decoded.
+const AWK_ESC = { n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', f: '\f', v: '\v' };
+const awkString = (s) => s.replace(/\\([0-7]{1,3}|.)/gs, (m, c) => (/^[0-7]/.test(c) ? String.fromCharCode(parseInt(c, 8)) : AWK_ESC[c] ?? c));
+
+/**
+ * An awk command's program words and the files it reads code from. The programs are each
+ * `-e`/`--source` value, else the first operand when no `-f` or `-E` names a program file.
+ * `files` holds each `-f`, `-E`, `-i` and `-l` value: a word, or a string from `-fFILE` or
+ * `--file=FILE` (gawk's `-E` also ends the options, and `-i` and `-l` add to the program).
+ */
+function awkPrograms(args) {
+  const progs = [];
+  const files = [];
+  let main = false;
+  let k = 0;
+  for (; k < args.length; k++) {
+    // awk sees the word's value: `'-f/dev/stdin'` is still `-f`.
+    const r = args[k].literal === true ? args[k].text : args[k].raw;
+    if (r === '--') { k++; break; }
+    const long = /^--(source|file|exec|include|load|field-separator|assign)=(.*)$/s.exec(r);
+    if (long) {
+      if (long[1] === 'source') progs.push({ ...args[k], text: r.slice(r.indexOf('=') + 1) });
+      else if (!/^(?:field-separator|assign)$/.test(long[1])) { files.push({ ...args[k], text: r.slice(r.indexOf('=') + 1) }); main ||= /^(?:file|exec)$/.test(long[1]); }
+      if (long[1] === 'exec') { k++; break; }
+      continue;
+    }
+    if (/^(?:-[evfFEil]|--(?:source|file|exec|include|load|field-separator|assign))$/.test(r)) {
+      const v = args[++k];
+      if (v && (r === '-e' || r === '--source')) progs.push(v);
+      if (/^(?:-[fEil]|--(?:file|exec|include|load))$/.test(r)) { files.push(v ?? literalWord('')); main ||= /^(?:-[fE]|--(?:file|exec))$/.test(r); }
+      if (r === '-E' || r === '--exec') { k++; break; }
+      continue;
+    }
+    if (/^-[evfFEil]./s.test(r)) {
+      const rest = { ...args[k], text: r.slice(2) };
+      if (/[fEil]/.test(r[1])) { files.push(rest); main ||= /[fE]/.test(r[1]); }
+      if (r[1] === 'e') progs.push(rest);
+      if (r[1] === 'E') { k++; break; }
+      continue;
+    }
+    if (r.startsWith('-') && r !== '-') continue;
+    break;
+  }
+  if (!progs.length && !main && args[k]) progs.push(args[k]);
+  return { progs, files };
 }
 
 // ---------- what a command writes ----------
@@ -1032,12 +1100,14 @@ export const pathspecPattern = (w) => /[*?[]/.test(w.raw) || /^:(?:\(|[/!^])/.te
 // Interpreter code that writes a file: the literal (or a variable assigned one) in a write position.
 const LIT_PREFIX = '[rbfuRBFU]{0,2}';
 const PATH_WRAP = String.raw`(?:(?:pathlib\s*\.\s*)?Path\s*\(\s*)?`;
-const ARG = String.raw`${PATH_WRAP}(?:${LIT_PREFIX}__L(?<a>\d+)__|(?<![\w.])\$?(?<v>[A-Za-z_]\w*))\s*\)?`;
+// The whitespace after the argument is taken whole (a lookahead and its backreference make it
+// atomic), so the patterns' next `\s*` cannot split a long run of it again and again (#155).
+const ARG = String.raw`${PATH_WRAP}(?:${LIT_PREFIX}__L(?<a>\d+)__|(?<![\w.])\$?(?<v>[A-Za-z_]\w*))(?=(?<sp>\s*))\k<sp>\)?`;
 // A mode: a literal, or a variable the code assigned one (`m = 'w'; open(p, m)`).
 const MODE = String.raw`(?:${LIT_PREFIX}__L(?<m>\d+)__|(?<mv>[A-Za-z_]\w*)\b(?!\s*[(.\[]))`;
 const CODE_WRITES = [
   [String.raw`\bopen\s*\(\s*${ARG}\s*,\s*(?:mode\s*=\s*)?${MODE}`, (m) => /[wax+]/.test(m)],
-  [String.raw`\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*__L(?<m>\d+)__\s*,\s*${ARG}`, (m) => /^\s*(?:\+?>>?|\+<)/.test(m)],
+  [String.raw`\bopen\s*(?:\(\s*)?(?:my\s+)?\$?\w+\s*,\s*__L(?<m>\d+)__\s*,\s*${ARG}`, (m) => /^\s*(?:\+?>>?|\+<)/.test(m)],
   [String.raw`\bos\s*\.\s*open\s*\(\s*${ARG}\s*,[^)]*O_(?:WRONLY|RDWR|CREAT|APPEND|TRUNC)`],
   [String.raw`${ARG}\s*\.\s*(?:write_text|write_bytes|touch)\b`],
   [String.raw`${ARG}\s*\.\s*open\s*\(\s*(?:mode\s*=\s*)?${MODE}`, (m) => /[wax+]/.test(m)],
@@ -1092,7 +1162,7 @@ export function codeWriteTargets(code) {
     }
   }
   // Perl's two-argument open: open(FH, '>file').
-  for (const m of text.matchAll(/\bopen\s*\(?\s*(?:my\s+)?\$?\w+\s*,\s*__L(\d+)__\s*\)/g)) {
+  for (const m of text.matchAll(/\bopen\s*(?:\(\s*)?(?:my\s+)?\$?\w+\s*,\s*__L(\d+)__\s*\)/g)) {
     const t = /^\s*\+?>>?\s*(\S.*)$/.exec(lits[Number(m[1])]);
     if (t) out.push(t[1]);
   }
@@ -1463,6 +1533,11 @@ export function opaquePatch(c) {
     return { kind: 'name', why: `${c.name === 'alias' ? 'an alias' : 'a hash -p'}, which makes a command name run another command` };
   }
   if (c.name === 'eval' && c.args.some((x) => x.literal !== true)) return { kind: 'script', why: 'an eval argument built from an expansion' };
+  if (c.name === 'trap' && trapAction(c.args) && trapAction(c.args).literal !== true) return { kind: 'script', why: 'a trap action built from an expansion' };
+  if (AWKS.has(c.name)) {
+    const why = unreadAwk(c.args);
+    if (why) return { kind: 'script', why: `an awk program that ${why}` };
+  }
   if (g) {
     if (g.dynamic || (g.sub && !GIT_BUILTINS.has(g.sub))) return { kind: 'git', why: 'a git subcommand temper cannot resolve' };
     if (g.sub === 'config' && configWritesAlias(g.args)) return { kind: 'alias', why: 'a git config write to an alias' };
@@ -1482,6 +1557,23 @@ export function opaquePatch(c) {
   const stdinArg = c.args.some((x) => x.value !== null && STDIN_PATH.test(path.posix.normalize(x.value)));
   const scriptArg = c.args.some((x) => !x.raw.startsWith('-')) || codeWords(c).length > 0;
   if (c.stdin && !readStdin(c.stdin) && (!scriptArg || stdinArg)) return { kind: 'code', why: `a ${c.name} script on stdin that temper cannot read` };
+  return null;
+}
+
+/** Why an awk command runs something temper cannot read: a program from stdin or a non-literal word, `system()` of a non-literal, or a pipe to or from a command (#155). */
+function unreadAwk(args) {
+  const { progs, files } = awkPrograms(args);
+  for (const f of files) {
+    if (f.literal !== true || f.text === '-' || /^\/dev\/(?:stdin|fd\/)|^\/proc\//.test(f.text)) return 'reads its program from stdin or a word temper cannot read';
+  }
+  for (const p of progs) {
+    if (p.literal !== true) return 'is built from an expansion';
+    // A string literal is text: `FS = "|"` pipes nothing. An unclosed one runs to the end, so a
+    // run of `"\` does not rescan from every quote.
+    const code = p.text.replace(AWK_SYSTEM, '').replace(/"(?:[^"\\]|\\[\s\S])*(?:"|\\?$)/g, '""');
+    if (/\bsystem\s*\(/.test(code)) return 'runs system() on text temper cannot read';
+    if (/(?<!\|)\|(?!\|)/.test(code)) return 'pipes to or from a command';
+  }
   return null;
 }
 
