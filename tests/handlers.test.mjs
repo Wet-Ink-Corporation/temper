@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { sessionStart, userPromptSubmit, postTool, preEdit, preBash, stop, subagentStop, subagentStart, preHandback, reportFromTranscript } from '../scripts/lib/hooks.mjs';
+import { sessionStart, userPromptSubmit, postTool, preEdit, preBash, stop, subagentStop, subagentStart, preHandback, reportFromTranscript, coversBase } from '../scripts/lib/hooks.mjs';
 import { discover, fingerprint, loadConfig, readTelemetry, rustChanges, sessionDir, startFingerprint, writeAtomic } from '../scripts/lib/project.mjs';
 import { DIMENSIONS, recordVerdict, verdictFor } from '../scripts/lib/verdict.mjs';
 
@@ -765,6 +765,37 @@ test('Stop: commits in the main checkout are gated when the session enters a wor
   // an edit there is noted (and denied, or reverted): the worktree's own tree does not change
   preEdit({ cwd: w.dir, session_id: sid, tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: 'fn x() {}\n' } });
   assert.ok(blocked(stop({ cwd: w.dir, session_id: sid })), 'the main checkout\'s commit is still ungated and unreviewed');
+});
+
+test('Stop: a shell-only commit in the main checkout is gated when the session stops from a subagent\'s unchanged worktree (#157)', { skip: noCargo }, (t) => {
+  const r = repo(t);
+  const sid = 's-wt-shell';
+  sessionStart({ cwd: r.dir, session_id: sid, source: 'startup' });
+  // Rust committed in the main checkout through the shell only: no Edit notes the main checkout
+  r.put(LIB, LIB_RS_2);
+  r.git('commit', '-qam', 'two');
+  const w = worktree(r, 'sub-shell');
+  // a subagent's edit in a worktree made from that commit is noted, but leaves no net change
+  preEdit({ cwd: w.dir, session_id: sid, agent_id: 'a-shell', agent_type: 'general-purpose', tool_name: 'Write', tool_input: { file_path: w.file(LIB), content: 'fn x() {}\n' } });
+  // the scope runs from the session base, which holds the commit
+  const fp = w.gate(sid, true);
+  const res = blocked(stop({ cwd: w.dir, session_id: sid }));
+  assert.ok(res, 'the main checkout\'s commit is still unreviewed');
+  assert.ok(res.includes(`(fingerprint ${fp})`), res);
+  // a reviewer started there is given that same scope, and its approval ends the turn
+  const rv = { cwd: w.dir, session_id: sid, agent_type: 'temper:rust-reviewer', agent_id: 'rv-shell' };
+  assert.match(context(subagentStart(rv)), new RegExp(`Current tree fingerprint: ${fp}`));
+  assert.deepEqual(subagentStop({ ...rv, last_assistant_message: fenced(verdict(fp)) }), {});
+  assert.equal(message(stop({ cwd: w.dir, session_id: sid })), `temper: gate green and review approved (fingerprint ${fp}).`);
+});
+
+test('coversBase: a failed git rev-list does not count as covered (#157)', { skip: noGit }, (t) => {
+  const r = repo(t);
+  const head = r.git('rev-parse', 'HEAD');
+  const missing = '0'.repeat(40);
+  assert.equal(coversBase(r.proj(), head, missing, r.proj()), false);
+  assert.equal(coversBase(r.proj(), missing, head, r.proj()), false);
+  assert.equal(coversBase(r.proj(), head, head, r.proj()), true);
 });
 
 test('SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate', { skip: noGit }, (t) => {

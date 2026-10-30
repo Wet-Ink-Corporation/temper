@@ -1456,13 +1456,19 @@ function otherTrees(proj, input, { agent, gone = false } = {}) {
 }
 
 /** True when a scope from `base` holds all of `tree`'s own commits (those after `treeBase`): none of them is already in `base`. */
-function coversBase(proj, base, treeBase, tree) {
+export function coversBase(proj, base, treeBase, tree) {
   if (!treeBase) return true;
   if (!base) return false;
   const head = resolveRev(tree, 'HEAD');
   if (!head) return false;
-  const count = (...revs) => Number(run('git', ['rev-list', '--count', head, `^${treeBase}`, ...revs], { cwd: proj.gitRoot }).stdout.trim());
-  return count() === count(`^${base}`);
+  // a failed count is not taken as covered (#157)
+  const count = (...revs) => {
+    const r = run('git', ['rev-list', '--count', head, `^${treeBase}`, ...revs], { cwd: proj.gitRoot });
+    const n = r.code === 0 ? Number(r.stdout.trim()) : NaN;
+    return Number.isInteger(n) ? n : NaN;
+  };
+  const all = count();
+  return Number.isInteger(all) && all === count(`^${base}`);
 }
 
 /** True when everything `tree` holds is already in `main`'s HEAD: its HEAD is an ancestor, and it has no uncommitted Rust change. */
@@ -1481,7 +1487,7 @@ function mergedInto(tree, main) {
  */
 function dueTrees(proj, input, { agent } = {}) {
   const candidates = [
-    { proj, ...ownTree(proj, input), main: true },
+    { proj, ...ownTree(proj, input, { widen: !agent }), main: true },
     ...otherTrees(proj, input, { agent }),
   ];
   const due = [];
@@ -1513,7 +1519,8 @@ function goneNotices(proj, input, agent) {
 function reviewedTree(proj, input, fp) {
   const { base } = ownTree(proj, input);
   if (!fp) return { proj, base };
-  if (fingerprint(proj, base) === fp) return { proj, base };
+  // the main agent's widened scope (#157) is a scope of this checkout too
+  for (const b of new Set([base, ownTree(proj, input, { widen: true }).base])) if (fingerprint(proj, b) === fp) return { proj, base: b };
   return otherTrees(proj, input).find((t) => fingerprint(t.proj, t.base) === fp) ?? { proj, base };
 }
 
@@ -1535,8 +1542,9 @@ function isLinked(proj) {
 /**
  * The base and starting fingerprint of the checkout an agent runs in: for a linked worktree, its
  * HEAD and fingerprint when this session first noted it (as Stop gates it); else the session's.
+ * With `widen` (the main agent), a linked worktree's scope starts no later than the session base.
  */
-function ownTree(proj, input) {
+function ownTree(proj, input, { widen = false } = {}) {
   const session = { base: baseRev(proj, input.session_id), startFp: startFingerprint(proj, input.session_id) };
   if (!proj.gitRoot || !input.session_id || !isLinked(proj)) return session;
   const dir = sessionDir(proj, input.session_id);
@@ -1550,8 +1558,15 @@ function ownTree(proj, input) {
     }
   } catch { return session; }
   const base = first ? resolveRev(proj, first.head) : null;
-  return base ? { base, startFp: first.startFp ?? null } : session;
+  if (!base) return session;
+  // The main agent answers for the session's commits too: when its earliest record here is a
+  // subagent's, made after the session base, the scope widens to the session base (#157).
+  if (widen && session.base && session.base !== base && isAncestor(proj, session.base, base)) return { base: session.base, startFp: null };
+  return { base, startFp: first.startFp ?? null };
 }
+
+/** True when commit `a` is an ancestor of commit `b`. */
+const isAncestor = (proj, a, b) => run('git', ['merge-base', '--is-ancestor', a, b], { cwd: proj.gitRoot }).code === 0;
 
 // A Stop that gated one tree for this long starts no other uncached tree's gate: it blocks, and
 // the next Stop (with the first result cached) runs it, so the hook's 1200 s timeout is not hit.
@@ -1722,7 +1737,7 @@ export function subagentStart(input) {
   const linked = isLinked(proj);
   const due = reviewer ? dueTrees(proj, input) : [];
   const others = due.filter((t) => !t.main);
-  const target = linked || due.some((t) => t.main) || !others.length ? { proj, base: ownTree(proj, input).base, main: true } : others[0];
+  const target = linked || due.some((t) => t.main) || !others.length ? { proj, base: ownTree(proj, input, { widen: reviewer }).base, main: true } : others[0];
   const tp = target.proj;
   const base = target.base;
   const also = others.filter((t) => t !== target);
