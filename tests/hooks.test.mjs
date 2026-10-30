@@ -839,7 +839,7 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
 // and the `temper baseline` pattern rescanned from every `=` (64K took 4 s).
 test('Bash: a long run of shell-writer words or `=` is decided in under a second', () => {
   // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument).
-  for (const [word, n, end = 'x', pre = ''] of [['open(', 8192], ['sed ', 32768], ['sed -i ', 4096], ['perl -i ', 4096], ['write_text ', 16384], ['cp ', 2048], ['Set-Content ', 16384], ['=x', 32768], ['=', 65536],
+  for (const [word, n, end = 'x', pre = ''] of [['open(', 8192], ['sed ', 32768], ['sed -i ', 4096], ['perl -i ', 4096], ['write_text ', 16384], ['cp ', 2048], ['Set-Content ', 16384], ['=x', 32768], ['=', 65536], ['--!\t', 32768, '-', '$0\t'],
     ['.claude/temper/', 32768, '<', 'cp '], ['.claude/temper/', 32768, "'x\"", "python3 -c \"open('"],
     ['.claude/temper/', 32768, '<', 'mv x ']]) {
     const command = `${pre}${word.repeat(n)}${end}`;

@@ -939,8 +939,9 @@ const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
  */
 export function baselineRaise(cmd) {
   for (const seg of unquotedSegments(cmd)) {
-    // `[^\s=]` stops each start's scan at the next start, so a run of `=` stays linear (#155).
-    const call = /(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:--?\S+\s+)*baseline\b(.*)$/.exec(seg);
+    // `[^\s=]` stops each start's scan at the next start, so a run of `=` stays linear, and an
+    // option is `-\S+` (not `--?\S+`), which reads `--x` one way only (#155).
+    const call = /(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:-\S+\s+)*baseline\b(.*)$/.exec(seg);
     if (!call) continue;
     const flag = /(?:^|\s)--?(init|update)(?![\w-])/.exec(call[1]);
     if (flag) return `--${flag[1]}`;
