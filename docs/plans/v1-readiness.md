@@ -154,10 +154,14 @@ The plan's own order is phases 0a to 8: workspace skeleton, distribution spike, 
 
 1. **Phase 0** is done. The owner added the required checks to the `main` ruleset (0.1, #62) and set the Actions budget (0.9, #7) on 2026-10-11. The runner probe ran on 2026-10-02, and its results are in 0.9. From here on, work is tracked in #6 and #21. After this, everything goes through PRs.
 2. ~~**Next:** phase 1 and 3.1 to 3.2 in parallel. Start phase 2 adoption (2.1 to 2.2) as soon as 1.2 and 1.3 land, since the pilot needs elapsed time more than effort.~~ Done: phase 1, 2.1, 2.2, 3.1 and 3.2 are done, and 1.3.0 was released on 2026-10-05. The pilot (2.3, 2.4) is running.
-3. **Then, the critical path to v1 live** (refreshed 2026-10-14):
+3. ~~**Then, the critical path to v1 live**~~ Done: 1.4.0 was released and v1 went live on 2026-10-19 (#20 and #6 closed). The path was:
    1. The pilot report on 2026-10-18 (2.3): the final `temper stats --branch` numbers from both pilots, one `pilot` issue per finding (#15).
    2. The fixes it calls for (#16), and the work held for the pilot window (the AGENTS.md rule from wi-b63bd6, and wi-3fa7cf): the `[hold]` temper lens PRs with their gate and CI prerequisites, #117 to #121 and #123 (#107); the staged MUST-rule checks (wi-3fa7cf, #58); and the telemetry gaps the interim report found (`verdict-invalid` problems and denied command text are not logged).
    3. 1.4.0's release candidate: the smoke test and the evals, including the `candidate` cases (#19, #101). These are paid, so the owner approves them.
    4. The 1.4.0 release (wi-891617), through the release checklist in `AGENTS.md`.
    5. The go-live sign-off (#20): one other org member verifies the install, the announcement goes out, then #20 is ticked and #6 closed.
-4. **Then:** temper 2.0, from its committed plan, starting with the pre-port steps in phase 5.
+4. **Now: close out 1.x, then temper 2.0** (planned 2026-10-30; the owner approved wi-9d8c9e, wi-779016, wi-0cfadc, wi-428ed1 and wi-e85ef8):
+   1. Close the audit issues down to an owner call (#61, #63, #64, #70) and #137, whose data arrives after 1.5.0.
+   2. Fix #157 and #155's core (the slow regexes in the shell guards and the cheap gaps that affect every agent), and write the #101 eval cases. #155 lands before port phase 2, since the port reproduces `shell.mjs` exactly (wi-6e0cc2).
+   3. Release 1.5.0, with one paid pass for the smoke test, the release-candidate evals and the #101 cases. That closes #22.
+   4. Then the port, from its plan: phases 0a to 0c (closing #23 and #24), 1 to 7 (closing #103), and the 2.0.0 cutover in phase 8 (closing #21).
