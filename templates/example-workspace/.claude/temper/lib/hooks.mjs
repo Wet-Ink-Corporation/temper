@@ -354,6 +354,26 @@ const LOCKFILE_DENY = (rel) => `temper: ${rel} is maintained by Cargo and is nev
 const MANIFEST_SHELL_DENY = 'temper: edit Cargo.toml with the Edit or Write tools, not the shell, so the manifest checks run on it (MOD-09, PERF-09, H-12, H-16). Use the Edit tool for this change.';
 
 /**
+ * A pattern `key` + `rest` tried once per segment (split on `sep`), from the segment's first
+ * `key`. `rest` spans the segment (`[^|;&]*`, or `[^)]*` for `open(`), so a match from a later
+ * `key` is a match from the first, and trying it from each one re-read the rest of the segment
+ * every time: 16K `write_text` took 16 s and 32K `sed ` over 20 s, past the hook timeout (#155).
+ * The lookaheads in `rest` keep each try linear.
+ */
+const fromFirst = (key, rest, { flags = '', sep = /[|;&]/ } = {}) => {
+  const first = new RegExp(key);
+  const re = new RegExp(rest, `${flags}y`);
+  return {
+    test: (text) => text.split(sep).some((seg) => {
+      const m = first.exec(seg);
+      if (!m) return false;
+      re.lastIndex = m.index + m[0].length;
+      return re.test(seg);
+    }),
+  };
+};
+
+/**
  * Shell commands that write a file whose name ends with `target` (a regex source).
  * `copies` also treats the file as the destination of cp/mv/install.
  */
@@ -362,13 +382,13 @@ const shellWrites = (target, { copies = false } = {}) => {
   const res = [
     new RegExp(`(?:&>>?|(?:^|[^>&0-9])>>?\\|?)\\s*["']?[^\\s"'|;&<>]*${t}`),
     new RegExp(`\\btee\\s+(?:-a\\s+)?["']?[^\\s"'|;&]*${t}`),
-    new RegExp(`\\bsed\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${t}`),
-    new RegExp(`\\bsed\\b[^|;&]*--in-place[^|;&]*${t}`),
-    new RegExp(`\\bperl\\b[^|;&]*\\s-[a-zA-Z]*i[^|;&]*${t}`),
-    new RegExp(`\\bopen\\s*\\([^)]*${target}["']\\s*,\\s*["'][wa+]`),
-    new RegExp(`\\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\\b[^|;&]*${t}`),
+    fromFirst('\\bsed\\b', `(?=[^|;&]*\\s-[a-zA-Z]*i)[^|;&]*${t}`),
+    fromFirst('\\bsed\\b', `(?=[^|;&]*--in-place)[^|;&]*${t}`),
+    fromFirst('\\bperl\\b', `(?=[^|;&]*\\s-[a-zA-Z]*i)[^|;&]*${t}`),
+    fromFirst('\\bopen\\s*\\(', `[^)]*${target}["']\\s*,\\s*["'][wa+]`, { sep: /\)/ }),
+    fromFirst('\\b(?:write_text|writeFileSync|Set-Content|Out-File|Add-Content)\\b', `[^|;&]*${t}`),
   ];
-  if (copies) res.push(new RegExp(`\\b(?:cp|mv|install|Copy-Item|Move-Item)\\b[^|;&]*\\s["']?[^\\s"'|;&<>]*${t}["']?\\s*(?:$|[|;&)])`, 'm'));
+  if (copies) res.push(fromFirst('\\b(?:cp|mv|install|Copy-Item|Move-Item)\\b', `[^|;&]*\\s["']?[^\\s"'|;&<>]*${t}["']?\\s*(?:$|[|;&)])`, { flags: 'm' }));
   return res;
 };
 const SHELL_WRITE_RS = shellWrites('\\.rs');
@@ -696,7 +716,8 @@ function shellRustWrites(cmd, proj, input) {
 const SHELL_WRITE_LOCK = shellWrites('Cargo\\.lock', { copies: true });
 const SHELL_WRITE_TOML = shellWrites('Cargo\\.toml', { copies: true });
 const SHELL_WRITE_BASELINE = shellWrites('temper-baseline\\.json', { copies: true });
-const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/[\\w./-]*', { copies: true });
+// Each scan stops at the next `.claude/temper/`, so a word of many does not backtrack to each one (#155).
+const SHELL_WRITE_VENDORED = shellWrites('\\.claude/temper/(?:(?!\\.claude/temper/)[\\w./-])*', { copies: true });
 const VENDORED_SHELL_DENY = 'temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.';
 const STATE_SHELL_DENY = 'temper: temper\'s state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it: verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command (`node "$TEMPER_CLI" gate`). Reading the files, copying them elsewhere and deleting telemetry.jsonl stay allowed.';
 // `$VAR/temper/<entry>` counts as the state dir unless VAR is a home or temp directory.
@@ -751,11 +772,14 @@ export function stateDirWrite(proj, cmd, cwd = proj.root) {
 
 const BASELINE_SHELL_DENY = 'temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node "$TEMPER_CLI" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.';
 
+const PATH_MAX = 4096;
 /** The project that owns `abs` (a nested git checkout, such as a worktree under .claude/worktrees/, owns its files), as preEdit finds it. */
 function ownerOf(proj, rel, cache) {
-  const parts = rel.split('/');
-  for (let k = parts.length - 1; k > 0; k--) {
-    const dir = path.join(proj.root, ...parts.slice(0, k));
+  // Each ancestor, deepest first. One longer than PATH_MAX cannot exist, so a path of thousands
+  // of parts is not joined once per part (#155: `mv x` onto 2000 `.claude/temper/` took 3 s).
+  for (let end = rel.lastIndexOf('/'); end > 0; end = rel.lastIndexOf('/', end - 1)) {
+    if (end > PATH_MAX) continue;
+    const dir = path.join(proj.root, rel.slice(0, end));
     if (!cache.has(dir)) cache.set(dir, fs.existsSync(path.join(dir, '.git')) ? discover(dir) ?? proj : null);
     const owner = cache.get(dir);
     if (owner) return owner;
@@ -907,6 +931,26 @@ function protectedShellWrites(proj, cmd, cwd) {
 const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
   .map((seg) => seg.replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_m, a, b) => a ?? b ?? ''));
 
+// The CLI and its options, then `baseline`. `[^\s=]` stops each start's scan at the next start, and
+// an option is `-\S+` (not `--?\S+`, which reads `--x` two ways and backtracked exponentially).
+const BASELINE_CLI = /(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:-\S+\s+)*/g;
+const BASELINE_REST = /baseline\b(.*)$/y;
+/**
+ * The first `<cli> [options] baseline <rest>` in `seg`, with `rest` as group 1. A start inside an
+ * option chain (`-a=$0`) reaches the same end as the chain, so the scan resumes at the chain's last
+ * character rather than at each start, which re-read the chain from every one (#155).
+ */
+function baselineCall(seg) {
+  BASELINE_CLI.lastIndex = 0;
+  for (let m; (m = BASELINE_CLI.exec(seg));) {
+    BASELINE_REST.lastIndex = BASELINE_CLI.lastIndex;
+    const call = BASELINE_REST.exec(seg);
+    if (call) return call;
+    BASELINE_CLI.lastIndex = Math.max(m.index + 1, BASELINE_CLI.lastIndex - 1);
+  }
+  return null;
+}
+
 /**
  * `temper baseline --init` / `--update` through the plugin CLI, the vendored copy
  * (`node .claude/temper/temper.mjs`), `$TEMPER_CLI`, or any variable holding the
@@ -915,7 +959,7 @@ const unquotedSegments = (cmd) => String(cmd).split(/&&|\|\||[;|\n]/)
  */
 export function baselineRaise(cmd) {
   for (const seg of unquotedSegments(cmd)) {
-    const call = /(?:^|[\s=])(?:\S*temper\.mjs|\$\{?\w+\}?|temper)\s+(?:--?\S+\s+)*baseline\b(.*)$/.exec(seg);
+    const call = baselineCall(seg);
     if (!call) continue;
     const flag = /(?:^|\s)--?(init|update)(?![\w-])/.exec(call[1]);
     if (flag) return `--${flag[1]}`;

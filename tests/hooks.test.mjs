@@ -247,7 +247,9 @@ test('Bash: shell writes to Cargo.lock are denied; cargo and git are not', () =>
   // existing Rust-source rule still holds
   assert.match(reason(bash("sed -i 's/unwrap()/?/' src/lib.rs")), /Edit or Write tools/);
   // redirect forms, copies, and near-miss file names
-  for (const cmd of ['echo x >| Cargo.lock', 'echo x &> Cargo.lock', 'cp ../other/Cargo.lock Cargo.lock', 'sed -Ei s/a/b/ Cargo.lock', "python3 -c \"open('Cargo.lock','w').write('')\""]) {
+  for (const cmd of ['echo x >| Cargo.lock', 'echo x &> Cargo.lock', 'cp ../other/Cargo.lock Cargo.lock', 'sed -Ei s/a/b/ Cargo.lock', "python3 -c \"open('Cargo.lock','w').write('')\"",
+    'sed s/a/b/ Cargo.lock -i', 'echo; sed -n p x; sed -i s/a/b/ Cargo.lock',
+    `python3 -c "open(*('Cargo.lock', 'w'))"`, `python3 -c "open(('Cargo.lock','w')[0], 'w')"`, `python3 -c "open('(' and 'Cargo.lock', 'w')"`]) {
     assert.equal(decision(bash(cmd)), 'deny', cmd);
   }
   for (const cmd of ["perl -ne 'print if /serde-derive/' Cargo.lock", 'cargo metadata --format-version 1 > Cargo.lock.json', 'cp Cargo.lock /tmp/Cargo.lock.bak', 'git show HEAD:Cargo.lock > /tmp/old.lock']) {
@@ -815,10 +817,11 @@ test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a
 
 // #155: `\s*\)?\s*` in codeWriteTargets' argument pattern, `\s*\(?\s*` after `open`, and the `\s*`
 // and `(?:\S*[\\/])?` prefix of the search-command pattern in blankProse backtracked quadratically, past
-// the 15 s hook timeout.
+// the 15 s hook timeout. The `;a=` and `(/` runs are shorter because the parser's own linear cost per
+// command is high: 20,000 `(/` took just over a second on the Windows runner.
 test('Bash: a megabyte of spaces, parentheses or call openers is decided in under a second', () => {
   for (const command of [`python3 -c "'busybox${' '.repeat(1 << 20)}"`, `python3 -c "x${' '.repeat(1 << 20)}.touch()"`,
-    `python3 -c "${"system('".repeat(150000)}"`, `${'('.repeat(1 << 20)}x`, `${';a='.repeat(20000)}x`, `${'(/'.repeat(20000)}x`,
+    `python3 -c "${"system('".repeat(150000)}"`, `${'('.repeat(1 << 20)}x`, `${';a='.repeat(20000)}x`, `${'(/'.repeat(10000)}x`,
     `python3 -c "x${'\n'.repeat(1 << 19)}"`, `python3 -c "x${' \n'.repeat(1 << 18)}"`, `python3 -c "open${' '.repeat(1 << 16)}"`, `perl -e "open${' '.repeat(1 << 16)}"`,
     `awk '${'"\\'.repeat(1 << 19)}'`]) {
     for (const agent of ['temper:rust-reviewer', undefined]) {
@@ -826,6 +829,26 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
       preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
       const ms = Date.now() - t0;
       assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+    }
+  }
+});
+
+// #155 follow-up: the shell-write patterns for .rs, Cargo and vendored files rescanned the rest of the
+// segment from every `sed`, `open(` or `cp`, and `sed`'s two spans backtracked against each other
+// (16K `write_text` took 16 s, and 32K `sed ` ran past 20 s). A word of many `.claude/temper/`
+// backtracked to each one, finding a path's owner joined it once per part (2000 parts took 3 s),
+// and the `temper baseline` pattern rescanned from every `=` (64K took 4 s).
+test('Bash: a long run of shell-writer words or `=` is decided in under a second', () => {
+  // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument).
+  for (const [word, n, end = 'x', pre = ''] of [['open(', 8192], ['sed ', 32768], ['sed -i ', 4096], ['perl -i ', 4096], ['write_text ', 16384], ['cp ', 2048], ['Set-Content ', 16384], ['=x', 32768], ['=', 65536], ['--!\t', 32768, '-', '$0\t'], ['=$0 -', 32768], ['-a=temper ', 32768, 'x', 'temper '],
+    ['.claude/temper/', 32768, '<', 'cp '], ['.claude/temper/', 32768, "'x\"", "python3 -c \"open('"],
+    ['.claude/temper/', 32768, '<', 'mv x ']]) {
+    const command = `${pre}${word.repeat(n)}${end}`;
+    for (const agent of ['temper:rust-reviewer', undefined]) {
+      const t0 = Date.now();
+      preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
+      const ms = Date.now() - t0;
+      assert.ok(ms < 1000, `${word} ${agent ?? 'main'}: ${ms} ms`);
     }
   }
 });
