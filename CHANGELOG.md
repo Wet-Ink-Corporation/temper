@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+**The plugin carries the 2.0 launcher, unused (port Phase 0b).** `scripts/launch.mjs` is the launcher the 2.0 Rust engine will run behind. It finds the engine (`TEMPER_BIN`, the `@wet-ink/temper-<platform>-<arch>` npm package, or a locally built copy), passes argv, stdin and the exit code through, and runs the 1.x CLI for every subcommand that has not moved to Rust. `hooks/hooks.json` still runs `scripts/temper.mjs`, so nothing changes for users.
+
 ## 1.5.0 (2026-10-30)
 
 **Stop closes two worktree-gate gaps (#157).** The main session's `Stop` now gates a commit it made in the main checkout through the shell alone when it stops from inside a subagent's worktree made from that commit and left unchanged. Before, the subagent's earlier record set that worktree's scope, so the commit was in neither scope. For the main agent, and for a reviewer it starts there, a linked worktree's scope now starts at the session base whenever the session base is an ancestor of the commit the worktree was on when first noted. An implementer's `SubagentStop` keeps the worktree's own base. Also, a `git rev-list` that fails while temper decides whether the main checkout already covers a merged worktree no longer counts as covered, so that worktree is gated.
