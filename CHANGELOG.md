@@ -6,6 +6,8 @@
 
 **A release workflow for the 2.0 engine (port Phase 0b).** `.github/workflows/release-2.yml` builds the engine for six targets, packs the `@wet-ink/temper-*` npm packages, publishes them with npm provenance once the owner approves, generates and checks the plugin's `package-lock.json`, and verifies an `npm ci` install on all six runners. It stays separate from `release.yml`, which still ships 1.x, until the 2.0.0 cutover.
 
+**The launcher can build its engine (port Phase 0c).** When no prebuilt engine is installed, `scripts/fallback.mjs` builds one with the user's cargo at session start, into the plugin's data directory, with one build at a time across sessions. A failed build is recorded and retried at the next session start. Until an engine exists, Rust edits are paused with a retry message, Stop reports the gate as unavailable, and everything else passes. None of this runs for users yet: no hook goes through the launcher before Phase 2.
+
 ## 1.5.0 (2026-10-30)
 
 **Stop closes two worktree-gate gaps (#157).** The main session's `Stop` now gates a commit it made in the main checkout through the shell alone when it stops from inside a subagent's worktree made from that commit and left unchanged. Before, the subagent's earlier record set that worktree's scope, so the commit was in neither scope. For the main agent, and for a reviewer it starts there, a linked worktree's scope now starts at the session base whenever the session base is an ancestor of the commit the worktree was on when first noted. An implementer's `SubagentStop` keeps the worktree's own base. Also, a `git rev-list` that fails while temper decides whether the main checkout already covers a merged worktree no longer counts as covered, so that worktree is gated.

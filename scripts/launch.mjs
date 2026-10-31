@@ -123,6 +123,13 @@ export async function runEngine(bin, argv, { env, pluginRoot, version, nodeVersi
   return runBinary(bin, argv, { env, pluginRoot, version, stdin, onStdout });
 }
 
+async function readStdin() {
+  if (process.stdin.isTTY) return '';
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function drainStdin() {
   if (process.stdin.isTTY) return;
   for await (const chunk of process.stdin) void chunk;
@@ -138,7 +145,13 @@ async function main() {
   }
   if (where === 'engine') {
     const version = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version;
-    const bin = resolveBinary({ env: process.env, pluginRoot, version, platform: process.platform, arch: process.arch });
+    const resolved = resolveBinary({ env: process.env, pluginRoot, version, platform: process.platform, arch: process.arch });
+    const key = engineKey(pluginRoot, version);
+    const fallback = resolved || argv[0] === 'hook' ? await import('./fallback.mjs') : null;
+    // A dev engine is rebuilt at each session start (§5.3); cargo makes that a no-op if unchanged.
+    const bin = resolved && fallback.sessionStartEngine({
+      argv, env: process.env, pluginRoot, dataDir: process.env.CLAUDE_PLUGIN_DATA, key, platform: process.platform, bin: resolved,
+    });
     if (bin) {
       try {
         return await runEngine(bin, argv, {
@@ -152,6 +165,34 @@ async function main() {
         return 1;
       }
     }
+    if (argv[0] === 'hook') {
+      // No engine for a graduated hook: the fallback build or the D6 policy (§5.4, Phase 0c).
+      // The hook input is read once here, so an engine that becomes available still gets it.
+      const stdin = await readStdin();
+      // 1.x's Node check first, with the input already read, so an old Node never waits on a build.
+      const { earlyNodeCheck } = await import('./lib/requirements.mjs');
+      const early = await earlyNodeCheck(process.versions.node, argv, process.env, { readStdin: () => Promise.resolve(stdin) });
+      const write = (text) => new Promise((done) => { process.stdout.write(text, done); });
+      if (early && early.stdout !== undefined) {
+        await write(early.stdout);
+        return early.exit;
+      }
+      const r = fallback.withoutEngine({
+        argv, env: process.env, stdin, pluginRoot, dataDir: process.env.CLAUDE_PLUGIN_DATA, key, platform: process.platform,
+      });
+      if (r.bin) {
+        try {
+          return await runBinary(r.bin, argv, { env: process.env, pluginRoot, version, stdin });
+        } catch (error) {
+          // Invariant 4: a hook that cannot run its engine is a notice with exit 0.
+          await write(JSON.stringify({ systemMessage: `temper hook ${argv[1]} failed: cannot run the engine at ${r.bin} (${error.code ?? error.message})` }));
+          return 0;
+        }
+      }
+      await write(r.stdout);
+      return r.exit;
+    }
+    // A command with no engine runs in 1.x while the port is under way.
   }
   // The 1.x CLI, in this process: it reads process.argv and stdin itself and sets the exit code.
   await import(pathToFileURL(path.join(pluginRoot, 'scripts', 'temper.mjs')).href);
