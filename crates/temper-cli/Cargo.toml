@@ -1,0 +1,16 @@
+[package]
+name = "temper-cli"
+description = "The temper command-line tool and hook engine for Claude Code"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "temper"
+path = "src/main.rs"

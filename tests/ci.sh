@@ -2,8 +2,9 @@
 # Every check that runs without a model call, in the order CI runs them.
 #
 #   tests/ci.sh            # all checks
-#   tests/ci.sh --quick    # skip the steps that compile Rust (doc examples, brownfield e2e,
-#                          # example workspace gate)
+#   tests/ci.sh --quick    # skip the steps that compile Rust (the workspace's clippy, tests,
+#                          # docs and licence check, doc examples, brownfield e2e, example
+#                          # workspace gate)
 #
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
 # templates/workspace/rust-toolchain.toml with clippy and rustfmt (the example
@@ -17,6 +18,9 @@ quick=0
 [ "${1:-}" = "--quick" ] && quick=1
 
 step() { printf '\n== %s\n' "$*"; }
+
+step "workspace format (the 2.0 port's crates)"
+cargo fmt --all -- --check
 
 step "unit tests (scanner, hooks, manifests, baseline, report, vendor, release check)"
 node --test tests/*.test.mjs
@@ -42,9 +46,21 @@ step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: doc examples, the brownfield e2e and the example workspace gate (--quick)"
+  step "skipped: the workspace's clippy, tests, docs and licence check, doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
+
+step "workspace clippy"
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+step "workspace tests"
+cargo test --workspace --all-features --locked
+
+step "workspace docs"
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+
+step "each crate carries both licence texts, equal to the root's"
+cargo xtask check-licenses
 
 step "doc examples (every code block in the skill)"
 python3 tests/doc_examples.py --fetch

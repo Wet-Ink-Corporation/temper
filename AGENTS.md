@@ -26,12 +26,18 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | `docs/history/` | Specs, reviews, findings and the decision log behind each release |
 | `.kb/_intake/decisions/` | Weigh-In decision records (generated; see below) |
 | `.claude-plugin/` | `plugin.json` (the version lives here) and `marketplace.json` |
+| `Cargo.toml`, `crates/`, `xtask/` | The 2.0 port's Cargo workspace (see "Workspace charter" below). Users still run the Node engine until the cutover. |
+| `LICENSE`, `LICENSE-APACHE` | The plugin is MIT; the crates are `MIT OR Apache-2.0` and each carries copies of both |
 
 ## Commands
 
 | Purpose | Command |
 |---|---|
 | Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the steps that compile Rust) |
+| The workspace's gate | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features --locked`, `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked` (or `node scripts/temper.mjs gate`) |
+| Licence copies in each crate | `cargo xtask check-licenses` |
+| Supply chain | `cargo deny check` |
+| MSRV | `cargo +1.96 check --workspace --locked` |
 | Unit tests | `node --test tests/*.test.mjs` |
 | Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |
 | Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
@@ -79,6 +85,47 @@ A release goes through `.github/workflows/release.yml`, the flow the 2.0 port pl
 5. Run the Release workflow on `release/X.Y.Z` (Actions, or `gh workflow run release.yml --ref release/X.Y.Z -f version=X.Y.Z`). Its `check` job runs the release check with the tag, the manifest validation and `tests/ci.sh`. Its `publish` job waits for the owner's approval in the `release` environment, then tags `vX.Y.Z` on the checked commit and creates the GitHub release from the CHANGELOG section. A re-run after the release exists does nothing.
 6. The owner merges the release PR with a merge commit, not a squash, so the tag stays in `main`'s history. The merge is the release for marketplace users.
 
-## When the 2.0 port starts
+## Workspace charter (the 2.0 port)
 
-Phase 0a of `docs/plans/temper-2-rust-port.md` adds a Cargo workspace at the repository root. This file then gains the workspace charter: the crate map, the layer rules and a decisions log, in the shape of `templates/workspace/AGENTS.md`. The commands above gain the cargo steps.
+The root is also a Cargo workspace, added in Phase 0a of `docs/plans/temper-2-rust-port.md`. It ports the CLI and hook engine from Node to Rust. Until the 2.0.0 cutover, `hooks/hooks.json` runs `scripts/temper.mjs` and nothing in the workspace reaches users. The workspace follows rust-craft, like the code the plugin governs, and temper's own hooks gate it.
+
+### Crate map
+
+| Crate | Layer | Purpose | Depends on |
+|---|---|---|---|
+| `crates/temper-domain` | domain | Scanner, manifest, config and verdict policy, models, renderers, message texts; no I/O | std (D10's crates as phases need them) |
+| `crates/temper-app` | application | Use cases per subcommand and hook; owns the ports (`Files`, `ProcessRunner`, `Clock`) | domain |
+| `crates/temper-host` | adapter | Process runner with timeouts, files, clock | app, domain |
+| `crates/temper-cli` | binary | `temper`: arguments, wiring, output, exit codes | everything |
+| `xtask` | tooling, unpublished | `cargo xtask check-licenses`; release tooling from Phase 0b | none |
+
+Dependencies point inward: domain, then application, then adapters, then the binary (ARC-02). Each crate's `AGENTS.md` is its charter (ARC-08). Every member inherits `[lints] workspace = true` and `[workspace.package]`; sibling crates are declared once in `[workspace.dependencies]`.
+
+Toolchain 1.98.1 (`rust-toolchain.toml`, a copy of the template's). MSRV 1.96 (D4); raising it is an H-16 decision. `clippy.toml`, `rustfmt.toml`, `deny.toml` and `.cargo/config.toml` are copies of `templates/workspace/`; the config adds the `xtask` alias. The `exclude` list keeps the templates' own workspaces out of this one.
+
+### Decisions log
+
+The port's decisions D1 to D17 are recorded in full, with their Weigh-In records, in the port plan's "Decisions (H-16) record". In short:
+
+| Date | Decision | Rule | Decided by |
+|---|---|---|---|
+| 2026-10-02 | D1: npm packages `@wet-ink/temper-<platform>-<arch>` | H-16 | owner (wi-836680) |
+| 2026-10-02 | D2: publish 4 crates to crates.io | H-16 | owner (wi-222f58) |
+| 2026-10-02 | D3: four crates plus `xtask` | ARC-07, H-16 | owner (wi-0b4dc2) |
+| 2026-10-02 | D4: MSRV 1.96, toolchain 1.98.1 | H-16 | owner (wi-5fc813) |
+| 2026-10-02 | D5: six release targets | H-16 | owner (wi-4a9bfe) |
+| 2026-10-02 | D6: hybrid hook behaviour while the fallback build is pending | H-16 | owner (wi-4abeef) |
+| 2026-10-02 | D7: hand-written release workflow plus `xtask` | H-16 | two-way default (wi-f22cef) |
+| 2026-10-02 | D8: port the masking lexer, no `syn` | H-16 | two-way default (wi-2f31ee) |
+| 2026-10-02 | D9: `regex` plus explicit predicates | H-16 | two-way default (wi-e9386f) |
+| 2026-10-02 | D10: dependencies `regex`, `toml`, `sha2`, `wait-timeout`; no `clap` and the like | ARC-12, H-16 | owner (wi-b03273) |
+| 2026-10-02 | D11: 2.0.0 ships Rust only | H-16 | owner (wi-bf7535) |
+| 2026-10-02 | D12: trusted publishing from the `release` environment | H-16 | owner (wi-6aac03) |
+| 2026-10-02 | D13: user CI installs through `taiki-e/install-action` | H-16 | owner (wi-37c1df) |
+| 2026-10-02 | D14: the pin lives in `.claude/temper-version` | H-16 | owner (wi-3b5428) |
+| 2026-10-02 | D15: hash-guarded `setup --migrate` | H-16 | owner (wi-cdcecc) |
+| 2026-10-02 | D16: the divergences and retired tests in §2.4 | H-12, H-16 | owner (wi-348e0b; amended by wi-5fbb56 and #64) |
+| 2026-10-02 | D17: export the binary on PATH in Claude sessions | H-16 | owner (wi-1d4cd6) |
+| 2026-10-02 | Crates are `MIT OR Apache-2.0`; the plugin stays MIT | H-16 | owner (wi-4679b3) |
+| 2026-10-30 | macOS runs in CI on every code-touching PR | H-16 | owner (wi-e85ef8) |
+| 2026-10-31 | Workspace version `2.0.0-alpha.0` and `publish = false` until Phase 0b's first alpha; no third-party dependency in Phase 0a | H-16 | two-way calls (Phase 0a) |
