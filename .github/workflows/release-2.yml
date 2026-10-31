@@ -1,0 +1,336 @@
+name: Release 2.x engine
+
+# The 2.0 port's release pipeline (docs/plans/temper-2-rust-port.md §4). It stays separate from
+# release.yml, which ships 1.x from main, until the 2.0.0 cutover merges the two (wi-96fbfe).
+#
+# Run it on branch release/<version> with that version, e.g. 2.0.0-alpha.1 for Phase 0b's
+# distribution spike. Until the cutover:
+#   - package.json is not on main, so the lockfile job writes the private plugin package.json from
+#     the six pins and keeps it and package-lock.json as an artifact rather than committing them;
+#   - plugin.json is not a version site (it is one once package.json exists), and
+#     `node scripts/launch.mjs --version` is what proves an install, since hooks.json still runs
+#     scripts/temper.mjs;
+#   - there is no hook smoke test: the engine answers only --version until `hook pre-bash`
+#     graduates (Phase 2), when the build and verify jobs gain it;
+#   - crates are not published (`publish = false`, wi-2cf4e1), so publish-crates and the
+#     `cargo publish --dry-run` check wait for D2;
+#   - build-provenance attestations wait: npm provenance covers the packages, and the attest action
+#     is a new pinned dependency that goes in with its own decision.
+#
+# npm publishing uses trusted publishing (OIDC, D12): no token. npm sets up a trusted publisher only
+# for a package that exists, so the owner publishes the six 0.0.0 placeholders by hand before the
+# first run (wi-428ed1). Both publish jobs wait for the owner's approval in the `release`
+# environment.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The engine version, X.Y.Z or X.Y.Z-pre. Run from branch release/<version>."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-2-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ inputs.version }}
+  # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+  NPM_VERSION: 11.21.1
+
+jobs:
+  check:
+    name: Release checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Branch and version agree
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version must be X.Y.Z or X.Y.Z-pre, got '$VERSION'"; exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/release/$VERSION" ]; then
+            echo "::error::run this workflow from branch release/$VERSION, not $GITHUB_REF"; exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - name: Version sites agree on the release version
+        run: cargo xtask versions --check "$VERSION"
+      - name: Checks (tests/ci.sh)
+        run: bash tests/ci.sh
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: check
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-24.04, smoke: "" }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm, smoke: "" }
+          - { target: aarch64-apple-darwin, runner: macos-15, smoke: "" }
+          # Cross-compiled on Apple silicon and run under Rosetta.
+          - { target: x86_64-apple-darwin, runner: macos-15, smoke: "arch -x86_64" }
+          # The CRT is linked statically so no VC++ redistributable is needed (D5).
+          - { target: x86_64-pc-windows-msvc, runner: windows-2025, smoke: "", rustflags: "-C target-feature=+crt-static" }
+          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm, smoke: "", rustflags: "-C target-feature=+crt-static" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+          targets: ${{ matrix.target }}
+      - name: Build
+        shell: bash
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: cargo build --release --locked -p temper-cli --target "${{ matrix.target }}"
+      - name: Smoke run
+        shell: bash
+        env:
+          SMOKE: ${{ matrix.smoke }}
+        run: |
+          exe=temper; case "${{ matrix.target }}" in *windows*) exe=temper.exe ;; esac
+          bin="target/${{ matrix.target }}/release/$exe"
+          got=$($SMOKE "$bin" --version)
+          if [ "$got" != "temper $VERSION" ]; then
+            echo "::error::$bin --version printed '$got', want 'temper $VERSION'"; exit 1
+          fi
+          mkdir -p "dist/${{ matrix.target }}"
+          cp "$bin" "dist/${{ matrix.target }}/"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bin-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/
+          if-no-files-found: error
+
+  package:
+    name: Package
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bin-*
+          path: bins
+      - name: Platform packages and release archives
+        run: |
+          # download-artifact names each directory after its artifact: bin-<target>.
+          for d in bins/bin-*; do mv "$d" "bins/${d#bins/bin-}"; done
+          cargo xtask npm-pack "$VERSION" --bins bins
+          mkdir -p archives
+          for d in bins/*/; do
+            t=$(basename "$d")
+            case "$t" in
+              *windows*) (cd "$d" && zip -q "$GITHUB_WORKSPACE/archives/temper-cli-v$VERSION-$t.zip" temper.exe) ;;
+              *) chmod 0755 "$d/temper"; tar -C "$d" -czf "archives/temper-cli-v$VERSION-$t.tar.gz" temper ;;
+            esac
+          done
+          (cd archives && sha256sum -- * > SHA256SUMS)
+          cat archives/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - name: npm tarballs
+        # Packed here, on Linux, so the executable bit survives (§4 step 3).
+        run: |
+          mkdir -p tarballs
+          for d in target/npm/@wet-ink/*/; do (cd "$d" && npm pack --pack-destination "$GITHUB_WORKSPACE/tarballs" >/dev/null); done
+          ls -l tarballs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-tarballs
+          path: tarballs/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: archives
+          path: archives/
+          if-no-files-found: error
+
+  publish-npm:
+    name: Publish to npm
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Requires the owner's approval (D12).
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g "npm@$NPM_VERSION"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-tarballs
+          path: tarballs
+      - name: Publish the six packages
+        # Idempotent: a version already on the registry with the same integrity is skipped, so a
+        # partial failure can be re-run. One with a different integrity fails the job.
+        run: |
+          tag=latest; case "$VERSION" in *-*) tag=next ;; esac
+          for tgz in tarballs/*.tgz; do
+            name=$(tar -xOzf "$tgz" package/package.json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).name))')
+            local=$(node -e 'const c=require("crypto"),f=require("fs");console.log("sha512-"+c.createHash("sha512").update(f.readFileSync(process.argv[1])).digest("base64"))' "$tgz")
+            remote=$(npm view "$name@$VERSION" dist.integrity 2>/dev/null || true)
+            if [ -n "$remote" ]; then
+              if [ "$remote" = "$local" ]; then echo "$name@$VERSION already published; skipped"; continue; fi
+              echo "::error::$name@$VERSION is on the registry with integrity $remote, not $local"; exit 1
+            fi
+            npm publish "$tgz" --provenance --access public --tag "$tag"
+          done
+
+  lockfile:
+    name: Lockfile
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm install -g "npm@$NPM_VERSION"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+      - name: The plugin package.json, before the cutover
+        run: |
+          if [ -f package.json ]; then exit 0; fi
+          node -e '
+            const v = process.env.VERSION;
+            const pins = {};
+            for (const p of ["darwin-arm64","darwin-x64","linux-arm64","linux-x64","win32-arm64","win32-x64"]) pins[`@wet-ink/temper-${p}`] = v;
+            const pkg = { name: "temper-claude-plugin", private: true, version: v, optionalDependencies: pins };
+            require("fs").writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+      - name: Generate package-lock.json (no node_modules; npm/cli#4828)
+        run: |
+          if [ -e node_modules ]; then echo "::error::node_modules must not exist here"; exit 1; fi
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Lockfile invariant (invariant 6)
+        run: cargo xtask check-npm-lock
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-lock
+          path: |
+            package.json
+            package-lock.json
+          if-no-files-found: error
+
+  verify-npm:
+    name: Verify install (${{ matrix.runner }}, ${{ matrix.arch }})
+    needs: lockfile
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, arch: x64, engine: temper-linux-x64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64, engine: temper-linux-arm64 }
+          - { runner: macos-15, arch: arm64, engine: temper-darwin-arm64 }
+          # x64 Node on Apple silicon, under Rosetta, installs and runs the darwin-x64 engine.
+          - { runner: macos-15, arch: x64, engine: temper-darwin-x64 }
+          - { runner: windows-2025, arch: x64, engine: temper-win32-x64 }
+          - { runner: windows-11-arm, arch: arm64, engine: temper-win32-arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          architecture: ${{ matrix.arch }}
+      - run: npm install -g "npm@$NPM_VERSION"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-lock
+          path: lock
+      - name: Copy the plugin directory, as Claude Code's cache does
+        shell: bash
+        run: |
+          dir="$RUNNER_TEMP/plugin"
+          mkdir -p "$dir"
+          git archive HEAD | tar -x -C "$dir"
+          cp lock/package.json lock/package-lock.json "$dir/"
+          echo "PLUGIN=$dir" >> "$GITHUB_ENV"
+      - name: npm ci within the hook budget
+        shell: bash
+        # The SessionStart hook allows 60 s; the install must leave a margin (45 s).
+        timeout-minutes: 1
+        run: |
+          cd "$PLUGIN"
+          start=$SECONDS
+          npm ci --ignore-scripts --no-audit --no-fund
+          took=$((SECONDS - start))
+          echo "npm ci took ${took}s"
+          if [ "$took" -ge 45 ]; then echo "::error::npm ci took ${took}s, over the 45 s margin"; exit 1; fi
+      - name: Exactly one engine, the matching one
+        shell: bash
+        run: |
+          got=$(ls "$PLUGIN/node_modules/@wet-ink")
+          if [ "$got" != "${{ matrix.engine }}" ]; then
+            echo "::error::installed engines: '$got', want exactly '${{ matrix.engine }}'"; exit 1
+          fi
+      - name: The launcher runs the installed engine
+        shell: bash
+        run: |
+          got=$(node "$PLUGIN/scripts/launch.mjs" --version)
+          if [ "$got" != "temper $VERSION" ]; then
+            echo "::error::launch.mjs --version printed '$got', want 'temper $VERSION'"; exit 1
+          fi
+
+  github-release:
+    name: GitHub release
+    needs: verify-npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Requires the owner's approval: it creates the tag.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: archives
+          path: archives
+      - name: Tag and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="v$VERSION"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::release $tag already exists; nothing to do"
+            exit 0
+          fi
+          pre=""; case "$VERSION" in *-*) pre="--prerelease" ;; esac
+          gh release create "$tag" --target "$GITHUB_SHA" --title "temper engine $VERSION" $pre \
+            --notes "The temper $VERSION engine binaries. npm: @wet-ink/temper-<platform>-<arch>@$VERSION." \
+            archives/*
