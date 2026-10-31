@@ -51,7 +51,7 @@ step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: the workspace's clippy, tests, docs and licence check, doc examples, the brownfield e2e and the example workspace gate (--quick)"
+  step "skipped: the workspace's clippy, tests, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
 
@@ -66,6 +66,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --lock
 
 step "each crate carries both licence texts, equal to the root's"
 cargo xtask check-licenses
+
+step "the workspace's version sites agree"
+cargo xtask versions --check
 
 step "doc examples (every code block in the skill)"
 python3 tests/doc_examples.py --fetch

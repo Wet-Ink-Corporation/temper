@@ -1,31 +1,33 @@
 # Crate charter: `xtask`
 
 ## Purpose
-temper's repository tooling, run as `cargo xtask <task>` (the alias is in `.cargo/config.toml`). Never published. Phase 0a has one task:
+temper's repository tooling, run as `cargo xtask <task>` (the alias is in `.cargo/config.toml`). Never published. Tasks:
 - `check-licenses`: every crate under `crates/` holds `LICENSE-MIT` and `LICENSE-APACHE` equal to the root `LICENSE` and `LICENSE-APACHE`, because `cargo package` packs only files inside the crate (port plan §1.2).
-
-Phase 0b adds `versions`, `npm-pack`, `check-npm-lock` and `verify-install` (port plan §4).
+- `versions --check [X]` and `versions --set X`: the version sites agree (port plan §4, "Versioning"). The sites are the workspace and sibling versions in `Cargo.toml`, the members in `Cargo.lock`, `package.json` and its six pins once it exists, `plugin.json` only once `package.json` exists (until the cutover the plugin ships 1.x), and the templates' `.claude/temper-version` once present. `--set` of a release (not a pre-release) needs a `## X` heading in `CHANGELOG.md`, and writes nothing without it. A version operand must be exact semver (exit 2 otherwise), and a missing pin counts as a disagreeing site.
+- `check-npm-lock`: `package.json` and `package-lock.json` install exactly one engine safely (invariant 6). `package.json` needs exact pins for the six packages and no other dependency, `scripts` or `overrides`. The lockfile must be format 3, with one entry per package: the package's own tarball from the npm registry over HTTPS, a sha512 integrity, and its target's `os` and `cpu`. Nothing else may be in it.
+- `npm-pack X --bins DIR`: writes the six `@wet-ink/temper-<os>-<cpu>` packages under `target/npm/` from `DIR/<target>/temper[.exe]`, with both licences and the binary at mode 0755. It reads every input before it writes, and it replaces each package directory whole.
 
 ## Layer
 tooling, `publish = false`.
 
 ## Allowed dependencies
 - Workspace crates: none.
-- Third-party, added by the phase that first uses it (D10): `anyhow`, `serde_json`.
+- Third-party (D10): `serde_json`; `anyhow` if a later task needs it. Dev only: `tempfile`.
 
 ## Public surface
 None: a binary. Exit codes: `0` the task passed, `1` a check failed or a file could not be read, `2` usage error. Success goes to stdout, problems to stderr.
 
 ## Invariants
-- The comparison logic is pure (`src/licenses.rs`); the file system is read only in `main.rs`.
+- The logic is pure, text in and text out (`licenses.rs`, `versions.rs`, `npm.rs`); the file system is touched only in `main.rs` and `pack.rs`.
+- `versions --set` computes every new text before it writes any file, and spawns no process: it rewrites the members' `Cargo.lock` entries itself.
 - Paths are found from `CARGO_MANIFEST_DIR`, so a task gives the same answer from any working directory.
 
 ## Errors
-A private `XtaskError` with the path that could not be read; no `anyhow` until a phase adds it.
+A private `XtaskError` (read, write, JSON, missing binary), each with its path; no `anyhow`.
 
 ## Test strategy
-- Unit tests beside the pure logic.
-- CI and `tests/ci.sh` run `cargo xtask check-licenses` on the committed tree.
+- Unit tests beside the pure logic; `tempfile` trees for `versions` and `npm-pack`.
+- CI and `tests/ci.sh` run `cargo xtask check-licenses` and `cargo xtask versions --check` on the committed tree.
 - Run: `cargo test -p xtask`.
 
 ## Do not
@@ -36,3 +38,4 @@ A private `XtaskError` with the path that could not be read; no `anyhow` until a
 |---|---|---|---|
 | 2026-10-02 | Hand-written release tooling in `xtask`, not cargo-dist (D7). | H-16 | two-way default (wi-f22cef) |
 | 2026-10-02 | Crates carry plain copies of both licences, checked by `check-licenses`. | H-16 | owner (wi-4679b3) |
+| 2026-10-31 | `plugin.json` joins the version check only once `package.json` exists (the cutover); a pre-release `--set` needs no CHANGELOG heading; `--set` rewrites `Cargo.lock` itself instead of running `cargo update`; packages' `package.json` keys come out sorted (serde_json without `preserve_order`), checked by an exact-text test instead of `insta`. | H-16 | two-way default (wi-654352) |
