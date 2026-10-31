@@ -1,0 +1,4 @@
+{
+  "description": "temper lens: a read-only view of temper's gate and review state. The enforcing hooks live in the temper plugin.",
+  "modules": ["./lens/register.tsx"]
+}

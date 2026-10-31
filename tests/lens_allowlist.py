@@ -2,12 +2,12 @@
 """temper lens stays read-only: an allow-list over what `claude plugin validate --json` says the
 lens module hooks and calls (#107, Design: read-only; #110).
 
-    claude plugin validate --json .claude-plugin/plugin.json > validate.json
+    claude plugin validate --json plugins/temper-lens/.claude-plugin/plugin.json > validate.json
     python3 tests/lens_allowlist.py validate.json
     python3 tests/lens_allowlist.py --self-test
 
 Fails on any hooked event or `$` call outside the lists below, on any env write, on a state write
-outside `temper.*`, on a gating hook outside GATING or without `.catch`, when the report says
+outside `temper-lens.*`, on a gating hook outside GATING or without `.catch`, when the report says
 nothing about the module (so a format change cannot pass silently). It also reads the module's
 source: every `$.process.run` must be a literal `node <plugin root>/scripts/temper.mjs status|stats
 --json` call, every `next(...)` must pass `e` on as it came (the Spinner's suffix aside), every
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 MODULE = './lens/register.tsx'
-SOURCE = Path(__file__).resolve().parent.parent / 'hooks' / 'lens' / 'register.tsx'
+SOURCE = Path(__file__).resolve().parent.parent / 'plugins' / 'temper-lens' / 'hooks' / 'lens' / 'register.tsx'
 
 # Events the lens may hook: it observes them and passes every result on unchanged.
 HOOKS = {
@@ -89,7 +89,7 @@ def problems(report, source, pin=None):
     hooks = field('hooks')
     calls = field('calls')
     if hooks is None or calls is None:
-        out.append(f'the report lists no "hooks:" or "calls:" line for {MODULE}: is the module registered in hooks/hooks.json?')
+        out.append(f'the report lists no "hooks:" or "calls:" line for {MODULE}: is the module registered in plugins/temper-lens/hooks/hooks.json?')
         return out
     for h in split(hooks):
         name = re.sub(r'\{.*\}$', '', h)
@@ -104,7 +104,7 @@ def problems(report, source, pin=None):
         out.append(f'the lens writes environment variables: {env_writes}')
     state_writes = field('state writes')
     for w in [x.strip() for x in (state_writes or '').split(',') if x.strip() and x.strip() != 'nothing']:
-        if not w.startswith('temper.'):
+        if not w.startswith('temper-lens.'):
             out.append(f'the lens writes state it does not own: {w}')
     for g in gating:
         if g.get('hook') not in GATING:
@@ -150,7 +150,7 @@ def self_test():
         f'{MODULE} gating hook with .catch: tool.call',
         f'{MODULE} calls: $.process.run (via runStats, statusView), $.ui.resolve, $.state.get',
         f'{MODULE} env writes: nothing',
-        f'{MODULE} state writes: temper.view',
+        f'{MODULE} state writes: temper-lens.view',
     ]
     good_src = "await $.process.run(['node', `${$.plugin.root}/scripts/temper.mjs`, 'status', '--json'])"
     report = lambda notes, gating=(): {'success': True, 'contents': [{'notes': notes, 'gatingHooks': list(gating)}]}
@@ -161,7 +161,7 @@ def self_test():
         '$.prompt.submit': [n.replace('$.state.get', '$.prompt.submit') for n in good_notes],
         '$.http.fetch': [n.replace('$.state.get', '$.http.fetch (via x)') for n in good_notes],
         'environment': [n.replace('env writes: nothing', 'env writes: PATH') for n in good_notes],
-        'state it does not own': [n.replace('temper.view', 'other.view') for n in good_notes],
+        'state it does not own': [n.replace('temper-lens.view', 'other.view') for n in good_notes],
         'no "hooks:"': good_notes[1:],
         'gating allow-list': [n.replace('with .catch: tool.call', 'with .catch: tool.call, prompt.submit') for n in good_notes],
     }

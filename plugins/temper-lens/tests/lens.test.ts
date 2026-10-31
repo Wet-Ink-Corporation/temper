@@ -7,7 +7,7 @@ import type { On, RenderSurface } from 'claude-code'
 const SURFACES = ['terminal', 'desktop'] as const
 
 const BAND = {
-  plugin: 'temper',
+  plugin: 'temper-lens',
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
@@ -270,7 +270,7 @@ for (const [what, answer] of Object.entries(BENEATH)) {
 // The /temper-lens pane (#112): the reviewer's verdict, findings by severity, the rule's text on a
 // press, and a Draft fix button that fills the prompt box and never submits.
 const PANE = {
-  plugin: 'temper',
+  plugin: 'temper-lens',
   component: 'Pane',
   requestId: 'temper-lens',
   props: { title: 'temper', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
@@ -330,7 +330,9 @@ for (const surface of SURFACES) {
     await ui.press({ key: 'finding:H-02:src/a.rs:7' })
     expect((await ui.find({ key: 'finding:H-02:src/a.rs:7-rule' }))?.text).toContain('No `unwrap` in production code.')
     expect(seen.reads).toHaveLength(1)
-    expect(seen.reads[0]).toMatch(/skills\/rust-craft\/references\/rules\.md$/)
+    // The lens plugin's own copy of the registry (tests/ci.sh keeps it equal to the standard's).
+    expect(seen.reads[0]).toMatch(/\/references\/rules\.md$/)
+    expect(seen.reads[0]).not.toMatch(/skills\//)
 
     await ui.press({ key: 'finding:H-02:src/a.rs:7-draft' })
     expect(seen.fills).toHaveLength(1)
@@ -478,7 +480,7 @@ const RUNNING = (current: string, done: { name: string; ms: number }[]) => doc({
   } },
 })
 
-const SPINNER = { plugin: 'temper', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
+const SPINNER = { plugin: 'temper-lens', component: 'Spinner', props: { word: 'Working', message: null, suffix: '…', mode: 'tool-use' } } as const
 
 /** Telemetry rows for `stats --json --session`: temper's own record of a block, at `ms`, for `agent`'s type. */
 const temperBlock = (event: string, ms: number, agent = 'main') => ({ t: new Date(ms).toISOString(), event, agent, file: null, rules: [], via: null })

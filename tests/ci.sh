@@ -44,10 +44,22 @@ v=templates/example-workspace/.claude/temper
 diff -q scripts/temper.mjs "$v/temper.mjs"
 for f in scripts/lib/*; do diff -q "$f" "$v/lib/$(basename "$f")"; done
 
+step "temper-lens's vendored CLI and rule registry match scripts/ and the standard's"
+l=plugins/temper-lens
+diff -q scripts/temper.mjs "$l/scripts/temper.mjs"
+diff -rq scripts/lib "$l/scripts/lib"
+diff -q skills/rust-craft/references/rules.md "$l/references/rules.md"
+
+step "the temper plugin ships no mod (a mod turns the whole plugin off in desktop chats; the lens is its own plugin)"
+node -e '
+  const h = require("./hooks/hooks.json"), p = require("./.claude-plugin/plugin.json");
+  const bad = [h.modules && "hooks/hooks.json lists modules", p.types && "plugin.json names types"].filter(Boolean);
+  if (bad.length) { console.error(`the temper plugin must not ship a mod: ${bad.join(", ")}; put it in plugins/temper-lens/`); process.exit(1); }'
+
 step "temper lens allow-list checker"
 python3 tests/lens_allowlist.py --self-test
 
-step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
+step "release check (both plugin.json files, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then

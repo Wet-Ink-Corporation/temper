@@ -7,6 +7,11 @@
       "name": "temper",
       "source": "./",
       "description": "The rust-craft Rust engineering standard, enforced: skill-load gate, pre-write escape-hatch scanner, protected config, and a completion gate that requires an independent, fingerprint-bound review; a lint-baseline ratchet for existing codebases; and a compliance report."
+    },
+    {
+      "name": "temper-lens",
+      "source": "./plugins/temper-lens",
+      "description": "temper lens: a read-only band and pane showing temper's gate, review verdict and baseline for the current tree. A mod, so it runs only in Claude Code; install it next to temper."
     }
   ]
 }

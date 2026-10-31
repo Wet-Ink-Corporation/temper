@@ -16,7 +16,8 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | `skills/rust-craft/` | The standard: `SKILL.md`, and `references/` with the rule registry `rules.md` (182 rules) and its sources |
 | `skills/{setup,implement,review,gate,audit}/` | The `/temper:*` commands |
 | `agents/` | `rust-architect`, `rust-implementer`, `rust-reviewer` |
-| `hooks/hooks.json` | Hook registrations; every hook runs `node scripts/temper.mjs hook <event>` |
+| `hooks/hooks.json` | Hook registrations; every hook runs `node scripts/temper.mjs hook <event>`. No `modules`: see `plugins/temper-lens/` |
+| `plugins/temper-lens/` | The `temper-lens` plugin: the lens (a mod), its types, plugin tests, and vendored copies of `scripts/temper.mjs`, `scripts/lib/` and `rules.md` |
 | `scripts/temper.mjs`, `scripts/lib/` | The CLI and hook engine: Node 18+, no dependencies |
 | `templates/workspace/` | What `/temper:setup` installs in a user repository |
 | `templates/example-workspace/` | A complete reference workspace that passes its own gate. Its `.claude/temper/` is a vendored copy of `scripts/`. |
@@ -25,7 +26,7 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | `docs/plans/` | Live plans: `v1-readiness.md` (the road to v1) and `temper-2-rust-port.md` (the 2.0 port) |
 | `docs/history/` | Specs, reviews, findings and the decision log behind each release |
 | `.kb/_intake/decisions/` | Weigh-In decision records (generated; see below) |
-| `.claude-plugin/` | `plugin.json` (the version lives here) and `marketplace.json` |
+| `.claude-plugin/` | `plugin.json` (the version lives here) and `marketplace.json` (lists `temper` and `temper-lens`) |
 | `Cargo.toml`, `crates/`, `xtask/` | The 2.0 port's Cargo workspace (see "Workspace charter" below). Users still run the Node engine until the cutover. |
 | `LICENSE`, `LICENSE-APACHE` | The plugin is MIT; the crates are `MIT OR Apache-2.0` and each carries copies of both |
 
@@ -43,7 +44,8 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |
 | Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
 | The code blocks in the standard | `python3 tests/doc_examples.py` (add `--fetch` without a warm registry cache) |
-| Plugin and marketplace manifests | `claude plugin validate --strict .claude-plugin/plugin.json` and `claude plugin validate --strict .` |
+| Plugin and marketplace manifests | `claude plugin validate --strict .claude-plugin/plugin.json`, `claude plugin validate --strict plugins/temper-lens/.claude-plugin/plugin.json` and `claude plugin validate --strict .` |
+| The lens: plugin tests, read-only allow-list, type check | `bash tests/lens-check.sh` |
 | Brownfield e2e, no model calls | `bash tests/e2e/brownfield.sh` |
 | Headless smoke session, a few model calls | `bash tests/e2e/smoke.sh` |
 | Behavioural evals (model calls, costs money) | `claude plugin eval . --allow-tools Write Edit --scaffold --trust-plugin --runs 3` |
@@ -57,8 +59,13 @@ Needs Node 22+, Python 3.11+, git, and the toolchain in `templates/workspace/rus
   v=templates/example-workspace/.claude/temper
   cp scripts/temper.mjs "$v/" && rm -f "$v"/lib/* && cp scripts/lib/* "$v/lib/"
   node -p 'require("./.claude-plugin/plugin.json").version' > "$v/VERSION"
+  l=plugins/temper-lens/scripts
+  cp scripts/temper.mjs "$l/" && rm -f "$l"/lib/* && cp scripts/lib/* "$l/lib/"
+  cp skills/rust-craft/references/rules.md plugins/temper-lens/references/
   ```
-- **The rule map.** After editing `skills/rust-craft/references/rules.md`, run `python3 tests/gen_rulemap.py` to regenerate `scripts/lib/rulemap.json`, then sync the vendored copy.
+  The lens plugin's `plugins/temper-lens/references/rules.md` must match `skills/rust-craft/references/rules.md` too, and its `plugin.json` version must match temper's (`tests/release-check.sh`).
+- **No mod in the temper plugin.** The desktop app's Chat and Cowork turn off every part of a plugin that ships a mod (`modules` in `hooks.json`), skills included, so temper's own `hooks/hooks.json` lists none and `plugin.json` names no `types`; `tests/ci.sh` fails otherwise. Mod code goes in `plugins/temper-lens/`.
+- **The rule map.** After editing `skills/rust-craft/references/rules.md`, run `python3 tests/gen_rulemap.py` to regenerate `scripts/lib/rulemap.json`, then sync the vendored copies (and copy `rules.md` to `plugins/temper-lens/references/`).
 - **Code in the standard is tested.** `tests/doc_examples.py` checks the Rust and TOML blocks in `skills/rust-craft/`. "Do" blocks (` ```rust `) are compiled and linted and must pass. "Don't" blocks that carry `expect=` must fire the diagnostic they claim. "Don't" blocks without `expect=` are not compiled; the harness lists them in its report without failing. `rust,fragment` blocks are scanned, not compiled, and TOML blocks are parsed. Other languages are counted and skipped.
 - **Rule IDs are permanent.** Never renumber or reuse one. Every cited ID must exist (`tests/registry.py`).
 - **Decisions.** Questions that need the owner go through Weigh-In. The records in `.kb/_intake/decisions/` are generated, so do not hand-edit them, except to repoint an anchor. Each decision is also listed in `docs/history/decisions.md`.
@@ -79,9 +86,9 @@ An agent working with no human watching (an AFK session, a scheduled run) follow
 ## Release checklist
 
 A release goes through `.github/workflows/release.yml`, the flow the 2.0 port plan defines (§4):
-1. Branch `release/X.Y.Z` from `main`. Bump `version` in `.claude-plugin/plugin.json`, and turn `## Unreleased` in `CHANGELOG.md` into a `## X.Y.Z (date)` section. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
-2. Sync the vendored copy (above), including `VERSION`.
-3. `bash tests/release-check.sh --tag vX.Y.Z` passes. It needs the tags (`git fetch --tags`), and fails when the versions or the tag disagree, when an `## Unreleased` section is left above the release, or when the "Upgrading from" note is missing. `bash tests/ci.sh` is green; it runs the release check without the tag. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`.
+1. Branch `release/X.Y.Z` from `main`. Bump `version` in `.claude-plugin/plugin.json` and `plugins/temper-lens/.claude-plugin/plugin.json`, and turn `## Unreleased` in `CHANGELOG.md` into a `## X.Y.Z (date)` section. If the release changes `scripts/` or `templates/workspace/`, the section ends with an "Upgrading from X.Y" note for adopted repositories: what drifts, and anything beyond the README's Upgrading steps.
+2. Sync the vendored copies (above), including `VERSION`.
+3. `bash tests/release-check.sh --tag vX.Y.Z` passes. It needs the tags (`git fetch --tags`), and fails when the versions or the tag disagree, when an `## Unreleased` section is left above the release, or when the "Upgrading from" note is missing. `bash tests/ci.sh` is green; it runs the release check without the tag. For a minor or major release, also run `tests/e2e/smoke.sh` and the evals, and append the results to `docs/history/evals.md`, and have the owner check that `/temper:gate` loads in a new Claude desktop app chat with a folder connected (no CI covers that surface).
 4. Open the release PR to `main`.
 5. Run the Release workflow on `release/X.Y.Z` (Actions, or `gh workflow run release.yml --ref release/X.Y.Z -f version=X.Y.Z`). Its `check` job runs the release check with the tag, the manifest validation and `tests/ci.sh`. Its `publish` job waits for the owner's approval in the `release` environment, then tags `vX.Y.Z` on the checked commit and creates the GitHub release from the CHANGELOG section. A re-run after the release exists does nothing.
 6. The owner merges the release PR with a merge commit, not a squash, so the tag stays in `main`'s history. The merge is the release for marketplace users.

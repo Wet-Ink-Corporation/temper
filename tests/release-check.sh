@@ -6,6 +6,7 @@
 #
 # Asserts that these agree:
 #   - `version` in .claude-plugin/plugin.json;
+#   - `version` in plugins/temper-lens/.claude-plugin/plugin.json (the two plugins release together);
 #   - the top `## X.Y.Z (YYYY-MM-DD)` heading in CHANGELOG.md;
 #   - templates/example-workspace/.claude/temper/VERSION;
 #   - with --tag, the tag (vX.Y.Z). If the tag exists, it must point at HEAD.
@@ -45,8 +46,9 @@ fail=0
 err() { echo "release-check: $*" >&2; fail=1; }
 ok() { echo "release-check: $*"; }
 
-# 1. The three versions in the tree.
+# 1. The four versions in the tree.
 plugin=$(node -p 'require("./.claude-plugin/plugin.json").version')
+lens=$(node -p 'require("./plugins/temper-lens/.claude-plugin/plugin.json").version')
 vendored=$(tr -d '\r\n' < templates/example-workspace/.claude/temper/VERSION)
 heading_re='^## ([0-9]+\.[0-9]+\.[0-9]+) \(([0-9]{4}-[0-9]{2}-[0-9]{2})\)[[:space:]]*$'
 headings=$(grep -E "$heading_re" CHANGELOG.md | sed -E "s/$heading_re/\\1/" || true)
@@ -56,6 +58,7 @@ previous=$(printf '%s\n' "$headings" | sed -n 2p)
 [ -n "$changelog" ] || err "CHANGELOG.md has no '## X.Y.Z (YYYY-MM-DD)' heading"
 [ "$plugin" = "$changelog" ] || err "plugin.json is $plugin, the top CHANGELOG heading is ${changelog:-missing}"
 [ "$plugin" = "$vendored" ] || err "plugin.json is $plugin, templates/example-workspace/.claude/temper/VERSION is $vendored"
+[ "$plugin" = "$lens" ] || err "plugin.json is $plugin, plugins/temper-lens/.claude-plugin/plugin.json is $lens"
 
 # 2. The tag.
 if [ -n "$tag" ]; then
