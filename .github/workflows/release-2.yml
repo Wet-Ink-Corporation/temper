@@ -20,7 +20,10 @@ name: Release 2.x engine
 # npm publishing uses trusted publishing (OIDC, D12): no token. npm sets up a trusted publisher only
 # for a package that exists, so the owner publishes the six 0.0.0 placeholders by hand before the
 # first run (wi-428ed1). Both publish jobs wait for the owner's approval in the `release`
-# environment.
+# environment. The approval only holds if each package's trusted publisher names this workflow file
+# AND the `release` environment, and the environment is limited to release/* branches: otherwise a
+# pushed branch with an edited copy of this file could publish. At the cutover, when release.yml
+# takes over, each trusted publisher is repointed to it.
 on:
   workflow_dispatch:
     inputs:
@@ -38,7 +41,8 @@ concurrency:
 
 env:
   VERSION: ${{ inputs.version }}
-  # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+  # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10. Only publish-npm upgrades:
+  # the lockfile and verify jobs use the npm that Node 22 bundles, as users do.
   NPM_VERSION: 11.21.1
 
 jobs:
@@ -156,6 +160,21 @@ jobs:
           mkdir -p tarballs
           for d in target/npm/@wet-ink/*/; do (cd "$d" && npm pack --pack-destination "$GITHUB_WORKSPACE/tarballs" >/dev/null); done
           ls -l tarballs
+      - name: Each tarball has both licences and an executable engine
+        # A published npm version can never change, so a malformed set stops here.
+        run: |
+          n=0
+          for tgz in tarballs/*.tgz; do
+            n=$((n + 1))
+            list=$(tar -tzf "$tgz")
+            for f in package/LICENSE-MIT package/LICENSE-APACHE package/package.json; do
+              grep -qx "$f" <<<"$list" || { echo "::error::$tgz has no $f"; exit 1; }
+            done
+            bin=$(grep -xE 'package/bin/temper(\.exe)?' <<<"$list") || { echo "::error::$tgz has no engine"; exit 1; }
+            mode=$(tar -tvzf "$tgz" "$bin" | cut -c1-10)
+            [ "$mode" = "-rwxr-xr-x" ] || { echo "::error::$bin in $tgz has mode $mode"; exit 1; }
+          done
+          [ "$n" -eq 6 ] || { echo "::error::$n tarballs, want 6"; exit 1; }
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-tarballs
@@ -175,21 +194,21 @@ jobs:
     # Requires the owner's approval (D12).
     environment: release
     permissions:
-      contents: read
       id-token: write
     steps:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: npm install -g "npm@$NPM_VERSION"
+      - run: npm install -g "npm@${{ env.NPM_VERSION }}"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-tarballs
           path: tarballs
       - name: Publish the six packages
-        # Idempotent: a version already on the registry with the same integrity is skipped, so a
-        # partial failure can be re-run. One with a different integrity fails the job.
+        # Idempotent within a run: a version already on the registry with the same integrity is
+        # skipped, so "Re-run failed jobs" finishes a partial publish. A new dispatch rebuilds, and
+        # its binaries may differ byte for byte, so it fails here on integrity instead (fail-safe).
         run: |
           tag=latest; case "$VERSION" in *-*) tag=next ;; esac
           for tgz in tarballs/*.tgz; do
@@ -215,7 +234,6 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - run: npm install -g "npm@$NPM_VERSION"
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
         with:
           toolchain: 1.98.1
@@ -232,7 +250,12 @@ jobs:
       - name: Generate package-lock.json (no node_modules; npm/cli#4828)
         run: |
           if [ -e node_modules ]; then echo "::error::node_modules must not exist here"; exit 1; fi
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          # The registry's metadata can lag a fresh publish by a minute or so (ETARGET): retry.
+          for i in 1 2 3 4 5 6; do
+            npm install --package-lock-only --ignore-scripts --no-audit --no-fund && exit 0
+            echo "attempt $i failed; retrying in 20 s"; sleep 20
+          done
+          exit 1
       - name: Lockfile invariant (invariant 6)
         run: cargo xtask check-npm-lock
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -267,7 +290,6 @@ jobs:
         with:
           node-version: 22
           architecture: ${{ matrix.arch }}
-      - run: npm install -g "npm@$NPM_VERSION"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-lock
@@ -277,7 +299,7 @@ jobs:
         run: |
           dir="$RUNNER_TEMP/plugin"
           mkdir -p "$dir"
-          git archive HEAD | tar -x -C "$dir"
+          git archive HEAD | tar -xf - -C "$dir"
           cp lock/package.json lock/package-lock.json "$dir/"
           echo "PLUGIN=$dir" >> "$GITHUB_ENV"
       - name: npm ci within the hook budget
