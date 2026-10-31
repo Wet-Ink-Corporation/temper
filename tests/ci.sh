@@ -19,6 +19,11 @@ quick=0
 
 step() { printf '\n== %s\n' "$*"; }
 
+step "workspace config matches templates/workspace/ (.cargo/config.toml only appends the xtask alias)"
+for f in clippy.toml rustfmt.toml deny.toml rust-toolchain.toml; do cmp "templates/workspace/$f" "$f"; done
+t=templates/workspace/.cargo/config.toml
+cmp "$t" <(head -c "$(wc -c < "$t")" .cargo/config.toml)
+
 step "workspace format (the 2.0 port's crates)"
 cargo fmt --all -- --check
 

@@ -6,12 +6,12 @@
 use std::fmt;
 
 /// Each licence copy a crate holds, with the root file it must equal.
-pub(crate) const COPIES: [Copy; 2] = [
-    Copy {
+pub(crate) const COPIES: [LicenseCopy; 2] = [
+    LicenseCopy {
         in_crate: "LICENSE-MIT",
         at_root: "LICENSE",
     },
-    Copy {
+    LicenseCopy {
         in_crate: "LICENSE-APACHE",
         at_root: "LICENSE-APACHE",
     },
@@ -19,7 +19,7 @@ pub(crate) const COPIES: [Copy; 2] = [
 
 /// One licence file a crate copies from the root.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Copy {
+pub(crate) struct LicenseCopy {
     /// Its name in the crate directory.
     pub(crate) in_crate: &'static str,
     /// The root file it copies.
@@ -53,7 +53,7 @@ impl fmt::Display for Problem {
 /// Compare one crate's copy (`None` when the file is absent) with the root text.
 pub(crate) fn compare(
     krate: &str,
-    copy: Copy,
+    copy: LicenseCopy,
     root_text: &str,
     found: Option<&str>,
 ) -> Option<Problem> {
