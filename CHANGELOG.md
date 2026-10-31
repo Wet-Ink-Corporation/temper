@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 (2026-10-31)
 
 **temper loads in desktop chats again: the lens is now its own plugin, `temper-lens`.** The Claude desktop app's Chat and Cowork turn off every part of a plugin that ships a mod, so temper's skills and commands (`/temper:gate` among them) failed there with "this plugin entry is off here". temper no longer ships a mod: the lens moved to `plugins/temper-lens/`, a second plugin in the same marketplace, with its own copy of temper's CLI and rule registry. Claude Code users who want the band and the `/temper-lens` pane install it next to temper with `claude plugin install temper-lens@temper`. The lens itself is unchanged. temper's hooks and gate are unchanged. CI now fails if the temper plugin lists a mod again, and the release check requires both plugins to carry the same version.
 
@@ -9,6 +9,8 @@
 **A release workflow for the 2.0 engine (port Phase 0b).** `.github/workflows/release-2.yml` builds the engine for six targets, packs the `@wet-ink/temper-*` npm packages, publishes them with npm provenance once the owner approves, generates and checks the plugin's `package-lock.json`, and verifies an `npm ci` install on all six runners. It stays separate from `release.yml`, which still ships 1.x, until the 2.0.0 cutover.
 
 **The launcher can build its engine (port Phase 0c).** When no prebuilt engine is installed, `scripts/fallback.mjs` builds one with the user's cargo at session start, into the plugin's data directory, with one build at a time across sessions. A failed build is recorded and retried at the next session start. Until an engine exists, Rust edits are paused with a retry message, Stop reports the gate as unavailable, and everything else passes. None of this runs for users yet: no hook goes through the launcher before Phase 2.
+
+Upgrading from 1.5: install `temper-lens` next to temper if you use the lens (`claude plugin marketplace update temper`, `claude plugin update temper@temper`, then `claude plugin install temper-lens@temper`); after the update temper no longer draws it. `scripts/` gains `launch.mjs` and `fallback.mjs`, which no hook runs yet and which are not part of the vendored copy; `temper.mjs` and `lib/` are unchanged, so the vendored `.claude/temper/` differs only in its `VERSION`. `temper setup --vendor-only` refreshes it; until then CI runs the same code. Nothing in `templates/workspace/` changed.
 
 ## 1.5.0 (2026-10-30)
 
