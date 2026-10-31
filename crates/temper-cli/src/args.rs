@@ -21,18 +21,21 @@ pub(crate) enum Command {
 /// Why the usage text is printed, which decides the exit code.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum UsageExit {
-    /// No subcommand: the usage text is the answer (exit 0, as in 1.x).
+    /// No subcommand, or an empty one: the usage text is the answer (exit 0, as in 1.x).
     Requested,
     /// An unknown or not yet ported subcommand (exit 2, as in 1.x).
     Unknown,
 }
 
 /// Parse the arguments after the program name.
+///
+/// As in 1.x, a missing or empty first argument means no subcommand, whatever follows it.
 pub(crate) fn parse<I: IntoIterator<Item = OsString>>(args: I) -> Command {
-    let args: Vec<OsString> = args.into_iter().collect();
-    match args.as_slice() {
-        [] => Command::Usage(UsageExit::Requested),
-        [only] if only == "--version" => Command::Version,
+    let mut args = args.into_iter();
+    match (args.next(), args.next()) {
+        (None, _) => Command::Usage(UsageExit::Requested),
+        (Some(first), _) if first.is_empty() => Command::Usage(UsageExit::Requested),
+        (Some(first), None) if first == "--version" => Command::Version,
         _ => Command::Usage(UsageExit::Unknown),
     }
 }
@@ -53,6 +56,17 @@ mod tests {
             Command::Usage(UsageExit::Requested),
             "empty command line"
         );
+    }
+
+    #[test]
+    fn an_empty_first_argument_asks_for_the_usage_text() {
+        for args in [&[""][..], &["", "x"]] {
+            assert_eq!(
+                parse_strs(args),
+                Command::Usage(UsageExit::Requested),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

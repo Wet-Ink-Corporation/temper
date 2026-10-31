@@ -21,6 +21,9 @@ fn main() -> ExitCode {
     };
     match write_out(text) {
         Ok(()) => exit.into(),
+        // The reader went away (`temper .. | head`): stop writing and keep the command's own
+        // code (port plan §2.4, D16(b)).
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => exit.into(),
         // Nothing useful can be said about a stdout that cannot be written to.
         Err(_) => Exit::Output.into(),
     }
@@ -37,7 +40,7 @@ fn write_out(text: &str) -> io::Result<()> {
 enum Exit {
     /// 0: done.
     Success,
-    /// 1: stdout could not be written.
+    /// 1: stdout could not be written, for a reason other than a closed pipe.
     Output,
     /// 2: the command line was not understood.
     Usage,

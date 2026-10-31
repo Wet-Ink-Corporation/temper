@@ -91,6 +91,7 @@ jobs:
     timeout-minutes: 20
     env:
       CARGO_TERM_COLOR: always
+      CARGO_BUILD_WARNINGS: deny   # Cargo 1.97+ build.warnings (MOD-13)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -113,6 +114,14 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Licence copies in each crate
         run: cargo xtask check-licenses
+      # Feature unification can hide a member that does not build alone (ARC-16).
+      - name: Each member builds on its own
+        if: runner.os == 'Linux'
+        shell: bash
+        run: >-
+          cargo metadata --locked --no-deps --format-version 1
+          | jq -r '.packages[].name'
+          | xargs -I{} cargo check --locked --all-targets -p {}
       - name: Install cargo-deny
         if: runner.os == 'Linux'
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21

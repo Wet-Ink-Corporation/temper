@@ -25,3 +25,15 @@ pub(crate) fn temper(args: &[&str]) -> Result<Run, Box<dyn Error>> {
         stderr: String::from_utf8(output.stderr)?,
     })
 }
+
+/// Run `temper <args..>` with stdout a pipe whose reading end is already closed, as in
+/// `temper scan | head` after `head` exits; return the exit code.
+pub(crate) fn temper_into_closed_pipe(args: &[&str]) -> Result<Option<i32>, Box<dyn Error>> {
+    let (reader, writer) = std::io::pipe()?;
+    drop(reader);
+    let status = Command::new(env!("CARGO_BIN_EXE_temper"))
+        .args(args)
+        .stdout(writer)
+        .status()?;
+    Ok(status.code())
+}

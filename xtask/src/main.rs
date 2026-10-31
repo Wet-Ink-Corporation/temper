@@ -118,13 +118,8 @@ impl fmt::Display for XtaskError {
     }
 }
 
-impl std::error::Error for XtaskError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Read { source, .. } => Some(source),
-        }
-    }
-}
+/// `Display` already names the I/O error, so `source` is not repeated (ERR-05).
+impl std::error::Error for XtaskError {}
 
 /// The exit codes: 0 done, 1 a check failed or a file could not be read, 2 usage.
 enum Exit {
