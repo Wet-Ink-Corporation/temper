@@ -35,7 +35,10 @@ function workspace(t) {
 }
 
 /** The pid of a process that has ended. */
-const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
+// A pid no process has: the pid of a process that just exited can be reused at once on Windows, so
+// count down from near the top of the pid range instead (multiples of 4, as Windows assigns them).
+let nextDeadPid = 2147483644;
+const deadPid = () => { nextDeadPid -= 4; return nextDeadPid; };
 
 // ------------------------------------------------------------- redactCommand
 
