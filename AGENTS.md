@@ -36,6 +36,7 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | Everything CI runs that needs no model call | `bash tests/ci.sh` (`--quick` skips the steps that compile Rust) |
 | The workspace's gate | `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`, `cargo test --workspace --all-features --locked`, `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked` (or `node scripts/temper.mjs gate`) |
 | Licence copies in each crate | `cargo xtask check-licenses` |
+| Version sites agree (the 2.0 workspace) | `cargo xtask versions --check` |
 | Supply chain | `cargo deny check` |
 | MSRV | `cargo +1.96 check --workspace --all-targets --locked` |
 | Unit tests | `node --test tests/*.test.mjs` |

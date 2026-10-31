@@ -38,6 +38,6 @@ Phase 0a has no failure beyond the stdout write: a closed pipe keeps the command
 ## Decisions
 | Date | Decision | Rule | Decided by |
 |---|---|---|---|
-| 2026-10-02 | Hand-parse arguments with slice patterns; no `clap` (D10). | ARC-12, H-16 | owner (wi-b03273) |
+| 2026-10-02 | Hand-parse arguments; no `clap` (D10). | ARC-12, H-16 | owner (wi-b03273) |
 | 2026-10-31 | `--version` prints the version and exits 0, where 1.x prints the usage text and exits 2; the port plan's Phase 0 test list asks for it, and the Node CLI never answered `--version`. | OUT-06 | port plan (Phase 0 test list) |
 | 2026-10-31 | Exit codes come from a private fieldless `Exit` enum through one exhaustive `match`, so no code is a loose constant or an `as` cast. | H-11 | Phase 0a |

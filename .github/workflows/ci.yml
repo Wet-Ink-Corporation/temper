@@ -114,6 +114,8 @@ jobs:
           RUSTDOCFLAGS: -D warnings
       - name: Licence copies in each crate
         run: cargo xtask check-licenses
+      - name: Version sites agree
+        run: cargo xtask versions --check
       # Feature unification can hide a member that does not build alone (ARC-16).
       - name: Each member builds on its own
         if: runner.os == 'Linux'

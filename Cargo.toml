@@ -27,6 +27,9 @@ publish = false                # turned on by the Phase 0b release work (D2, wi-
 temper-domain = { path = "crates/temper-domain", version = "2.0.0-alpha.0" }
 temper-app = { path = "crates/temper-app", version = "2.0.0-alpha.0" }
 temper-host = { path = "crates/temper-host", version = "2.0.0-alpha.0" }
+# Third-party, each approved by D10 (wi-b03273) or pre-approved by the standard.
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
+tempfile = { version = "3", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"                                  # H-01
