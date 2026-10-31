@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { preEdit, preBash, lintConfigChanged } from '../scripts/lib/hooks.mjs';
+import { preEdit, preBash, lintConfigChanged, blankProse } from '../scripts/lib/hooks.mjs';
 import { checkManifests, checkManifestsToml, runGate, renderGate, scanChanged, mustAdvisories } from '../scripts/lib/gate.mjs';
 import { discover } from '../scripts/lib/project.mjs';
 
@@ -815,6 +815,23 @@ test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a
   }
 });
 
+// The #155 timing tests' limit for a whole preBash call. The parser's own linear cost at these sizes
+// is 0.3 to 0.4 s here and up to 1.2 s on the CI runners, and each pattern that backtracked took
+// 8 s or more on the shapes below, so 3 s keeps a margin both ways. The search-command pattern is
+// also timed alone, at 1 MB, below.
+const TIMING_MS = 3000;
+
+// #155: the search-command pattern in blankProse, on its own: each shape took seconds at 20,000 repeats.
+test('blankProse: a megabyte of starts, assignments, paths or newlines is blanked in well under a second', () => {
+  for (const [word, n] of [[';a=', 1 << 18], ['(/', 1 << 19], ['(', 1 << 20], ['\n', 1 << 20], [' \n', 1 << 19], ['a=b ', 1 << 18]]) {
+    const t0 = Date.now();
+    blankProse(`${word.repeat(n)}x`);
+    const ms = Date.now() - t0;
+    assert.ok(ms < 1000, `${JSON.stringify(word)}: ${ms} ms`);
+  }
+});
+
+
 // #155: `\s*\)?\s*` in codeWriteTargets' argument pattern, `\s*\(?\s*` after `open`, and the `\s*`
 // and `(?:\S*[\\/])?` prefix of the search-command pattern in blankProse backtracked quadratically, past
 // the 15 s hook timeout. The `;a=` and `(/` runs are shorter because the parser's own linear cost per
@@ -828,7 +845,7 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
       const t0 = Date.now();
       preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
       const ms = Date.now() - t0;
-      assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+      assert.ok(ms < TIMING_MS, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
     }
   }
 });
@@ -839,16 +856,17 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
 // backtracked to each one, finding a path's owner joined it once per part (2000 parts took 3 s),
 // and the `temper baseline` pattern rescanned from every `=` (64K took 4 s).
 test('Bash: a long run of shell-writer words or `=` is decided in under a second', () => {
-  // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument).
+  // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument), on
+  // the slower Windows runner too: 32K `.claude/temper/` took 1.2 s there.
   for (const [word, n, end = 'x', pre = ''] of [['open(', 8192], ['sed ', 32768], ['sed -i ', 4096], ['perl -i ', 4096], ['write_text ', 16384], ['cp ', 2048], ['Set-Content ', 16384], ['=x', 32768], ['=', 65536], ['--!\t', 32768, '-', '$0\t'], ['=$0 -', 32768], ['-a=temper ', 32768, 'x', 'temper '],
-    ['.claude/temper/', 32768, '<', 'cp '], ['.claude/temper/', 32768, "'x\"", "python3 -c \"open('"],
-    ['.claude/temper/', 32768, '<', 'mv x ']]) {
+    ['.claude/temper/', 8192, '<', 'cp '], ['.claude/temper/', 8192, "'x\"", "python3 -c \"open('"],
+    ['.claude/temper/', 8192, '<', 'mv x ']]) {
     const command = `${pre}${word.repeat(n)}${end}`;
     for (const agent of ['temper:rust-reviewer', undefined]) {
       const t0 = Date.now();
       preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
       const ms = Date.now() - t0;
-      assert.ok(ms < 1000, `${word} ${agent ?? 'main'}: ${ms} ms`);
+      assert.ok(ms < TIMING_MS, `${word} ${agent ?? 'main'}: ${ms} ms`);
     }
   }
 });
