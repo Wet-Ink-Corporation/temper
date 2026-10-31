@@ -1015,7 +1015,7 @@ const WORD = '[^\\s;&|(\\x60]';
 const SEARCH = new RegExp(`(?:^|[;&|(\\x60\\n])[ \\t]*(?:\\w+=${WORD}*[ \\t]+|(?:sudo|env|time|xargs)[ \\t]+)*(?:${WORD}*[\\\\/])?(?:git[ \\t]+grep|[ef]?grep|rg|ag|ack)(?:\\.exe)?(?=\\s|$)(?:${QUOTED}|[^'"|;&\\n])*`, 'g');
 
 /** `cmd` with here-document bodies, message option values and search patterns blanked. */
-function blankProse(cmd) {
+export function blankProse(cmd) {
   return cmd
     // A backslash-newline continues the line.
     .replace(/\\\r?\n/g, ' ')
