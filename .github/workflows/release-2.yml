@@ -170,7 +170,11 @@ jobs:
             for f in package/LICENSE-MIT package/LICENSE-APACHE package/package.json; do
               grep -qx "$f" <<<"$list" || { echo "::error::$tgz has no $f"; exit 1; }
             done
-            bin=$(grep -xE 'package/bin/temper(\.exe)?' <<<"$list") || { echo "::error::$tgz has no engine"; exit 1; }
+            want=package/bin/temper; case "$tgz" in *win32*) want=package/bin/temper.exe ;; esac
+            bin=$(grep -x 'package/bin/.*' <<<"$list" || true)
+            [ "$bin" = "$want" ] || { echo "::error::$tgz carries '$bin', want exactly $want"; exit 1; }
+            v=$(tar -xOzf "$tgz" package/package.json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>console.log(JSON.parse(s).version))')
+            [ "$v" = "$VERSION" ] || { echo "::error::$tgz is version $v, want $VERSION"; exit 1; }
             mode=$(tar -tvzf "$tgz" "$bin" | cut -c1-10)
             [ "$mode" = "-rwxr-xr-x" ] || { echo "::error::$bin in $tgz has mode $mode"; exit 1; }
           done
@@ -250,10 +254,12 @@ jobs:
       - name: Generate package-lock.json (no node_modules; npm/cli#4828)
         run: |
           if [ -e node_modules ]; then echo "::error::node_modules must not exist here"; exit 1; fi
-          # The registry's metadata can lag a fresh publish by a minute or so (ETARGET): retry.
-          for i in 1 2 3 4 5 6; do
-            npm install --package-lock-only --ignore-scripts --no-audit --no-fund && exit 0
-            echo "attempt $i failed; retrying in 20 s"; sleep 20
+          # The registry's metadata can lag a fresh publish (ETARGET), and its CDN caches a packument
+          # for up to 300 s, so retry for over 5 minutes. --prefer-online makes npm revalidate
+          # rather than reuse the stale packument from its own cache.
+          for i in $(seq 1 12); do
+            npm install --package-lock-only --prefer-online --ignore-scripts --no-audit --no-fund && exit 0
+            if [ "$i" -lt 12 ]; then echo "attempt $i failed; retrying in 30 s"; sleep 30; fi
           done
           exit 1
       - name: Lockfile invariant (invariant 6)

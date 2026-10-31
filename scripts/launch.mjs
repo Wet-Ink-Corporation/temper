@@ -123,6 +123,13 @@ export async function runEngine(bin, argv, { env, pluginRoot, version, nodeVersi
   return runBinary(bin, argv, { env, pluginRoot, version, stdin, onStdout });
 }
 
+async function readStdin() {
+  if (process.stdin.isTTY) return '';
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 async function drainStdin() {
   if (process.stdin.isTTY) return;
   for await (const chunk of process.stdin) void chunk;
@@ -152,6 +159,25 @@ async function main() {
         return 1;
       }
     }
+    if (argv[0] === 'hook') {
+      // No engine for a graduated hook: the fallback build or the D6 policy (§5.4, Phase 0c).
+      // The hook input is read once here, so an engine that becomes available still gets it.
+      const stdin = await readStdin();
+      const { withoutEngine } = await import('./fallback.mjs');
+      const r = withoutEngine({
+        argv, env: process.env, stdin, pluginRoot, dataDir: process.env.CLAUDE_PLUGIN_DATA,
+        key: engineKey(pluginRoot, version), platform: process.platform,
+      });
+      if (r.bin) {
+        return runEngine(r.bin, argv, {
+          env: process.env, pluginRoot, version, nodeVersion: process.versions.node, stdin,
+          writeStderr: (text) => process.stderr.write(text),
+        });
+      }
+      await new Promise((done) => { process.stdout.write(r.stdout, done); });
+      return r.exit;
+    }
+    // A command with no engine runs in 1.x while the port is under way.
   }
   // The 1.x CLI, in this process: it reads process.argv and stdin itself and sets the exit code.
   await import(pathToFileURL(path.join(pluginRoot, 'scripts', 'temper.mjs')).href);
