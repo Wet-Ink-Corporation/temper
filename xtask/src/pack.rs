@@ -60,6 +60,8 @@ pub(crate) fn pack(
         }
         let installed = bin_dir.join(target.bin_name());
         write(&installed, &binary)?;
+        // Windows has no mode bits; the package job runs on Linux, where they are set.
+        #[cfg(unix)]
         make_executable(&installed)?;
         written.push(dir);
     }
@@ -96,12 +98,6 @@ fn make_executable(path: &Path) -> Result<(), XtaskError> {
             source,
         }
     })
-}
-
-/// Windows has no mode bits; the package job runs on Linux, where they are set.
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<(), XtaskError> {
-    Ok(())
 }
 
 #[cfg(test)]
