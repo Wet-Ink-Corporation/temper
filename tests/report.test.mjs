@@ -336,6 +336,15 @@ test('report: Markdown table cells escape pipes', () => {
   assert.equal(row, '| H-02 | MUST | 2 | a \\| b &lt;c&gt; |');
 });
 
+test('report: Markdown table cells keep backslashes before pipes literal', () => {
+  const { collection, baseline, res } = small();
+  // Outside a code span the backslash is escaped; inside one GFM keeps it literal. Either way
+  // the pipe gets its own `\|`, so `\\|` reads as a backslash and a pipe, never a cell break.
+  const r = buildReport(collection, baseline, res, { ...META, rulemap: { rules: { 'H-02': { level: 'MUST', title: 'x\\|y `p\\|q`' } } } });
+  const row = renderMarkdown(r).split('\n').find((l) => l.startsWith('| H-02 |'));
+  assert.equal(row, '| H-02 | MUST | 2 | x\\\\\\|y `p\\\\|q` |');
+});
+
 test('report: --out stays under target/ or .temper/', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-out-'));
   try {
@@ -354,9 +363,11 @@ test('report: --out stays under target/ or .temper/', () => {
 
 // ---------- the CLI, in a child process (runReport reads the cwd) ----------
 
+// A fixed script: the module URL and the arguments travel in argv, never spliced into the code.
+const CLI_CODE = 'const [url, ...args] = process.argv.slice(1); import(url).then((m) => m.runReport(args)).then((c) => { process.exitCode = c; });';
+
 function runCli(cwd, args) {
-  const code = `import(${JSON.stringify(pathToFileURL(REPORT_MJS).href)}).then((m) => m.runReport(${JSON.stringify(args)})).then((c) => { process.exitCode = c; });`;
-  return spawnSync(process.execPath, ['--input-type=module', '-e', code], { cwd, encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(cwd), TEMPER_BASE: '' } });
+  return spawnSync(process.execPath, ['--input-type=module', '-e', CLI_CODE, pathToFileURL(REPORT_MJS).href, ...args], { cwd, encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: path.dirname(cwd), TEMPER_BASE: '' } });
 }
 
 function scratch(withRatchet) {
