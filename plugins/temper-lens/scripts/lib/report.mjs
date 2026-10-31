@@ -265,12 +265,12 @@ function mdText(s, max = 0) {
     str += '…';
   }
   const outside = (p) => p.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/([\\*_[\]~#!])/g, '\\$1').replace(/@/g, '@\u200b');
+    .replace(/([\\*_[\]~#!|])/g, '\\$1').replace(/@/g, '@\u200b');
   const parts = str.split('`');
   if (parts.length % 2 === 0) return outside(str).replace(/`/g, '&#96;');
   return parts.map((p, i) => (i % 2 ? `\`${p}\`` : outside(p))).join('');
 }
-const mdCell = (s, max) => mdText(s, max).replace(/\|/g, '\\|');
+const mdCell = (s, max) => mdText(s, max);
 const mdCode = (s) => `\`${String(s ?? '').replace(/[`\r\n]/g, '')}\``;
 const loc = (f) => (f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '(no file)');
 const ruleList = (rules) => (rules?.length ? rules.join(', ') : 'unmapped');
