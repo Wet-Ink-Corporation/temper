@@ -815,6 +815,11 @@ test('Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a
   }
 });
 
+// The #155 timing tests' limit. The Windows runner takes about twice as long on the parser's linear
+// cost (1.2 s where Linux takes 0.4 s), and a pattern that backtracks takes 10 s or more at these
+// sizes on either, so 3 s there still catches one.
+const TIMING_MS = process.platform === 'win32' ? 3000 : 1000;
+
 // #155: `\s*\)?\s*` in codeWriteTargets' argument pattern, `\s*\(?\s*` after `open`, and the `\s*`
 // and `(?:\S*[\\/])?` prefix of the search-command pattern in blankProse backtracked quadratically, past
 // the 15 s hook timeout. The `;a=` and `(/` runs are shorter because the parser's own linear cost per
@@ -828,7 +833,7 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
       const t0 = Date.now();
       preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
       const ms = Date.now() - t0;
-      assert.ok(ms < 1000, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
+      assert.ok(ms < TIMING_MS, `${command.slice(0, 24)} ${agent ?? 'main'}: ${ms} ms`);
     }
   }
 });
@@ -849,7 +854,7 @@ test('Bash: a long run of shell-writer words or `=` is decided in under a second
       const t0 = Date.now();
       preBash({ tool_name: 'Bash', cwd: ws, session_id: 'hooks-test', agent_type: agent, tool_input: { command } });
       const ms = Date.now() - t0;
-      assert.ok(ms < 1000, `${word} ${agent ?? 'main'}: ${ms} ms`);
+      assert.ok(ms < TIMING_MS, `${word} ${agent ?? 'main'}: ${ms} ms`);
     }
   }
 });
