@@ -9,13 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::XtaskError;
-use crate::npm::{TARGETS, package_json};
-
-/// The licence files every package carries: (name in the package, root file).
-const LICENCES: [(&str, &str); 2] = [
-    ("LICENSE-MIT", "LICENSE"),
-    ("LICENSE-APACHE", "LICENSE-APACHE"),
-];
+use crate::npm::{LICENCES, TARGETS, package_json};
 
 /// Write the six packages under `out` and return their directories, in [`TARGETS`] order.
 pub(crate) fn pack(

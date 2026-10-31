@@ -70,9 +70,18 @@ impl Target {
     }
 }
 
+/// The licence files every package carries: (name in the package, file at the repository root).
+/// npm packs a `LICENSE-*` file only when `files` names it, so [`package_json`] lists each one.
+pub(crate) const LICENCES: [(&str, &str); 2] = [
+    ("LICENSE-MIT", "LICENSE"),
+    ("LICENSE-APACHE", "LICENSE-APACHE"),
+];
+
 /// The `package.json` of `target`'s package at `version`: no `bin`, no `scripts` (§4 step 3).
 /// Keys come out sorted, so the text is the same on every run.
 pub(crate) fn package_json(target: Target, version: &str) -> String {
+    let mut files = vec!["bin"];
+    files.extend(LICENCES.map(|(name, _)| name));
     let value = serde_json::json!({
         "name": target.package_name(),
         "version": version,
@@ -84,7 +93,7 @@ pub(crate) fn package_json(target: Target, version: &str) -> String {
         },
         "os": [target.os],
         "cpu": [target.cpu],
-        "files": ["bin"],
+        "files": files,
     });
     let mut text = format!("{value:#}");
     text.push('\n');
@@ -416,7 +425,9 @@ mod tests {
   ],
   "description": "The temper engine for win32 arm64",
   "files": [
-    "bin"
+    "bin",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "license": "MIT OR Apache-2.0",
   "name": "@wet-ink/temper-win32-arm64",
