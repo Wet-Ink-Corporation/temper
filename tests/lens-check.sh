@@ -1,5 +1,6 @@
 #!/bin/bash
-# temper lens checks (#110): the lens's plugin tests, and the read-only allow-list over what
+# temper lens checks (#110), on the temper-lens plugin (plugins/temper-lens/): the lens's plugin
+# tests, and the read-only allow-list over what
 # `claude plugin validate --json` says the lens hooks and calls, and a strict tsc pass over the
 # lens and its tests against the plugin API types in tests/lens-types/ (wi-78d987). No model calls.
 #
@@ -14,7 +15,7 @@ read -r -a tsc <<< "${TSC:-tsc}"
 python3 tests/lens_allowlist.py --self-test
 report="$(mktemp)"
 trap 'rm -f "$report"' EXIT
-"${claude[@]}" plugin validate --json .claude-plugin/plugin.json > "$report"
+"${claude[@]}" plugin validate --json plugins/temper-lens/.claude-plugin/plugin.json > "$report"
 python3 tests/lens_allowlist.py "$report"
-"${claude[@]}" plugin test .
+"${claude[@]}" plugin test plugins/temper-lens
 "${tsc[@]}" -p tests/lens.tsconfig.json

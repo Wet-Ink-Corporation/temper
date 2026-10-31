@@ -1,30 +1,31 @@
 // temper lens: a read-only view of temper's state for the current tree (#107).
 //
-// The hooks in hooks.json enforce; the lens only shows what they decided. It reads one document,
-// `temper status --json`, from the CLI of this same plugin, and never parses the state dir. It
-// hooks only events it observes and returns every `next(e)` result unchanged, so a lens bug can
-// never allow or block anything. Where no terminal or desktop draws (cloud sessions, `claude -p`,
-// the VS Code chat panel), under TEMPER_DISABLE=1 or TEMPER_LENS=0, and outside a Rust project it
-// runs nothing.
+// The temper plugin's hooks enforce; the lens, a plugin of its own so that temper still loads where
+// mods cannot run, only shows what they decided. It reads one document, `temper status --json`,
+// from this plugin's copy of the temper CLI (scripts/, kept equal to temper's by tests/ci.sh), and
+// never parses the state dir. It hooks only events it observes and returns every `next(e)` result
+// unchanged, so a lens bug can never allow or block anything. Where no terminal or desktop draws
+// (cloud sessions, `claude -p`, the VS Code chat panel), under TEMPER_DISABLE=1 or TEMPER_LENS=0,
+// and outside a Rust project it runs nothing.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { LensFinding, LensStats, LensStatsView, LensStatus, LensView } from '../../types'
 
-const view = atom({ plugin: 'temper', key: 'view' } as const, null)
-const expanded = atom({ plugin: 'temper', key: 'expanded' } as const, null)
-const tab = atom({ plugin: 'temper', key: 'tab' } as const, 'review')
-const stats = atom({ plugin: 'temper', key: 'stats' } as const, null)
-const branchStats = atom({ plugin: 'temper', key: 'branchStats' } as const, null)
+const view = atom({ plugin: 'temper-lens', key: 'view' } as const, null)
+const expanded = atom({ plugin: 'temper-lens', key: 'expanded' } as const, null)
+const tab = atom({ plugin: 'temper-lens', key: 'tab' } as const, 'review')
+const stats = atom({ plugin: 'temper-lens', key: 'stats' } as const, null)
+const branchStats = atom({ plugin: 'temper-lens', key: 'branchStats' } as const, null)
 // The time of the last poll while a gate runs at Stop: the drawing's clock for the elapsed time.
-const polledAt = atom({ plugin: 'temper', key: 'polledAt' } as const, 0)
+const polledAt = atom({ plugin: 'temper-lens', key: 'polledAt' } as const, 0)
 
 type Tab = 'review' | 'activity' | 'stats'
 const TABS: readonly Tab[] = ['review', 'activity', 'stats']
 const TAB_LABEL: Record<Tab, string> = { review: 'Review', activity: 'Activity', stats: 'Stats' }
 
 const PANE = 'temper-lens'
-const RULES_MD = 'skills/rust-craft/references/rules.md'
+const RULES_MD = 'references/rules.md'
 const SEVERITIES = ['blocker', 'major', 'minor', 'nit'] as const
 const DIMENSIONS = [
   'correctness', 'escape_hatches', 'ownership', 'errors', 'api', 'architecture',

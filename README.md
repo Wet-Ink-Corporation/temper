@@ -35,6 +35,7 @@ Requirements:
 # as a marketplace (this repository)
 claude plugin marketplace add Wet-Ink-Corporation/temper
 claude plugin install temper@temper
+claude plugin install temper-lens@temper   # optional: the status band and pane (Claude Code only)
 
 # or for one session while developing
 claude --plugin-dir /path/to/temper
@@ -152,7 +153,7 @@ An adopted repository runs two copies of temper:
 
 Move both to the new release together, in one pull request:
 
-1. **Update the plugin.** Run `claude plugin marketplace update temper` and then `claude plugin update temper@temper`, then restart Claude Code. From then on the hooks run the new version, while CI still runs the old vendored copy until step 4 is merged.
+1. **Update the plugin.** Run `claude plugin marketplace update temper` and then `claude plugin update temper@temper` (and `claude plugin update temper-lens@temper` if you use the lens), then restart Claude Code. From then on the hooks run the new version, while CI still runs the old vendored copy until step 4 is merged.
 2. **Read the CHANGELOG** sections between the version in `.claude/temper/VERSION` and the new one. Releases that change the templates or the vendored CLI include upgrade steps.
 3. **Preview, on a branch.** Run `/temper:setup` (it shows the plan before writing), or run `node <temper>/scripts/temper.mjs setup --dry-run` from a temper checkout. Three kinds of line matter:
    - A `drift` line for `.claude/temper/`: the vendored CLI is out of date. It names the plugin's version, the copy's version when it records one, the files that differ, and how to replace the copy. `up to date with temper X` means it is current.
@@ -178,13 +179,13 @@ A temper checkout serves as `<temper>` in step 3. The plugin's own copy, under C
 
 ## temper lens
 
-temper lens is a read-only view of temper's state that ships inside the plugin. In a Rust project, in the terminal or the desktop app, it draws one row above the prompt for the current tree:
+temper lens is a read-only view of temper's state. It is a plugin of its own, `temper-lens`, in the same marketplace: install it next to temper with `claude plugin install temper-lens@temper`. It is separate because it is a mod, and the Claude desktop app's Chat and Cowork turn off every part of a plugin that ships a mod, temper's skills and commands included. With the lens in its own plugin, temper loads there and the lens runs only where mods do. In a Rust project, in the terminal or the desktop app, it draws one row above the prompt for the current tree:
 
 ```
 temper  3 .rs changed · gate red (clippy) · review: changes-requested, 2 major · baseline 41
 ```
 
-The row shows the Rust files changed since the session's base, the gate (green, red with the failing step, running with its step, or not run), the reviewer's verdict (approved, changes requested with the blocker and major counts, stale, or none) and the baseline's total. On a narrow window it drops a running gate's list of steps done, then the baseline, then the review's counts, then a red gate's failing step, so it stays one row. It refreshes when the session starts, when the desktop app attaches, when a turn ends, and about 1.5 s after a `Write`, `Edit`, `MultiEdit` or `Bash` call, never on a timer while idle. While temper's gate runs at `Stop` or `SubagentStop`, the lens polls each second, so the spinner and the row show the step the gate is on and how long it has run (`gate 4 clippy · 1m 12s`) and the steps done with their times. When the gate ends, one toast gives the outcome, or the first line of the block reason when temper's own telemetry recorded that block for the same agent (another hook's block, or temper's block of another subagent stopping at the same time, is not reported as temper's). Several subagents stopping at once share one poll. It reads `temper status --json` from the plugin's own CLI and never the state dir.
+The row shows the Rust files changed since the session's base, the gate (green, red with the failing step, running with its step, or not run), the reviewer's verdict (approved, changes requested with the blocker and major counts, stale, or none) and the baseline's total. On a narrow window it drops a running gate's list of steps done, then the baseline, then the review's counts, then a red gate's failing step, so it stays one row. It refreshes when the session starts, when the desktop app attaches, when a turn ends, and about 1.5 s after a `Write`, `Edit`, `MultiEdit` or `Bash` call, never on a timer while idle. While temper's gate runs at `Stop` or `SubagentStop`, the lens polls each second, so the spinner and the row show the step the gate is on and how long it has run (`gate 4 clippy · 1m 12s`) and the steps done with their times. When the gate ends, one toast gives the outcome, or the first line of the block reason when temper's own telemetry recorded that block for the same agent (another hook's block, or temper's block of another subagent stopping at the same time, is not reported as temper's). Several subagents stopping at once share one poll. It reads `temper status --json` from its own copy of temper's CLI, which ships with each release next to temper's, and never the state dir.
 
 `/temper-lens` opens a pane with the reviewer's verdict for the tree: the verdict, and whether it is stale; the 12 rubric scores, any below 3 highlighted; and the findings by severity, each with its rule ID, `file:line` and fix. Pressing a finding shows its rule's text from the standard, with a **Draft fix** button that puts a request to address the finding into the prompt box. The button only fills the box: you read the request and decide whether to send it. With no verdict, the pane says why and what clears it. The lens never opens the pane on its own. Two more tabs sit beside **Review**:
 - **Activity** lists what temper denied or asked in this session, newest first, with rule IDs, file and agent. Pressing a row shows the rule, and a legend points each kind of event to its section of [docs/troubleshooting.md](docs/troubleshooting.md).
@@ -194,7 +195,7 @@ The pane opens on the tab you left it on, and the tabs refresh only while it is 
 
 The lens is a view and never an enforcer. The hooks decide; the lens only shows what they decided, passes every tool call's result on unchanged, and makes no model calls, and no network calls unless you press the Stats tab's fetch button. CI holds it to that with an allow-list of what it may hook and call (`tests/lens-check.sh`).
 
-It draws nothing in Claude Code cloud sessions, in VS Code's chat panel and under `claude -p`, where Claude Code draws no mods; there it runs nothing either. It is also off under `TEMPER_DISABLE=1` and outside a Rust project. To turn off the lens alone and keep temper's hooks, set `TEMPER_LENS=0` (in the shell, or in the `env` block of `.claude/settings.json`). `disableAllHooks` and disabling temper in `/plugin` turn off the lens and every temper hook with it. It needs Claude Code 2.1.286 or later on the desktop and 2.1.287 or later in the terminal. An organization with `allowManagedModsOnly` loses the lens and keeps the rest of the plugin. Claude Code is still rolling out plugin modules: where they are not on for an account yet, the lens does not load and `/temper-lens` is an unknown command, while temper's hooks run as usual.
+It draws nothing in Claude Code cloud sessions, in VS Code's chat panel and under `claude -p`, where Claude Code draws no mods; there it runs nothing either. It is also off under `TEMPER_DISABLE=1` and outside a Rust project. To turn off the lens alone and keep temper's hooks, set `TEMPER_LENS=0` (in the shell, or in the `env` block of `.claude/settings.json`). Disabling `temper-lens` in `/plugin` turns off the lens alone. `disableAllHooks` turns off the lens and every temper hook with it, and with temper disabled the lens has nothing to show. It needs Claude Code 2.1.286 or later on the desktop and 2.1.287 or later in the terminal. An organization with `allowManagedModsOnly` loses the lens and keeps the rest of the plugin. Claude Code is still rolling out plugin modules: where they are not on for an account yet, the lens does not load and `/temper-lens` is an unknown command, while temper's hooks run as usual.
 
 ## Compliance reporting
 

@@ -1,6 +1,5 @@
 {
   "description": "temper: enforce the rust-craft standard (skill gate, escape-hatch scan, protected config, completion gate with independent review).",
-  "modules": ["./lens/register.tsx"],
   "hooks": {
     "SessionStart": [
       {

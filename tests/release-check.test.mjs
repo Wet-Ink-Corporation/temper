@@ -23,10 +23,14 @@ const git = (cwd, ...args) => {
   return res.stdout.trim();
 };
 
-// Writes the release files: plugin.json, the vendored VERSION and CHANGELOG.md.
-function release(root, { version, vendored = version, changelog }) {
+// Writes the release files: plugin.json, the temper-lens plugin.json, the vendored VERSION and
+// CHANGELOG.md.
+function release(root, { version, vendored = version, lens = version, changelog }) {
   fs.mkdirSync(path.join(root, '.claude-plugin'), { recursive: true });
   fs.writeFileSync(path.join(root, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ name: 'temper', version }, null, 2)}\n`);
+  const l = path.join(root, 'plugins', 'temper-lens', '.claude-plugin');
+  fs.mkdirSync(l, { recursive: true });
+  fs.writeFileSync(path.join(l, 'plugin.json'), `${JSON.stringify({ name: 'temper-lens', version: lens }, null, 2)}\n`);
   const v = path.join(root, 'templates', 'example-workspace', '.claude', 'temper');
   fs.mkdirSync(v, { recursive: true });
   fs.writeFileSync(path.join(v, 'VERSION'), `${vendored}\n`);
@@ -42,7 +46,7 @@ const commit = (root, msg) => { git(root, 'add', '-A'); git(root, 'commit', '-q'
 
 // A repository with v1.0.0 tagged, then a change to `touch` and the 1.1.0
 // release files committed on top.
-function repo({ touch = 'scripts/temper.mjs', changelog = 'CHANGELOG-1.1.0-note.md', version = '1.1.0', vendored, tag100 = true } = {}) {
+function repo({ touch = 'scripts/temper.mjs', changelog = 'CHANGELOG-1.1.0-note.md', version = '1.1.0', vendored, lens, tag100 = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-release-'));
   git(root, 'init', '-q');
   git(root, 'config', 'user.email', 'test@example.com');
@@ -54,7 +58,7 @@ function repo({ touch = 'scripts/temper.mjs', changelog = 'CHANGELOG-1.1.0-note.
   commit(root, 'temper 1.0.0');
   if (tag100) git(root, 'tag', 'v1.0.0');
   write(root, touch, `// changed after 1.0.0\n`);
-  release(root, { version, vendored, changelog });
+  release(root, { version, vendored, lens, changelog });
   commit(root, 'temper 1.1.0');
   return root;
 }
@@ -93,6 +97,14 @@ test('release-check: a stale vendored VERSION fails', { skip }, () => {
     const r = check(root);
     assert.equal(r.status, 1);
     assert.match(r.out, /plugin\.json is 1\.1\.0, templates\/example-workspace\/\.claude\/temper\/VERSION is 1\.0\.0/);
+  });
+});
+
+test('release-check: a temper-lens plugin.json left behind fails', { skip }, () => {
+  withRepo({ lens: '1.0.0' }, (root) => {
+    const r = check(root);
+    assert.equal(r.status, 1);
+    assert.match(r.out, /plugin\.json is 1\.1\.0, plugins\/temper-lens\/\.claude-plugin\/plugin\.json is 1\.0\.0/);
   });
 });
 

@@ -1,8 +1,8 @@
 # Plugin API types for the lens type check
 
 `claude-code.d.ts` is Claude Code's declaration of the plugin API (`'claude-code'` and
-`'claude-code/testing'`). `tests/lens.tsconfig.json` type-checks `hooks/lens/` and
-`tests/lens.test.ts` against it, in `tests/lens-check.sh` and CI's `temper lens` step (wi-78d987).
+`'claude-code/testing'`). `tests/lens.tsconfig.json` type-checks the temper-lens plugin's
+`plugins/temper-lens/hooks/lens/` and `plugins/temper-lens/tests/` against it, in `tests/lens-check.sh` and CI's `temper lens` step (wi-78d987).
 
 It is copied, unedited, because Claude Code writes it only in a session: as the `plugin-authoring`
 skill loads, and when the engine loads a mod. The npm package does not ship it, and

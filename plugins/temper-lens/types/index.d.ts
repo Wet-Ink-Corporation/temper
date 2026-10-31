@@ -63,7 +63,7 @@ export type LensStatsView = { kind: 'stats'; totals: LensStats; session: LensAct
 
 declare module 'claude-code' {
   interface PluginState {
-    temper: {
+    'temper-lens': {
       view: LensView | null
       expanded: LensExpanded | null
       tab: 'review' | 'activity' | 'stats'

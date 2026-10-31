@@ -174,8 +174,9 @@ What helps, starting with the cheapest:
 ## The lens shows nothing
 
 temper lens draws its row above the prompt only where all of these hold:
+- **The `temper-lens` plugin is installed.** Since 1.6.0 the lens is a plugin of its own: `claude plugin install temper-lens@temper`, next to temper.
 - **A surface that draws mods.** The desktop app on Claude Code 2.1.286 or later, or the terminal on 2.1.287 or later. Cloud sessions, VS Code's chat panel and `claude -p` draw no mods.
-- **A Rust project.** The session's directory is inside one, so `node <plugin>/scripts/temper.mjs status --json` prints a document whose `project` is not `null`.
+- **A Rust project.** The session's directory is inside one, so `node <temper-lens plugin>/scripts/temper.mjs status --json` prints a document whose `project` is not `null`.
 - **temper is on.** `TEMPER_DISABLE` is not `1`, `TEMPER_LENS` is not `0`, `disableAllHooks` is off, and the organization does not set `allowManagedModsOnly`.
 - **A refresh has run.** The row appears when the session starts, or in the desktop app when it attaches to the session. Once the lens finds no Rust project, it stays off until the session restarts.
 
