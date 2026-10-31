@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { route, resolveBinary, engineKey, runBinary, RUST_READY } from '../scripts/launch.mjs';
+import { route, resolveBinary, engineKey, runBinary, runEngine, RUST_READY } from '../scripts/launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCH = path.join(here, '..', 'scripts', 'launch.mjs');
@@ -74,6 +74,18 @@ test('resolveBinary: TEMPER_BIN wins, then the npm package, then the built engin
   assert.equal(resolveBinary({ ...opts, platform: 'freebsd', env: {} }), null, 'nothing');
 });
 
+test("resolveBinary: only the plugin directory's own node_modules counts, not an ancestor's", () => {
+  const outer = tmp();
+  const root = path.join(outer, 'plugin');
+  fs.mkdirSync(root);
+  const exe = process.platform === 'win32' ? 'temper.exe' : 'temper';
+  const stray = path.join(outer, 'node_modules', '@wet-ink', `temper-${process.platform}-${process.arch}`);
+  fs.mkdirSync(path.join(stray, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(stray, 'package.json'), '{"name":"x","version":"9.9.9"}');
+  fs.writeFileSync(path.join(stray, 'bin', exe), '');
+  assert.equal(resolveBinary({ env: {}, pluginRoot: root, version: '2.0.0', platform: process.platform, arch: process.arch }), null, 'a stray engine above the plugin is not run');
+});
+
 test('runBinary: argv, stdin, the plugin env and the exit code pass through', async () => {
   const dir = tmp();
   const stub = stubEngine(dir);
@@ -116,6 +128,35 @@ test('runBinary: a binary that lost its exec bit is made executable once and run
   assert.equal(fs.statSync(bin).mode & 0o777, 0o755, 'mode');
 });
 
+test('runBinary: a directory is never chmodded', { skip: process.platform === 'win32' ? 'no exec bit on Windows' : false }, async () => {
+  const dir = tmp();
+  const target = path.join(dir, 'not-a-binary');
+  fs.mkdirSync(target, { mode: 0o700 });
+  await assert.rejects(runBinary(target, [], { env: process.env, pluginRoot: dir, version: '2.0.0', stdin: '', onStdout: () => {} }), /EACCES/);
+  assert.equal(fs.statSync(target).mode & 0o777, 0o700, 'mode unchanged');
+});
+
+test("runEngine: below the Node minimum, a command gets 1.x's warning and still runs; TEMPER_DISABLE silences it", async () => {
+  const dir = tmp();
+  const stub = stubEngine(dir);
+  const run = async (env) => {
+    const err = [];
+    const out = [];
+    const code = await runEngine(process.execPath, [stub, '--version'], {
+      env: { ...process.env, ...env, STUB_EXIT: '4' }, pluginRoot: '/plugin', version: '2.0.0', nodeVersion: '16.20.2',
+      stdin: '', onStdout: (c) => out.push(c), writeStderr: (t) => err.push(t),
+    });
+    return { code, err: err.join(''), ran: out.length > 0 };
+  };
+  const warned = await run({});
+  assert.match(warned.err, /^temper: Node 16\.20\.2 is older than the documented minimum/, 'the #89 warning');
+  assert.equal(warned.code, 4, 'the engine still ran, with its own exit code');
+  assert.ok(warned.ran, 'engine ran');
+  const quiet = await run({ TEMPER_DISABLE: '1' });
+  assert.equal(quiet.err, '', 'no warning under TEMPER_DISABLE');
+  assert.equal(quiet.code, 4, 'engine exit code');
+});
+
 // The launcher passes only its own argv to the engine, so these process tests point TEMPER_BIN at a
 // shell wrapper that runs the stub. A .cmd wrapper would need a shell on Windows, and the launcher
 // never uses one, so they run on POSIX; the runBinary tests above cover Windows.
@@ -126,12 +167,36 @@ test('launch.mjs: --version through TEMPER_BIN, as a process', POSIX_ONLY, () =>
   const stub = stubEngine(dir);
   const wrapper = path.join(dir, 'engine');
   fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`, { mode: 0o755 });
-  const r = spawnSync(process.execPath, [LAUNCH, '--version'], { encoding: 'utf8', env: { ...process.env, TEMPER_BIN: wrapper, STUB_EXIT: '0' }, input: '' });
-  assert.equal(r.status, 0, r.stderr);
+  const r = spawnSync(process.execPath, [LAUNCH, '--version'], { encoding: 'utf8', env: { ...process.env, TEMPER_BIN: wrapper, STUB_EXIT: '3' }, input: '{"tool":"Bash"}' });
+  assert.equal(r.status, 3, `the engine's exit code: ${r.stderr}`);
   const seen = JSON.parse(r.stdout);
   assert.deepEqual(seen.argv, ['--version'], 'argv');
+  assert.equal(seen.stdin, '{"tool":"Bash"}', 'stdin');
   assert.equal(seen.root, path.resolve(here, '..'), 'TEMPER_PLUGIN_ROOT');
   assert.equal(seen.version, JSON.parse(fs.readFileSync(path.join(here, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version, 'TEMPER_PLUGIN_VERSION');
+});
+
+test('launch.mjs: a signal-killed engine gives exit 1, as a process', POSIX_ONLY, () => {
+  const dir = tmp();
+  const stub = stubEngine(dir);
+  const wrapper = path.join(dir, 'engine');
+  fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`, { mode: 0o755 });
+  const r = spawnSync(process.execPath, [LAUNCH, '--version'], { encoding: 'utf8', env: { ...process.env, TEMPER_BIN: wrapper, STUB_SIGNAL: 'SIGKILL' }, input: '' });
+  assert.equal(r.status, 1, r.stderr);
+});
+
+test('launch.mjs: a TEMPER_BIN that cannot be run is a one-line error, not a stack trace', () => {
+  const r = spawnSync(process.execPath, [LAUNCH, '--version'], { encoding: 'utf8', env: { ...process.env, TEMPER_BIN: path.join(tmp(), 'missing') } });
+  assert.equal(r.status, 1, 'fails open as a non-blocking error');
+  assert.match(r.stderr, /^temper: cannot run the engine at .*missing \(ENOENT\)\n$/, r.stderr);
+});
+
+test('launch.mjs: started through a symlinked path, it still runs', POSIX_ONLY, () => {
+  const link = path.join(tmp(), 'link');
+  fs.symlinkSync(path.join(here, '..'), link);
+  const r = spawnSync(process.execPath, [path.join(link, 'scripts', 'launch.mjs'), 'bogus'], { encoding: 'utf8' });
+  assert.equal(r.status, 2, 'usage exit, not a silent 0');
+  assert.match(r.stdout, /^usage: temper/, 'usage text');
 });
 
 test('launch.mjs: a 1.x subcommand runs the Node engine in-process, unchanged', () => {
@@ -139,12 +204,16 @@ test('launch.mjs: a 1.x subcommand runs the Node engine in-process, unchanged', 
   const direct = spawnSync(process.execPath, [path.join(here, '..', 'scripts', 'temper.mjs'), 'bogus'], { encoding: 'utf8' });
   assert.equal(r.status, 2, 'usage exit');
   assert.equal(r.stdout, direct.stdout, 'same usage text as temper.mjs');
+  assert.equal(r.stderr, direct.stderr, 'same stderr');
 });
 
 test('launch.mjs: TEMPER_DISABLE=1 hook exits 0 without resolving a binary', () => {
-  const r = spawnSync(process.execPath, [LAUNCH, 'hook', 'pre-edit'], { encoding: 'utf8', env: { ...process.env, TEMPER_DISABLE: '1', TEMPER_ENGINE: 'rust', TEMPER_BIN: '/nonexistent/temper' }, input: '{"x":1}' });
+  // An unknown event: 1.x would print "unknown hook event" even under TEMPER_DISABLE, so silence
+  // here shows the launcher stopped before running anything.
+  const r = spawnSync(process.execPath, [LAUNCH, 'hook', 'nosuch'], { encoding: 'utf8', env: { ...process.env, TEMPER_DISABLE: '1', TEMPER_ENGINE: 'rust', TEMPER_BIN: '/nonexistent/temper' }, input: '{"x":1}' });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout, '', 'no output');
+  assert.equal(r.stderr, '', 'nothing on stderr');
 });
 
 test('launch.mjs: --version with no engine falls back to the Node engine while the port is under way', () => {

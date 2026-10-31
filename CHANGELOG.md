@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**The plugin carries the 2.0 launcher, unused (port Phase 0b).** `scripts/launch.mjs` is the launcher the 2.0 Rust engine will run behind. It finds the engine (`TEMPER_BIN`, the `@wet-ink/temper-<platform>-<arch>` npm package, or a locally built copy), passes argv, stdin and the exit code through, and runs the 1.x CLI for every subcommand that has not moved to Rust. `hooks/hooks.json` still runs `scripts/temper.mjs`, so nothing changes for users.
+**The plugin carries the 2.0 launcher, unused (port Phase 0b).** `scripts/launch.mjs` is the launcher the 2.0 Rust engine will run behind. It finds the engine (`TEMPER_BIN`, the `@wet-ink/temper-<platform>-<arch>` npm package, or a locally built copy), passes argv, stdin and the exit code through, and runs the 1.x CLI for every subcommand that has not moved to Rust. Only `--version` goes to the engine so far, and it falls back to the 1.x CLI when no engine is installed. `hooks/hooks.json` still runs `scripts/temper.mjs`, so nothing changes for users.
 
 ## 1.5.0 (2026-10-30)
 

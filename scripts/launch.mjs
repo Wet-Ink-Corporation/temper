@@ -9,7 +9,8 @@
 //
 // The engine is found in this order (§5.1 step 3):
 //   (a) TEMPER_BIN;
-//   (b) the npm package @wet-ink/temper-<platform>-<arch>, bin/temper[.exe] (D1);
+//   (b) the npm package @wet-ink/temper-<platform>-<arch>, bin/temper[.exe] (D1), in the plugin
+//       directory's own node_modules only, so a stray copy in an ancestor directory is never run;
 //   (c) ${CLAUDE_PLUGIN_DATA}/engine/<key>/temper[.exe], where the fallback build installs it (§5.4,
 //       Phase 0c). <key> is the plugin version for a cached copy and `dev` for a git checkout.
 //
@@ -17,7 +18,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** The subcommands the Rust engine handles, keyed as `hook <event>` or the first argument. */
@@ -48,14 +48,9 @@ export function engineKey(pluginRoot, version) {
 export function resolveBinary({ env, pluginRoot, version, platform, arch }) {
   if (env.TEMPER_BIN) return env.TEMPER_BIN;
   const exe = platform === 'win32' ? 'temper.exe' : 'temper';
-  try {
-    const require = createRequire(path.join(pluginRoot, 'scripts', 'launch.mjs'));
-    const manifest = require.resolve(`@wet-ink/temper-${platform}-${arch}/package.json`);
-    const bin = path.join(path.dirname(manifest), 'bin', exe);
-    if (fs.existsSync(bin)) return bin;
-  } catch {
-    // Not installed: npm skipped it (unsupported platform, no npm, a failed install). Fall through.
-  }
+  // Absent when npm skipped it (unsupported platform, no npm, a failed install): fall through.
+  const bin = path.join(pluginRoot, 'node_modules', '@wet-ink', `temper-${platform}-${arch}`, 'bin', exe);
+  if (fs.existsSync(bin)) return bin;
   if (env.CLAUDE_PLUGIN_DATA) {
     const built = path.join(env.CLAUDE_PLUGIN_DATA, 'engine', engineKey(pluginRoot, version), exe);
     if (fs.existsSync(built)) return built;
@@ -75,22 +70,57 @@ export async function runBinary(bin, args, { env, pluginRoot, version, stdin = '
       windowsHide: true,
       env: { ...env, TEMPER_PLUGIN_ROOT: pluginRoot, TEMPER_PLUGIN_VERSION: version },
     });
+    // A terminal's Ctrl-C reaches the engine twice (process group, then this forwarder); a default
+    // SIGINT handler treats both the same.
     const forward = (signal) => () => { child.kill(signal); };
     const handlers = ['SIGINT', 'SIGTERM', 'SIGHUP'].map((signal) => [signal, forward(signal)]);
     for (const [signal, handler] of handlers) process.on(signal, handler);
     const done = () => { for (const [signal, handler] of handlers) process.off(signal, handler); };
     if (onStdout) child.stdout.on('data', onStdout);
-    if (stdin !== 'inherit') child.stdin.end(stdin);
+    if (stdin !== 'inherit') {
+      // A child that exits without reading its stdin must not raise an unhandled EPIPE.
+      child.stdin.on('error', () => {});
+      child.stdin.end(stdin);
+    }
     child.once('error', (error) => { done(); reject(error); });
-    child.once('exit', (code) => { done(); resolve(code ?? 1); });
+    // 'close', not 'exit': piped stdout may still hold data at 'exit'.
+    child.once('close', (code) => { done(); resolve(code ?? 1); });
   });
   try {
     return await attempt();
   } catch (error) {
-    if (error.code !== 'EACCES' || process.platform === 'win32') throw error;
-    fs.chmodSync(bin, 0o755);
+    if (error.code !== 'EACCES' || process.platform === 'win32' || !isFile(bin)) throw error;
+    try {
+      fs.chmodSync(bin, 0o755);
+    } catch {
+      throw error;
+    }
     return attempt();
   }
+}
+
+function isFile(file) {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The engine route once a binary resolves: 1.x's early warning below the Node minimum (#89),
+ * unchanged, since the launcher itself still runs on Node, then the engine.
+ */
+export async function runEngine(bin, argv, { env, pluginRoot, version, nodeVersion, stdin = 'inherit', onStdout = null, writeStderr }) {
+  const { earlyNodeCheck } = await import('./lib/requirements.mjs');
+  // When `hook session-start` graduates, the stdin read here must be handed to the engine.
+  const early = await earlyNodeCheck(nodeVersion, argv, env);
+  if (early && early.stderr) writeStderr(early.stderr);
+  if (early && early.stdout !== undefined) {
+    await new Promise((done) => { process.stdout.write(early.stdout, done); });
+    return early.exit;
+  }
+  return runBinary(bin, argv, { env, pluginRoot, version, stdin, onStdout });
 }
 
 async function drainStdin() {
@@ -110,15 +140,17 @@ async function main() {
     const version = JSON.parse(fs.readFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version;
     const bin = resolveBinary({ env: process.env, pluginRoot, version, platform: process.platform, arch: process.arch });
     if (bin) {
-      const { earlyNodeCheck } = await import('./lib/requirements.mjs');
-      // 1.x's warning below the Node minimum (#89), unchanged: the launcher itself still runs on Node.
-      const early = await earlyNodeCheck(process.versions.node, argv, process.env);
-      if (early && early.stderr) process.stderr.write(early.stderr);
-      if (early && early.stdout !== undefined) {
-        await new Promise((done) => { process.stdout.write(early.stdout, done); });
-        return early.exit;
+      try {
+        return await runEngine(bin, argv, {
+          env: process.env, pluginRoot, version, nodeVersion: process.versions.node,
+          writeStderr: (text) => process.stderr.write(text),
+        });
+      } catch (error) {
+        if (!error.syscall || !error.syscall.startsWith('spawn')) throw error;
+        // A stale TEMPER_BIN or a pruned cache: say so in one line and fail open (exit 1).
+        process.stderr.write(`temper: cannot run the engine at ${bin} (${error.code})\n`);
+        return 1;
       }
-      return runBinary(bin, argv, { env: process.env, pluginRoot, version });
     }
   }
   // The 1.x CLI, in this process: it reads process.argv and stdin itself and sets the exit code.
@@ -126,7 +158,18 @@ async function main() {
   return null;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node realpaths the main module's URL but not argv[1], so compare real paths: a symlinked plugin
+// directory (or macOS's /var -> /private/var) must still run main.
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const code = await main();
   if (code !== null) process.exitCode = code;
 }
