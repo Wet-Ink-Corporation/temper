@@ -13,6 +13,8 @@
 
 use std::fmt;
 
+use crate::npm::TARGETS;
+
 /// One place that records a version, and the version it records.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Site {
@@ -42,10 +44,15 @@ pub(crate) struct Mismatch<'a> {
 
 impl fmt::Display for Mismatch<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let found = if self.site.version.is_empty() {
+            "missing"
+        } else {
+            &self.site.version
+        };
         write!(
             f,
-            "{} is {}, expected {}",
-            self.site.name, self.site.version, self.expected
+            "{} is {found}, expected {}",
+            self.site.name, self.expected
         )
     }
 }
@@ -165,21 +172,23 @@ pub(crate) fn json_version(text: &str) -> Result<Option<String>, serde_json::Err
 }
 
 /// `package.json`'s `version` and each `@wet-ink/temper-*` pin in `optionalDependencies`.
+/// An absent version or pin is a site with an empty version, so the check reports it as missing.
 pub(crate) fn package_json_sites(text: &str) -> Result<Vec<Site>, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(text)?;
-    let mut sites = Vec::new();
-    if let Some(version) = value.get("version").and_then(serde_json::Value::as_str) {
-        sites.push(Site::new("package.json version", version));
-    }
-    if let Some(pins) = value
-        .get("optionalDependencies")
-        .and_then(serde_json::Value::as_object)
-    {
-        for (name, pin) in pins {
-            if let Some(pin) = pin.as_str() {
-                sites.push(Site::new(format!("package.json {name}"), pin));
-            }
-        }
+    let string = |v: Option<&serde_json::Value>| {
+        v.and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut sites = vec![Site::new(
+        "package.json version",
+        string(value.get("version")),
+    )];
+    let pins = value.get("optionalDependencies");
+    for target in TARGETS {
+        let name = target.package_name();
+        let pin = string(pins.and_then(|p| p.get(&name)));
+        sites.push(Site::new(format!("package.json {name}"), pin));
     }
     Ok(sites)
 }
@@ -409,9 +418,13 @@ version = "2.0.0-alpha.0"
             [
                 ("package.json version", "2.0.0"),
                 ("package.json @wet-ink/temper-linux-x64", "2.0.0"),
+                ("package.json @wet-ink/temper-linux-arm64", ""),
+                ("package.json @wet-ink/temper-darwin-x64", ""),
+                ("package.json @wet-ink/temper-darwin-arm64", ""),
+                ("package.json @wet-ink/temper-win32-x64", ""),
                 ("package.json @wet-ink/temper-win32-arm64", "2.0.1"),
             ],
-            "sites"
+            "the version and every engine's pin, absent ones empty"
         );
         let set = set_json_strings(
             text,

@@ -51,7 +51,7 @@ step "release check (plugin.json, CHANGELOG heading and vendored VERSION agree)"
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: the workspace's clippy, tests, docs and licence check, doc examples, the brownfield e2e and the example workspace gate (--quick)"
+  step "skipped: the workspace's clippy, tests, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
 

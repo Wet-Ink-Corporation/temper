@@ -116,7 +116,19 @@ pub(crate) enum LockProblem {
     Resolved { name: String, resolved: String },
     /// A locked package has no sha512 integrity.
     Integrity(String),
+    /// A locked package's `os` or `cpu` is not its target's, so npm would install the wrong engine.
+    Platform {
+        name: String,
+        os: String,
+        cpu: String,
+        target: Target,
+    },
+    /// `optionalDependencies` names a package that is not one of the six.
+    ExtraDependency(String),
 }
+
+/// What a lock entry's absent field is shown as.
+const MISSING: &str = "<missing>";
 
 impl fmt::Display for LockProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -132,10 +144,7 @@ impl fmt::Display for LockProblem {
                 )
             }
             Self::OldLockfile(version) => {
-                write!(
-                    f,
-                    "package-lock.json has lockfileVersion {version}, need 2 or 3"
-                )
+                write!(f, "package-lock.json has lockfileVersion {version}, need 3")
             }
             Self::MissingEntry(name) => write!(f, "package-lock.json has no entry for {name}"),
             Self::ExtraPackage(key) => write!(f, "package-lock.json has an extra package {key}"),
@@ -151,6 +160,20 @@ impl fmt::Display for LockProblem {
             Self::Integrity(name) => {
                 write!(f, "package-lock.json has no sha512 integrity for {name}")
             }
+            Self::Platform {
+                name,
+                os,
+                cpu,
+                target,
+            } => write!(
+                f,
+                "package-lock.json gives {name} os {os} and cpu {cpu}, expected [\"{}\"] and [\"{}\"]",
+                target.os, target.cpu
+            ),
+            Self::ExtraDependency(name) => write!(
+                f,
+                "package.json optionalDependencies has {name}, which is not an engine package"
+            ),
         }
     }
 }
@@ -163,8 +186,55 @@ pub(crate) fn lock_problems(
     let package: serde_json::Value = serde_json::from_str(package_json)?;
     let lock: serde_json::Value = serde_json::from_str(lock)?;
     let mut problems = Vec::new();
+    let expected = package_problems(&package, &mut problems);
 
-    for key in ["scripts", "overrides"] {
+    // Absent reads as 0, which is reported like any other format but 3.
+    let format = lock
+        .get("lockfileVersion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    if format != 3 {
+        problems.push(LockProblem::OldLockfile(format));
+        return Ok(problems);
+    }
+    let empty = serde_json::Map::new();
+    let packages = lock
+        .get("packages")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(&empty);
+    for (target, name, pin) in &expected {
+        let Some(entry) = packages.get(&format!("node_modules/{name}")) else {
+            problems.push(LockProblem::MissingEntry(name.clone()));
+            continue;
+        };
+        problems.extend(entry_problems(*target, name, pin, entry));
+    }
+    for key in packages.keys() {
+        let known = key.is_empty()
+            || expected
+                .iter()
+                .any(|(_, name, _)| key.strip_prefix("node_modules/") == Some(name.as_str()));
+        if !known {
+            problems.push(LockProblem::ExtraPackage(key.clone()));
+        }
+    }
+    Ok(problems)
+}
+
+/// `package.json`'s problems, pushed onto `problems`; returns each pinned engine with its pin.
+fn package_problems(
+    package: &serde_json::Value,
+    problems: &mut Vec<LockProblem>,
+) -> Vec<(Target, String, String)> {
+    // Scripts run code at install; overrides rewrite resolution; any other dependency field would
+    // put packages besides the six engines in the tree.
+    for key in [
+        "scripts",
+        "overrides",
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+    ] {
         if package.get(key).is_some() {
             problems.push(LockProblem::ForbiddenKey(key));
         }
@@ -172,7 +242,7 @@ pub(crate) fn lock_problems(
     let pins = package
         .get("optionalDependencies")
         .and_then(serde_json::Value::as_object);
-    let mut expected: Vec<(String, String)> = Vec::new();
+    let mut expected: Vec<(Target, String, String)> = Vec::new();
     for target in TARGETS {
         let name = target.package_name();
         match pins
@@ -187,71 +257,72 @@ pub(crate) fn lock_problems(
                         pin: pin.to_owned(),
                     });
                 }
-                expected.push((name, pin.to_owned()));
+                expected.push((target, name, pin.to_owned()));
             }
         }
     }
-
-    let format = lock
-        .get("lockfileVersion")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    if format < 2 {
-        problems.push(LockProblem::OldLockfile(format));
-        return Ok(problems);
-    }
-    let empty = serde_json::Map::new();
-    let packages = lock
-        .get("packages")
-        .and_then(serde_json::Value::as_object)
-        .unwrap_or(&empty);
-    for (name, pin) in &expected {
-        let Some(entry) = packages.get(&format!("node_modules/{name}")) else {
-            problems.push(LockProblem::MissingEntry(name.clone()));
-            continue;
-        };
-        problems.extend(entry_problems(name, pin, entry));
-    }
-    for key in packages.keys() {
-        let known = key.is_empty()
-            || expected
-                .iter()
-                .any(|(name, _)| key.strip_prefix("node_modules/") == Some(name.as_str()));
-        if !known {
-            problems.push(LockProblem::ExtraPackage(key.clone()));
+    let engines: Vec<String> = TARGETS.iter().map(|t| t.package_name()).collect();
+    for name in pins.into_iter().flat_map(serde_json::Map::keys) {
+        if !engines.contains(name) {
+            problems.push(LockProblem::ExtraDependency(name.clone()));
         }
     }
-    Ok(problems)
+    expected
 }
 
 /// The problems with one platform package's lock entry.
-fn entry_problems(name: &str, pin: &str, entry: &serde_json::Value) -> Vec<LockProblem> {
+fn entry_problems(
+    target: Target,
+    name: &str,
+    pin: &str,
+    entry: &serde_json::Value,
+) -> Vec<LockProblem> {
     let field = |key| entry.get(key).and_then(serde_json::Value::as_str);
     let mut problems = Vec::new();
-    let locked = field("version").unwrap_or_default();
-    if locked != pin {
+    let locked = field("version");
+    if locked != Some(pin) {
         problems.push(LockProblem::LockedVersion {
             name: name.to_owned(),
-            locked: locked.to_owned(),
+            locked: locked.unwrap_or(MISSING).to_owned(),
             pin: pin.to_owned(),
         });
     }
-    let resolved = field("resolved").unwrap_or_default();
-    if !resolved.starts_with(REGISTRY) {
+    // The tarball must be this package's own, not any file on the registry.
+    let resolved = field("resolved");
+    if !resolved.is_some_and(|r| r.starts_with(&format!("{REGISTRY}{name}/-/"))) {
         problems.push(LockProblem::Resolved {
             name: name.to_owned(),
-            resolved: resolved.to_owned(),
+            resolved: resolved.unwrap_or(MISSING).to_owned(),
         });
     }
     if !field("integrity").is_some_and(|i| i.starts_with("sha512-")) {
         problems.push(LockProblem::Integrity(name.to_owned()));
     }
+    let list = |key| {
+        entry
+            .get(key)
+            .map_or_else(|| MISSING.to_owned(), ToString::to_string)
+    };
+    let only = |key, want: &str| {
+        entry
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| values.len() == 1 && values.iter().all(|v| v == want))
+    };
+    if !only("os", target.os) || !only("cpu", target.cpu) {
+        problems.push(LockProblem::Platform {
+            name: name.to_owned(),
+            os: list("os"),
+            cpu: list("cpu"),
+            target,
+        });
+    }
     problems
 }
 
 /// An exact semver version: `1.2.3`, optionally with `-pre` or `+build`; never a range.
-fn is_exact_version(pin: &str) -> bool {
-    let core = pin.split(['-', '+']).next().unwrap_or_default();
+pub(crate) fn is_exact_version(pin: &str) -> bool {
+    let core = pin.split_once(['-', '+']).map_or(pin, |(core, _)| core);
     let mut parts = core.split('.');
     let numeric = |part: Option<&str>| {
         part.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
@@ -287,8 +358,11 @@ mod tests {
     fn entry(target: Target, version: &str) -> String {
         let name = target.package_name();
         format!(
-            "    \"node_modules/{name}\": {{\n      \"version\": \"{version}\",\n      \"resolved\": \"https://registry.npmjs.org/{name}/-/temper-{}-{}-{version}.tgz\",\n      \"integrity\": \"sha512-abc\",\n      \"optional\": true\n    }}",
-            target.os, target.cpu
+            "    \"node_modules/{name}\": {{\n      \"version\": \"{version}\",\n      \"resolved\": \"https://registry.npmjs.org/{name}/-/temper-{}-{}-{version}.tgz\",\n      \"integrity\": \"sha512-abc\",\n      \"cpu\": [\"{cpu}\"],\n      \"optional\": true,\n      \"os\": [\"{os}\"]\n    }}",
+            target.os,
+            target.cpu,
+            os = target.os,
+            cpu = target.cpu
         )
     }
 
@@ -463,16 +537,88 @@ mod tests {
     }
 
     #[test]
-    fn lockfile_version_1_is_reported() {
+    fn a_lockfile_version_other_than_3_is_reported() {
+        for old in [1, 2] {
+            let lock = lock("2.0.0", &good_entries("2.0.0")).replacen(
+                "\"lockfileVersion\": 3",
+                &format!("\"lockfileVersion\": {old}"),
+                1,
+            );
+            assert_eq!(
+                problems(&package("2.0.0"), &lock),
+                [format!(
+                    "package-lock.json has lockfileVersion {old}, need 3"
+                )],
+                "lockfile {old}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wrong_platform_is_reported() {
         let lock = lock("2.0.0", &good_entries("2.0.0")).replacen(
-            "\"lockfileVersion\": 3",
-            "\"lockfileVersion\": 1",
+            "temper-linux-arm64-2.0.0.tgz\",\n      \"integrity\": \"sha512-abc\",\n      \"cpu\": [\"arm64\"]",
+            "temper-linux-arm64-2.0.0.tgz\",\n      \"integrity\": \"sha512-abc\",\n      \"cpu\": [\"x64\"]",
             1,
         );
         assert_eq!(
             problems(&package("2.0.0"), &lock),
-            ["package-lock.json has lockfileVersion 1, need 2 or 3"],
-            "old lockfile"
+            [
+                "package-lock.json gives @wet-ink/temper-linux-arm64 os [\"linux\"] and cpu [\"x64\"], expected [\"linux\"] and [\"arm64\"]"
+            ],
+            "wrong cpu"
+        );
+    }
+
+    #[test]
+    fn a_tarball_of_another_package_is_reported() {
+        let lock = lock("2.0.0", &good_entries("2.0.0")).replacen(
+            "https://registry.npmjs.org/@wet-ink/temper-darwin-x64/-/",
+            "https://registry.npmjs.org/evil/-/",
+            1,
+        );
+        assert_eq!(
+            problems(&package("2.0.0"), &lock),
+            [
+                "package-lock.json resolves @wet-ink/temper-darwin-x64 from https://registry.npmjs.org/evil/-/temper-darwin-x64-2.0.0.tgz"
+            ],
+            "another package's tarball"
+        );
+    }
+
+    #[test]
+    fn a_missing_version_field_says_so() {
+        let mut entries = good_entries("2.0.0");
+        if let Some(first) = entries.first_mut() {
+            *first = first.replace("      \"version\": \"2.0.0\",\n", "");
+        }
+        assert_eq!(
+            problems(&package("2.0.0"), &lock("2.0.0", &entries)),
+            ["package-lock.json locks @wet-ink/temper-linux-x64 at <missing>, pinned 2.0.0"],
+            "absent field named"
+        );
+    }
+
+    #[test]
+    fn other_dependencies_are_reported() {
+        let package = package("2.0.0")
+            .replacen(
+                "  \"private\": true,\n",
+                "  \"private\": true,\n  \"dependencies\": {},\n",
+                1,
+            )
+            .replacen(
+                "\"@wet-ink/temper-linux-x64\": \"2.0.0\"",
+                "\"left-pad\": \"1.3.0\",\n    \"@wet-ink/temper-linux-x64\": \"2.0.0\"",
+                1,
+            );
+        assert_eq!(
+            problems(&package, &lock("2.0.0", &good_entries("2.0.0"))),
+            [
+                "package.json must not have \"dependencies\"",
+                "package.json optionalDependencies has left-pad, which is not an engine package",
+            ],
+            "non-engine dependencies"
         );
     }
 

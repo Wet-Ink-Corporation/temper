@@ -42,14 +42,16 @@ fn parse_task(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<Task
         .collect::<Result<_, _>>()
         .ok()?;
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    // A version operand is written into manifests and package names, so it must be exact semver.
+    let version = |v: &str| npm::is_exact_version(v).then(|| v.to_owned());
     match words.as_slice() {
         ["check-licenses"] => Some(Task::CheckLicenses),
         ["versions", "--check"] => Some(Task::VersionsCheck(None)),
-        ["versions", "--check", version] => Some(Task::VersionsCheck(Some((*version).to_owned()))),
-        ["versions", "--set", version] => Some(Task::VersionsSet((*version).to_owned())),
+        ["versions", "--check", v] => version(v).map(|v| Task::VersionsCheck(Some(v))),
+        ["versions", "--set", v] => version(v).map(Task::VersionsSet),
         ["check-npm-lock"] => Some(Task::CheckNpmLock),
-        ["npm-pack", version, "--bins", bins] => Some(Task::NpmPack {
-            version: (*version).to_owned(),
+        ["npm-pack", v, "--bins", bins] => version(v).map(|version| Task::NpmPack {
+            version,
             bins: PathBuf::from(bins),
         }),
         _ => None,
@@ -412,6 +414,10 @@ mod tests {
             &["versions", "--set"],
             &["npm-pack", "2.0.0"],
             &["check-licenses", "x"],
+            &["versions", "--set", ""],
+            &["versions", "--set", "2.0.0\""],
+            &["versions", "--check", "^2.0.0"],
+            &["npm-pack", "v2", "--bins", "dist"],
         ] {
             assert_eq!(parse(args), None, "{args:?}");
         }
@@ -459,9 +465,10 @@ mod tests {
         );
         assert!(versions_check(root, None)?.passed, "they agree");
 
+        cutover_tree(root)?;
         fs::write(
-            root.join("package.json"),
-            "{\n  \"version\": \"2.0.0-alpha.0\",\n  \"optionalDependencies\": {\n    \"@wet-ink/temper-linux-x64\": \"2.0.0-alpha.0\"\n  }\n}\n",
+            root.join(".claude-plugin/plugin.json"),
+            "{\n  \"name\": \"temper\",\n  \"version\": \"1.5.0\"\n}\n",
         )?;
         let outcome = versions_check(root, None)?;
         assert!(!outcome.passed, "plugin.json now disagrees");
@@ -473,21 +480,65 @@ mod tests {
         Ok(())
     }
 
+    /// A tree as it looks after the cutover: every site present, all at `2.0.0-alpha.0`.
+    fn cutover_tree(root: &Path) -> TestResult {
+        tree(root)?;
+        let pins: Vec<String> = crate::npm::TARGETS
+            .iter()
+            .map(|t| format!("    \"{}\": \"2.0.0-alpha.0\"", t.package_name()))
+            .collect();
+        fs::write(
+            root.join("package.json"),
+            format!(
+                "{{\n  \"version\": \"2.0.0-alpha.0\",\n  \"optionalDependencies\": {{\n{}\n  }}\n}}\n",
+                pins.join(",\n")
+            ),
+        )?;
+        fs::write(
+            root.join(".claude-plugin/plugin.json"),
+            "{\n  \"name\": \"temper\",\n  \"version\": \"2.0.0-alpha.0\"\n}\n",
+        )?;
+        for dir in [
+            "templates/workspace/.claude",
+            "templates/example-workspace/.claude",
+        ] {
+            fs::create_dir_all(root.join(dir))?;
+            fs::write(root.join(dir).join("temper-version"), "2.0.0-alpha.0\n")?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn each_disagreeing_site_fails_the_check() -> TestResult {
         let tmp = tempfile::tempdir()?;
         let root = tmp.path();
-        tree(root)?;
-        let template = root.join("templates/workspace/.claude");
-        fs::create_dir_all(&template)?;
-        fs::write(template.join("temper-version"), "2.0.0-alpha.0\n")?;
-        assert!(
-            versions_check(root, Some("2.0.0-alpha.0"))?.passed,
-            "all agree"
+        cutover_tree(root)?;
+        let outcome = versions_check(root, Some("2.0.0-alpha.0"))?;
+        assert_eq!(
+            outcome.lines,
+            ["13 sites agree on 2.0.0-alpha.0"],
+            "Cargo.toml 2, Cargo.lock 1, package.json 7, plugin.json 1, temper-version 2"
         );
+        assert!(outcome.passed, "all agree");
         assert!(!versions_check(root, Some("2.0.0"))?.passed, "not X");
 
         for (file, from, to) in [
+            (
+                "package.json",
+                "\"version\": \"2.0.0-alpha.0\"",
+                "\"version\": \"2.0.0-alpha.9\"",
+            ),
+            (
+                "package.json",
+                "temper-darwin-arm64\": \"2.0.0-alpha.0\"",
+                "temper-darwin-arm64\": \"2.0.0-alpha.9\"",
+            ),
+            (".claude-plugin/plugin.json", "alpha.0", "alpha.9"),
+            (
+                "templates/example-workspace/.claude/temper-version",
+                "alpha.0",
+                "alpha.9",
+            ),
             (
                 "Cargo.toml",
                 "version = \"2.0.0-alpha.0\"\n\n",
@@ -518,6 +569,49 @@ mod tests {
             assert!(!outcome.passed, "{file}");
             fs::write(&path, original)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_pin_fails_the_check() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        cutover_tree(root)?;
+        let path = root.join("package.json");
+        let text = fs::read_to_string(&path)?.replacen(
+            "    \"@wet-ink/temper-win32-x64\": \"2.0.0-alpha.0\",\n",
+            "",
+            1,
+        );
+        fs::write(&path, text)?;
+        let outcome = versions_check(root, None)?;
+        assert_eq!(
+            outcome.lines,
+            ["package.json @wet-ink/temper-win32-x64 is missing, expected 2.0.0-alpha.0"],
+            "names the pin"
+        );
+        assert!(!outcome.passed, "a pin is missing");
+        Ok(())
+    }
+
+    #[test]
+    fn set_after_the_cutover_rewrites_package_and_plugin_json() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        cutover_tree(root)?;
+        let outcome = versions_set(root, "2.0.0-alpha.1")?;
+        assert_eq!(
+            outcome.lines,
+            ["13 sites agree on 2.0.0-alpha.1"],
+            "every site"
+        );
+        assert!(outcome.passed, "set");
+        let package = fs::read_to_string(root.join("package.json"))?;
+        assert!(!package.contains("alpha.0"), "every pin moved: {package}");
+        assert!(
+            fs::read_to_string(root.join(".claude-plugin/plugin.json"))?.contains("2.0.0-alpha.1"),
+            "plugin.json moved"
+        );
         Ok(())
     }
 

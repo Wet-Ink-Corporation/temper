@@ -24,28 +24,53 @@ pub(crate) fn pack(
     bins: &Path,
     out: &Path,
 ) -> Result<Vec<PathBuf>, XtaskError> {
-    let mut written = Vec::with_capacity(TARGETS.len());
+    // Every input is read before anything is written, so a missing binary or licence leaves no
+    // half-written set of packages behind.
+    let mut licences = Vec::with_capacity(LICENCES.len());
+    for (name, at_root) in LICENCES {
+        licences.push((name, read(&root.join(at_root))?));
+    }
+    let mut binaries = Vec::with_capacity(TARGETS.len());
     for target in TARGETS {
-        let binary = bins.join(target.triple).join(target.bin_name());
-        if !binary.is_file() {
-            return Err(XtaskError::MissingBinary { path: binary });
+        let path = bins.join(target.triple).join(target.bin_name());
+        if !path.is_file() {
+            return Err(XtaskError::MissingBinary { path });
         }
+        binaries.push((target, read(&path)?));
+    }
+
+    let mut written = Vec::with_capacity(TARGETS.len());
+    for (target, binary) in binaries {
         let dir = out.join(target.package_name());
+        // A file left from an earlier run must not ship in this one.
+        if dir.exists() {
+            fs::remove_dir_all(&dir).map_err(|source| XtaskError::Write {
+                path: dir.clone(),
+                source,
+            })?;
+        }
         let bin_dir = dir.join("bin");
         create_dir(&bin_dir)?;
         write(
             &dir.join("package.json"),
             package_json(target, version).as_bytes(),
         )?;
-        for (name, at_root) in LICENCES {
-            copy(&root.join(at_root), &dir.join(name))?;
+        for (name, text) in &licences {
+            write(&dir.join(name), text)?;
         }
         let installed = bin_dir.join(target.bin_name());
-        copy(&binary, &installed)?;
+        write(&installed, &binary)?;
         make_executable(&installed)?;
         written.push(dir);
     }
     Ok(written)
+}
+
+fn read(path: &Path) -> Result<Vec<u8>, XtaskError> {
+    fs::read(path).map_err(|source| XtaskError::Read {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn create_dir(path: &Path) -> Result<(), XtaskError> {
@@ -60,15 +85,6 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), XtaskError> {
         path: path.to_path_buf(),
         source,
     })
-}
-
-fn copy(from: &Path, to: &Path) -> Result<(), XtaskError> {
-    fs::copy(from, to)
-        .map(drop)
-        .map_err(|source| XtaskError::Write {
-            path: to.to_path_buf(),
-            source,
-        })
 }
 
 #[cfg(unix)]
@@ -163,6 +179,42 @@ mod tests {
                 .is_some_and(|e| e.contains("aarch64-pc-windows-msvc")),
             "names the missing binary: {error:?}"
         );
+        assert!(!root.join("npm").exists(), "nothing written");
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_root_licence_names_the_file_it_could_not_read() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        fake_tree(root)?;
+        fs::remove_file(root.join("LICENSE-APACHE"))?;
+        let error = pack(root, "2.0.0", &root.join("bins"), &root.join("npm"))
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("cannot read") && e.contains("LICENSE-APACHE")),
+            "{error:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_package_file_is_removed() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        fake_tree(root)?;
+        let out = root.join("npm");
+        let Some(first) = TARGETS.first() else {
+            return Err("six targets".into());
+        };
+        let stale = out.join(first.package_name()).join("bin").join("old-file");
+        fs::create_dir_all(stale.parent().ok_or("parent")?)?;
+        fs::write(&stale, "from an earlier run")?;
+        pack(root, "2.0.0", &root.join("bins"), &out)?;
+        assert!(!stale.exists(), "an earlier run's file does not ship");
         Ok(())
     }
 }
