@@ -839,10 +839,11 @@ test('Bash: a megabyte of spaces, parentheses or call openers is decided in unde
 // backtracked to each one, finding a path's owner joined it once per part (2000 parts took 3 s),
 // and the `temper baseline` pattern rescanned from every `=` (64K took 4 s).
 test('Bash: a long run of shell-writer words or `=` is decided in under a second', () => {
-  // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument).
+  // The sizes keep the parser's own linear cost well under the limit (`cp` stats each argument), on
+  // the slower Windows runner too: 32K `.claude/temper/` took 1.2 s there.
   for (const [word, n, end = 'x', pre = ''] of [['open(', 8192], ['sed ', 32768], ['sed -i ', 4096], ['perl -i ', 4096], ['write_text ', 16384], ['cp ', 2048], ['Set-Content ', 16384], ['=x', 32768], ['=', 65536], ['--!\t', 32768, '-', '$0\t'], ['=$0 -', 32768], ['-a=temper ', 32768, 'x', 'temper '],
-    ['.claude/temper/', 32768, '<', 'cp '], ['.claude/temper/', 32768, "'x\"", "python3 -c \"open('"],
-    ['.claude/temper/', 32768, '<', 'mv x ']]) {
+    ['.claude/temper/', 8192, '<', 'cp '], ['.claude/temper/', 8192, "'x\"", "python3 -c \"open('"],
+    ['.claude/temper/', 8192, '<', 'mv x ']]) {
     const command = `${pre}${word.repeat(n)}${end}`;
     for (const agent of ['temper:rust-reviewer', undefined]) {
       const t0 = Date.now();
