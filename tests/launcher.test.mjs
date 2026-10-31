@@ -70,7 +70,9 @@ test('resolveBinary: TEMPER_BIN wins, then the npm package, then the built engin
   assert.equal(resolveBinary({ ...opts, env: { CLAUDE_PLUGIN_DATA: data } }), path.join(built, exe), 'package dir has no binary yet');
   fs.writeFileSync(path.join(pkg, 'bin', exe), '');
   assert.equal(resolveBinary({ ...opts, env: { CLAUDE_PLUGIN_DATA: data } }), path.join(pkg, 'bin', exe), 'npm package');
-  assert.equal(resolveBinary({ ...opts, platform: 'freebsd', env: { CLAUDE_PLUGIN_DATA: data } }), path.join(built, exe), 'unsupported platform: the built engine');
+  // Off Windows the engine has no .exe, whatever platform runs this test.
+  fs.writeFileSync(path.join(built, 'temper'), '');
+  assert.equal(resolveBinary({ ...opts, platform: 'freebsd', env: { CLAUDE_PLUGIN_DATA: data } }), path.join(built, 'temper'), 'unsupported platform: the built engine');
   assert.equal(resolveBinary({ ...opts, platform: 'freebsd', env: {} }), null, 'nothing');
 });
 
