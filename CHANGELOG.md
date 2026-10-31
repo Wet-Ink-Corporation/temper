@@ -38,6 +38,8 @@ The lockfile step also retries until `package-lock.json` has an entry for every 
 
 **The 2.0 engine's scanner has 40 more rules, with their look-around and keep predicates (port Phase 1b).** Nothing calls it yet; users run 1.x.
 
+**The repository's code scanning alerts are fixed at the source.** The report's Markdown table cells escape pipes without a pattern CodeQL reads as incomplete sanitization, and a new test pins how a backslash before a pipe renders, inside a code span and outside one. The report output does not change. Three tests now escape regular expressions in full and pass the CLI's arguments in argv rather than spliced into code, and the archived audit page loads its Markdown library with a subresource-integrity hash.
+
 ## 1.6.0 (2026-10-31)
 
 **temper loads in desktop chats again: the lens is now its own plugin, `temper-lens`.** The Claude desktop app's Chat and Cowork turn off every part of a plugin that ships a mod, so temper's skills and commands (`/temper:gate` among them) failed there with "this plugin entry is off here". temper no longer ships a mod: the lens moved to `plugins/temper-lens/`, a second plugin in the same marketplace, with its own copy of temper's CLI and rule registry. Claude Code users who want the band and the `/temper-lens` pane install it next to temper with `claude plugin install temper-lens@temper`. The lens itself is unchanged. temper's hooks and gate are unchanged. CI now fails if the temper plugin lists a mod again, and the release check requires both plugins to carry the same version.

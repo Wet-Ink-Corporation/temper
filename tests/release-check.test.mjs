@@ -9,6 +9,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+/** Escape every regular-expression metacharacter in `s`. */
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const PLUGIN = fileURLToPath(new URL('..', import.meta.url));
 const SCRIPT = path.join(PLUGIN, 'tests', 'release-check.sh');
 const FIXTURES = path.join(PLUGIN, 'tests', 'fixtures', 'release-check');
@@ -132,7 +135,7 @@ test('release-check: a release that changes scripts/ or templates/workspace/ nee
         const r = check(root);
         assert.equal(r.status, 1, `${touch} ${changelog}: ${r.out}`);
         assert.match(r.out, /since v1\.0\.0, but its CHANGELOG section does not end with an 'Upgrading from X\.Y' note/);
-        assert.match(r.out, new RegExp(`^  ${touch.replace(/\./g, '\\.')}$`, 'm'));
+        assert.match(r.out, new RegExp(`^  ${escapeRegExp(touch)}$`, 'm'));
       });
     }
   }
