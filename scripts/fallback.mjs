@@ -3,19 +3,22 @@
 // platform, a failed or skipped npm install, or a `--plugin-dir` checkout.
 //
 // The engine is built into ${CLAUDE_PLUGIN_DATA}/engine/<key>/, under a `.lock` directory that
-// only one session can create. A failed build leaves `build.failed`, which is retried at the next
-// SessionStart, never on every hook. Without an engine, hooks degrade as D6-C says: Rust edits are
-// denied with a retry message, Stop reports the gate UNAVAILABLE, and everything else passes, so
-// a broken toolchain never wedges the session. TEMPER_DISABLE=1 short-circuits before any of this,
-// in the launcher.
+// only one session can create, with an owner record so a lock left by a killed session is stale at
+// once. A failed build leaves `build.failed`, which is retried at the next SessionStart, never on
+// every hook. Without an engine, hooks degrade as D6-C says: Rust edits are denied with a retry
+// message, Stop reports the gate UNAVAILABLE, and everything else passes, so a broken toolchain
+// never wedges the session. TEMPER_DISABLE=1 short-circuits before any of this, in the launcher.
 //
 // This file is not vendored into user repositories (scripts/lib/ is).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 /** A `.lock` older than this belongs to a build that died: take it over. */
 export const LOCK_STALE_MS = 15 * 60 * 1000;
+/** The workspace's rust-version (D4); a test keeps it equal to the workspace manifest's. */
+export const MSRV = '1.96';
 /** SessionStart's build budget: under the 900 s SessionStart timeout the cutover sets (§5.2). */
 const BUILD_BUDGET_MS = 840 * 1000;
 /** How long a SessionStart waits for another session's build before starting degraded. */
@@ -25,7 +28,6 @@ const STOP_WAIT_MS = 600 * 1000;
 const POLL_MS = 250;
 /** The version keys kept besides `dev` (§5.4 pruning). */
 const KEEP_VERSIONS = 2;
-const MSRV = '1.96';
 
 const exeName = (platform) => (platform === 'win32' ? 'temper.exe' : 'temper');
 
@@ -46,31 +48,70 @@ function mtimeMs(file) {
   }
 }
 
-/** Create the lock directory; take over a stale one. True when this process holds it. */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === 'EPERM';
+  }
+}
+
+function readOwner(lock) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(lock, 'owner.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A lock is stale when its owner, on this host, has exited (a SessionStart killed mid-build), or
+ * when it is older than LOCK_STALE_MS. A lock with no owner record yet is judged by age alone.
+ */
+function lockStale(lock, now) {
+  const at = mtimeMs(lock);
+  if (at === null) return false;
+  if (now - at > LOCK_STALE_MS) return true;
+  const owner = readOwner(lock);
+  return Boolean(owner && owner.host === os.hostname() && Number.isInteger(owner.pid) && !pidAlive(owner.pid));
+}
+
+/** Create the lock directory and its owner record. True when this process holds it. */
 function tryLock(lock, now) {
   try {
     fs.mkdirSync(lock);
-    return true;
   } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-  }
-  const at = mtimeMs(lock);
-  if (at !== null && now - at > LOCK_STALE_MS) {
-    fs.rmSync(lock, { recursive: true, force: true });
+    if (error.code !== 'EEXIST' || !lockStale(lock, now)) return false;
+    // Rename the stale lock away before removing it, so two sessions that both find it stale do
+    // not remove each other's new lock: only one rename succeeds.
+    const aside = `${lock}.stale-${process.pid}-${now}`;
+    try {
+      fs.renameSync(lock, aside);
+    } catch {
+      return false;
+    }
+    fs.rmSync(aside, { recursive: true, force: true });
     try {
       fs.mkdirSync(lock);
-      return true;
     } catch {
       return false;
     }
   }
-  return false;
+  fs.writeFileSync(path.join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, host: os.hostname(), at: now }));
+  return true;
 }
 
-/** Wait until `lock` is gone or `waitMs` passes. True when it is gone. */
+/** Remove the lock only if this process owns it. */
+function unlock(lock) {
+  if (readOwner(lock)?.pid === process.pid) fs.rmSync(lock, { recursive: true, force: true });
+}
+
+/** Wait until `lock` is gone or stale, or `waitMs` passes. True when it is gone or stale. */
 function waitForLock(lock, waitMs, onWait) {
   const deadline = Date.now() + waitMs;
   for (let n = 1; fs.existsSync(lock); n += 1) {
+    if (lockStale(lock, Date.now())) return true;
     if (Date.now() >= deadline) return false;
     if (onWait) onWait(n);
     sleep(POLL_MS);
@@ -88,8 +129,9 @@ function readFailed(dir) {
 
 /**
  * Build the engine for `key` with the user's cargo and install it. Returns `{ status, bin?, log?,
- * reason? }`: `exists` (an installed cached engine; nothing built), `built`, `failed` (with the
- * log; `build.failed` records it) or `busy` (another session's build held the lock past `waitMs`).
+ * reason?, waited? }`: `exists` (an installed cached engine; nothing built), `built` (`waited`
+ * when another session built it), `failed` (with the log; `build.failed` records it) or `busy`
+ * (another session's build held the lock past `waitMs`).
  */
 export function buildEngine({ env, pluginRoot, dataDir, key, platform, waitMs = SESSION_WAIT_MS, budgetMs = BUILD_BUDGET_MS }) {
   const dir = engineDir(dataDir, key);
@@ -99,33 +141,42 @@ export function buildEngine({ env, pluginRoot, dataDir, key, platform, waitMs = 
   if (key !== 'dev' && fs.existsSync(bin)) return { status: 'exists', bin };
   fs.mkdirSync(dir, { recursive: true });
   const lock = path.join(dir, '.lock');
-  if (!tryLock(lock, Date.now())) {
-    waitForLock(lock, waitMs);
-    if (fs.existsSync(bin)) return { status: 'built', bin };
-    const failed = readFailed(dir);
-    if (failed) return { status: 'failed', log: failed.log, reason: failed.reason };
-    return { status: 'busy' };
-  }
+  const build = { env, pluginRoot, dataDir, platform, dir, bin, budgetMs, lock };
+  if (tryLock(lock, Date.now())) return buildAndUnlock(build);
+  waitForLock(lock, waitMs);
+  if (!fs.existsSync(lock) && fs.existsSync(bin)) return { status: 'built', bin, waited: true };
+  // The other build died (its lock is stale): build here.
+  if (tryLock(lock, Date.now())) return buildAndUnlock(build);
+  const failed = readFailed(dir);
+  if (failed) return { status: 'failed', log: failed.log, reason: failed.reason };
+  return { status: 'busy' };
+}
+
+function buildAndUnlock({ lock, ...build }) {
   try {
-    return buildLocked({ env, pluginRoot, dataDir, key, platform, dir, bin, budgetMs });
+    return buildLocked(build);
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
+    unlock(lock);
   }
 }
 
-function buildLocked({ env, pluginRoot, dataDir, key, platform, dir, bin, budgetMs }) {
+function buildLocked({ env, pluginRoot, dataDir, platform, dir, bin, budgetMs }) {
   const log = path.join(dir, 'build.log');
   const failedMarker = path.join(dir, 'build.failed');
   fs.rmSync(failedMarker, { force: true });
   const target = path.join(dir, 'target');
+  // cwd is the data directory, so the repository's rust-toolchain.toml does not make rustup
+  // download its pinned toolchain: the user's default toolchain builds it (it must meet the MSRV).
+  // The repository's .cargo/config.toml is not read either; nothing in it matters to this build.
+  // CARGO_BUILD_TARGET would move the binary out of target/release, so it is not passed on.
+  const childEnv = { ...env };
+  delete childEnv.CARGO_BUILD_TARGET;
   const fd = fs.openSync(log, 'w');
   let r;
   try {
-    // cwd is the data directory, so the repository's rust-toolchain.toml does not make rustup
-    // download its pinned toolchain: the user's default toolchain builds it (it must meet the MSRV).
     r = spawnSync('cargo', ['build', '--release', '--locked', '-p', 'temper-cli',
       '--manifest-path', path.join(pluginRoot, 'Cargo.toml'), '--target-dir', target], {
-      cwd: dataDir, env, stdio: ['ignore', fd, fd], windowsHide: true, timeout: budgetMs, killSignal: 'SIGKILL',
+      cwd: dataDir, env: childEnv, stdio: ['ignore', fd, fd], windowsHide: true, timeout: budgetMs, killSignal: 'SIGKILL',
     });
   } finally {
     fs.closeSync(fd);
@@ -154,7 +205,7 @@ function buildLocked({ env, pluginRoot, dataDir, key, platform, dir, bin, budget
   return { status: 'built', bin, log };
 }
 
-/** Keep the newest version keys (by directory mtime) and `dev`; remove the rest. */
+/** Keep the newest version keys (by directory mtime) and `dev`; remove the rest, best effort. */
 export function pruneEngines(dataDir) {
   const root = path.join(dataDir, 'engine');
   let keys;
@@ -164,17 +215,32 @@ export function pruneEngines(dataDir) {
     return;
   }
   const byAge = keys.map((k) => [k, mtimeMs(path.join(root, k)) ?? 0]).sort((a, b) => b[1] - a[1]);
-  for (const [k] of byAge.slice(KEEP_VERSIONS)) fs.rmSync(path.join(root, k), { recursive: true, force: true });
+  for (const [k] of byAge.slice(KEEP_VERSIONS)) {
+    try {
+      fs.rmSync(path.join(root, k), { recursive: true, force: true });
+    } catch {
+      // A running old engine cannot be removed on Windows; the next prune tries again.
+    }
+  }
 }
 
 /** Why no engine is available, as a phrase: "is not installed", "is still building", ... */
 function why(dataDir, key) {
   if (!dataDir) return 'is not installed, and CLAUDE_PLUGIN_DATA is not set, so it cannot be built';
   const dir = engineDir(dataDir, key);
-  if (fs.existsSync(path.join(dir, '.lock'))) return 'is still building';
+  const lock = path.join(dir, '.lock');
+  if (fs.existsSync(lock) && !lockStale(lock, Date.now())) return 'is still building';
   const failed = readFailed(dir);
   if (failed) return `failed to build (log: ${failed.log})`;
   return 'is not installed';
+}
+
+/** What the agent can do about `reason`, as a sentence. */
+function nextStep(reason) {
+  if (/building/.test(reason)) return 'Wait a minute and retry.';
+  if (/failed to build/.test(reason)) return `Install Rust ${MSRV} or newer (rustup update) and start a new session.`;
+  if (/CLAUDE_PLUGIN_DATA/.test(reason)) return 'Install the @wet-ink/temper npm package for this platform, or set TEMPER_BIN.';
+  return null;
 }
 
 function parseInput(stdin) {
@@ -188,38 +254,63 @@ function parseInput(stdin) {
 
 const out = (value) => ({ stdout: JSON.stringify(value), exit: 0 });
 const silent = { stdout: '', exit: 0 };
-const isRustSource = (file) => /\.rs$/.test(file) || /(^|[\\/])Cargo\.toml$/.test(file);
+// Case-insensitive, for case-insensitive file systems.
+const isRustSource = (file) => /\.rs$/i.test(file) || /(^|[\\/])cargo\.toml$/i.test(file);
 
 /** True the first time a session asks; a marker file in the engine directory remembers it. */
 function firstTimeFor(dataDir, key, sessionId) {
   if (!dataDir) return true;
   const dir = engineDir(dataDir, key);
-  const safe = String(sessionId ?? 'none').replace(/[^A-Za-z0-9_-]/g, '_');
+  const safe = String(sessionId ?? 'none').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 100);
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.closeSync(fs.openSync(path.join(dir, `notified-${safe}`), 'wx'));
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // Only an existing marker means "already told"; any other failure shows the notice again.
+    return error.code !== 'EEXIST';
   }
 }
 
 function startDegraded(reason) {
-  const fix = /failed to build/.test(reason)
-    ? `Install Rust ${MSRV} or newer (rustup update) and start a new session, or set TEMPER_DISABLE=1.`
-    : /CLAUDE_PLUGIN_DATA/.test(reason)
-      ? 'Install the @wet-ink/temper npm package for this platform, set TEMPER_BIN, or set TEMPER_DISABLE=1.'
-      : 'Start a new session to build it, or set TEMPER_DISABLE=1.';
-  const msg = `temper is not enforcing: the engine ${reason}. ${fix}`;
+  const fix = /CLAUDE_PLUGIN_DATA/.test(reason)
+    ? 'Install the @wet-ink/temper npm package for this platform, set TEMPER_BIN'
+    : (nextStep(reason) ?? 'Start a new session to build it.').replace(/\.$/, '');
+  const msg = `temper is not enforcing: the engine ${reason}. ${fix}, or set TEMPER_DISABLE=1.`;
   return out({ systemMessage: msg, hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg } });
 }
 
 /**
  * What a hook does when no engine resolved (D6-C). Returns `{ bin }` when an engine became
  * available (SessionStart built it, or Stop waited for another session's build): the launcher
- * runs it with the same input. Otherwise `{ stdout, exit }`, the hook's whole answer.
+ * runs it with the same input. Otherwise `{ stdout, exit }`, the hook's whole answer. It never
+ * throws: a handler error is a notice with exit 0 (invariant 4).
  */
-export function withoutEngine({ argv, env, stdin, pluginRoot, dataDir, key, platform, stopWaitMs = STOP_WAIT_MS, onWait }) {
+export function withoutEngine(args) {
+  try {
+    return noEngine(args);
+  } catch (error) {
+    return out({ systemMessage: `temper hook ${args.argv[1]} failed: ${error.message}` });
+  }
+}
+
+/**
+ * The engine to run at session start: the resolved `bin`, after rebuilding it when it is the
+ * `dev` engine in the data directory (§5.3: a source checkout builds at every SessionStart, and
+ * cargo makes that a no-op when nothing changed). A failed rebuild keeps the engine already built.
+ */
+export function sessionStartEngine({ argv, env, pluginRoot, dataDir, key, platform, bin }) {
+  if (argv[0] !== 'hook' || argv[1] !== 'session-start' || key !== 'dev' || !dataDir) return bin;
+  if (bin !== path.join(engineDir(dataDir, key), exeName(platform))) return bin;
+  try {
+    buildEngine({ env, pluginRoot, dataDir, key, platform });
+  } catch {
+    // The engine already built still runs.
+  }
+  return bin;
+}
+
+function noEngine({ argv, env, stdin, pluginRoot, dataDir, key, platform, stopWaitMs = STOP_WAIT_MS, onWait }) {
   const event = argv[1];
   const input = parseInput(stdin);
   const bin = dataDir ? path.join(engineDir(dataDir, key), exeName(platform)) : null;
@@ -233,8 +324,11 @@ export function withoutEngine({ argv, env, stdin, pluginRoot, dataDir, key, plat
     case 'pre-edit': {
       const file = String(input.tool_input?.file_path ?? '');
       if (!isRustSource(file)) return silent;
+      const reason = why(dataDir, key);
+      const next = nextStep(reason);
+      const paused = next ? `so Rust edits are paused. ${next}` : 'so Rust edits are paused until the next session start builds it.';
       return out({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny',
-        permissionDecisionReason: `temper: the engine ${why(dataDir, key)}, so Rust edits are paused. Wait a minute and retry; the next session start builds it. To work without temper, set TEMPER_DISABLE=1.` } });
+        permissionDecisionReason: `temper: the engine ${reason}, ${paused} To work without temper, set TEMPER_DISABLE=1.` } });
     }
     case 'pre-bash':
     case 'pre-handback':
