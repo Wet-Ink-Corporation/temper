@@ -223,6 +223,19 @@ fn scan_into_a_closed_pipe_keeps_exit_1() -> TestResult {
     Ok(())
 }
 
+/// D16(b), the other way: a run without hard hits still exits 0 on a closed pipe.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn scan_into_a_closed_pipe_keeps_exit_0() -> TestResult {
+    let dir = fixture(&[])?;
+
+    let code =
+        temper_in_into_closed_pipe(&dir.path().join("crates/core"), &["scan", "src/asks.rs"])?;
+
+    assert_eq!(code, Some(0), "exception requests and advice pass");
+    Ok(())
+}
+
 /// A port of 1.x's `baseline.test.mjs` test of the same name, for its scan-observable half
 /// (the rest is `rel_to_falls_back_to_real_paths_when_lexically_outside` in `temper-app`).
 #[test]
