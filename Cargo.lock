@@ -310,6 +310,11 @@ dependencies = [
 [[package]]
 name = "temper-host"
 version = "2.0.0-alpha.0"
+dependencies = [
+ "temper-app",
+ "temper-domain",
+ "tempfile",
+]
 
 [[package]]
 name = "tempfile"
