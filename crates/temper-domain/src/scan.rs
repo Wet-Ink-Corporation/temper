@@ -2,9 +2,11 @@
 //! source, with test regions and the test, ignore and clone counts.
 
 mod counts;
+mod env;
 mod finders;
 mod hit;
 mod lexer;
+mod predicates;
 mod regions;
 mod rules;
 mod scanner;

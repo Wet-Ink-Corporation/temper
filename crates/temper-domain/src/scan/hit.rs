@@ -99,8 +99,11 @@ pub struct Hit {
     /// The trimmed source line, owned because a hit outlives the source it came from.
     pub(crate) text: String,
     pub(crate) msg: Cow<'static, str>,
-    pub(crate) fix: Cow<'static, str>,
-    /// The lint an `#[expect(..)]` names, taken from the source.
+    /// Always a table text: in 1.x only `msg` is ever formatted, never `fix`.
+    pub(crate) fix: &'static str,
+    /// For a hard hit turned into an exception request, the rule-table lint that the covering
+    /// reasoned `#[expect]` lists; for an `expect-attr` hit, the attribute's first argument as
+    /// written. Owned because the second comes from the source.
     pub(crate) exception: Option<String>,
 }
 
@@ -144,10 +147,12 @@ impl Hit {
     /// How to fix it.
     #[must_use]
     pub fn fix(&self) -> &str {
-        &self.fix
+        self.fix
     }
 
-    /// For an exception request, the lint the `#[expect(..)]` names.
+    /// For an exception request, the lint it asks for: for a hard hit below a reasoned
+    /// `#[expect(..)]`, the rule's lint that the attribute lists; for the `expect-attr` hit
+    /// itself, the attribute's first argument as written, trimmed.
     #[must_use]
     pub fn exception(&self) -> Option<&str> {
         self.exception.as_deref()

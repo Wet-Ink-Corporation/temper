@@ -1,12 +1,13 @@
-//! Test-only regions of masked code: `#[cfg(test)]` items, `#[test]`-style functions and
-//! `proptest!` blocks (1.x `testRegions`).
+//! Regions of masked code: test-only code (`#[cfg(test)]` items, `#[test]`-style functions and
+//! `proptest!` blocks, 1.x `testRegions`) and compile-time code (1.x `constRegions`).
 
 use std::ops::RangeInclusive;
 
 use regex::Regex;
 
-use super::lexer::match_brace;
+use super::lexer::{match_brace, statement_end};
 use super::scanner::{ScannerSetupError, compile};
+use crate::js::is_js_space;
 
 /// Byte ranges of test-only code, both ends inclusive, in 1.x order: attribute regions, then
 /// `proptest!` blocks. Ranges may nest.
@@ -20,13 +21,15 @@ impl Regions {
     }
 }
 
-/// The compiled patterns behind [`test_regions`].
+/// The compiled patterns behind [`test_regions`] and [`const_regions`].
 #[derive(Debug)]
 pub(crate) struct RegionPatterns {
     attr: Regex,
     test_word: Regex,
     not_test: Regex,
     proptest: Regex,
+    const_block: Regex,
+    const_item: Regex,
 }
 
 impl RegionPatterns {
@@ -40,8 +43,27 @@ impl RegionPatterns {
             test_word: compile("regions:test-word", r"\btest\b")?,
             not_test: compile("regions:not-test", r"\bnot\s*\(\s*test\b")?,
             proptest: compile("regions:proptest", r"\bproptest\s*!\s*\{")?,
+            const_block: compile("regions:const-block", r"\bconst\s*\{")?,
+            const_item: compile("regions:const-item", r"\bconst\s+(?:_|[A-Za-z_]\w*)\s*:")?,
         })
     }
+}
+
+/// The regions of masked `code` evaluated at compile time (1.x `constRegions`): each inline
+/// `const { .. }` block, then each `const NAME: T = ..;` item. A const generic parameter (after
+/// `<` or `,`) is not one, and neither is a `const fn`.
+pub(crate) fn const_regions(code: &str, patterns: &RegionPatterns) -> Regions {
+    let blocks = patterns.const_block.find_iter(code).map(|m| {
+        // The match ends with the block's `{`.
+        m.start()..=match_brace(code, m.end().saturating_sub(1))
+    });
+    let items = patterns.const_item.find_iter(code).filter_map(|m| {
+        let before = code.get(..m.start()).unwrap_or("");
+        let prev = before.trim_end_matches(is_js_space).chars().next_back();
+        let generic = matches!(prev, Some('<' | ','));
+        (!generic).then(|| m.start()..=statement_end(code, m.start()))
+    });
+    Regions(blocks.chain(items).collect())
 }
 
 /// The test-only regions of masked `code`: each `#[cfg(..test..)]` (not `not(test)`) or
@@ -171,6 +193,24 @@ mod tests {
             regions_of("#[cfg(test)]\nmod t { fn a() {"),
             [(0, 28)],
             "an unclosed body runs to the last offset"
+        );
+    }
+
+    #[test]
+    fn const_regions_skip_const_generics() {
+        let src = "const A: u8 = 1;\nfn f<const N: usize>() { const { assert!(true) }; }\nfn g(x: u8, const B: u8) {}\nconst _: () = assert!(true);";
+        let patterns = RegionPatterns::new().expect("the region patterns compile");
+
+        let regions: Vec<(usize, usize)> = const_regions(&mask_rust(src), &patterns)
+            .0
+            .into_iter()
+            .map(RangeInclusive::into_inner)
+            .collect();
+
+        assert_eq!(
+            regions,
+            [(42, 64), (0, 15), (97, 124)],
+            "blocks first, then items; const generic parameters are skipped"
         );
     }
 

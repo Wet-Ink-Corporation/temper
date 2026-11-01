@@ -7,9 +7,10 @@ use regex::Regex;
 
 use super::Found;
 use crate::js::{is_js_space, js_trim};
+use crate::scan::env::Env;
 use crate::scan::hit::Severity;
 use crate::scan::lexer::slice;
-use crate::scan::scanner::{Env, ScannerSetupError, compile};
+use crate::scan::scanner::{ScannerSetupError, compile};
 
 /// How many lines above a hit an `#[expect(..)]` may start and still cover it.
 const WINDOW_LINES: usize = 12;
@@ -35,33 +36,30 @@ impl ExpectPatterns {
     }
 }
 
-/// Every `#[expect(..)]`: hard without a reason, otherwise an exception request for its first
-/// lint.
-pub(crate) fn find(env: &Env<'_>, patterns: &ExpectPatterns) -> Vec<Found> {
-    patterns
-        .attr
-        .captures_iter(env.code)
-        .map(|caps| {
-            let offset = caps.get_match().start();
-            let args = caps.get(1).map_or("", |args| args.as_str());
-            if patterns.reason.is_match(args) {
-                let lint = js_trim(args.split_once(',').map_or(args, |(first, _)| first));
-                Found {
-                    severity: Some(Severity::Ask),
-                    msg: Some(Cow::Owned(format!("lint exception requested for `{lint}`"))),
-                    exception: Some(lint.to_owned()),
-                    ..Found::at(offset)
-                }
-            } else {
-                Found {
-                    severity: Some(Severity::Hard),
-                    msg: Some(Cow::Borrowed(NO_REASON_MSG)),
-                    fix: Some(NO_REASON_FIX),
-                    ..Found::at(offset)
-                }
+/// Pushes every `#[expect(..)]` onto `out`: hard without a reason, otherwise an exception request
+/// for its first lint.
+pub(crate) fn find(env: &Env<'_>, patterns: &ExpectPatterns, out: &mut Vec<Found>) {
+    let found = patterns.attr.captures_iter(env.code).map(|caps| {
+        let offset = caps.get_match().start();
+        let args = caps.get(1).map_or("", |args| args.as_str());
+        if patterns.reason.is_match(args) {
+            let lint = js_trim(args.split_once(',').map_or(args, |(first, _)| first));
+            Found {
+                severity: Some(Severity::Ask),
+                msg: Some(Cow::Owned(format!("lint exception requested for `{lint}`"))),
+                exception: Some(lint.to_owned()),
+                ..Found::at(offset)
             }
-        })
-        .collect()
+        } else {
+            Found {
+                severity: Some(Severity::Hard),
+                msg: Some(Cow::Borrowed(NO_REASON_MSG)),
+                fix: Some(NO_REASON_FIX),
+                ..Found::at(offset)
+            }
+        }
+    });
+    out.extend(found);
 }
 
 /// The lint of `lints` that a reasoned `#[expect(..)]` starting at most 12 lines above `offset`

@@ -1,10 +1,13 @@
 //! Scanner-level tests: the port of `tests/scan.test.mjs` for the 1a rules, in its order, plus
 //! the scan property.
 
+use std::error::Error as _;
 use std::sync::LazyLock;
 
 use proptest::prelude::*;
 
+use super::rules::RULES;
+use super::scanner::compile;
 use super::strategies::token_soup;
 use super::{CodeKind, FileRole, Hit, ScanOptions, ScanReport, Scanner, Severity, is_build_script};
 
@@ -57,6 +60,33 @@ fn summary(report: &ScanReport) -> Vec<(&'static str, Severity, usize)> {
         .collect()
 }
 
+/// One rule's hits as `id:severity@line` (1.x `hitsOf`).
+fn hits_of(src: &str, key: &str, kind: CodeKind) -> Vec<String> {
+    scan(src, kind)
+        .hits()
+        .iter()
+        .filter(|h| h.key().as_str() == key)
+        .map(|h| format!("{}:{}@{}", h.id(), severity_name(h.severity()), h.line()))
+        .collect()
+}
+
+/// One rule's hits (1.x `has`).
+fn has(src: &str, key: &str, kind: CodeKind) -> Vec<Hit> {
+    scan(src, kind)
+        .into_hits()
+        .into_iter()
+        .filter(|h| h.key().as_str() == key)
+        .collect()
+}
+
+/// One rule's severities (1.x `sevOf`).
+fn sev_of(src: &str, key: &str, kind: CodeKind) -> Vec<&'static str> {
+    has(src, key, kind)
+        .iter()
+        .map(|h| severity_name(h.severity()))
+        .collect()
+}
+
 fn hit<'r>(report: &'r ScanReport, key: &str) -> &'r Hit {
     report
         .hits()
@@ -73,6 +103,130 @@ fn scanner_new_compiles_every_pattern() {
     let failed = Scanner::new().err().map(|error| error.rule());
 
     assert_eq!(failed, None, "no built-in pattern fails to compile");
+}
+
+#[test]
+fn compile_reports_an_unsupported_construct_with_the_rule_name() {
+    let error = compile("t", r"\A").err();
+
+    let reported = error.map(|e| (e.rule(), e.source().map(ToString::to_string)));
+
+    assert_eq!(
+        reported,
+        Some((
+            "t",
+            Some("JS regex construct `\\A` at byte 0 has no faithful translation".to_owned())
+        )),
+        "the rule and the construct are named"
+    );
+}
+
+/// The 60 1.x rule keys in `scan.mjs` table order.
+const KEYS_1X: [&str; 60] = [
+    "unsafe",
+    "unwrap",
+    "panic",
+    "assert-in-prod",
+    "allow-attr",
+    "dbg",
+    "print",
+    "leak",
+    "catch-unwind",
+    "exit",
+    "discard-ok",
+    "empty-err-arm",
+    "empty-if-let-err",
+    "let-underscore",
+    "filter-map-ok",
+    "parse-unwrap-or",
+    "as-cast",
+    "ptr-param",
+    "lazy-static",
+    "path-attr",
+    "ignore-no-reason",
+    "async-trait",
+    "shared-mut",
+    "mutex-unit",
+    "global-mut",
+    "deref-inherit",
+    "sleep",
+    "thread-spawn",
+    "detached-spawn",
+    "unbounded",
+    "spin-lock",
+    "seqcst",
+    "fetch-update",
+    "compiler-fence",
+    "downcast",
+    "unwrap-or-default",
+    "map-index",
+    "env-var",
+    "ambient-now",
+    "serde-hashmap",
+    "test-branch",
+    "global-allocator",
+    "should-panic",
+    "weak-assert",
+    "extern-crate",
+    "crate-lint-attr",
+    "pub-glob-reexport",
+    "prelude-mod",
+    "pub-smart-ptr",
+    "ops-impl",
+    "type-alias-primitive",
+    "get-prefix",
+    "struct-bounds",
+    "doc-unwrap",
+    "doc-arg-sections",
+    "expect-attr",
+    "forbid-override",
+    "erased-error",
+    "todo-comment",
+    "commented-code",
+];
+
+#[test]
+fn rules_keep_1x_table_order() {
+    let mut oracle = KEYS_1X.iter();
+
+    let out_of_order: Vec<&str> = RULES
+        .iter()
+        .map(|spec| spec.key)
+        .filter(|key| !oracle.any(|k| k == key))
+        .collect();
+
+    assert_eq!(
+        out_of_order,
+        Vec::<&str>::new(),
+        "every key is a 1.x key, in 1.x order"
+    );
+}
+
+#[test]
+fn hard_hits_in_production_code() {
+    let src = "\npub fn a(v: &Vec<u8>) -> u32 {\n    let x = v.first().unwrap();\n    let y = std::env::args().next().expect(\"argv\");\n    if *x > 3 { panic!(\"big\") }\n    dbg!(x);\n    println!(\"{y}\");\n    u32::from(*x) + (*x as u32)\n}";
+
+    let report = scan(src, CodeKind::Prod);
+    let hard: Vec<String> = report
+        .hits()
+        .iter()
+        .filter(|h| h.severity() == Severity::Hard)
+        .map(|h| format!("{} {}@{}", h.key(), h.id(), h.line()))
+        .collect();
+
+    assert_eq!(
+        hard,
+        [
+            "unwrap H-02@3",
+            "unwrap H-02@4",
+            "panic H-03@5",
+            "dbg H-06@6",
+            "print H-06@7",
+            "as-cast H-11@8",
+            "ptr-param OWN-03@2",
+        ],
+        "the 1.x hard hits, in rule-table order"
+    );
 }
 
 #[test]
@@ -217,6 +371,149 @@ fn forced_expect_attr_severity_ignores_test_regions() {
 }
 
 #[test]
+fn assert_in_prod_compile_time_assertions_are_exempt() {
+    let key = "assert-in-prod";
+
+    assert_eq!(
+        sev_of(
+            "pub fn f(x: u8) { assert!(x > 0, \"x must be positive\"); }",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "a run-time assert is advisory"
+    );
+    assert_eq!(
+        has(
+            "const _: () = assert!(size_of::<Event>() <= 128, \"Event grew past two cache lines\");",
+            key,
+            CodeKind::Prod
+        ),
+        [],
+        "PERF-05 size pin"
+    );
+    assert_eq!(
+        has(
+            "pub fn chunk<const N: usize>(xs: &[u8]) -> usize {\n    const { assert!(N > 0, \"N must be positive\") };\n    xs.len() / N\n}",
+            key,
+            CodeKind::Prod
+        ),
+        [],
+        "MOD-10 inline const block"
+    );
+    assert_eq!(
+        sev_of(
+            "impl<const N: usize> Ring<N> {\n    pub fn push(&mut self) { assert!(self.len < N, \"full\"); }\n}",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "a const generic parameter is not a const context"
+    );
+}
+
+#[test]
+fn assert_in_prod_const_contexts() {
+    let src = "const A: u8 = { assert!(true); 1 };\nfn f<const N: usize>() { assert!(N > 0); }\nfn g(a: u8,\n const B: u8) { assert!(a > 0); }\nconst fn h() { assert!(true); }";
+
+    assert_eq!(
+        hits_of(src, "assert-in-prod", CodeKind::Prod),
+        ["H-03:soft@2", "H-03:soft@4", "H-03:soft@5"],
+        "const items and blocks are exempt; const generics and const fn are not"
+    );
+}
+
+#[test]
+fn ignore_no_reason_also_catches_cfg_attr_ignore() {
+    let key = "ignore-no-reason";
+    let flagged = [
+        "#[ignore]\n#[test]\nfn slow() {}",
+        "#[cfg_attr(miri, ignore)]\n#[test]\nfn spawns() {}",
+        "#[cfg_attr(any(miri, all(unix, not(target_os = \"linux\"))), ignore)]\n#[test]\nfn t() {}",
+    ];
+    let clean = [
+        "#[cfg_attr(miri, ignore = \"Miri cannot spawn processes\")]\n#[test]\nfn cli() {}",
+        "#[ignore = \"needs a network\"]\n#[test]\nfn net() {}",
+        "#[derive(Debug)]\n#[cfg_attr(feature = \"educe\", educe(Debug, ignore))]\nstruct S;",
+    ];
+
+    for s in flagged {
+        assert_eq!(sev_of(s, key, CodeKind::Test), ["hard"], "{s}");
+    }
+    for s in clean {
+        assert_eq!(has(s, key, CodeKind::Test), [], "{s}");
+    }
+}
+
+#[test]
+fn ignore_no_reason_backtracks_like_js() {
+    let key = "ignore-no-reason";
+
+    assert_eq!(
+        hits_of(
+            "#[cfg_attr(x, ignorefoo, ignore)]\n#[test]\nfn t() {}",
+            key,
+            CodeKind::Test
+        ),
+        ["H-12:hard@1"],
+        "JS backtracks the lazy `[^\\]]*?` past `ignorefoo`"
+    );
+    assert_eq!(
+        hits_of(
+            "#[ignore ]\n#[test]\nfn t() {}\n#[cfg_attr(miri, ignore )]\nfn u() {}",
+            key,
+            CodeKind::Test
+        ),
+        ["H-12:hard@1", "H-12:hard@4"],
+        "spaces before the closer"
+    );
+}
+
+#[test]
+fn extern_crate_alloc_and_std_are_exempt() {
+    let key = "extern-crate";
+
+    assert_eq!(
+        sev_of("extern crate serde;", key, CodeKind::Prod),
+        ["soft"],
+        "extern crate is unnecessary"
+    );
+    assert_eq!(
+        has(
+            "#![no_std]\nextern crate alloc;\n#[cfg(test)]\nextern crate std;\nextern crate self as ledger;",
+            key,
+            CodeKind::Prod
+        ),
+        [],
+        "alloc and std in a no_std crate, and self as, are exempt"
+    );
+}
+
+#[test]
+fn extern_crate_lookahead_backtracks_like_js() {
+    let key = "extern-crate";
+
+    assert_eq!(
+        hits_of(
+            "extern crate  alloc;\nextern crate alloc;\nextern crate  self as y;\nextern crate\tstd ;",
+            key,
+            CodeKind::Prod
+        ),
+        ["MOD-01:soft@1", "MOD-01:soft@3"],
+        "JS gives `\\s+` back one space, and the look-ahead then sees a space"
+    );
+    assert_eq!(
+        hits_of(
+            "extern crate\nalloc;\nextern crate\n\nstd;",
+            key,
+            CodeKind::Prod
+        ),
+        ["MOD-01:soft@3"],
+        "the same over newlines"
+    );
+}
+
+#[test]
 fn print_build_scripts_get_the_writeln_fix_text() {
     let src = "fn main() {\n    println!(\"cargo::rerun-if-changed=schema.json\");\n}";
 
@@ -241,9 +538,52 @@ fn print_build_scripts_get_the_writeln_fix_text() {
     assert!(
         is_build_script("build.rs")
             && !is_build_script("src/build.rs")
+            && !is_build_script("src/bin/build.rs")
             && !is_build_script("src\\bin\\build.rs"),
         "only build.rs at the crate root is a build script"
     );
+}
+
+#[test]
+fn thread_spawn_is_refused_outside_tests() {
+    let key = "thread-spawn";
+    let excepted = "#[expect(clippy::disallowed_methods, reason = \"startup thread; the process exits if it cannot start\")]\nfn run() { let h = thread::spawn(work); }";
+    // async-concurrency.md ASY-15 Do
+    let good = "\npub fn start_audit(log: AuditLog) -> io::Result<thread::JoinHandle<()>> {\n    thread::Builder::new().name(\"audit\".into()).spawn(move || log.run())\n}\npub fn parallel_sum(parts: &[Vec<u64>]) -> io::Result<u64> {\n    thread::scope(|s| {\n        let handles = parts.iter().map(|p| thread::Builder::new().spawn_scoped(s, move || p.iter().sum::<u64>()));\n        handles.count();\n        Ok(0)\n    })\n}";
+
+    assert_eq!(
+        sev_of(
+            "fn run() { let h = thread::spawn(move || work()); }",
+            key,
+            CodeKind::Prod
+        ),
+        ["hard"],
+        "thread::spawn in a library"
+    );
+    assert_eq!(
+        sev_of(
+            "fn run() { let h = std::thread::spawn(work); }",
+            key,
+            CodeKind::Bin
+        ),
+        ["hard"],
+        "and in a binary"
+    );
+    assert_eq!(
+        sev_of(
+            "#[test]\nfn t() { let h = thread::spawn(work); }",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "advisory in a test"
+    );
+    assert_eq!(
+        sev_of(excepted, key, CodeKind::Prod),
+        ["ask"],
+        "a reasoned expect of clippy::disallowed_methods asks"
+    );
+    assert_eq!(has(good, key, CodeKind::Prod), [], "Builder and scope");
 }
 
 #[test]
