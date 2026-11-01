@@ -30,6 +30,7 @@ temper-host = { path = "crates/temper-host", version = "2.0.0-alpha.0" }
 # Third-party, each approved by D10 (wi-b03273) or pre-approved by the standard.
 proptest = { version = "1.12", default-features = false, features = ["std"] }          # dev only; no fork or timeout (wi-c0f25b)
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }   # D10; the default set spelled out (wi-466849)
+serde = { version = "1.0", default-features = false, features = ["std"] }                       # pre-approved; no derive (1d-12)
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tempfile = { version = "3", default-features = false }
 thiserror = { version = "2.0", default-features = false, features = ["std"] }                  # wi-5eed96

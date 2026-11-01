@@ -23,9 +23,12 @@
 //! ```
 
 mod js;
+mod paths;
 mod scan;
 
+pub use js::js_trim;
+pub use paths::{PathStyle, unverbatim};
 pub use scan::{
-    CodeKind, FileRole, Hit, LibTarget, LineNo, RuleId, RuleKey, ScanOptions, ScanReport, Scanner,
-    ScannerSetupError, Severity, classify_path, is_build_script, new_hits,
+    CodeKind, FileRole, Hit, HitAt, LibTarget, LineNo, RuleId, RuleKey, ScanOptions, ScanReport,
+    Scanner, ScannerSetupError, Severity, classify_path, format_hit, is_build_script, new_hits,
 };

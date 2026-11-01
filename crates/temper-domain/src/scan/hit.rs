@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use serde::ser::{Serialize, SerializeStruct, Serializer};
+
 /// How a hit is enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {
@@ -102,10 +104,20 @@ pub struct Hit {
     pub(crate) msg: Cow<'static, str>,
     /// Always a table text: in 1.x only `msg` is ever formatted, never `fix`.
     pub(crate) fix: &'static str,
-    /// For a hard hit turned into an exception request, the rule-table lint that the covering
-    /// reasoned `#[expect]` lists; for an `expect-attr` hit, the attribute's first argument as
-    /// written. Owned because the second comes from the source.
-    pub(crate) exception: Option<String>,
+    /// The lint of an exception request, and where it came from.
+    pub(crate) exception: Option<Exception>,
+}
+
+/// The lint an exception request asks for, by where it came from. 1.x spreads the two into its
+/// hit object at different points, so they sit at different places in the JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Exception {
+    /// A hard hit below a reasoned `#[expect]`: the rule-table lint the attribute lists. Written
+    /// before `msg`.
+    Requested(String),
+    /// A finder's own exception, which only `expect-attr` reports: the attribute's first
+    /// argument as written, owned because it comes from the source. Written after `msg`.
+    Attribute(String),
 }
 
 impl Hit {
@@ -156,7 +168,72 @@ impl Hit {
     /// itself, the attribute's first argument as written, trimmed.
     #[must_use]
     pub fn exception(&self) -> Option<&str> {
-        self.exception.as_deref()
+        match &self.exception {
+            Some(Exception::Requested(lint) | Exception::Attribute(lint)) => Some(lint),
+            None => None,
+        }
+    }
+
+    /// The number of JSON fields [`Hit::write_fields`] writes.
+    fn field_count(&self) -> usize {
+        7_usize.saturating_add(usize::from(self.exception.is_some()))
+    }
+
+    /// Writes the fields in 1.x's order (`scanSource`'s object spread): `key, id, severity, line,
+    /// text`, a requested `exception`, `msg`, an attribute's `exception`, `fix`.
+    fn write_fields<S: SerializeStruct>(&self, out: &mut S) -> Result<(), S::Error> {
+        out.serialize_field("key", self.key.as_str())?;
+        out.serialize_field("id", self.id.as_str())?;
+        out.serialize_field("severity", severity_name(self.severity))?;
+        out.serialize_field("line", &self.line.get())?;
+        out.serialize_field("text", &self.text)?;
+        if let Some(Exception::Requested(lint)) = &self.exception {
+            out.serialize_field("exception", lint)?;
+        }
+        out.serialize_field("msg", self.msg.as_ref())?;
+        if let Some(Exception::Attribute(lint)) = &self.exception {
+            out.serialize_field("exception", lint)?;
+        }
+        out.serialize_field("fix", self.fix)
+    }
+}
+
+/// 1.x's JSON object for a hit without its file (`scanSource`'s result).
+impl Serialize for Hit {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut out = serializer.serialize_struct("Hit", self.field_count())?;
+        self.write_fields(&mut out)?;
+        out.end()
+    }
+}
+
+/// A hit with the path of its file, as `temper scan --json` writes it: the hit's fields, then
+/// `file`. A view: the caller owns the hits and the paths.
+#[derive(Debug, Clone, Copy)]
+pub struct HitAt<'a> {
+    /// The hit.
+    pub hit: &'a Hit,
+    /// The file's path as the command reports it: relative to the project root, `/`-separated.
+    pub file: &'a str,
+}
+
+/// 1.x `{ ...hit, file }`.
+impl Serialize for HitAt<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let len = self.hit.field_count().saturating_add(1);
+        let mut out = serializer.serialize_struct("HitAt", len)?;
+        self.hit.write_fields(&mut out)?;
+        out.serialize_field("file", self.file)?;
+        out.end()
+    }
+}
+
+/// The severity as 1.x names it in JSON and text: `hard`, `ask` or `soft`.
+pub(crate) fn severity_name(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Hard => "hard",
+        Severity::Ask => "ask",
+        Severity::Soft => "soft",
     }
 }
 

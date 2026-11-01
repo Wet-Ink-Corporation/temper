@@ -28,7 +28,17 @@ pub(crate) fn is_js_space(c: char) -> bool {
 }
 
 /// JS `text.trim()`: strips the JS whitespace set, which has U+FEFF and lacks U+0085.
-pub(crate) fn js_trim(text: &str) -> &str {
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::js_trim;
+///
+/// assert_eq!(js_trim("\u{feff} x\n"), "x");
+/// assert_eq!(js_trim("\u{85}x"), "\u{85}x");
+/// ```
+#[must_use]
+pub fn js_trim(text: &str) -> &str {
     text.trim_matches(is_js_space)
 }
 
