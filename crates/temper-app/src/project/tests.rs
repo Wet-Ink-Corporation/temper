@@ -5,8 +5,9 @@ use temper_domain::PathStyle::{Posix, Windows};
 
 use super::{CrateRoot, Project, crate_of, declares_package, discover, exists};
 use crate::engine::RunEnv;
-use crate::fakes::FakeFiles;
+use crate::fakes::{FakeFiles, FakePorts, FakeProcess, Reply};
 use crate::paths::PathEnv;
+use crate::ports::{ExitKind, Stream};
 
 const PACKAGE: &str = "[package]\nname = \"core\"\n";
 const WORKSPACE: &str = "[workspace]\nmembers = [\"crates/*\"]\n";
@@ -104,7 +105,7 @@ fn discover_without_git_takes_the_outermost_cargo_directory() {
     };
 
     assert_eq!(
-        discover(&files, &env),
+        discover(&FakePorts::new(files), &env),
         Some(Project {
             root: r"C:\ws".to_owned()
         }),
@@ -120,7 +121,11 @@ fn discover_is_none_without_a_cargo_toml() {
         style: Posix,
     };
 
-    assert_eq!(discover(&files, &env), None, "not a Rust project");
+    assert_eq!(
+        discover(&FakePorts::new(files), &env),
+        None,
+        "not a Rust project"
+    );
 }
 
 #[test]
@@ -137,5 +142,95 @@ fn exists_is_false_when_the_path_cannot_be_resolved() {
         ],
         [true, false],
         "existsSync answers false on any error"
+    );
+}
+
+/// `git rev-parse --show-toplevel` in `cwd` answering `reply`.
+fn git_in(cwd: &str, reply: Reply) -> FakeProcess {
+    FakeProcess::new().answering(&["git", "rev-parse", "--show-toplevel"], cwd, reply)
+}
+
+fn exit(status: ExitKind, stdout: &str) -> Reply {
+    Reply::Exit {
+        status,
+        stdout: stdout.to_owned(),
+    }
+}
+
+#[test]
+fn discover_prefers_the_git_top_level() {
+    let cwd = r"C:\g\rust\crates\core";
+    let ports = FakePorts {
+        files: FakeFiles::new(Windows)
+            .with_file(r"C:\g\rust\Cargo.toml", WORKSPACE)
+            .with_file(r"C:\g\rust\crates\core\Cargo.toml", PACKAGE),
+        process: git_in(cwd, exit(ExitKind::Code(0), "C:/g\n")),
+    };
+    let env = RunEnv {
+        cwd: PathBuf::from(cwd),
+        style: Windows,
+    };
+
+    assert_eq!(
+        discover(&ports, &env),
+        Some(Project {
+            root: r"C:\g".to_owned()
+        }),
+        "git's answer, trimmed and resolved, even without a Cargo.toml at the top"
+    );
+}
+
+#[test]
+fn discover_falls_back_without_git() {
+    let cwd = "/g/rust/crates/core";
+    let replies = [
+        exit(ExitKind::Code(128), "/g\n"),
+        exit(ExitKind::Signal, "/g\n"),
+        exit(ExitKind::TimedOut, "/g\n"),
+        Reply::SpawnFails,
+        Reply::Overflows(Stream::Stdout),
+    ];
+    let env = RunEnv {
+        cwd: PathBuf::from(cwd),
+        style: Posix,
+    };
+
+    let roots = replies.map(|reply| {
+        let ports = FakePorts {
+            files: FakeFiles::new(Posix)
+                .with_file("/g/rust/Cargo.toml", WORKSPACE)
+                .with_file("/g/rust/crates/core/Cargo.toml", PACKAGE),
+            process: git_in(cwd, reply),
+        };
+        discover(&ports, &env).map(|project| project.root)
+    });
+
+    assert_eq!(
+        roots,
+        [(); 5].map(|()| Some("/g/rust".to_owned())),
+        "1.x reads any failed git run as no git root"
+    );
+}
+
+#[test]
+fn discover_is_none_in_a_git_repo_without_cargo_toml_above_the_cwd() {
+    let found = ["/g", "/g/docs"].map(|cwd| {
+        let ports = FakePorts {
+            files: FakeFiles::new(Posix)
+                .with_file("/g/rust/Cargo.toml", WORKSPACE)
+                .with_file("/g/docs/guide.md", ""),
+            process: git_in(cwd, exit(ExitKind::Code(0), "/g\n")),
+        };
+        let env = RunEnv {
+            cwd: PathBuf::from(cwd),
+            style: Posix,
+        };
+        discover(&ports, &env)
+    });
+
+    assert_eq!(
+        found,
+        [None, None],
+        "a Cargo.toml below the cwd does not count"
     );
 }

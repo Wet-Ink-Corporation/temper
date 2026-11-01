@@ -34,6 +34,7 @@ serde = { version = "1.0", default-features = false, features = ["std"] }       
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tempfile = { version = "3", default-features = false }
 thiserror = { version = "2.0", default-features = false, features = ["std"] }                  # wi-5eed96
+wait-timeout = { version = "0.2.1", default-features = false }                                  # D10; child timeouts (1d-13 A, wi-f1bd32)
 
 [workspace.lints.rust]
 unsafe_code = "forbid"                                  # H-01

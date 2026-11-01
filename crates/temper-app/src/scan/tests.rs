@@ -21,7 +21,7 @@ fn engine(files: FakeFiles, style: PathStyle, cwd: &str) -> Engine<FakePorts> {
         style,
     };
     let scanner = Scanner::new().expect("every built-in pattern compiles");
-    Engine::new(FakePorts { files }, env, scanner)
+    Engine::new(FakePorts::new(files), env, scanner)
 }
 
 fn args(targets: ScanTargets, format: OutputFormat) -> ScanArgs {

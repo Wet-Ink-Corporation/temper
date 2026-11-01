@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use temper_domain::PathStyle;
 
-use crate::ports::{DirEntry, EntryKind, Files, FsError, FsOp, Ports};
+use crate::ports::{
+    DirEntry, EntryKind, ExitKind, Files, FsError, FsOp, Ports, ProcessError, ProcessOutput,
+    ProcessRequest, ProcessRunner, Stream,
+};
 
 /// A file tree held as text paths in one [`PathStyle`]. A directory exists when a file is below
 /// it; listings are derived in name-byte order unless one is set.
@@ -177,16 +180,93 @@ impl Files for FakeFiles {
     }
 }
 
+/// What a [`FakeProcess`] answers to one request.
+#[derive(Debug)]
+pub(crate) enum Reply {
+    /// The child ends with `status`, having written `stdout` and nothing on stderr.
+    Exit { status: ExitKind, stdout: String },
+    /// The program cannot be started.
+    SpawnFails,
+    /// The child writes past the cap of a stream.
+    Overflows(Stream),
+}
+
+/// Child processes that answer from a table: each entry matches a program, its arguments and
+/// its directory. Anything else fails to start, as on a machine without the program.
+#[derive(Debug, Default)]
+pub(crate) struct FakeProcess {
+    replies: Vec<(String, Vec<OsString>, PathBuf, Reply)>,
+}
+
+impl FakeProcess {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// `command` (the program, then its arguments) run in `cwd` answers `reply`.
+    pub(crate) fn answering(mut self, command: &[&str], cwd: &str, reply: Reply) -> Self {
+        let (program, args) = command.split_first().unwrap_or((&"", &[]));
+        let args = args.iter().map(OsString::from).collect();
+        self.replies
+            .push(((*program).to_owned(), args, PathBuf::from(cwd), reply));
+        self
+    }
+}
+
+impl ProcessRunner for FakeProcess {
+    fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+        let program = request.program.to_owned();
+        let reply = self.replies.iter().find_map(|(name, args, cwd, reply)| {
+            (name == request.program && args == request.args && cwd == request.cwd).then_some(reply)
+        });
+        match reply {
+            Some(Reply::Exit { status, stdout }) => Ok(ProcessOutput {
+                status: *status,
+                stdout: stdout.clone().into_bytes(),
+                stderr: Vec::new(),
+            }),
+            Some(Reply::Overflows(stream)) => Err(ProcessError::Overflow {
+                program,
+                stream: *stream,
+                cap: match stream {
+                    Stream::Stdout => request.stdout_cap.get(),
+                    Stream::Stderr => request.stderr_cap.get(),
+                },
+            }),
+            Some(Reply::SpawnFails) | None => Err(ProcessError::Spawn {
+                program,
+                source: io::Error::from(io::ErrorKind::NotFound),
+            }),
+        }
+    }
+}
+
 /// The ports of one test.
 #[derive(Debug)]
 pub(crate) struct FakePorts {
     pub(crate) files: FakeFiles,
+    pub(crate) process: FakeProcess,
+}
+
+impl FakePorts {
+    /// `files`, on a machine where no program can be started: git is missing.
+    pub(crate) fn new(files: FakeFiles) -> Self {
+        Self {
+            files,
+            process: FakeProcess::new(),
+        }
+    }
 }
 
 impl Ports for FakePorts {
     type Files = FakeFiles;
+    type Process = FakeProcess;
 
     fn files(&self) -> &FakeFiles {
         &self.files
+    }
+
+    fn process(&self) -> &FakeProcess {
+        &self.process
     }
 }

@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 temper-app.workspace = true
 temper-domain.workspace = true
+wait-timeout.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
