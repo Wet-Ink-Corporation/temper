@@ -24,6 +24,10 @@ pub(super) fn token_soup() -> impl Strategy<Value = String> {
         Just("[&"),
         Just("spawn("),
         Just("get_"),
+        Just("#[global_allocator]"),
+        Just("ignore)"),
+        Just("fn main("),
+        Just("extern crate  "),
         Just("é"),
         Just("😀"),
     ]
