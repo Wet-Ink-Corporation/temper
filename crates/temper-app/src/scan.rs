@@ -32,7 +32,7 @@ pub(crate) fn run<P: Ports>(
     args: &ScanArgs,
 ) -> Result<CommandOutput, CommandError> {
     let files = ports.files();
-    let Some(project) = discover(files, env) else {
+    let Some(project) = discover(ports, env) else {
         return Err(CommandError::Refused {
             exit: Exit::Usage,
             message: NOT_A_RUST_PROJECT.to_owned(),

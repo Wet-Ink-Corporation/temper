@@ -49,7 +49,11 @@ pub(crate) fn dirname(style: PathStyle, path: &str) -> &str {
     let root = root_len(style, path);
     let parent = path
         .get(root..)
-        .and_then(|rest| rest.rfind(|c| is_sep(style, c)))
+        .and_then(|rest| {
+            // Node passes over trailing separators before it looks for the last one.
+            rest.trim_end_matches(|c| is_sep(style, c))
+                .rfind(|c| is_sep(style, c))
+        })
         .map_or(root, |at| root.saturating_add(at).max(root));
     // The cut is at a separator or after the root, both ASCII, so it is a char boundary.
     path.get(..parent).unwrap_or(path)

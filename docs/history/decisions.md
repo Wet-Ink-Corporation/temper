@@ -196,4 +196,5 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 1d.2 | Does the CLI edge use `anyhow` yet? | No: a hand-written cause-chain printer for its three error sites; revisit in Phase 2. Two-way default, 2026-11-01 (wi-950997). |
 | port 1d.2 | When does the 1d.1 review's F3 (a named-field `Witness` table) land? | In a test-only follow-up PR; F1 and F2 land in 1d.2a. Two-way default, 2026-11-01 (wi-fbe4e1). |
 | port 1d.2 | What shape does `ProcessRequest` take before Phase 4? | `stdout_cap: ByteCap` and no `env`; Phase 4 replaces `stdout_cap` with `StdoutSink` and adds `env`. Two-way default, 2026-11-01 (wi-b175fb). |
+| port 1d.2 | What does a child-process stream past its `ByteCap` report? | `ProcessError::Overflow { program, stream, cap }`, as 1.x's `maxBuffer` fails the run, never truncated output; lands in 1d.2b. Owner decision, 2026-11-01 (wi-129daa). |
 | port 1d.2 | How much of §1.3's `Files` port lands before Phase 2? | `read_text`, `read_dir` and `real_path`, with `existsSync` as `real_path` answering present, since `metadata` is lstat. Two-way default, 2026-11-01 (wi-bb98f7). |

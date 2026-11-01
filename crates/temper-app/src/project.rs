@@ -6,41 +6,54 @@ use std::path::Path;
 use temper_domain::{LibTarget, js_trim};
 
 use crate::engine::RunEnv;
+use crate::git;
 use crate::paths::{self, PathEnv};
-use crate::ports::Files;
+use crate::ports::{Files, Ports};
 
 /// The project a command runs in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Project {
-    /// The project root, resolved: the outermost directory above the working directory that
-    /// has a `Cargo.toml`. Phase 1d.2b puts the git top level first.
+    /// The project root, resolved: git's top level when the working directory is in a
+    /// repository, otherwise the outermost directory above it that has a `Cargo.toml`.
     pub(crate) root: String,
 }
 
-/// 1.x `discover(cwd)` without its git step: the outermost ancestor of the working directory
-/// that has a `Cargo.toml`, or `None` when none has one (not a Rust project).
-///
-/// 1.x then also checks that the root or some ancestor has a `Cargo.toml`, which a root found
-/// this way always has; that check matters once the git top level can be the root (1d.2b).
-pub(crate) fn discover(files: &impl Files, env: &RunEnv) -> Option<Project> {
+/// 1.x `discover(cwd)`: the project root, or `None` when this is not a Rust project, which
+/// is when neither the root nor any ancestor of the working directory has a `Cargo.toml`.
+pub(crate) fn discover(ports: &impl Ports, env: &RunEnv) -> Option<Project> {
+    let files = ports.files();
     let cwd = env.cwd.to_string_lossy();
     let at = PathEnv {
         style: env.style,
         cwd: &cwd,
     };
     let has_manifest = |dir: &str| exists(files, &paths::join(at.style, dir, "Cargo.toml"));
-    let mut outer = find_up(at, &cwd, has_manifest)?;
+    let root = match git::toplevel(ports.process(), &env.cwd) {
+        Some(top) => {
+            let root = paths::resolve(at.style, at.cwd, js_trim(&top));
+            // A git repository is a Rust project only with a manifest at its top or above the
+            // working directory; one below it does not count.
+            (has_manifest(&root) || find_up(at, &cwd, has_manifest).is_some()).then_some(root)
+        }
+        None => outermost_manifest_dir(at, has_manifest),
+    }?;
+    Some(Project { root })
+}
+
+/// The outermost ancestor of the working directory, itself included, that has a manifest.
+fn outermost_manifest_dir(at: PathEnv<'_>, has_manifest: impl Fn(&str) -> bool) -> Option<String> {
+    let mut outer = find_up(at, at.cwd, &has_manifest)?;
     loop {
         let parent = paths::dirname(at.style, &outer);
         if parent == outer {
             break;
         }
-        match find_up(at, parent, has_manifest) {
+        match find_up(at, parent, &has_manifest) {
             Some(dir) => outer = dir,
             None => break,
         }
     }
-    Some(Project { root: outer })
+    Some(outer)
 }
 
 /// 1.x `findUp(start, predicate)`: the nearest ancestor of `start` (resolved against the

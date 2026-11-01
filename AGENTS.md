@@ -137,4 +137,4 @@ The port's decisions D1 to D17 are recorded in full, with their Weigh-In records
 | 2026-10-02 | Crates are `MIT OR Apache-2.0`; the plugin stays MIT | H-16 | owner (wi-4679b3) |
 | 2026-10-30 | macOS runs in CI on every code-touching PR | H-16 | owner (wi-e85ef8) |
 | 2026-10-31 | Workspace version `2.0.0-alpha.0` and `publish = false` until Phase 0b's first alpha; no third-party dependency in Phase 0a | H-16 | two-way calls (Phase 0a) |
-| 2026-11-01 | `serde` (pre-approved; `std` only, no `derive`) added in Phase 1d.2a; `wait-timeout` (D10) follows in 1d.2b | ARC-12, H-16 | pre-approved; D10 (wi-b03273) |
+| 2026-11-01 | `serde` (pre-approved; `std` only, no `derive`) added in Phase 1d.2a; `wait-timeout` 0.2.1 (D10) added in 1d.2b, to `temper-host` only | ARC-12, H-16 | pre-approved; D10 (wi-b03273) |

@@ -160,6 +160,14 @@ fn dirname_basename_join_like_node() {
         (Windows, r"C:\ws\a.rs", r"C:\ws"),
         (Windows, r"\\h\s\a", r"\\h\s\"),
         (Windows, r"\\h\s\", r"\\h\s\"),
+        (Windows, r"\\h\s", r"\\h\s"),
+        // Node's `dirname` reads `\\?\C:` and `\\.\C:` as a host and a share, unlike `resolve`.
+        (Windows, r"\\?\C:\ws", r"\\?\C:\"),
+        (Windows, r"\\?\C:\", r"\\?\C:\"),
+        (Windows, r"\\?\C:\a\b", r"\\?\C:\a"),
+        (Windows, r"\\.\C:\x", r"\\.\C:\"),
+        (Windows, r"\\.\x", r"\\.\x"),
+        (Windows, r"\\?\UNC\h\s\x", r"\\?\UNC\h\s"),
         (Posix, "/", "/"),
         (Posix, "/a", "/"),
         (Posix, "/ws/a.rs", "/ws"),
@@ -168,6 +176,8 @@ fn dirname_basename_join_like_node() {
         (Windows, r"C:\ws\a.rs", "a.rs"),
         (Windows, r"C:\", ""),
         (Windows, r"\\h\s\a", "a"),
+        (Windows, r"\\?\C:\ws", "ws"),
+        (Windows, r"\\.\C:\x", "x"),
         (Posix, "/ws/a.rs", "a.rs"),
         (Posix, "/", ""),
     ];

@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 
 use temper_domain::PathStyle;
 
-use crate::ports::{DirEntry, EntryKind, Files, FsError, FsOp, Ports};
+use crate::ports::{
+    DirEntry, EntryKind, ExitKind, Files, FsError, FsOp, Ports, ProcessError, ProcessOutput,
+    ProcessRequest, ProcessRunner, Stream,
+};
 
 /// A file tree held as text paths in one [`PathStyle`]. A directory exists when a file is below
 /// it; listings are derived in name-byte order unless one is set.
@@ -21,6 +24,8 @@ pub(crate) struct FakeFiles {
     listings: BTreeMap<String, Option<Vec<DirEntry>>>,
     /// Prefixes that resolve to another path, as a symlinked ancestor or an 8.3 short name does.
     links: Vec<(String, String)>,
+    /// Paths whose real path fails with an error other than "not found".
+    unresolvable: Vec<String>,
 }
 
 impl FakeFiles {
@@ -30,6 +35,7 @@ impl FakeFiles {
             files: BTreeMap::new(),
             listings: BTreeMap::new(),
             links: Vec::new(),
+            unresolvable: Vec::new(),
         }
     }
 
@@ -63,6 +69,12 @@ impl FakeFiles {
     /// `from` and everything below it resolves to `to` and below.
     pub(crate) fn with_link(mut self, from: &str, to: &str) -> Self {
         self.links.push((from.to_owned(), to.to_owned()));
+        self
+    }
+
+    /// `real_path` of `path` fails, as a permission error makes `realpathSync.native` throw.
+    pub(crate) fn with_unresolvable(mut self, path: &str) -> Self {
+        self.unresolvable.push(path.to_owned());
         self
     }
 
@@ -157,7 +169,75 @@ impl Files for FakeFiles {
 
     fn real_path(&self, path: &Path) -> Result<Option<PathBuf>, FsError> {
         let real = self.unlinked(&text_of(path));
+        if self.unresolvable.contains(&real) {
+            return Err(FsError::new(
+                FsOp::RealPath,
+                path,
+                io::Error::from(io::ErrorKind::PermissionDenied),
+            ));
+        }
         Ok(self.exists(&real).then(|| PathBuf::from(real)))
+    }
+}
+
+/// What a [`FakeProcess`] answers to one request.
+#[derive(Debug)]
+pub(crate) enum Reply {
+    /// The child ends with `status`, having written `stdout` and nothing on stderr.
+    Exit { status: ExitKind, stdout: String },
+    /// The program cannot be started.
+    SpawnFails,
+    /// The child writes past the cap of a stream.
+    Overflows(Stream),
+}
+
+/// Child processes that answer from a table: each entry matches a program, its arguments and
+/// its directory. Anything else fails to start, as on a machine without the program.
+#[derive(Debug, Default)]
+pub(crate) struct FakeProcess {
+    replies: Vec<(String, Vec<OsString>, PathBuf, Reply)>,
+}
+
+impl FakeProcess {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// `command` (the program, then its arguments) run in `cwd` answers `reply`.
+    pub(crate) fn answering(mut self, command: &[&str], cwd: &str, reply: Reply) -> Self {
+        let (program, args) = command.split_first().unwrap_or((&"", &[]));
+        let args = args.iter().map(OsString::from).collect();
+        self.replies
+            .push(((*program).to_owned(), args, PathBuf::from(cwd), reply));
+        self
+    }
+}
+
+impl ProcessRunner for FakeProcess {
+    fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+        let program = request.program.to_owned();
+        let reply = self.replies.iter().find_map(|(name, args, cwd, reply)| {
+            (name == request.program && args == request.args && cwd == request.cwd).then_some(reply)
+        });
+        match reply {
+            Some(Reply::Exit { status, stdout }) => Ok(ProcessOutput {
+                status: *status,
+                stdout: stdout.clone().into_bytes(),
+                stderr: Vec::new(),
+            }),
+            Some(Reply::Overflows(stream)) => Err(ProcessError::Overflow {
+                program,
+                stream: *stream,
+                cap: match stream {
+                    Stream::Stdout => request.stdout_cap.get(),
+                    Stream::Stderr => request.stderr_cap.get(),
+                },
+            }),
+            Some(Reply::SpawnFails) | None => Err(ProcessError::Spawn {
+                program,
+                source: io::Error::from(io::ErrorKind::NotFound),
+            }),
+        }
     }
 }
 
@@ -165,12 +245,28 @@ impl Files for FakeFiles {
 #[derive(Debug)]
 pub(crate) struct FakePorts {
     pub(crate) files: FakeFiles,
+    pub(crate) process: FakeProcess,
+}
+
+impl FakePorts {
+    /// `files`, on a machine where no program can be started: git is missing.
+    pub(crate) fn new(files: FakeFiles) -> Self {
+        Self {
+            files,
+            process: FakeProcess::new(),
+        }
+    }
 }
 
 impl Ports for FakePorts {
     type Files = FakeFiles;
+    type Process = FakeProcess;
 
     fn files(&self) -> &FakeFiles {
         &self.files
+    }
+
+    fn process(&self) -> &FakeProcess {
+        &self.process
     }
 }

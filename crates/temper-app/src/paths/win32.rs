@@ -176,14 +176,44 @@ pub(super) fn is_absolute(path: &str) -> bool {
     }
 }
 
-/// The byte length of a resolved path's root, the separator after it included: `C:\`, `\` or
-/// `\\host\share\` (as Node's `dirname` sees it).
+/// The byte length of a path's root as Node's `win32.dirname` parses it, the separator after it
+/// included: `C:\`, `\`, `\\host\share\`, or the whole path when it is only `\\host\share`.
+///
+/// Unlike `resolve`, `dirname` has no case for `\\?\` and `\\.\`: it reads `\\?\C:\x` as host
+/// `?` and share `C:`, so its root is `\\?\C:\`.
 pub(super) fn root_len(path: &str) -> usize {
-    let root = parse_root(path);
-    let unc = root.device.starts_with("\\\\");
-    match path.as_bytes().get(root.end) {
-        Some(&b) if unc && is_sep(b) => root.end.saturating_add(1),
-        _ => root.end,
+    let bytes = path.as_bytes();
+    match bytes {
+        [letter, b':', rest @ ..] if letter.is_ascii_alphabetic() => {
+            if rest.first().copied().is_some_and(is_sep) {
+                3
+            } else {
+                2
+            }
+        }
+        [first, second, ..] if is_sep(*first) && is_sep(*second) => {
+            let run = |from: usize, sep: bool| {
+                bytes
+                    .get(from..)
+                    .map_or(0, |rest| {
+                        rest.iter().take_while(|&&b| is_sep(b) == sep).count()
+                    })
+                    .saturating_add(from)
+            };
+            let host_end = run(2, false);
+            let share_start = run(host_end, true);
+            if host_end == 2 || host_end >= bytes.len() || share_start >= bytes.len() {
+                return 1;
+            }
+            let share_end = run(share_start, false);
+            if share_end == bytes.len() {
+                share_end
+            } else {
+                share_end.saturating_add(1)
+            }
+        }
+        [first, ..] if is_sep(*first) => 1,
+        _ => 0,
     }
 }
 
@@ -207,7 +237,7 @@ pub(super) fn relative(cwd: &str, from: &str, to: &str) -> String {
     let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
     let (from16, to16) = (units(&from_lower), units(&to_lower));
     let to_orig16 = units(&to_orig);
-    if units(&from_orig).len() != from16.len() || to_orig16.len() != to16.len() {
+    if from_orig.encode_utf16().count() != from16.len() || to_orig16.len() != to16.len() {
         return segment_relative(&from_orig, &to_orig);
     }
     unit_relative(&from16, &to16, &to_orig16)
@@ -215,14 +245,7 @@ pub(super) fn relative(cwd: &str, from: &str, to: &str) -> String {
 
 /// Node's `relative` when lowering changed a length: segment by segment.
 fn segment_relative(from_orig: &str, to_orig: &str) -> String {
-    let split = |s: &str| {
-        let mut parts: Vec<String> = s.split('\\').map(str::to_owned).collect();
-        if parts.last().is_some_and(String::is_empty) {
-            parts.pop();
-        }
-        parts
-    };
-    let (from, to) = (split(from_orig), split(to_orig));
+    let (from, to) = (segments(from_orig), segments(to_orig));
     let length = from.len().min(to.len());
     let common = from
         .iter()
@@ -245,6 +268,15 @@ fn segment_relative(from_orig: &str, to_orig: &str) -> String {
     } else {
         String::new()
     }
+}
+
+/// The `\`-separated parts of a resolved path, without the empty one after a trailing `\`.
+fn segments(path: &str) -> Vec<&str> {
+    let mut parts: Vec<&str> = path.split('\\').collect();
+    if parts.last().is_some_and(|part| part.is_empty()) {
+        parts.pop();
+    }
+    parts
 }
 
 /// Node's `relative` on the lowered UTF-16 units of `from` and `to`, slicing `to_orig`.

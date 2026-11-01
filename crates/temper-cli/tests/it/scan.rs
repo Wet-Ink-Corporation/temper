@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::cli::USAGE;
-use crate::support::{TestResult, temper_in, temper_in_into_closed_pipe, write_tree};
+use crate::support::{TestResult, git_init, temper_in, temper_in_into_closed_pipe, write_tree};
 
 /// The 1d.2 fixture, as `oracle/mk.py` writes it.
 const FIXTURE: [(&str, &str); 18] = [
@@ -223,6 +223,19 @@ fn scan_into_a_closed_pipe_keeps_exit_1() -> TestResult {
     Ok(())
 }
 
+/// D16(b), the other way: a run without hard hits still exits 0 on a closed pipe.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn scan_into_a_closed_pipe_keeps_exit_0() -> TestResult {
+    let dir = fixture(&[])?;
+
+    let code =
+        temper_in_into_closed_pipe(&dir.path().join("crates/core"), &["scan", "src/asks.rs"])?;
+
+    assert_eq!(code, Some(0), "exception requests and advice pass");
+    Ok(())
+}
+
 /// A port of 1.x's `baseline.test.mjs` test of the same name, for its scan-observable half
 /// (the rest is `rel_to_falls_back_to_real_paths_when_lexically_outside` in `temper-app`).
 #[test]
@@ -275,6 +288,64 @@ fn rel_to_one_directory_reached_through_a_symlinked_ancestor_and_through_its_rea
     Ok(())
 }
 
+/// A port of 1.x's `baseline.test.mjs` test of the same name, for its scan-observable half
+/// (the "not yet on disk" case is in `rel_to_falls_back_to_real_paths_when_lexically_outside`).
+#[cfg(windows)]
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn rel_to_one_directory_spelled_with_an_8_3_short_name_and_a_long_name_is_the_same_root()
+-> TestResult {
+    let base = tempfile::tempdir()?;
+    let long = base.path().join("long directory name ws");
+    write_tree(
+        &long,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"ws\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            ("src/lib.rs", "pub fn f() {\n    dbg!(1);\n}\n"),
+        ],
+    )?;
+    let short = short_name(&long)?;
+    if short == long {
+        // This volume does not make 8.3 names; there is nothing to test.
+        return Ok(());
+    }
+    let file_in = |dir: &Path| dir.join(r"src\lib.rs");
+    let text = |path: &Path| path.to_str().map(str::to_owned).ok_or("a UTF-8 path");
+
+    let runs = [
+        temper_in(&long, &["scan", &text(&file_in(&short))?, "--json"])?,
+        // Windows keeps the short spelling as the child's working directory.
+        temper_in(&short, &["scan", &text(&file_in(&long))?, "--json"])?,
+    ];
+
+    assert_eq!(
+        runs.each_ref().map(|run| files_of(&run.stdout)),
+        [(); 2].map(|()| vec!["\"src/lib.rs\""]),
+        "{runs:?}"
+    );
+    Ok(())
+}
+
+/// The 8.3 short form of `path`, as `cmd`'s `%~sI` prints it.
+#[cfg(windows)]
+fn short_name(path: &Path) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+
+    let output = std::process::Command::new("cmd")
+        .args(["/d", "/c"])
+        .raw_arg(format!("for %I in (\"{}\") do @echo %~sI", path.display()))
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("cmd failed: {}", output.status).into());
+    }
+    Ok(std::path::PathBuf::from(
+        String::from_utf8(output.stdout)?.trim_end(),
+    ))
+}
+
 #[cfg(unix)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
@@ -283,4 +354,67 @@ fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
+}
+
+/// The `file` values of `temper scan --json` output.
+fn files_of(json: &str) -> Vec<&str> {
+    json.lines()
+        .filter_map(|line| line.trim().strip_prefix("\"file\": "))
+        .collect()
+}
+
+/// A temporary directory with the fixture in `g/rust` and a `g/docs` beside it.
+fn nested_fixture() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    write_tree(&dir.path().join("g/rust"), &FIXTURE)?;
+    write_tree(&dir.path().join("g/docs"), &[("guide.md", "# Guide\n")])?;
+    Ok(dir)
+}
+
+/// 1.x's `discover` takes git's top level as the root when there is one (Node-verified:
+/// `rust/crates/tool/src/cli.rs` with git, `crates/tool/src/cli.rs` without).
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn scan_paths_are_relative_to_the_git_top_level() -> TestResult {
+    let without_git = nested_fixture()?;
+    let with_git = nested_fixture()?;
+    git_init(&with_git.path().join("g"))?;
+    let scan_cli = |dir: &tempfile::TempDir| {
+        temper_in(
+            &dir.path().join("g/rust/crates/tool"),
+            &["scan", "src/cli.rs", "--json"],
+        )
+    };
+
+    let runs = [scan_cli(&with_git)?, scan_cli(&without_git)?];
+
+    assert_eq!(
+        runs.each_ref().map(|run| (files_of(&run.stdout), run.code)),
+        [
+            (vec!["\"rust/crates/tool/src/cli.rs\""], Some(1)),
+            (vec!["\"crates/tool/src/cli.rs\""], Some(1)),
+        ],
+        "{runs:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_git_repository_without_cargo_toml_above_the_cwd_is_not_a_rust_project() -> TestResult {
+    let dir = nested_fixture()?;
+    let top = dir.path().join("g");
+    git_init(&top)?;
+
+    let runs = [
+        temper_in(&top, &["scan", "--all"])?,
+        temper_in(&top.join("docs"), &["scan", "--all"])?,
+    ];
+
+    assert_eq!(
+        runs.map(|run| (run.code, run.stdout, run.stderr)),
+        [(); 2].map(|()| (Some(2), String::new(), NOT_A_RUST_PROJECT.to_owned())),
+        "the Cargo.toml in g/rust is below the cwd"
+    );
+    Ok(())
 }
