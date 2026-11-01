@@ -632,7 +632,7 @@ Triggered by `workflow_dispatch` with the input `version` on branch `release/<ve
 - **Versioning:** `xtask versions --set X` rewrites:
   - `Cargo.toml` `[workspace.package].version` and the sibling `version` fields;
   - `.claude-plugin/plugin.json`;
-  - `plugins/temper-lens/.claude-plugin/plugin.json`, from the cutover, like the line above;
+  - `plugins/temper-lens/.claude-plugin/plugin.json`, from the cutover, as for `.claude-plugin/plugin.json` (both stay 1.x during the port);
   - `package.json` `version` and all six pins;
   - `templates/workspace/.claude/temper-version` and `templates/example-workspace/.claude/temper-version`;
   - it then runs `cargo update --workspace` and checks that CHANGELOG has a `## X` heading.
