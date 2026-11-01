@@ -1,8 +1,9 @@
 //! The 1.x `KEY_CASES` table (`tests/scan.test.mjs`): per key, positive sources with the hits 1.x
-//! reports, and near misses that must not fire, in 1.x order over three modules. A failure here
+//! reports, and near misses that must not fire, in 1.x order over four modules. A failure here
 //! is a change in scanner output.
 
 mod escape_hatches;
+mod locks_and_todos;
 mod state_and_time;
 mod tests_and_finders;
 
