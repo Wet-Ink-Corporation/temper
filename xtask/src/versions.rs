@@ -7,6 +7,8 @@
 //! - `package.json`: `version` and the six platform pins, once the file exists;
 //! - `.claude-plugin/plugin.json`: only once `package.json` exists. Until the cutover the plugin
 //!   ships 1.x while the workspace carries a 2.0 pre-release, by design;
+//! - `plugins/temper-lens/.claude-plugin/plugin.json`: under the same condition, and only when
+//!   present;
 //! - `templates/{workspace,example-workspace}/.claude/temper-version`, once present (Phase 7).
 //!
 //! Everything here is text in, text out; `main.rs` reads and writes the files.

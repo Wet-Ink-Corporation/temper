@@ -6,6 +6,8 @@
 
 **The plugin carries the 2.0 launcher, unused (port Phase 0b).** `scripts/launch.mjs` is the launcher the 2.0 Rust engine will run behind. It finds the engine (`TEMPER_BIN`, the `@wet-ink/temper-<platform>-<arch>` npm package, or a locally built copy), passes argv, stdin and the exit code through, and runs the 1.x CLI for every subcommand that has not moved to Rust. Only `--version` goes to the engine so far, and it falls back to the 1.x CLI when no engine is installed. `hooks/hooks.json` still runs `scripts/temper.mjs`, so nothing changes for users.
 
+**`cargo xtask versions` covers the lens plugin's `plugin.json`.** From the 2.0 cutover, `--check` compares it and `--set` rewrites it with temper's own `plugin.json`; during the port it is left alone.
+
 **A release workflow for the 2.0 engine (port Phase 0b).** `.github/workflows/release-2.yml` builds the engine for six targets, packs the `@wet-ink/temper-*` npm packages, publishes them with npm provenance once the owner approves, generates and checks the plugin's `package-lock.json`, and verifies an `npm ci` install on all six runners. It stays separate from `release.yml`, which still ships 1.x, until the 2.0.0 cutover.
 
 **The launcher can build its engine (port Phase 0c).** When no prebuilt engine is installed, `scripts/fallback.mjs` builds one with the user's cargo at session start, into the plugin's data directory, with one build at a time across sessions. A failed build is recorded and retried at the next session start. Until an engine exists, Rust edits are paused with a retry message, Stop reports the gate as unavailable, and everything else passes. None of this runs for users yet: no hook goes through the launcher before Phase 2.

@@ -157,6 +157,9 @@ mod site_files {
     pub(crate) const CARGO_LOCK: &str = "Cargo.lock";
     pub(crate) const PACKAGE_JSON: &str = "package.json";
     pub(crate) const PLUGIN_JSON: &str = ".claude-plugin/plugin.json";
+    /// The lens plugin's manifest: a site under the same condition as [`PLUGIN_JSON`], and only
+    /// when present, like the `temper-version` files.
+    pub(crate) const LENS_PLUGIN_JSON: &str = "plugins/temper-lens/.claude-plugin/plugin.json";
     pub(crate) const TEMPER_VERSIONS: [&str; 2] = [
         "templates/workspace/.claude/temper-version",
         "templates/example-workspace/.claude/temper-version",
@@ -176,6 +179,15 @@ fn read_sites(root: &Path) -> Result<Vec<Site>, XtaskError> {
         if let Some(version) = versions::json_version(&read(&plugin)?).map_err(json(&plugin))? {
             sites.push(Site {
                 name: site_files::PLUGIN_JSON.to_owned(),
+                version,
+            });
+        }
+        let lens = root.join(site_files::LENS_PLUGIN_JSON);
+        if lens.is_file()
+            && let Some(version) = versions::json_version(&read(&lens)?).map_err(json(&lens))?
+        {
+            sites.push(Site {
+                name: site_files::LENS_PLUGIN_JSON.to_owned(),
                 version,
             });
         }
@@ -234,6 +246,11 @@ fn versions_set(root: &Path, version: &str) -> Result<Outcome, XtaskError> {
         let plugin = root.join(site_files::PLUGIN_JSON);
         let text = versions::set_json_strings(&read(&plugin)?, &["version"], version);
         writes.push((plugin, text));
+        let lens = root.join(site_files::LENS_PLUGIN_JSON);
+        if lens.is_file() {
+            let text = versions::set_json_strings(&read(&lens)?, &["version"], version);
+            writes.push((lens, text));
+        }
     }
     for file in site_files::TEMPER_VERSIONS {
         let path = root.join(file);
@@ -611,6 +628,96 @@ mod tests {
         assert!(
             fs::read_to_string(root.join(".claude-plugin/plugin.json"))?.contains("2.0.0-alpha.1"),
             "plugin.json moved"
+        );
+        Ok(())
+    }
+
+    const LENS_PLUGIN_JSON: &str = "plugins/temper-lens/.claude-plugin/plugin.json";
+
+    /// Adds the lens plugin's `plugin.json` at `version`.
+    fn write_lens(root: &Path, version: &str) -> TestResult {
+        fs::create_dir_all(root.join("plugins/temper-lens/.claude-plugin"))?;
+        fs::write(
+            root.join(LENS_PLUGIN_JSON),
+            format!("{{\n  \"name\": \"temper-lens\",\n  \"version\": \"{version}\"\n}}\n"),
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn lens_plugin_json_is_a_site_only_once_package_json_exists() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        tree(root)?;
+        write_lens(root, "1.5.0")?;
+        assert_eq!(
+            site_names(root)?,
+            [
+                "Cargo.toml [workspace.package] 2.0.0-alpha.0",
+                "Cargo.toml [workspace.dependencies] temper-app 2.0.0-alpha.0",
+                "Cargo.lock temper-app 2.0.0-alpha.0",
+            ],
+            "during the port the 1.x lens plugin.json is not a site"
+        );
+        assert!(versions_check(root, None)?.passed, "they agree");
+
+        cutover_tree(root)?;
+        let outcome = versions_check(root, None)?;
+        assert!(!outcome.passed, "the lens plugin.json now disagrees");
+        assert_eq!(
+            outcome.lines,
+            [format!(
+                "{LENS_PLUGIN_JSON} is 1.5.0, expected 2.0.0-alpha.0"
+            )],
+            "names the site"
+        );
+
+        write_lens(root, "2.0.0-alpha.0")?;
+        let outcome = versions_check(root, None)?;
+        assert_eq!(
+            outcome.lines,
+            ["14 sites agree on 2.0.0-alpha.0"],
+            "the 13 cutover sites and the lens plugin.json"
+        );
+        assert!(outcome.passed, "all agree");
+        Ok(())
+    }
+
+    #[test]
+    fn set_after_the_cutover_rewrites_the_lens_plugin_json() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        cutover_tree(root)?;
+        write_lens(root, "2.0.0-alpha.0")?;
+        let outcome = versions_set(root, "2.0.0-alpha.1")?;
+        assert_eq!(
+            outcome.lines,
+            ["14 sites agree on 2.0.0-alpha.1"],
+            "every site"
+        );
+        assert!(outcome.passed, "set");
+        assert!(
+            fs::read_to_string(root.join(LENS_PLUGIN_JSON))?.contains("2.0.0-alpha.1"),
+            "the lens plugin.json moved"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_during_the_port_leaves_the_lens_plugin_json() -> TestResult {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path();
+        tree(root)?;
+        write_lens(root, "1.5.0")?;
+        let outcome = versions_set(root, "2.0.0-alpha.1")?;
+        assert_eq!(
+            outcome.lines,
+            ["3 sites agree on 2.0.0-alpha.1"],
+            "every site set"
+        );
+        assert!(
+            fs::read_to_string(root.join(LENS_PLUGIN_JSON))?.contains("1.5.0"),
+            "the lens plugin.json untouched during the port"
         );
         Ok(())
     }
