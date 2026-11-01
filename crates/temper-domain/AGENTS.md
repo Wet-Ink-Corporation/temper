@@ -1,7 +1,7 @@
 # Crate charter: `temper-domain`
 
 ## Purpose
-temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, and Phase 1b 40 more rules with their look-around and keep predicates; the rest arrives phase by phase.
+temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, Phase 1b 40 more rules with their look-around and keep predicates, and Phase 1c the finders and the last regex rules (58 of 60); the rest arrives phase by phase.
 
 ## Layer
 domain.
@@ -12,11 +12,11 @@ domain.
 
 ## Public surface
 Re-exported from `lib.rs`, one path each (API-14):
-- `Scanner` (`new`, `scan`), `ScanOptions` (`kind`, `file`), `ScanReport` (`hits`, `into_hits`, `tests`, `ignores`, `clones`), `ScannerSetupError` (`rule`, `source`).
+- `Scanner` (`new`, `scan`), `ScanOptions` (`kind`, `file`, `forbid`), `ScanReport` (`hits`, `into_hits`, `tests`, `ignores`, `clones`), `ScannerSetupError` (`rule`, `source`).
 - `Hit` (`key`, `id`, `severity`, `line`, `text`, `msg`, `fix`, `exception`), `Severity`, `RuleKey`, `RuleId`, `LineNo`.
 - `CodeKind`, `FileRole`, `is_build_script`.
 
-Everything else is `pub(crate)`: the JS helpers in `js` (`js_trim`, `truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`. 1c adds `ScanOptions::forbid` and `Scanner::rules()`, 1d `classify_path`, `new_hits` and `format_hit`; §1.3 of the port plan lists the rest.
+Everything else is `pub(crate)`: the JS helpers in `js` (`js_trim`, `truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`. 1d adds `classify_path`, `new_hits` and `format_hit`, and Phase 4 `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest.
 
 ## Invariants
 - No `std::fs`, `std::process`, `std::env`, `SystemTime::now` or threads: every input arrives as a value (ARC-02).
@@ -27,7 +27,7 @@ Typed `thiserror` enums per module, added with the code that needs them (ERR-01,
 
 ## Test strategy
 - Unit tests beside the code; property tests (proptest, in use since Phase 1a) for the lexer, the scanner and the glob matcher; `insta` snapshots for rendered reports. Commit `proptest-regressions/` when proptest writes one.
-- Scanner-level tests port `tests/scan.test.mjs` in its order (`src/scan/tests.rs`); lexer, region and count tests use values computed by running 1.x on the same input.
+- Scanner-level tests port `tests/scan.test.mjs` in its order, one module per 1.x test group (`src/scan/tests/`, support in `src/scan/tests.rs`); lexer, region and count tests use values computed by running 1.x on the same input.
 - Parity with 1.x is checked by the port's harness (§2.2), not here.
 - Run: `cargo test -p temper-domain`.
 
@@ -49,3 +49,11 @@ Typed `thiserror` enums per module, added with the code that needs them (ERR-01,
 | 2026-11-01 | Where §1.6's predicate table is not faithful, the look-around rewrites reproduce JS backtracking: `ignore-no-reason` consumes `[\],)]` and a keep trims it, `extern-crate` holds on two or more trailing spaces, and `compiler-fence` drops the redundant `fn` alternative. A rewritten pattern carries its 1.x source in a comment (D8). | CRF-09, H-16 | two-way (wi-31f653) |
 | 2026-11-01 | `js::translate` is fallible: it rejects JS constructs that `regex` would read with another meaning, and `ScannerSetupError`'s private source becomes a private `SetupCause` (`Js` or `Regex`). The public surface is unchanged; `source()` no longer downcasts to `regex::Error`. | ERR-01, H-09 | two-way (wi-ef9d9d) |
 | 2026-11-01 | The rule data lives in `scan/rules/table.rs`, one ordered slice in 1.x order with a positional `ctx(prod, bin, example, test)`, over ARC-06's soft ~400 lines, so it diffs 1:1 against `scan.mjs`. | ARC-06 | two-way (wi-cbeff6) |
+| 2026-11-01 | The 1c/1d cut: `doc-unwrap`, `doc-arg-sections`, doc blocks, `Env::doc` and `is_rust_fence` move to 1d with the 1.x tests that need the whole table; 1c lands 58 of the 60 rules. | ARC-05, H-16 | two-way (wi-9f78ea) |
+| 2026-11-01 | `Scanner::rules()` and `RuleInfo` wait for their first non-test reader (the gate's new-code-only set, Phase 4); 1d ports the rule-table test against the in-crate table. | API-14, H-16 | two-way (wi-ca74b3) |
+| 2026-11-01 | The "large file" test keeps its hit assertion; its `ms < 10_000` wall-clock bound moves to Phase 1e's corpus CI job as a D16 retired assertion. | TST-10, H-12 | owner (wi-825595) |
+| 2026-11-01 | `struct-bounds`' run-time regexes (1.x `new RegExp(esc(name))`) are hand-written matchers, so `scan` compiles nothing and stays total. | H-03, CRF-09 | two-way (wi-5842d0) |
+| 2026-11-01 | Comment records carry `kind: CommentKind { Plain, Doc }`, not a `doc: bool`. | API-10 | two-way (wi-91ace5) |
+| 2026-11-01 | The scanner tests split into one module per 1.x test group, and `key_cases` into three, bodies unchanged. | ARC-06 | two-way (wi-bd9fd8) |
+| 2026-11-01 | `ScanOptions::forbid` is `Option<&'a BTreeSet<String>>`, as §1.3 writes it: the caller lends one set per crate to many scans. | OWN-01, API-14 | two-way (wi-2d7b05) |
+| 2026-11-01 | `other_arm_binds_err` lives in `finders/empty_errs.rs` beside `empty-if-let-err`; its patterns are owned by `PredicatePatterns`, which `empty-err-arm`'s keep receives. | ARC-05 | two-way (wi-5f034a) |

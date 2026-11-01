@@ -1,4 +1,5 @@
-//! `KEY_CASES` for the test rules and the finders: `should_panic`, weak asserts, ambient clocks.
+//! `KEY_CASES` for the test rules and the finders: `should_panic`, weak asserts, test branches,
+//! serialized hash maps, ambient clocks, spin locks and untracked `TODO`s.
 
 use super::{assert_hits, assert_misses};
 use crate::scan::CodeKind;

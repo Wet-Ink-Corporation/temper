@@ -265,6 +265,9 @@ impl Scanner {
     pub fn scan(&self, src: &str, options: &ScanOptions<'_>) -> ScanReport;   // infallible, total
     pub fn rules(&self) -> impl Iterator<Item = &RuleInfo> + '_;               // key, id, lints, contexts (rule-table test)
 }
+// `rules()` and `RuleInfo` land with their first non-test reader, the gate's new-code-only
+// set (Phase 4, wi-ca74b3); 1d ports the rule-table test against the in-crate table.
+// `is_rust_fence` is `pub(crate)` when it lands in 1d: no other crate reads it (1c plan, Appendix A).
 pub struct ScanOptions<'a> { pub kind: CodeKind, pub file: FileRole, pub forbid: Option<&'a BTreeSet<String>> }
 pub enum FileRole { Source, BuildScript }                     // API-10: not a bool
 pub struct ScanReport { /* hits: Vec<Hit>, tests: usize, ignores: usize, clones: usize */ }  // getters
@@ -561,6 +564,7 @@ JS flags and windows (Phase 1b, wi-afd1cd, wi-1636ef):
 - (h) Telemetry lines are JSON-equivalent but may order detail keys differently. `stats` output is identical.
 - (i) **Retired tests** (H-12): the 6 `vendor.test.mjs` tests, and "CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs" and "CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else" in `baseline.test.mjs`, because vendoring, `--vendor-only` and optional modules no longer exist. The `--vendor-only` test was added to this list by the owner on 2026-10-19, amending wi-348e0b (#64). Replacement tests: setup pins `.claude/temper-version`; setup reports drift between the pin and the binary; `--migrate` replaces only known templates; `--force` on a pinned repository updates only `.claude/temper-version` (replaces the `--vendor-only` test); the example workspace's pin equals the plugin version.
 - (j) SessionStart's timeout rises from 30 to 900 s in `hooks.json` (D6-C).
+- (k) **Retired assertion** (H-12): the `ms < 10_000` wall-clock bound in `scan.test.mjs`'s "large file: a seeded hit near the end of ~5000 lines is reported in bounded time". The Rust port keeps its hit assertion (`scan::tests::whole_file::large_file_seeded_hit_near_the_end_is_reported`), and the bound moves to Phase 1e's scanner corpus CI job as a per-file scan-time budget, because a wall-clock unit test breaks TST-10. Decided by the owner on 2026-11-01 (wi-825595).
 
 #### 2.5 What is deliberately not parity-tested
 
@@ -589,9 +593,9 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 Phase 1 lands as five PRs, each green with no dead code, because every helper arrives with its first consumer (wi-a5a813):
 - 1a: the `js` helpers, the lexer, test regions, the counts, `Hit`, and the `Scanner` with six rules (`unsafe`, `unwrap`, `panic`, `dbg`, `print`, `expect-attr`); `regex`, `thiserror` and dev `proptest` added.
 - 1b: the lexer's comment records and remaining helpers, and 40 more regex rules in 1.x table order with the `keep` and look-around predicates (46 of the 60 in all).
-- 1c: the 13 finders, one file per concept, with doc blocks and `Scanner::rules()`; the regex rules `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and `ScanOptions::forbid` with its only reader (wi-13609d).
-- 1d: `new_hits`, `format_hit`, `classify_path`, `Serialize` on `Hit`, the app's `discover`, `crate_of` and `rel_to`, and the `temper scan` CLI; `serde` added.
-- 1e: the parity harness's `scan` cases and the scanner differential-corpus job; `scan` graduates once green on Linux, Windows and macOS.
+- 1c: 9 of the 11 remaining finders, one file per concept (`empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment`, `commented-code`); the regex rules `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and `ScanOptions::forbid` with its only reader (wi-13609d). 58 of the 60 rules in all. The doc group moves to 1d (wi-9f78ea), and `Scanner::rules()` with `RuleInfo` to Phase 4, its first non-test reader (wi-ca74b3).
+- 1d: the doc group (`doc-unwrap`, `doc-arg-sections`, doc blocks, the lazy `Env::doc` and `is_rust_fence`, specified in the 1c plan's Appendix A) and the 1.x tests that need the whole table; `new_hits`, `format_hit`, `classify_path`, `Serialize` on `Hit`, the app's `discover`, `crate_of` and `rel_to`, and the `temper scan` CLI; `serde` added.
+- 1e: the parity harness's `scan` cases and the scanner differential-corpus job, which also carries the scan-time bound retired from the "large file" unit test (D16(k), wi-825595); `scan` graduates once green on Linux, Windows and macOS.
 
 Strangler mechanics during phases 1 to 7:
 - `hooks/hooks.json` is unchanged, so users run 1.x exactly.
@@ -766,14 +770,15 @@ Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
 - [x] hard hits in production code (each H-rule key in the 1.x table).
 - [x] test regions allow unwrap/panic but not dbg or unsafe.
 - [x] `#[expect]` with a reason converts a hard hit into an exception request.
-- [ ] allow attribute, erased errors in pub signatures, `.ok();` discard.
+- [x] allow attribute, erased errors in pub signatures, `.ok();` discard.
 - [ ] `new_hits` reports only introduced violations (multiset on key+text).
 - [ ] path classification (`classify_path`, `is_build_script`).
 - [ ] no false positives on idiomatic code.
 - [ ] rule table: unique keys, rule ids, four contexts, fix text.
 - [ ] then, one per 1.x test: assert-in-prod; ignore-no-reason (incl. `cfg_attr`, `educe(Debug, ignore)` not counted; look-ahead predicate); extern-crate (look-ahead predicate); print fix text for build scripts; doc-unwrap positive and negative; empty-if-let-err depth and keep-first-error; escaped quote char and ignore counting; empty arms; thread-spawn; compiler-fence (look-behind predicate, `fn compiler_fence` and `x.compiler_fence(` not flagged) and global-allocator; map-index; filter-map-ok and parse-unwrap-or; seqcst and fetch-update; crate-lint-attr, pub-glob-reexport, prelude-mod; pub-smart-ptr; struct-bounds; ops-impl; type-alias-primitive, get-prefix (predicate), mutex-unit; doc-arg-sections; detached-spawn; idiomatic ledger module; commented-out code heuristic.
   - [x] 1b: the regex entries (assert-in-prod, ignore-no-reason, extern-crate, print fix text, thread-spawn, compiler-fence with its predicate, global-allocator, map-index, filter-map-ok and parse-unwrap-or, seqcst and fetch-update, crate-lint-attr, pub-glob-reexport, prelude-mod, pub-smart-ptr, ops-impl, type-alias-primitive, get-prefix with its predicate, mutex-unit, detached-spawn, idiomatic ledger module), with oracle tests for every predicate.
-  - [ ] 1c: doc-unwrap, empty-if-let-err, the escaped quote char and ignore counting, empty arms, struct-bounds, doc-arg-sections, commented-out code.
+  - [x] 1c: empty-if-let-err depth and keep-first-error, the escaped quote char and ignore counting (the scan half; the lexer half landed in 1a), empty arms, struct-bounds, commented-out code; with the finder `KEY_CASES` (test-branch, serde-hashmap, spin-lock, todo-comment), forbid-override, and "large file" without its timing (D16(k)); oracle tests for every finder and helper.
+  - [ ] 1d: doc-unwrap positive and negative, doc-arg-sections (moved from 1c, wi-9f78ea).
 - [x] unwrap-or-default: `x.parse::<u8>().unwrap_or_default()` is not flagged (look-behind predicate) but `x.unwrap_or_default()` is.
 - [x] JS class translation: `\b` adjacent to a non-ASCII letter behaves as in JS (é is not a word char); `\s` matches U+00A0 and U+FEFF but not U+0085.
 - [x] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
@@ -920,7 +925,7 @@ Phase 8: cutover
 | D13 user CI install | install-action / cargo install / curl | install-action (binstall) | owner (wi-37c1df) | A: install-action |
 | D14 pin location | `.claude/temper-version` / temper.json / workflow | `.claude/temper-version` | owner (wi-3b5428) | A: `.claude/temper-version` |
 | D15 1.x migration | hash-guarded rewrite / manual / force | hash-guarded `--migrate` | owner (wi-cdcecc) | A: hash-guarded `--migrate` |
-| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64) |
+| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64); (k) added by wi-825595 on 2026-11-01 |
 | D17 PATH export | yes / no | yes | owner (wi-1d4cd6) | A: export |
 | Crate licence | MIT / MIT OR Apache-2.0 | MIT | owner (wi-4679b3) | B: `MIT OR Apache-2.0` (override); add `LICENSE-APACHE`; plugin stays MIT |
 
@@ -960,4 +965,5 @@ Phase 8: cutover
   A packing dry run found that npm drops `LICENSE-*` files unless `files` names them, so `files` now lists both licences. Phase 0c adds `scripts/fallback.mjs`: the fallback build and the D6-C behaviours, with the binary absent, tested with a fake `cargo`. Two-way calls: wi-654352, wi-4769ed, wi-f83377, wi-a6e98e and wi-6bf67c. Phase 0b does not exit until two owner steps are done: the first `2.0.0-alpha.1` publish, which waits on the owner's six placeholder packages and trusted publishers (wi-428ed1), and the manual verify-install on the organization-sync and cloud setup-script paths (wi-48fb44).
 - 2026-11-01: Phase 1a built on `wip-1-scanner`: in `temper-domain`, the `js` helpers (`js_trim`, UTF-16 truncation, JS-to-`regex` translation), the masking lexer, test regions, the test, ignore and clone counts, `Hit` and the `Scanner` with its first six rules. The 1.x tests "masks strings…", "test regions allow…", "#[expect] with a reason…", "print: build scripts…" and "lexer: escaped quote char literal; ignore counting" are ported, with the masking and scan properties. A local differential run over 4,041 files (this repository's Rust and the cargo registry sources) gave zero diffs from 1.x for the six rules and the counts. Two-way calls: wi-a5a813, wi-466849, wi-5eed96, wi-c0f25b, wi-962170, wi-41c92b, wi-77bafb and wi-256d4d; `regex` under D10 (wi-b03273).
 - 2026-11-01: Phase 1b built on `wip-1b-scanner` (plan `.temper/plans/port-phase-1b.md`): 40 more regex rules in 1.x table order (46 of 60), their look-around and keep predicates, the JS `m` and `i` flags, UTF-16 back-windows, comment records, const and trait-impl regions, and a fallible `js::translate`. `allow-attr`, `discard-ok`, `empty-err-arm` and `ScanOptions::forbid` moved to 1c (wi-13609d). §1.6's predicate table was corrected where it was not faithful to JS backtracking (wi-31f653). Calls 1b-1 to 1b-10 are two-way defaults (wi-13609d, wi-31f653, wi-afd1cd, wi-1636ef, wi-ef9d9d, wi-d31f39, wi-cbeff6, wi-5cb4c8, wi-28a72e, wi-de1207). A local differential over 9,003 files (this repository's Rust and the cargo registry sources), scanned as prod and test and again as bin and example build scripts, matched 1.x `scanSource` filtered to the 46 keys byte for byte (301,336 hits).
+- 2026-11-01: Phase 1c built on `wip-1c-scanner` (plan `.temper/plans/port-phase-1c.md`): `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and the finders `empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment` and `commented-code` (58 of 60 rules); `ScanOptions` gains `forbid` and a lifetime as §1.3 writes it (wi-2d7b05); comment records gain `CommentKind` (wi-91ace5); the 1b review's follow-ups F1 to F4, including the test split by 1.x group (wi-bd9fd8). The doc group moves to 1d (wi-9f78ea) and `Scanner::rules()` to Phase 4 (wi-ca74b3); `struct-bounds`' run-time regexes are hand-written matchers (wi-5842d0), and `other_arm_binds_err` lives with the `empty-if-let-err` finder (wi-5f034a). The owner retired the "large file" test's wall-clock bound into D16(k) (wi-825595). A local differential over 9,021 files (this repository's Rust and the cargo registry sources), scanned as prod and test, as bin and example build scripts, and as prod with a forbid set, matched 1.x `scanSource` filtered to the 58 keys byte for byte (449,925 hits).
 - Next: Phase 0a (adds `LICENSE-APACHE`), after 1.5.0 (v1 went live on 2026-10-19) and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).

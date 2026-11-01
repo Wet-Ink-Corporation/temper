@@ -8,7 +8,8 @@
 
 use super::{FinderKind, HARD, JsFlags, Keep, Look, Matcher, OFF, RuleSpec, SOFT, ctx, re};
 
-/// The rules, in 1.x table order. Phases 1a and 1b port these; 1c adds the finders in place.
+/// The rules, in 1.x table order: 58 of the 60, ported in Phases 1a to 1c. 1d adds the doc rules
+/// in place.
 pub(crate) const RULES: &[RuleSpec] = &[
     RuleSpec {
         key: "unsafe",
@@ -463,8 +464,8 @@ pub(crate) const RULES: &[RuleSpec] = &[
         matcher: Matcher::Find(FinderKind::SerializedHashMaps),
     },
     RuleSpec {
-        // The finder sets the severity from the file's kind (1.x `TEST_BRANCH_CTX`); this row
-        // is the same table. 1.x's `newCodeOnly` lands with its first reader (Phase 4).
+        // The finder forces the severity from the file's kind (1.x `TEST_BRANCH_CTX`), which this
+        // row repeats. 1.x's `newCodeOnly` flag lands with its first reader in Phase 4.
         key: "test-branch",
         id: "TST-09",
         contexts: ctx(HARD, HARD, HARD, OFF),
