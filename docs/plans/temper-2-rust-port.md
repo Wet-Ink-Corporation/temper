@@ -580,6 +580,13 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 | 7 | `setup` (templates from `TEMPER_PLUGIN_ROOT`, `.claude/temper-version` pin, `--migrate` with the known-template hash table), `stats` (with `--branch`), `telemetry push`; template changes (§6) prepared on a branch | `setup`, `stats`, `telemetry` |
 | 8 | **Cutover (2.0.0)**: `launch.mjs` replaces `scripts/temper.mjs`; delete `scripts/lib/`, the Node tests, `tests/parity/` and the vendored copy in `templates/example-workspace/.claude/temper/`; `package.json` and `package-lock.json` land; `hooks.json` SessionStart timeout and status message; docs, CHANGELOG, Python checks, `tests/ci.sh`; release 2.0.0 (§4) | everything |
 
+Phase 1 lands as five PRs, each green with no dead code, because every helper arrives with its first consumer (wi-a5a813):
+- 1a: the `js` helpers, the lexer, test regions, the counts, `Hit`, and the `Scanner` with six rules (`unsafe`, `unwrap`, `panic`, `dbg`, `print`, `expect-attr`); `regex`, `thiserror` and dev `proptest` added.
+- 1b: the lexer's comment records and remaining helpers, every remaining regex rule in 1.x table order with the `keep` and look-around predicates, and `ScanOptions::forbid`.
+- 1c: the 13 finders, one file per concept, with doc blocks and `Scanner::rules()`.
+- 1d: `new_hits`, `format_hit`, `classify_path`, `Serialize` on `Hit`, the app's `discover`, `crate_of` and `rel_to`, and the `temper scan` CLI; `serde` added.
+- 1e: the parity harness's `scan` cases and the scanner differential-corpus job; `scan` graduates once green on Linux, Windows and macOS.
+
 Strangler mechanics during phases 1 to 7:
 - `hooks/hooks.json` is unchanged, so users run 1.x exactly.
 - Maintainers dogfood with `node scripts/launch.mjs` by setting `TEMPER_ENGINE=rust` and `TEMPER_BIN=target/release/temper`. They can point `hooks.json` at `launch.mjs` in a local `--plugin-dir` checkout.
@@ -746,12 +753,12 @@ Phase 0
 - [ ] verify-install, manual, once in Phase 0b: install `2.0.0-alpha.1` through a claude.ai organization sync (`~/.claude/plugins/synced/`) and through a cloud environment's setup script (`claude plugin marketplace add` plus `claude plugin install`). Record in Progress whether `node_modules/@wet-ink/temper-*` is present in each, and if not, whether the fallback build or D6 degraded mode follows. Phase 0b does not exit until both paths have an engine (wi-48fb44): a path that skips `npm ci` gets a step in the environment's setup script that installs the npm package, and this check is run again.
 
 Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
-- [ ] masks strings, raw strings, chars and comments but keeps lifetimes (incl. `'\''`, `br#".."#`, nested block comments, unterminated string at EOF).
-- [ ] property: `mask_rust(src).code.len() == src.len()` and newline positions are identical for arbitrary strings (proptest, TST-06).
+- [x] masks strings, raw strings, chars and comments but keeps lifetimes (incl. `'\''`, `br#".."#`, nested block comments, unterminated string at EOF).
+- [x] property: `mask_rust(src).code.len() == src.len()` and newline positions are identical for arbitrary strings (proptest, TST-06).
 - [ ] property: `scan` never panics and line numbers are in `1..=lines(src)` for arbitrary input (proptest).
 - [ ] hard hits in production code (each H-rule key in the 1.x table).
-- [ ] test regions allow unwrap/panic but not dbg or unsafe.
-- [ ] `#[expect]` with a reason converts a hard hit into an exception request.
+- [x] test regions allow unwrap/panic but not dbg or unsafe.
+- [x] `#[expect]` with a reason converts a hard hit into an exception request.
 - [ ] allow attribute, erased errors in pub signatures, `.ok();` discard.
 - [ ] `new_hits` reports only introduced violations (multiset on key+text).
 - [ ] path classification (`classify_path`, `is_build_script`).
@@ -759,8 +766,8 @@ Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
 - [ ] rule table: unique keys, rule ids, four contexts, fix text.
 - [ ] then, one per 1.x test: assert-in-prod; ignore-no-reason (incl. `cfg_attr`, `educe(Debug, ignore)` not counted; look-ahead predicate); extern-crate (look-ahead predicate); print fix text for build scripts; doc-unwrap positive and negative; empty-if-let-err depth and keep-first-error; escaped quote char and ignore counting; empty arms; thread-spawn; compiler-fence (look-behind predicate, `fn compiler_fence` and `x.compiler_fence(` not flagged) and global-allocator; map-index; filter-map-ok and parse-unwrap-or; seqcst and fetch-update; crate-lint-attr, pub-glob-reexport, prelude-mod; pub-smart-ptr; struct-bounds; ops-impl; type-alias-primitive, get-prefix (predicate), mutex-unit; doc-arg-sections; detached-spawn; idiomatic ledger module; commented-out code heuristic.
 - [ ] unwrap-or-default: `x.parse::<u8>().unwrap_or_default()` is not flagged (look-behind predicate) but `x.unwrap_or_default()` is.
-- [ ] JS class translation: `\b` adjacent to a non-ASCII letter behaves as in JS (é is not a word char); `\s` matches U+00A0 and U+FEFF but not U+0085.
-- [ ] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
+- [x] JS class translation: `\b` adjacent to a non-ASCII letter behaves as in JS (é is not a word char); `\s` matches U+00A0 and U+FEFF but not U+0085.
+- [x] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
 - [ ] differential corpus (CI job, not a unit test): zero unexplained diffs over the example workspace, the skill code blocks and the registry sources.
 - [ ] `rel_to`: verbatim `\\?\C:\...` and `//?/C:/...` inputs (domain, both `PathStyle`s); 8.3 short name vs long name is the same root (cli/it, `#[cfg(windows)]`, uses `cmd /c for %I in (..) do @echo %~sI` as 1.x does).
 - [ ] `rel_to`: one directory reached through a symlinked ancestor and through its real path is the same root (cli/it, every OS; ported from the 1.3.0 relTo symlink test; the symlink probe and the Windows privilege handling as in `safe_output_path`).
@@ -942,4 +949,5 @@ Phase 8: cutover
   - the launcher `scripts/launch.mjs` and `.github/workflows/release-2.yml`, kept beside `release.yml` until the cutover (wi-96fbfe) (#177).
 
   A packing dry run found that npm drops `LICENSE-*` files unless `files` names them, so `files` now lists both licences. Phase 0c adds `scripts/fallback.mjs`: the fallback build and the D6-C behaviours, with the binary absent, tested with a fake `cargo`. Two-way calls: wi-654352, wi-4769ed, wi-f83377, wi-a6e98e and wi-6bf67c. Phase 0b does not exit until two owner steps are done: the first `2.0.0-alpha.1` publish, which waits on the owner's six placeholder packages and trusted publishers (wi-428ed1), and the manual verify-install on the organization-sync and cloud setup-script paths (wi-48fb44).
+- 2026-11-01: Phase 1a built on `wip-1-scanner`: in `temper-domain`, the `js` helpers (`js_trim`, UTF-16 truncation, JS-to-`regex` translation), the masking lexer, test regions, the test, ignore and clone counts, `Hit` and the `Scanner` with its first six rules. The 1.x tests "masks strings…", "test regions allow…", "#[expect] with a reason…", "print: build scripts…" and "lexer: escaped quote char literal; ignore counting" are ported, with the masking and scan properties. A local differential run over 4,041 files (this repository's Rust and the cargo registry sources) gave zero diffs from 1.x for the six rules and the counts. Two-way calls: wi-a5a813, wi-466849, wi-5eed96, wi-c0f25b, wi-962170, wi-41c92b, wi-77bafb and wi-256d4d; `regex` under D10 (wi-b03273).
 - Next: Phase 0a (adds `LICENSE-APACHE`), after 1.5.0 (v1 went live on 2026-10-19) and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).
