@@ -90,6 +90,26 @@ fn sev_of(src: &str, key: &str, kind: CodeKind) -> Vec<&'static str> {
         .collect()
 }
 
+/// The whole report as `key id severity@line`, the oracle's "full" list.
+fn full(src: &str, kind: CodeKind) -> Vec<String> {
+    scan(src, kind)
+        .hits()
+        .iter()
+        .map(|h| {
+            let sev = severity_name(h.severity());
+            format!("{} {} {sev}@{}", h.key(), h.id(), h.line())
+        })
+        .collect()
+}
+
+/// One rule's hits as `line:msg`.
+fn msgs_of(src: &str, key: &str, kind: CodeKind) -> Vec<String> {
+    has(src, key, kind)
+        .iter()
+        .map(|h| format!("{}:{}", h.line(), h.msg()))
+        .collect()
+}
+
 fn hit<'r>(report: &'r ScanReport, key: &str) -> &'r Hit {
     report
         .hits()

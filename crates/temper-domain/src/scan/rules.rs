@@ -112,8 +112,24 @@ pub(crate) enum Matcher {
 /// The hand-written finders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FinderKind {
+    /// `if let Err(_) = .. {}` with an empty body and no `else`.
+    EmptyIfLetErr,
+    /// `spin_loop()`, and atomic swaps or compare-exchanges inside a loop.
+    SpinLocks,
+    /// `HashMap` and `HashSet` fields of a `Serialize` type.
+    SerializedHashMaps,
+    /// Test `cfg`s inside production function bodies.
+    TestBranches,
+    /// Trait bounds on a generic `struct` or `enum` definition.
+    StructBounds,
     /// `#[expect(..)]` attributes, with or without a reason.
     ExpectAttrs,
+    /// `pub fn` signatures that return `String` errors, `Box<dyn Error>`, `anyhow` or `eyre`.
+    ErasedErrors,
+    /// `TODO`-style comments without a tracking reference.
+    TodoComments,
+    /// Comments that read as code.
+    CommentedCode,
 }
 
 /// One rule of the table.

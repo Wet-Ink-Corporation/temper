@@ -73,6 +73,190 @@ fn weak_assert_near_misses_do_not_fire() {
 }
 
 #[test]
+fn test_branch_positive_cases_pin_id_severity_and_line() {
+    assert_hits(
+        "test-branch",
+        &[
+            (
+                CodeKind::Prod,
+                "pub fn timeout_secs() -> u64 {\n    if cfg!(test) { 1 } else { 30 }\n}",
+                &["TST-09:hard@2"],
+            ),
+            (
+                CodeKind::Prod,
+                "pub fn f() -> u8 {\n    #[cfg(test)]\n    return 0;\n    1\n}",
+                &["TST-09:hard@2"],
+            ),
+            (
+                CodeKind::Bin,
+                "fn main() {\n    if cfg!(not(test)) { run(); }\n}",
+                &["TST-09:hard@2"],
+            ),
+            (
+                CodeKind::Prod,
+                "impl Store {\n    pub fn open() -> Self {\n        let dir = if cfg!(any(test, feature = \"x\")) { \"t\" } else { \"p\" };\n        Self(dir)\n    }\n}",
+                &["TST-09:hard@3"],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn test_branch_near_misses_do_not_fire() {
+    assert_misses(
+        "test-branch",
+        &[
+            (
+                CodeKind::Prod,
+                "pub fn f() {}\n#[cfg(test)]\nmod tests {\n    fn helper() -> bool { cfg!(test) }\n}",
+            ),
+            (
+                CodeKind::Prod,
+                "#[cfg(any(test, feature = \"test-util\"))]\npub mod fakes;\n#[cfg(test)]\nfn fixture() -> u8 { 1 }\npub fn f() -> bool { cfg!(feature = \"test\") || cfg!(debug_assertions) }",
+            ),
+            (CodeKind::Test, "fn helper() -> bool { cfg!(test) }"),
+            (
+                CodeKind::Prod,
+                "pub fn f() -> &'static str { \"cfg!(test)\" } // #[cfg(test)]",
+            ),
+            (
+                CodeKind::Prod,
+                "pub trait Port {\n    #[cfg(test)]\n    fn probe(&self);\n}",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn test_branch_like_1x() {
+    let cases: [(&str, &[&str]); 4] = [
+        (
+            "fn decl();\nconst C: bool = cfg!(test);\npub fn f() { if cfg!(test) {} }",
+            &["TST-09:hard@3"],
+        ),
+        (
+            "fn f() { #[cfg(all(unix, test))] g(); }\n#[test]\nfn t() { if cfg!(test) {} }",
+            &["TST-09:hard@1"],
+        ),
+        ("fn r#match() { if cfg!(test) {} }", &["TST-09:hard@1"]),
+        (
+            "fn f() { let a = [cfg!(test)]; } fn g() { cfg!(testing); cfg!(tes",
+            &["TST-09:hard@1"],
+        ),
+    ];
+
+    for (src, want) in cases {
+        assert_hits(
+            "test-branch",
+            &[(CodeKind::Prod, src, want), (CodeKind::Example, src, want)],
+        );
+        assert_misses("test-branch", &[(CodeKind::Test, src)]);
+    }
+}
+
+#[test]
+fn serde_hashmap_positive_cases_pin_id_severity_and_line() {
+    assert_hits(
+        "serde-hashmap",
+        &[
+            (
+                CodeKind::Prod,
+                "use std::collections::HashMap;\n#[derive(Debug, Serialize)]\npub struct Report {\n    counts: HashMap<String, u64>,\n}",
+                &["OUT-04:soft@4"],
+            ),
+            (
+                CodeKind::Bin,
+                "#[derive(serde::Serialize)]\nenum Event {\n    Seen { ids: std::collections::HashSet<u64> },\n}",
+                &["OUT-04:soft@3"],
+            ),
+            (
+                CodeKind::Prod,
+                "#[cfg_attr(feature = \"serde\", derive(Serialize))]\npub struct Tally(pub HashMap<u8, u8>);",
+                &["OUT-04:soft@2"],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn serde_hashmap_near_misses_do_not_fire() {
+    assert_misses(
+        "serde-hashmap",
+        &[
+            (
+                CodeKind::Prod,
+                "#[derive(Debug, Deserialize)]\npub struct Input {\n    counts: HashMap<String, u64>,\n}",
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\npub struct Report {\n    counts: BTreeMap<String, u64>,\n    #[serde(serialize_with = \"sorted\", default)]\n    extra: HashMap<String, u64>,\n    #[serde(skip)]\n    cache: HashMap<u8, u8>,\n}",
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\npub struct A { x: u8 }\npub struct B { m: HashMap<u8, u8> }",
+            ),
+            (
+                CodeKind::Test,
+                "#[derive(Serialize)]\nstruct Fixture { m: HashMap<u8, u8> }",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn serde_hashmap_like_1x() {
+    assert_hits(
+        "serde-hashmap",
+        &[
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\n#[serde(rename_all = \"x\")]\npub(crate) struct A<T: Into<u8>> {\n    a: u8,\n    b: Vec<HashMap<u8, T>>,\n    #[serde(with = \"m\")] c: HashSet<u8>,\n    d: (HashMap<u8, u8>, u8),\n}",
+                &["OUT-04:soft@5", "OUT-04:soft@7"],
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\nenum C { V(HashMap<u8,u8>), W { s: HashSet<u8> } }",
+                &["OUT-04:soft@2", "OUT-04:soft@2"],
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\nstruct E(#[serde(skip_serializing)] HashMap<u8,u8>, HashSet<u8>);",
+                &["OUT-04:soft@2"],
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\nstruct F { é: u8, m: HashMap<u8, u8> }",
+                &["OUT-04:soft@2"],
+            ),
+            // 1.x's `matchAngle(..) + 1` is 0 when the list does not close: the walk restarts
+            // at the start of the file.
+            (
+                CodeKind::Prod,
+                "struct Pre { m: HashMap<u8,u8> }\n#[derive(Serialize)]\nstruct B<T: X {",
+                &["OUT-04:soft@1"],
+            ),
+        ],
+    );
+    assert_misses(
+        "serde-hashmap",
+        &[
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\nstruct D;\nstruct Z { n: HashMap<u8, u8> }",
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)] fn f() {}\nstruct Z { n: HashMap<u8, u8> }",
+            ),
+            (
+                CodeKind::Prod,
+                "#[derive(Serialize)]\nstruct B<T: X {\n    m: HashMap<u8, u8>,\n}\nstruct Z { n: HashMap<u8, u8> }",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn ambient_now_positive_cases_pin_id_severity_and_line() {
     assert_hits(
         "ambient-now",
@@ -135,6 +319,121 @@ fn ambient_now_trait_impls() {
             CodeKind::Prod,
             "impl<T> for<'a> X {}\nimpl Clock for Sys { fn now(&self) -> SystemTime { SystemTime::now() } }\nimpl Sys { fn t() { SystemTime::now(); } }\nimpl<F: Fn() -> u8> Clock for F { fn now(&self) { Utc::now(); } }",
             &["OUT-04:soft@3"],
+        )],
+    );
+}
+
+#[test]
+fn spin_lock_positive_cases_pin_id_severity_and_line() {
+    assert_hits(
+        "spin-lock",
+        &[
+            (
+                CodeKind::Prod,
+                "pub fn lock(&self) {\n    while self.locked.swap(true, Ordering::Acquire) {\n        std::hint::spin_loop();\n    }\n}",
+                &["ASY-17:soft@2", "ASY-17:soft@3"],
+            ),
+            (
+                CodeKind::Prod,
+                "pub fn take(&self) {\n    loop {\n        if self.flag.compare_exchange_weak(false, true, Acquire, Relaxed).is_ok() { return; }\n    }\n}",
+                &["ASY-17:soft@3"],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn spin_lock_near_misses_do_not_fire() {
+    assert_misses(
+        "spin-lock",
+        &[
+            (
+                CodeKind::Prod,
+                "pub fn first(&self) -> bool { !self.done.swap(true, Ordering::AcqRel) }",
+            ),
+            (
+                CodeKind::Test,
+                "fn f() { loop { std::hint::spin_loop(); } }",
+            ),
+            (
+                CodeKind::Prod,
+                "pub fn f(v: &mut [u8]) { for i in 0..2 { v.swap(i, 1); } }",
+            ),
+            (
+                CodeKind::Prod,
+                "pub fn f(flag: &AtomicBool) -> bool { flag.compare_exchange(false, true, AcqRel, Acquire).is_ok() }",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn spin_lock_like_1x() {
+    assert_hits(
+        "spin-lock",
+        &[
+            (
+                CodeKind::Prod,
+                "fn f() {\n    for<'a> x;\n    impl X for Y { fn g() { a.swap(true, R); } }\n    while a.compare_exchange(1, 2, A, B).is_err() {}\n    for i in v { b.swap(true, R); c.swap(true, R);\n    }\n    std::hint::spin_loop(); std::hint::spin_loop();\n}",
+                &["ASY-17:soft@4", "ASY-17:soft@5", "ASY-17:soft@7"],
+            ),
+            (
+                CodeKind::Prod,
+                "fn f() { for x in [a.swap(true, R)] {} }",
+                &["ASY-17:soft@1"],
+            ),
+        ],
+    );
+    assert_misses(
+        "spin-lock",
+        &[(CodeKind::Prod, "fn f() { loop; a.swap(true, R); }")],
+    );
+}
+
+#[test]
+fn todo_comment_positive_cases_pin_id_severity_and_line() {
+    assert_hits(
+        "todo-comment",
+        &[
+            (
+                CodeKind::Prod,
+                "pub fn f() {}\n// TODO: handle overflow",
+                &["CRF-04:soft@2"],
+            ),
+            (
+                CodeKind::Test,
+                "fn f() {} /* FIXME later */",
+                &["CRF-04:soft@1"],
+            ),
+        ],
+    );
+}
+
+#[test]
+fn todo_comment_near_misses_do_not_fire() {
+    assert_misses(
+        "todo-comment",
+        &[
+            (
+                CodeKind::Prod,
+                "// TODO(#123): handle overflow\n// FIXME see https://example.com/i/4\n// HACK until PROJ-12 lands\npub fn f() {}",
+            ),
+            (
+                CodeKind::Prod,
+                "/// TODO in a doc comment\npub fn f() -> &'static str { \"TODO\" }",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn todo_comment_like_1x() {
+    assert_hits(
+        "todo-comment",
+        &[(
+            CodeKind::Prod,
+            "/* TODO */\n// TODO(#1)\n/// TODO\n// todo lowercase\n// XXX: JIRA-12 not a ref? \n// HACK: see ABC-1\n/* FIXME http://x */\n//TODO:x\n// TODOS\n/**/\n// FIXME A1-2",
+            &["CRF-04:soft@1", "CRF-04:soft@8"],
         )],
     );
 }

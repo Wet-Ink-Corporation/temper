@@ -6,10 +6,10 @@ use regex::Regex;
 
 use super::counts::{CountPatterns, count_clones, count_ignored, count_tests};
 use super::env::Env;
-use super::finders::Found;
-use super::finders::expect_attrs::{self, ExpectPatterns, exception_for};
+use super::finders::expect_attrs::exception_for;
+use super::finders::{FinderPatterns, Found};
 use super::hit::{Hit, RuleId, RuleKey, Severity};
-use super::lexer::mask_rust;
+use super::lexer::{mask_rust, next_char};
 use super::predicates::{Candidate, Keep, Look, PredicatePatterns};
 use super::rules::{ContextSeverity, FinderKind, Matcher, Pattern, RULES, RuleSpec};
 use crate::js::{self, JsFlags, UnsupportedJs};
@@ -121,7 +121,7 @@ pub struct Scanner {
     rules: Vec<CompiledRule>,
     predicates: PredicatePatterns,
     counts: CountPatterns,
-    expect: ExpectPatterns,
+    finders: FinderPatterns,
 }
 
 #[derive(Debug)]
@@ -179,7 +179,7 @@ impl Scanner {
             rules,
             predicates: PredicatePatterns::new()?,
             counts: CountPatterns::new()?,
-            expect: ExpectPatterns::new()?,
+            finders: FinderPatterns::new()?,
         })
     }
 
@@ -221,9 +221,7 @@ impl Scanner {
     fn matches(&self, rule: &CompiledRule, env: &Env<'_>, out: &mut Vec<Found>) {
         match &rule.matcher {
             CompiledMatcher::Regex(pattern) => self.regex_matches(pattern, env, out),
-            CompiledMatcher::Find(FinderKind::ExpectAttrs) => {
-                expect_attrs::find(env, &self.expect, out);
-            }
+            CompiledMatcher::Find(kind) => self.finders.find(*kind, env, out),
         }
     }
 
@@ -233,7 +231,7 @@ impl Scanner {
             Some(forced) => (forced, found.exception),
             None => match spec.contexts.get(env.context_at(found.offset))? {
                 ContextSeverity::Hard => {
-                    match exception_for(env, found.offset, spec.lints, &self.expect) {
+                    match exception_for(env, found.offset, spec.lints, &self.finders.expect) {
                         Some(lint) => (Severity::Ask, Some(lint.to_owned())),
                         None => (Severity::Hard, found.exception),
                     }
@@ -305,15 +303,6 @@ impl Scanner {
             out.push(Found::at(candidate.start));
         }
     }
-}
-
-/// The offset after the char at `at`, or `at + 1` at the end of `text`.
-fn next_char(text: &str, at: usize) -> usize {
-    let width = text
-        .get(at..)
-        .and_then(|rest| rest.chars().next())
-        .map_or(1, char::len_utf8);
-    at.saturating_add(width)
 }
 
 /// What one scan reports.

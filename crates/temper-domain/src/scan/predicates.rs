@@ -5,6 +5,7 @@ use regex::Regex;
 
 use super::counts::top_level_cfg_attr_arg;
 use super::env::Env;
+use super::finders::empty_errs::{ErrArmPatterns, other_arm_binds_err};
 use super::hit::LineNo;
 use super::lexer::{match_brace, match_pair, slice, statement_end};
 use super::regions::RegionPatterns;
@@ -30,6 +31,8 @@ impl Candidate<'_> {
 pub(crate) enum Keep {
     /// `assert-in-prod`: not in a `const` item or block.
     OutsideConst,
+    /// `empty-err-arm`: no other arm of the enclosing `match` binds the error (keep-first-error).
+    NoArmBindsErr,
     /// `ignore-no-reason`: `ignore` is a top-level `cfg_attr` argument. The pattern consumes the
     /// char 1.x's look-ahead `(?=[\],)])` tests, so it is dropped first.
     TopLevelIgnore,
@@ -105,6 +108,7 @@ pub(crate) struct PredicatePatterns {
     checked_ops: Regex,
     parse_tail: Regex,
     extern_exempt: Regex,
+    err_arms: ErrArmPatterns,
     /// Also the scanner's test-region patterns: one owner per compiled pattern.
     pub(crate) regions: RegionPatterns,
 }
@@ -140,6 +144,7 @@ impl PredicatePatterns {
                 r"\bparse\s*(?:::\s*<[^>]*>)?\s*\(\s*\)\s*$",
             )?,
             extern_exempt: compile("look:extern-exempt", r"^(?:(?:alloc|std)\s*;|self\s+as\b)")?,
+            err_arms: ErrArmPatterns::new()?,
             regions: RegionPatterns::new()?,
         })
     }
@@ -239,19 +244,23 @@ impl Keep {
     pub(crate) fn holds(self, env: &Env<'_>, p: &PredicatePatterns, m: Candidate<'_>) -> bool {
         match self {
             Self::OutsideConst => !env.consts(&p.regions).contains(m.start),
+            Self::NoArmBindsErr => !other_arm_binds_err(env, &p.err_arms, m.start),
             Self::TopLevelIgnore => {
                 let mut attr = m.text.chars();
                 attr.next_back();
                 top_level_cfg_attr_arg(attr.as_str())
             }
             Self::StdFence => {
-                p.fence_path.is_match(window_before(env, m.start, FENCE_PATH_WINDOW_UNITS))
+                p.fence_path
+                    .is_match(window_before(env, m.start, FENCE_PATH_WINDOW_UNITS))
                     || p.fence_use.is_match(env.code)
             }
             Self::NoMainFn => !p.fn_main.is_match(env.code),
             Self::UnjustifiedSeqCst => {
                 !seqcst_justified(env, p, m.start)
-                    && !p.use_tail.is_match(window_before(env, m.start, SEQCST_USE_WINDOW_UNITS))
+                    && !p
+                        .use_tail
+                        .is_match(window_before(env, m.start, SEQCST_USE_WINDOW_UNITS))
             }
             Self::NoCfgAbove => !cfg_attr_above(env, &p.cfg_line, m.start),
             Self::UncheckedOps => unchecked_ops(env, p, m.start),

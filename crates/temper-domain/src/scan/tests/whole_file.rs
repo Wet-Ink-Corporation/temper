@@ -2,7 +2,7 @@
 
 use proptest::prelude::*;
 
-use super::{ALL_KINDS, scan, scanner};
+use super::{ALL_KINDS, full, has, hits_of, scan, scanner};
 use crate::scan::strategies::token_soup;
 use crate::scan::{CodeKind, FileRole, Hit, ScanOptions};
 
@@ -43,6 +43,44 @@ fn no_new_rule_hits_on_an_idiomatic_ledger_module() {
         .collect();
 
     assert_eq!(hits, Vec::<&Hit>::new(), "no 1.1 rule fires");
+}
+
+#[test]
+fn commented_out_code_heuristic_ignores_prose() {
+    let src = "// struct variants. Closed carries no data, so it is encoded as Closed {}.\n// for each account we replay the events in order.\n// let x = compute(y);\nfn a() {}\n";
+
+    let lines: Vec<usize> = has(src, "commented-code", CodeKind::Prod)
+        .iter()
+        .map(|h| h.line().get())
+        .collect();
+
+    assert_eq!(lines, [3], "only the `let` line is code");
+    assert_eq!(
+        full(src, CodeKind::Prod),
+        ["commented-code H-06 soft@3"],
+        "the oracle's whole report"
+    );
+}
+
+#[test]
+fn commented_code_like_1x() {
+    let src = "//! let x = 1;\n// let x = f(y).\n/* fn f() {} */\n// }\n// x = y;\n// use a::b\n// match x {\n// if a < b, go on\n/* struct S; */\n//// let a = 1;\n// return;\n/*\n let y = 2;\n*/\n// impl Foo for Bar {}…\n// for x in y { z(); }";
+
+    assert_eq!(
+        hits_of(src, "commented-code", CodeKind::Prod),
+        [
+            "H-06:soft@3",
+            "H-06:soft@5",
+            "H-06:soft@7",
+            "H-06:soft@8",
+            "H-06:soft@9",
+            "H-06:soft@10",
+            "H-06:soft@11",
+            "H-06:soft@12",
+            "H-06:soft@16",
+        ],
+        "code-like starts and ends, not doc comments or prose endings"
+    );
 }
 
 fn assert_lines_in_range(src: &str) -> Result<(), TestCaseError> {

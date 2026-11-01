@@ -1,6 +1,6 @@
 //! 1.x tests 2 to 8: the hard rules, test regions and `#[expect]` exception requests.
 
-use super::{TEST_REGIONS_SRC, hit, keys, scan, summary};
+use super::{TEST_REGIONS_SRC, full, hit, hits_of, keys, msgs_of, scan, summary};
 use crate::scan::{CodeKind, Hit, Severity};
 
 #[test]
@@ -168,6 +168,101 @@ fn forced_expect_attr_severity_ignores_test_regions() {
         summary(&report),
         [("expect-attr", Severity::Hard, 3)],
         "the finder's severity wins over the test context"
+    );
+}
+
+#[test]
+fn allow_attribute_erased_errors_in_pub_signatures_ok_discard() {
+    let src = "\n#[allow(dead_code)]\npub fn load(p: &str) -> Result<String, String> { std::fs::read_to_string(p).map_err(|e| e.to_string()) }\npub fn run() -> anyhow::Result<()> { Ok(()) }\nfn quiet() { std::fs::remove_file(\"x\").ok(); }\npub(crate) fn inner() -> Result<(), Box<dyn std::error::Error>> { Ok(()) }\n";
+    let hard = |kind| -> Vec<String> {
+        let all = keys(&scan(src, kind));
+        all.into_iter().filter(|k| k.ends_with(":hard")).collect()
+    };
+
+    let k = hard(CodeKind::Prod);
+
+    assert!(
+        k.iter().any(|x| x == "allow-attr:hard"),
+        "`#[allow]` is hard: {k:?}"
+    );
+    assert_eq!(
+        k.iter().filter(|x| *x == "erased-error:hard").count(),
+        2,
+        "the `String` and `anyhow` signatures: {k:?}"
+    );
+    assert!(
+        k.iter().any(|x| x == "discard-ok:hard"),
+        "`.ok();` is hard: {k:?}"
+    );
+    let bin = hard(CodeKind::Bin);
+    assert!(
+        !bin.iter().any(|x| x == "erased-error:hard"),
+        "binaries may use anyhow: {bin:?}"
+    );
+    assert_eq!(
+        (full(src, CodeKind::Prod), full(src, CodeKind::Bin)),
+        (
+            vec![
+                "allow-attr H-05 hard@2".to_owned(),
+                "discard-ok H-10 hard@5".to_owned(),
+                "erased-error H-09 hard@3".to_owned(),
+                "erased-error H-09 hard@4".to_owned(),
+            ],
+            vec![
+                "allow-attr H-05 hard@2".to_owned(),
+                "discard-ok H-10 hard@5".to_owned(),
+            ]
+        ),
+        "the oracle's whole reports"
+    );
+}
+
+#[test]
+fn erased_error_labels_in_1x_order() {
+    let src = "pub const async fn a() -> Result<Box<dyn Error>, String> {}\npub fn b() -> eyre::Result<()>;\npub fn c() -> Box<dyn core::error::Error + Send> {}\npub fn d(x: Result<u8, String>) {}\npub fn e() -> u8 { anyhow::Result }\npub async fn f() -> anyhow::Error {}";
+    let label = |line: u8, what: &str| format!("{line}:public library signature returns {what}");
+
+    assert_eq!(
+        msgs_of(src, "erased-error", CodeKind::Prod),
+        [
+            label(1, "Result<_, String>"),
+            label(1, "Box<dyn Error>"),
+            label(2, "eyre"),
+            label(3, "Box<dyn Error>"),
+            label(4, "Result<_, String>"),
+            label(6, "anyhow"),
+        ],
+        "each label in 1.x order, over the signature up to its `{{` or `;`"
+    );
+    assert_eq!(
+        msgs_of(src, "erased-error", CodeKind::Bin),
+        Vec::<String>::new(),
+        "binaries are exempt"
+    );
+}
+
+#[test]
+fn allow_attr_and_discard_ok_forms() {
+    let allows = "#![allow(x)]\n# ! [ allow (y)]\n#[cfg_attr(a, allow(b))]\n#[allowed(z)]";
+
+    assert_eq!(
+        hits_of(allows, "allow-attr", CodeKind::Test),
+        ["H-05:hard@1", "H-05:hard@2"],
+        "inner and spaced forms; not inside `cfg_attr` or a longer name"
+    );
+    assert_eq!(
+        hits_of(
+            "fn f() { a.ok(); b . ok ( ) ; c.ok()?; d.ok() }",
+            "discard-ok",
+            CodeKind::Test
+        ),
+        ["H-10:soft@1", "H-10:soft@1"],
+        "only `.ok()` ending a statement"
+    );
+    assert_eq!(
+        hits_of("fn f() { a.ok(); }", "discard-ok", CodeKind::Bin),
+        ["H-10:hard@1"],
+        "hard in a binary"
     );
 }
 

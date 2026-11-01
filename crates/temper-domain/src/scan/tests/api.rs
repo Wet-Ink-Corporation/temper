@@ -96,6 +96,101 @@ fn pub_smart_ptr_shared_mutable_state_and_dyn() {
 }
 
 #[test]
+fn struct_bounds_bounds_belong_on_impls() {
+    let key = "struct-bounds";
+    // ledger-app/src/ledger.rs and the API-21 exceptions in api-design.md
+    let good = "\npub struct Ledger<S, C> {\n    store: S,\n    clock: C,\n}\nimpl<S: EventStore, C: Clock> Ledger<S, C> {\n    pub fn new(store: S, clock: C) -> Self { Self { store, clock } }\n}\nstruct Cursor<S: Store> { last: Option<S::Record> }\nstruct Typed<S: Store> { last: Option<<S as Store>::Record> }\nstruct Framed<W: ?Sized> { inner: Box<W> }\nstruct Journal<W: Write> { out: W }\nimpl<W: Write> Drop for Journal<W> { fn drop(&mut self) { let _flushed = self.out.flush(); } }\nstruct Borrowed<'a, T: 'a> { items: &'a [T] }\nstruct Buf<const N: usize> { bytes: [u8; N] }\npub struct Id<T> { raw: u64, marker: PhantomData<fn() -> T> }\nenum Either<L, R> { Left(L), Right(R) }";
+
+    assert_eq!(
+        sev_of(
+            "pub struct Lookup<S: Store + Clone + std::fmt::Debug> {\n    store: S,\n}",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "an inline bound"
+    );
+    assert_eq!(
+        sev_of(
+            "pub struct Repo<S>\nwhere\n    S: Store,\n{\n    store: S,\n}",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "a `where` bound"
+    );
+    assert_eq!(
+        sev_of(
+            "pub enum Reply<T: Serialize> { Ok(T), Err(String) }",
+            key,
+            CodeKind::Prod
+        ),
+        ["soft"],
+        "an enum's bound"
+    );
+    assert_eq!(
+        sev_of("struct Pair<T>(T, T) where T: Clone;", key, CodeKind::Prod),
+        ["soft"],
+        "a tuple struct's `where` bound"
+    );
+    assert_eq!(
+        has(good, key, CodeKind::Prod),
+        Vec::new(),
+        "unbounded types and the API-21 exceptions"
+    );
+}
+
+#[test]
+fn struct_bounds_like_1x() {
+    let quiet = [
+        "struct A<T: X { t: T }",
+        "struct C<T> where T: Iterator { n: T::Item }",
+        "struct D<T> where Vec<T>: X { v: <Vec<T> as X>::Y }",
+        "struct E<T> where Vec<T>: X { v: Vec<T>::Y }",
+        "struct G<T: X> { t: T }\nimpl<T: X> Drop for G<T> { fn drop(&mut self) {} }",
+        "struct H<T: X> { t: T }\nimpl<T: X> Drop for Drop for H<T> {}",
+        "struct J<T: X>(T::Out);",
+        "struct L<'a, T: 'a + ?Sized, const N: usize = 3, U = u8> { t: &'a T }",
+        "struct Q<T: X>\n{ t: <T as X>::Y }",
+        "struct U<T: X> { t: <  T  as X>::Y }",
+    ];
+    let reported = [
+        "struct B<T> where T::Item: Copy { t: T }",
+        "struct F<T: X> { t: T }\nimpl<T: X> Drop for FBar<T> { fn drop(&mut self) {} }",
+        "struct I<T: X> { t: T }\nimpl<T: X> Clone for I<T> { } Drop for I<T> {}",
+        "struct K<T: X>(T) where T: Y;",
+        "struct M<T: ?Sized + X> { t: Box<T> }",
+        "struct N<T> where  : X { t: T }",
+        "struct R<T: X> { t: Rs::T::Y }",
+        "struct S<T: X> { t: xT::Y }",
+    ];
+
+    for src in quiet {
+        assert_eq!(
+            hits_of(src, "struct-bounds", CodeKind::Prod),
+            Vec::<String>::new(),
+            "{src}"
+        );
+    }
+    for src in reported {
+        assert_eq!(
+            hits_of(src, "struct-bounds", CodeKind::Prod),
+            ["API-21:soft@1"],
+            "{src}"
+        );
+    }
+    assert_eq!(
+        hits_of(
+            "enum O<T: X> { A(T) }\nstruct P<F: Fn(u8) -> u8> { f: F }",
+            "struct-bounds",
+            CodeKind::Prod
+        ),
+        ["API-21:soft@1", "API-21:soft@2"],
+        "an enum, and `->` inside the parameter list"
+    );
+}
+
+#[test]
 fn ops_impl_operators_must_not_overflow_silently() {
     let key = "ops-impl";
     // api-design.md API-22 Don't

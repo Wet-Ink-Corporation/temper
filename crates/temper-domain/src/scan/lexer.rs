@@ -15,8 +15,15 @@ pub(crate) struct Masked<'s> {
     pub(crate) comments: Vec<Comment<'s>>,
 }
 
-/// A comment of the source (1.x `{ start, end, text }`; the `doc` flag arrives with its
-/// readers in 1c, decision 1b-8).
+/// Whether a comment is a doc comment (1.x `doc`): `///` but not `////`, `//!`, `/**` but not
+/// `/**/`, and `/*!` (decision 1c-5, wi-91ace5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommentKind {
+    Plain,
+    Doc,
+}
+
+/// A comment of the source (1.x `{ start, end, text, doc }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Comment<'s> {
     /// The offset of its first `/`.
@@ -25,6 +32,22 @@ pub(crate) struct Comment<'s> {
     pub(crate) end: usize,
     /// `src[start..end]`.
     pub(crate) text: &'s str,
+    pub(crate) kind: CommentKind,
+}
+
+impl CommentKind {
+    /// The kind of the comment whose whole text is `text`.
+    fn of(text: &str) -> Self {
+        let line_doc =
+            (text.starts_with("///") || text.starts_with("//!")) && !text.starts_with("////");
+        let block_doc =
+            (text.starts_with("/**") || text.starts_with("/*!")) && !text.starts_with("/**/");
+        if line_doc || block_doc {
+            Self::Doc
+        } else {
+            Self::Plain
+        }
+    }
 }
 
 /// Masks `src` and records its comments. Offsets and line numbers carry over from the source to
@@ -39,10 +62,12 @@ pub(crate) fn mask_rust(src: &str) -> Masked<'_> {
         let step = lex_at(src, at);
         match step.span {
             Some(Span::Comment(range)) => {
+                let text = slice(src, range.start, range.end);
                 comments.push(Comment {
                     start: range.start,
                     end: range.end,
-                    text: slice(src, range.start, range.end),
+                    text,
+                    kind: CommentKind::of(text),
                 });
                 spans.push(range);
             }
@@ -285,6 +310,98 @@ pub(crate) fn match_pair(code: &str, open: usize, open_byte: u8, close: u8) -> u
     code.len().saturating_sub(1)
 }
 
+/// The offset of the first `{` (a body) at `(`/`[` depth <= 0 from `from`, or `None` when a `;`
+/// at that depth (no body) or the end comes first (1.x `bodyBrace`).
+pub(crate) fn body_brace(code: &str, from: usize) -> Option<usize> {
+    // Signed, as in 1.x: a closer before any opener takes the depth below zero.
+    let mut depth = 0_isize;
+    for (at, &b) in code.as_bytes().iter().enumerate().skip(from) {
+        match b {
+            b'(' | b'[' => depth = depth.saturating_add(1),
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'{' if depth <= 0 => return Some(at),
+            b';' if depth <= 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Is the byte before `at` a `-`, so a `>` at `at` is the arrow of `->`?
+fn after_dash(bytes: &[u8], at: usize) -> bool {
+    at.checked_sub(1).and_then(|prev| bytes.get(prev)) == Some(&b'-')
+}
+
+/// The offset of the `>` closing the generic list whose `<` is at `open` (a `>` after `-` closes
+/// none), or `None` when a `{` or `;` comes first or the code ends (1.x `matchAngle`'s -1).
+pub(crate) fn match_angle(code: &str, open: usize) -> Option<usize> {
+    let bytes = code.as_bytes();
+    // Signed, as in 1.x: a closer before any opener takes the depth below zero.
+    let mut depth = 0_isize;
+    for (at, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'<' => depth = depth.saturating_add(1),
+            b'>' if !after_dash(bytes, at) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            b'{' | b';' => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `s` split on the ASCII byte `sep` at bracket depth 0, where `<([{` open and `)]}` and a `>`
+/// not after `-` close (1.x `splitTop`). Always yields at least one piece: `""` gives `[""]`.
+pub(crate) fn split_top(s: &str, sep: u8) -> SplitTop<'_> {
+    SplitTop {
+        rest: s,
+        sep,
+        done: false,
+    }
+}
+
+/// The pieces of [`split_top`], in order.
+#[derive(Debug, Clone)]
+pub(crate) struct SplitTop<'s> {
+    rest: &'s str,
+    sep: u8,
+    done: bool,
+}
+
+impl<'s> Iterator for SplitTop<'s> {
+    type Item = &'s str;
+
+    fn next(&mut self) -> Option<&'s str> {
+        if self.done {
+            return None;
+        }
+        let bytes = self.rest.as_bytes();
+        // Every piece starts at depth 0, since 1.x splits only there.
+        let mut depth = 0_isize;
+        for (at, &b) in bytes.iter().enumerate() {
+            match b {
+                b'<' | b'(' | b'[' | b'{' => depth = depth.saturating_add(1),
+                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+                b'>' if !after_dash(bytes, at) => depth = depth.saturating_sub(1),
+                _ if b == self.sep && depth == 0 => {
+                    // `sep` is ASCII, so `at` and `at + 1` are char boundaries.
+                    if let Some((piece, tail)) = self.rest.split_at_checked(at) {
+                        self.rest = tail.get(1..).unwrap_or("");
+                        return Some(piece);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.done = true;
+        Some(self.rest)
+    }
+}
+
 /// The offset of the `;` that ends the statement or item starting at `from`, or of the closer
 /// of the enclosing block when the statement is a tail expression; the length when neither
 /// follows (1.x `statementEnd`).
@@ -304,6 +421,15 @@ pub(crate) fn statement_end(code: &str, from: usize) -> usize {
         }
     }
     code.len()
+}
+
+/// The offset after the char at `at`, or `at + 1` at the end of `text`.
+pub(crate) fn next_char(text: &str, at: usize) -> usize {
+    let width = text
+        .get(at..)
+        .and_then(|rest| rest.chars().next())
+        .map_or(1, char::len_utf8);
+    at.saturating_add(width)
 }
 
 /// JS `text.slice(from, to)` on byte offsets: both ends clamp to the length and floor to a char
