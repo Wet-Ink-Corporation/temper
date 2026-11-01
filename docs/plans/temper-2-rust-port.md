@@ -164,7 +164,7 @@ Approve the list in §2.4 as a whole. Every other observable behaviour stays byt
 2. `fingerprint(project, base)` is bit-identical between 1.x and 2.0 on the same tree, including untracked files and non-UTF-8 diff output. So gate caches and verdicts keyed by fingerprint carry over (§2.3).
 3. Every file temper writes under `.git/temper/`, `${CLAUDE_PLUGIN_DATA}/sessions/` and `.claude/temper-baseline.json` is readable by both engines in both directions.
 4. A hook never exits with code 2. A handler error becomes `{"systemMessage":"temper hook <event> failed: <msg>"}` with exit 0, and malformed stdin JSON exits 0 silently, as in 1.x.
-5. One version string X appears in `Cargo.toml` `[workspace.package]`, `.claude-plugin/plugin.json`, `package.json` (its version and all six exact optionalDependency pins), each npm platform package, `templates/*/.claude/temper-version`, the git tag `vX`, and `temper --version`. `cargo xtask versions --check` fails otherwise.
+5. One version string X appears in `Cargo.toml` `[workspace.package]`, `.claude-plugin/plugin.json`, `plugins/temper-lens/.claude-plugin/plugin.json`, `package.json` (its version and all six exact optionalDependency pins), each npm platform package, `templates/*/.claude/temper-version`, the git tag `vX`, and `temper --version`. `cargo xtask versions --check` fails otherwise.
 6. `package-lock.json` (lockfileVersion 3) lists all six platform packages at version X, with `https` `resolved` URLs, `sha512` `integrity` and matching `os`/`cpu`, and nothing else (the npm/cli#4828 guard). `package.json` has no `scripts`, `overrides` or non-registry dependencies.
 7. On every supported OS/arch, a copy of the plugin directory installed with `npm ci --ignore-scripts` within 60 s runs `node scripts/temper.mjs --version` and prints `temper X`.
 8. Production code has no `unsafe`, `unwrap`/`expect`, panics, `as` casts or print macros, and every spawned thread or process has an owner, a timeout and a capped buffer (H-01..H-13).
@@ -632,6 +632,7 @@ Triggered by `workflow_dispatch` with the input `version` on branch `release/<ve
 - **Versioning:** `xtask versions --set X` rewrites:
   - `Cargo.toml` `[workspace.package].version` and the sibling `version` fields;
   - `.claude-plugin/plugin.json`;
+  - `plugins/temper-lens/.claude-plugin/plugin.json`, from the cutover, as for `.claude-plugin/plugin.json` (both stay 1.x during the port);
   - `package.json` `version` and all six pins;
   - `templates/workspace/.claude/temper-version` and `templates/example-workspace/.claude/temper-version`;
   - it then runs `cargo update --workspace` and checks that CHANGELOG has a `## X` heading.
