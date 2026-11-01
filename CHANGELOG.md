@@ -6,6 +6,12 @@
 
 **The 2.0 release workflow publishes its npm tarballs by path (port Phase 0b).** `release-2.yml` now runs `npm publish ./tarballs/<file>.tgz`. Without the `./`, npm read the path as a GitHub `user/repo` shorthand and failed before publishing anything, which stopped the first `2.0.0-alpha.1` run.
 
+**The 2.0 release workflow verifies installs on Windows and builds Windows engines reproducibly (port Phase 0b).** Two fixes found by the `2.0.0-alpha.1` run, both proven by the `2.0.0-alpha.2` run:
+- The verify-install step now untars the plugin from inside its directory. Windows `tar` had read the `D:\` path given to `-C` as a remote host.
+- Windows engines link with `/Brepro`, so a re-dispatched run rebuilds byte-identical tarballs and its publish step skips them instead of stopping on the integrity check.
+
+The lockfile step also retries until `package-lock.json` has an entry for every engine, because a lagging registry let npm report "up to date" with none.
+
 **The plugin carries the 2.0 launcher, unused (port Phase 0b).** `scripts/launch.mjs` is the launcher the 2.0 Rust engine will run behind. It finds the engine (`TEMPER_BIN`, the `@wet-ink/temper-<platform>-<arch>` npm package, or a locally built copy), passes argv, stdin and the exit code through, and runs the 1.x CLI for every subcommand that has not moved to Rust. Only `--version` goes to the engine so far, and it falls back to the 1.x CLI when no engine is installed. `hooks/hooks.json` still runs `scripts/temper.mjs`, so nothing changes for users.
 
 **`cargo xtask versions` covers the lens plugin's `plugin.json`.** From the 2.0 cutover, `--check` compares it and `--set` rewrites it with temper's own `plugin.json`, and a missing one is an error; during the port it is left alone.
