@@ -753,41 +753,9 @@ fn map_index_skips_keywords() {
 }
 
 #[test]
-fn filter_map_ok_is_advisory() {
-    let filter = "filter-map-ok";
-
-    assert_eq!(
-        sev_of(
-            "fn f(xs: &[&str]) -> Vec<u32> { xs.iter().filter_map(|s| s.parse::<u32>().ok()).collect() }",
-            filter,
-            CodeKind::Prod
-        ),
-        ["soft"],
-        "a closure ending in .ok()"
-    );
-    assert_eq!(
-        sev_of(
-            "fn f(d: ReadDir) -> Vec<DirEntry> { d.filter_map(Result::ok).collect() }",
-            filter,
-            CodeKind::Prod
-        ),
-        ["soft"],
-        "Result::ok"
-    );
-    assert_eq!(
-        has(
-            "fn f(xs: &[u8]) -> usize { xs.iter().filter_map(|x| x.checked_add(1)).count() }",
-            filter,
-            CodeKind::Prod
-        ),
-        [],
-        "an Option-returning closure"
-    );
-}
-
-#[test]
-fn parse_unwrap_or_is_advisory() {
-    let parse = "parse-unwrap-or";
+fn filter_map_ok_and_parse_unwrap_or_are_advisory() {
+    let filter = |src| sev_of(src, "filter-map-ok", CodeKind::Prod);
+    let parse = |src| sev_of(src, "parse-unwrap-or", CodeKind::Prod);
     let both = scan(
         "fn f(s: &str) -> u16 { s.parse::<u16>().unwrap_or_default() }",
         CodeKind::Prod,
@@ -795,35 +763,42 @@ fn parse_unwrap_or_is_advisory() {
     let both: Vec<&str> = both.hits().iter().map(|h| h.key().as_str()).collect();
 
     assert_eq!(
-        sev_of(
-            "fn f(s: &str) -> u16 { s.parse().unwrap_or(8080) }",
-            parse,
-            CodeKind::Prod
+        filter(
+            "fn f(xs: &[&str]) -> Vec<u32> { xs.iter().filter_map(|s| s.parse::<u32>().ok()).collect() }"
         ),
+        ["soft"],
+        "a closure ending in .ok()"
+    );
+    assert_eq!(
+        filter("fn f(d: ReadDir) -> Vec<DirEntry> { d.filter_map(Result::ok).collect() }"),
+        ["soft"],
+        "Result::ok"
+    );
+    assert_eq!(
+        filter("fn f(xs: &[u8]) -> usize { xs.iter().filter_map(|x| x.checked_add(1)).count() }"),
+        [""; 0],
+        "an Option-returning closure"
+    );
+    assert_eq!(
+        parse("fn f(s: &str) -> u16 { s.parse().unwrap_or(8080) }"),
         ["soft"],
         "a parse failure replaced by a default"
     );
     assert!(
-        both.contains(&parse) && !both.contains(&"unwrap-or-default"),
+        both.contains(&"parse-unwrap-or") && !both.contains(&"unwrap-or-default"),
         "parse-unwrap-or, not unwrap-or-default: {both:?}"
     );
     // ledger-app lib.rs doctest helper and money.rs parser
     assert_eq!(
-        has(
-            "fn load(&self, a: &AccountId) -> io::Result<Vec<Recorded>> { Ok(self.0.get(a).cloned().unwrap_or_default()) }",
-            parse,
-            CodeKind::Prod
+        parse(
+            "fn load(&self, a: &AccountId) -> io::Result<Vec<Recorded>> { Ok(self.0.get(a).cloned().unwrap_or_default()) }"
         ),
-        [],
+        [""; 0],
         "no parse"
     );
     assert_eq!(
-        has(
-            "fn f(s: &str) -> Result<u16, ParseIntError> { let n = s.parse::<u16>()?; Ok(n) }",
-            parse,
-            CodeKind::Prod
-        ),
-        [],
+        parse("fn f(s: &str) -> Result<u16, ParseIntError> { let n = s.parse::<u16>()?; Ok(n) }"),
+        [""; 0],
         "a propagated parse"
     );
 }
