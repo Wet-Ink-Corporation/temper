@@ -1,0 +1,91 @@
+name: Scanner corpus
+
+# The 2.0 port's scanner parity job (docs/plans/temper-2-rust-port.md, Phase 1e): the Rust
+# `temper scan` against 1.x, byte for byte, on the parity cases (tests/parity/scan.test.mjs) and on
+# a real-world corpus (tests/parity/corpus.mjs): the registry packages of both committed lockfiles,
+# the example workspace, every code block in the rust-craft skill and the generated large file
+# (1e-2, wi-37a444). It also enforces the D16(k) bound: no file takes the Rust engine 10 s or more
+# (1e-5, wi-a24829). Linux, Windows and macOS (1e-4, wi-fc6a1c).
+#
+# Advisory, not a required check (wi-68036c): the parity cases also run under the required
+# `Checks` job through tests/ci.sh. Triggers (wi-295cf1): weekly, release branches, by hand, and
+# pull requests that touch the engines, the scanner's inputs or this harness.
+on:
+  schedule:
+    - cron: '23 4 * * 1'
+  push:
+    branches: ['release/**']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'Cargo.lock'
+      - 'scripts/temper.mjs'
+      - 'scripts/lib/**'
+      - 'skills/rust-craft/**'
+      - 'templates/example-workspace/**'
+      - 'tests/parity/**'
+      - 'tests/doc_examples.py'
+      - '.github/workflows/corpus.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  corpus:
+    name: Scanner corpus (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # Keep in sync with rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build the Rust engine (release)
+        run: cargo build --release --locked -p temper-cli
+      # Relative to the checkout: under Windows bash, $PWD is an MSYS path that node would misread.
+      - name: Engine path
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
+          echo "TEMPER_BIN=target/release/temper$exe" >> "$GITHUB_ENV"
+      # python3 is python on some Windows images; a missing interpreter fails the step.
+      - name: Extract the skill's code blocks
+        run: |
+          PY=$(command -v python3 || command -v python)
+          "$PY" tests/doc_examples.py --extract "$RUNNER_TEMP/doc-blocks"
+      - name: Scan parity cases
+        run: node --test tests/parity/scan.test.mjs
+      - name: Scanner corpus
+        run: >-
+          node tests/parity/corpus.mjs --bin "$TEMPER_BIN"
+          --lock Cargo.toml --lock templates/example-workspace/Cargo.toml
+          --root templates/example-workspace --root "$RUNNER_TEMP/doc-blocks"
+          --report "$RUNNER_TEMP/corpus-report"
+      - name: Upload the corpus report
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corpus-report-${{ matrix.os }}
+          path: ${{ runner.temp }}/corpus-report
+          retention-days: 14

@@ -3,8 +3,8 @@
 #
 #   tests/ci.sh            # all checks
 #   tests/ci.sh --quick    # skip the steps that compile Rust (the workspace's clippy, tests,
-#                          # docs and licence check, doc examples, brownfield e2e, example
-#                          # workspace gate)
+#                          # scan parity cases, test map, docs and licence check, doc examples,
+#                          # brownfield e2e, example workspace gate)
 #
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
 # templates/workspace/rust-toolchain.toml with clippy and rustfmt (the example
@@ -29,6 +29,10 @@ cargo fmt --all -- --check
 
 step "unit tests (scanner, hooks, manifests, baseline, report, vendor, release check)"
 node --test tests/*.test.mjs
+
+step "parity harness (the 1.x-against-Rust differential library, no binary) and its test-map checker"
+node --test tests/parity/harness.test.mjs
+python3 tests/parity/check_test_map.py --self-test
 
 step "rule registry"
 python3 tests/registry.py
@@ -63,7 +67,7 @@ step "release check (both plugin.json files, CHANGELOG heading and vendored VERS
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: the workspace's clippy, tests, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
+  step "skipped: the workspace's clippy, tests, scan parity cases, test map, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
 
@@ -72,6 +76,13 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 step "workspace tests"
 cargo test --workspace --all-features --locked
+
+step "scan parity cases (Rust engine against 1.x)"
+cargo build --locked -p temper-cli
+TEMPER_BIN="$PWD/target/debug/temper$([ -f target/debug/temper.exe ] && echo .exe)" node --test tests/parity/scan.test.mjs
+
+step "1.x scan tests are mapped to Rust tests"
+python3 tests/parity/check_test_map.py
 
 step "workspace docs"
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked

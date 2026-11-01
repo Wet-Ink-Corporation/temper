@@ -21,7 +21,7 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | `scripts/temper.mjs`, `scripts/lib/` | The CLI and hook engine: Node 18+, no dependencies |
 | `templates/workspace/` | What `/temper:setup` installs in a user repository |
 | `templates/example-workspace/` | A complete reference workspace that passes its own gate. Its `.claude/temper/` is a vendored copy of `scripts/`. |
-| `tests/` | Node unit tests, Python consistency checks, e2e scripts, fixtures |
+| `tests/` | Node unit tests, Python consistency checks, e2e scripts, fixtures. `tests/parity/` is the 1.x-against-Rust differential harness of the 2.0 port, deleted at cutover (its `README.md`) |
 | `evals/` | `claude plugin eval` cases |
 | `docs/plans/` | Live plans: `v1-readiness.md` (the road to v1) and `temper-2-rust-port.md` (the 2.0 port) |
 | `docs/history/` | Specs, reviews, findings and the decision log behind each release |
@@ -41,6 +41,10 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | Supply chain | `cargo deny check` |
 | MSRV | `cargo +1.96 check --workspace --all-targets --locked` |
 | Unit tests | `node --test tests/*.test.mjs` |
+| Parity harness library and test-map checker (no binary) | `node --test tests/parity/harness.test.mjs`, `python3 tests/parity/check_test_map.py --self-test` |
+| Scan parity cases (Rust engine against 1.x) | `cargo build -p temper-cli && TEMPER_BIN=target/debug/temper node --test tests/parity/scan.test.mjs` |
+| 1.x scan tests are mapped to Rust tests | `python3 tests/parity/check_test_map.py` |
+| Scanner corpus (release build; add `--root "$DIR"` after `python3 tests/doc_examples.py --extract "$DIR"` for the skill's blocks) | `node tests/parity/corpus.mjs --bin target/release/temper --lock Cargo.toml --lock templates/example-workspace/Cargo.toml --root templates/example-workspace` |
 | Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |
 | Rule registry, lint claims, rule map | `python3 tests/registry.py`, `python3 tests/lint-claims.py`, `python3 tests/gen_rulemap.py --check` |
 | The code blocks in the standard | `python3 tests/doc_examples.py` (add `--fetch` without a warm registry cache) |
@@ -138,3 +142,4 @@ The port's decisions D1 to D17 are recorded in full, with their Weigh-In records
 | 2026-10-30 | macOS runs in CI on every code-touching PR | H-16 | owner (wi-e85ef8) |
 | 2026-10-31 | Workspace version `2.0.0-alpha.0` and `publish = false` until Phase 0b's first alpha; no third-party dependency in Phase 0a | H-16 | two-way calls (Phase 0a) |
 | 2026-11-01 | `serde` (pre-approved; `std` only, no `derive`) added in Phase 1d.2a; `wait-timeout` 0.2.1 (D10) added in 1d.2b, to `temper-host` only | ARC-12, H-16 | pre-approved; D10 (wi-b03273) |
+| 2026-11-01 | The scanner corpus job (`.github/workflows/corpus.yml`): Linux, Windows and macOS; weekly, on `release/**`, by hand and on PRs that touch the engines or the scanner's inputs; advisory, not a required check. The parity cases and the test map run in `tests/ci.sh` under `Checks` | H-16 | owner (wi-295cf1, wi-68036c); OSes two-way (wi-fc6a1c) |
