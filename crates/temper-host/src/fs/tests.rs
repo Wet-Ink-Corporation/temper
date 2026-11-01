@@ -83,7 +83,8 @@ fn read_dir_lists_names_in_byte_order() -> TestResult {
         "a.rs",
         "_x.rs",
         "10.rs",
-        "A.rs",
+        // Not "A.rs": macOS file systems are case-insensitive, so it would replace "a.rs".
+        "C.rs",
     ] {
         fs::write(dir.path().join(name), "")?;
     }
@@ -100,7 +101,7 @@ fn read_dir_lists_names_in_byte_order() -> TestResult {
         [
             "10.rs",
             "9.rs",
-            "A.rs",
+            "C.rs",
             "Z.rs",
             "_x.rs",
             "a.rs",
