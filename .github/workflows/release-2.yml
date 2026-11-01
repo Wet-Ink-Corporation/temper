@@ -258,8 +258,11 @@ jobs:
           # The registry's metadata can lag a fresh publish (ETARGET), and its CDN caches a packument
           # for up to 300 s, so retry for over 5 minutes. --prefer-online makes npm revalidate
           # rather than reuse the stale packument from its own cache.
+          # A lagging packument can also make npm write a lockfile with no entry for the engines and
+          # report "up to date", so each attempt also checks the lockfile invariant.
           for i in $(seq 1 12); do
-            npm install --package-lock-only --prefer-online --ignore-scripts --no-audit --no-fund && exit 0
+            rm -f package-lock.json
+            npm install --package-lock-only --prefer-online --ignore-scripts --no-audit --no-fund && cargo xtask check-npm-lock && exit 0
             if [ "$i" -lt 12 ]; then echo "attempt $i failed; retrying in 30 s"; sleep 30; fi
           done
           exit 1
@@ -306,7 +309,8 @@ jobs:
         run: |
           dir="$RUNNER_TEMP/plugin"
           mkdir -p "$dir"
-          git archive HEAD | tar -xf - -C "$dir"
+          # Untar from inside $dir: on Windows, GNU tar reads "D:\a\_temp" given to -C as a remote host.
+          git archive HEAD | (cd "$dir" && tar -xf -)
           cp lock/package.json lock/package-lock.json "$dir/"
           echo "PLUGIN=$dir" >> "$GITHUB_ENV"
       - name: npm ci within the hook budget
