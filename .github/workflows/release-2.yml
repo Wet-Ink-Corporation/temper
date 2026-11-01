@@ -89,8 +89,8 @@ jobs:
           # Cross-compiled on Apple silicon and run under Rosetta.
           - { target: x86_64-apple-darwin, runner: macos-15, smoke: "arch -x86_64" }
           # The CRT is linked statically so no VC++ redistributable is needed (D5).
-          - { target: x86_64-pc-windows-msvc, runner: windows-2025, smoke: "", rustflags: "-C target-feature=+crt-static" }
-          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm, smoke: "", rustflags: "-C target-feature=+crt-static" }
+          - { target: x86_64-pc-windows-msvc, runner: windows-2025, smoke: "", rustflags: "-C target-feature=+crt-static -C link-arg=/Brepro" }
+          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm, smoke: "", rustflags: "-C target-feature=+crt-static -C link-arg=/Brepro" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
