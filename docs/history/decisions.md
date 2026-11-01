@@ -166,3 +166,11 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 1b | Does the comment record carry `doc` yet? | No: `Comment { start, end, text }`; `doc` lands in 1c with its readers. Two-way default, 2026-11-01 (wi-5cb4c8). |
 | port 1b | How is the per-rule `Vec<Found>` (1a review F7) removed? | One reusable buffer per scan. Two-way default, 2026-11-01 (wi-28a72e). |
 | port 1b | Are 1.x's two negative guards (idiomatic code, idiomatic ledger module) ported now? | Yes, in 1b, run last. Two-way default, 2026-11-01 (wi-de1207). |
+| port 1c | What does Phase 1c cut? | `doc-unwrap`, `doc-arg-sections`, doc blocks, `Env::doc` and `is_rust_fence` move to 1d with the tests that need them, keeping 1c one reviewable PR. Two-way default, 2026-11-01 (wi-9f78ea). |
+| port 1c | Do `Scanner::rules()` and `RuleInfo` land now? | No, in Phase 4 with their real consumer (the gate's new-code-only rules). Two-way default, 2026-11-01 (wi-ca74b3). |
+| port 1c | How does the port handle 1.x's `ms < 10_000` wall-clock assertion in the large-file scan test? | The Rust test keeps the hit assertion only; the 10 s bound moves to Phase 1e's corpus CI job as a D16 retired assertion. Owner decision, 2026-11-01 (wi-825595). |
+| port 1c | How does `struct-bounds` replace 1.x's per-type run-time regexes? | Two hand-written matchers, so a scan compiles nothing and cannot fail. Two-way default, 2026-11-01 (wi-5842d0). |
+| port 1c | Is the comment record's doc flag a bool? | No: `kind: CommentKind { Plain, Doc }` (API-10). Two-way default, 2026-11-01 (wi-91ace5). |
+| port 1c | Does the 1b review's test split also split `key_cases.rs`? | Yes, into three files by group. Two-way default, 2026-11-01 (wi-bd9fd8). |
+| port 1c | What shape does `ScanOptions::forbid` take? | §1.3's: `Option<&'a BTreeSet<String>>`, so `ScanOptions` gains a lifetime. Two-way default, 2026-11-01 (wi-2d7b05). |
+| port 1c | Where does `other_arm_binds_err` live? | In `scan/finders/empty_errs.rs`, beside the related finder. Two-way default, 2026-11-01 (wi-5f034a). |
