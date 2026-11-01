@@ -6,9 +6,9 @@
 
 **The 2.0 release workflow publishes its npm tarballs by path (port Phase 0b).** `release-2.yml` now runs `npm publish ./tarballs/<file>.tgz`. Without the `./`, npm read the path as a GitHub `user/repo` shorthand and failed before publishing anything, which stopped the first `2.0.0-alpha.1` run.
 
-**The 2.0 release workflow verifies installs on Windows and builds Windows engines reproducibly (port Phase 0b).** Two fixes found by the `2.0.0-alpha.1` run, both proven by the `2.0.0-alpha.2` run:
-- The verify-install step now untars the plugin from inside its directory. Windows `tar` had read the `D:\` path given to `-C` as a remote host.
-- Windows engines link with `/Brepro`, so a re-dispatched run rebuilds byte-identical tarballs and its publish step skips them instead of stopping on the integrity check.
+**The 2.0 release workflow verifies installs on Windows and links Windows engines reproducibly (port Phase 0b).** Two fixes found by the `2.0.0-alpha.1` run:
+- The verify-install step now untars the plugin from inside its directory. Git Bash's GNU `tar` had read the `D:\` path given to `-C` as a remote host. The `2.0.0-alpha.2` run passed verify-install on both Windows runners with this fix.
+- Windows engines link with `/Brepro`, which drops the linker's timestamp, so a re-dispatched run should rebuild the same Windows tarballs and its publish step skip them, as it already does for Linux and macOS. No re-dispatch has exercised this yet; until one does, the integrity check stays the safeguard.
 
 The lockfile step also retries until `package-lock.json` has an entry for every engine, because a lagging registry let npm report "up to date" with none.
 
