@@ -621,6 +621,18 @@ pub(crate) const RULES: &[RuleSpec] = &[
         matcher: Matcher::Find(FinderKind::ExpectAttrs),
     },
     RuleSpec {
+        // E0453 ("incompatible with previous forbid") is a hard error that `--cap-lints warn`
+        // hides, so the ratchet collection checks it here, given `ScanOptions::forbid`.
+        key: "forbid-override",
+        id: "H-05",
+        contexts: ctx(HARD, HARD, HARD, HARD),
+        msg: "`#[allow]`/`#[expect]` of a lint the workspace forbids (E0453 without --cap-lints)",
+        fix: "Remove the attribute and fix the code: a forbidden lint admits no exception (H-05). Changing the forbid is a human decision.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::ForbidOverrides),
+    },
+    RuleSpec {
         key: "erased-error",
         id: "H-09",
         contexts: ctx(HARD, OFF, OFF, OFF),

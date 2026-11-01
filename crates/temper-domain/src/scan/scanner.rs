@@ -1,6 +1,7 @@
 //! The scanner: compiles the rule table once and runs it over a source (1.x `scanSource`).
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
 use regex::Regex;
 
@@ -41,11 +42,14 @@ pub enum FileRole {
 
 /// Options for one scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScanOptions {
+pub struct ScanOptions<'a> {
     /// The context of the file's code.
     pub kind: CodeKind,
     /// Whether the file is a build script.
     pub file: FileRole,
+    /// The lints the crate forbids (`unsafe_code`, `clippy::unwrap_used`), which the
+    /// `forbid-override` rule reads. `None`, or an empty set, finds nothing.
+    pub forbid: Option<&'a BTreeSet<String>>,
 }
 
 /// Is the crate-relative path `rel_to_crate` the crate's build script (`build.rs` at its root)?
@@ -109,7 +113,7 @@ pub(crate) fn compile_with(
 /// use temper_domain::{CodeKind, FileRole, ScanOptions, Scanner, Severity};
 ///
 /// let scanner = Scanner::new()?;
-/// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source };
+/// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
 /// let report = scanner.scan("fn f() { dbg!(1); }", &options);
 ///
 /// let hit = report.hits().first().map(|h| (h.key().as_str(), h.severity()));
@@ -192,13 +196,14 @@ impl Scanner {
     ///
     /// let scanner = Scanner::new()?;
     /// let src = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n";
-    /// let report = scanner.scan(src, &ScanOptions { kind: CodeKind::Prod, file: FileRole::Source });
+    /// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
+    /// let report = scanner.scan(src, &options);
     ///
     /// assert_eq!((report.hits().len(), report.tests()), (0, 1));
     /// # Ok::<(), temper_domain::ScannerSetupError>(())
     /// ```
     #[must_use]
-    pub fn scan(&self, src: &str, options: &ScanOptions) -> ScanReport {
+    pub fn scan(&self, src: &str, options: &ScanOptions<'_>) -> ScanReport {
         let masked = mask_rust(src);
         let env = Env::new(src, &masked, options, &self.predicates.regions);
         let code = env.code;

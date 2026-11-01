@@ -1,10 +1,15 @@
 //! 1.x tests 31 on: whole files against the whole table, and the scan properties.
 
+use std::collections::BTreeSet;
+
 use proptest::prelude::*;
 
-use super::{ALL_KINDS, full, has, hits_of, scan, scanner};
+use super::{
+    ALL_KINDS, full, full_with, has, hits_of, hits_with, lints, msgs_with, options, scan, scanner,
+    severity_name,
+};
 use crate::scan::strategies::token_soup;
-use crate::scan::{CodeKind, FileRole, Hit, ScanOptions};
+use crate::scan::{CodeKind, Hit};
 
 #[test]
 fn no_new_rule_hits_on_an_idiomatic_ledger_module() {
@@ -83,17 +88,163 @@ fn commented_code_like_1x() {
     );
 }
 
-fn assert_lines_in_range(src: &str) -> Result<(), TestCaseError> {
+#[test]
+fn forbid_override_fires_only_for_a_lint_the_crate_forbids() {
+    let src = "#[allow(unsafe_code)]\npub fn f() {}\n#[expect(clippy::unwrap_used, reason = \"checked\")]\npub fn g() {}\n";
+    let forbid = lints(&["unsafe_code"]);
+    let other = lints(&["clippy::panic"]);
+    let key = "forbid-override";
+
+    assert_eq!(
+        hits_with(src, key, &options(CodeKind::Prod, Some(&forbid))),
+        ["H-05:hard@1"],
+        "the forbidden lint's `#[allow]`"
+    );
+    assert_eq!(
+        hits_with(src, key, &options(CodeKind::Test, Some(&forbid))),
+        ["H-05:hard@1"],
+        "hard in tests too"
+    );
+    // Near misses: no forbid set, or a forbid set that does not name the lint.
+    assert_eq!(
+        hits_with(src, key, &options(CodeKind::Prod, None)),
+        Vec::<String>::new(),
+        "no forbid set"
+    );
+    assert_eq!(
+        hits_with(src, key, &options(CodeKind::Prod, Some(&other))),
+        Vec::<String>::new(),
+        "another lint is forbidden"
+    );
+    assert_eq!(
+        full_with(src, &options(CodeKind::Prod, Some(&forbid))),
+        [
+            "allow-attr H-05 hard@1",
+            "expect-attr H-05 ask@3",
+            "forbid-override H-05 hard@1"
+        ],
+        "the oracle's whole report"
+    );
+}
+
+#[test]
+fn forbid_override_like_1x() {
+    let forbid = lints(&["unsafe_code", "clippy::unwrap_used", "missing_docs"]);
+    let src = "#![allow(unsafe_code)]\n#[cfg_attr(x, allow(clippy :: unwrap_used, dead_code))]\n#[expect(missing_docs, reason = \"r\")]\n#[allow(clippy::a::b, Unsafe_Code)]\n#[allow(dead_code, unsafe_code\n)]\n#[allow(unsafe_code, missing_docs)]";
+    let msg = |line: u8, attr: &str| {
+        format!(
+            "{line}:`#[{attr}]` overrides a lint the workspace forbids (E0453 without --cap-lints)"
+        )
+    };
+    let msgs = |src: &str, forbid: &BTreeSet<String>, key: &str| {
+        msgs_with(src, key, &options(CodeKind::Prod, Some(forbid)))
+    };
+
+    assert_eq!(
+        msgs(src, &forbid, "forbid-override"),
+        [
+            msg(1, "allow(unsafe_code)"),
+            msg(2, "allow(clippy::unwrap_used)"),
+            msg(3, "expect(missing_docs)"),
+            msg(5, "allow(unsafe_code)"),
+            msg(7, "allow(unsafe_code)"),
+            msg(7, "allow(missing_docs)"),
+        ],
+        "inner, cfg_attr, spaced and multi-line forms; not a path or a capitalised name"
+    );
+    assert_eq!(
+        msgs(src, &BTreeSet::new(), "forbid-override"),
+        Vec::<String>::new(),
+        "an empty set finds nothing"
+    );
+    let expected = "#[expect(unsafe_code, reason = \"r\")]\nfn f() {}";
+    assert_eq!(
+        (
+            hits_with(
+                expected,
+                "expect-attr",
+                &options(CodeKind::Prod, Some(&forbid))
+            ),
+            hits_with(
+                expected,
+                "forbid-override",
+                &options(CodeKind::Prod, Some(&forbid))
+            ),
+        ),
+        (
+            vec!["H-05:ask@1".to_owned()],
+            vec!["H-05:hard@1".to_owned()]
+        ),
+        "a reasoned `#[expect]` of a forbidden lint is still an override"
+    );
+}
+
+/// 1.x's `ms < 10_000` bound is not ported: a wall-clock assertion breaks TST-10, and the bound
+/// moves to Phase 1e's corpus job as a retired assertion (decision 1c-3, wi-825595).
+#[test]
+fn large_file_seeded_hit_near_the_end_is_reported() {
+    let block = [
+        "/// Adds two values.",
+        "///",
+        "/// # Errors",
+        "///",
+        "/// Returns `None` on overflow.",
+        "pub fn add_N(a: u32, b: u32) -> Option<u32> {",
+        "    let sum = a.checked_add(b)?;",
+        "    if sum > 10 { return Some(sum - 1); }",
+        "    Some(sum)",
+        "}",
+        "",
+    ];
+    let mut lines: Vec<String> = Vec::new();
+    for i in 0.. {
+        if lines.len() >= 4990 {
+            break;
+        }
+        let name = format!("add_{i}");
+        lines.extend(block.iter().map(|l| l.replacen("add_N", &name, 1)));
+    }
+    let seed = lines.len() + 2;
+    lines.extend(
+        [
+            "pub fn seeded(v: Option<u8>) -> u8 {",
+            "    v.unwrap()",
+            "}",
+            "",
+        ]
+        .map(str::to_owned),
+    );
+    let src = lines.join("\n");
+
+    let hits: Vec<String> = scan(&src, CodeKind::Prod)
+        .hits()
+        .iter()
+        .map(|h| {
+            format!(
+                "{}:{}:{}@{}",
+                h.key(),
+                h.id(),
+                severity_name(h.severity()),
+                h.line()
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        hits,
+        [format!("unwrap:H-02:hard@{seed}")],
+        "only the seeded hit, on its line"
+    );
+}
+
+fn assert_lines_in_range(
+    src: &str,
+    forbid: Option<&BTreeSet<String>>,
+) -> Result<(), TestCaseError> {
     let lines = src.split('\n').count();
     let scanner = scanner();
     for kind in ALL_KINDS {
-        let report = scanner.scan(
-            src,
-            &ScanOptions {
-                kind,
-                file: FileRole::Source,
-            },
-        );
+        let report = scanner.scan(src, &options(kind, forbid));
         for h in report.hits() {
             prop_assert!(
                 (1..=lines).contains(&h.line().get()),
@@ -109,11 +260,17 @@ fn assert_lines_in_range(src: &str) -> Result<(), TestCaseError> {
 proptest! {
     #[test]
     fn scan_never_panics_and_lines_are_in_range(src in any::<String>()) {
-        assert_lines_in_range(&src)?;
+        assert_lines_in_range(&src, None)?;
     }
 
     #[test]
     fn scan_never_panics_and_lines_are_in_range_on_token_soup(src in token_soup()) {
-        assert_lines_in_range(&src)?;
+        assert_lines_in_range(&src, None)?;
+    }
+
+    #[test]
+    fn scan_with_forbid_never_panics_on_token_soup(src in token_soup()) {
+        let forbid = lints(&["unsafe_code", "clippy::unwrap_used"]);
+        assert_lines_in_range(&src, Some(&forbid))?;
     }
 }

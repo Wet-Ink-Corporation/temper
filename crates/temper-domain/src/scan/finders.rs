@@ -4,6 +4,7 @@ pub(crate) mod comments;
 pub(crate) mod empty_errs;
 pub(crate) mod erased_errors;
 pub(crate) mod expect_attrs;
+pub(crate) mod forbid_overrides;
 pub(crate) mod serde_hashmaps;
 pub(crate) mod spin_locks;
 pub(crate) mod struct_bounds;
@@ -15,6 +16,7 @@ use self::comments::CommentPatterns;
 use self::empty_errs::IfLetErrPatterns;
 use self::erased_errors::ErasedPatterns;
 use self::expect_attrs::ExpectPatterns;
+use self::forbid_overrides::ForbidPatterns;
 use self::serde_hashmaps::SerdePatterns;
 use self::spin_locks::SpinPatterns;
 use self::struct_bounds::StructBoundPatterns;
@@ -60,6 +62,7 @@ pub(crate) struct FinderPatterns {
     serde: SerdePatterns,
     test_branch: TestBranchPatterns,
     struct_bounds: StructBoundPatterns,
+    forbid: ForbidPatterns,
     erased: ErasedPatterns,
     comments: CommentPatterns,
 }
@@ -74,6 +77,7 @@ impl FinderPatterns {
             serde: SerdePatterns::new()?,
             test_branch: TestBranchPatterns::new()?,
             struct_bounds: StructBoundPatterns::new()?,
+            forbid: ForbidPatterns::new()?,
             erased: ErasedPatterns::new()?,
             comments: CommentPatterns::new()?,
         })
@@ -88,6 +92,7 @@ impl FinderPatterns {
             FinderKind::TestBranches => test_branches::find(env, &self.test_branch, out),
             FinderKind::StructBounds => struct_bounds::find(env, &self.struct_bounds, out),
             FinderKind::ExpectAttrs => expect_attrs::find(env, &self.expect, out),
+            FinderKind::ForbidOverrides => forbid_overrides::find(env, &self.forbid, out),
             FinderKind::ErasedErrors => erased_errors::find(env, &self.erased, out),
             FinderKind::TodoComments => comments::find_todos(env, &self.comments, out),
             FinderKind::CommentedCode => comments::find_commented_code(env, &self.comments, out),

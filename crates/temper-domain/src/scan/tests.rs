@@ -10,6 +10,7 @@ mod engine;
 mod key_cases;
 mod whole_file;
 
+use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use super::{CodeKind, FileRole, Hit, ScanOptions, ScanReport, Scanner, Severity};
@@ -30,7 +31,14 @@ fn scanner() -> &'static Scanner {
 }
 
 fn scan_as(src: &str, kind: CodeKind, file: FileRole) -> ScanReport {
-    scanner().scan(src, &ScanOptions { kind, file })
+    scanner().scan(
+        src,
+        &ScanOptions {
+            kind,
+            file,
+            forbid: None,
+        },
+    )
 }
 
 fn scan(src: &str, kind: CodeKind) -> ScanReport {
@@ -90,9 +98,40 @@ fn sev_of(src: &str, key: &str, kind: CodeKind) -> Vec<&'static str> {
         .collect()
 }
 
+/// The options for a source file of `kind`, with the crate's forbidden lints.
+fn options(kind: CodeKind, forbid: Option<&BTreeSet<String>>) -> ScanOptions<'_> {
+    ScanOptions {
+        kind,
+        file: FileRole::Source,
+        forbid,
+    }
+}
+
+/// A forbidden-lint set.
+fn lints(names: &[&str]) -> BTreeSet<String> {
+    names.iter().map(|&name| name.to_owned()).collect()
+}
+
+/// One rule's hits under `options` as `id:severity@line` (1.x `hitsOf` with `opts`).
+fn hits_with(src: &str, key: &str, options: &ScanOptions<'_>) -> Vec<String> {
+    scanner()
+        .scan(src, options)
+        .hits()
+        .iter()
+        .filter(|h| h.key().as_str() == key)
+        .map(|h| format!("{}:{}@{}", h.id(), severity_name(h.severity()), h.line()))
+        .collect()
+}
+
 /// The whole report as `key id severity@line`, the oracle's "full" list.
 fn full(src: &str, kind: CodeKind) -> Vec<String> {
-    scan(src, kind)
+    full_with(src, &options(kind, None))
+}
+
+/// [`full`] under `options`.
+fn full_with(src: &str, options: &ScanOptions<'_>) -> Vec<String> {
+    scanner()
+        .scan(src, options)
         .hits()
         .iter()
         .map(|h| {
@@ -104,8 +143,16 @@ fn full(src: &str, kind: CodeKind) -> Vec<String> {
 
 /// One rule's hits as `line:msg`.
 fn msgs_of(src: &str, key: &str, kind: CodeKind) -> Vec<String> {
-    has(src, key, kind)
+    msgs_with(src, key, &options(kind, None))
+}
+
+/// [`msgs_of`] under `options`.
+fn msgs_with(src: &str, key: &str, options: &ScanOptions<'_>) -> Vec<String> {
+    scanner()
+        .scan(src, options)
+        .hits()
         .iter()
+        .filter(|h| h.key().as_str() == key)
         .map(|h| format!("{}:{}", h.line(), h.msg()))
         .collect()
 }

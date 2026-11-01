@@ -1,6 +1,7 @@
 //! The per-scan view of one source that the rules read (1.x `makeEnv`).
 
 use std::cell::OnceCell;
+use std::collections::BTreeSet;
 
 use super::lexer::{Comment, LineIndex, Masked};
 use super::regions::{RegionPatterns, Regions, const_regions, test_regions, trait_impl_regions};
@@ -21,6 +22,8 @@ pub(crate) struct Env<'s> {
     pub(crate) regions: Regions,
     pub(crate) kind: CodeKind,
     pub(crate) file: FileRole,
+    /// The lints the crate forbids, which `forbid-override` reads.
+    pub(crate) forbid: Option<&'s BTreeSet<String>>,
     // Interior mutability (OWN-12): each is computed on its first read through `&self` and never
     // changes after, as 1.x's lazy `consts` and `traitImpls` getters; most scans read neither.
     consts: OnceCell<Regions>,
@@ -32,7 +35,7 @@ impl<'s> Env<'s> {
     pub(crate) fn new(
         src: &'s str,
         masked: &'s Masked<'s>,
-        options: &ScanOptions,
+        options: &ScanOptions<'s>,
         patterns: &RegionPatterns,
     ) -> Self {
         let code = masked.code.as_str();
@@ -44,6 +47,7 @@ impl<'s> Env<'s> {
             regions: test_regions(code, patterns),
             kind: options.kind,
             file: options.file,
+            forbid: options.forbid,
             consts: OnceCell::new(),
             trait_impls: OnceCell::new(),
         }

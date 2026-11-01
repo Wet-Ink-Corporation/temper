@@ -124,6 +124,8 @@ pub(crate) enum FinderKind {
     StructBounds,
     /// `#[expect(..)]` attributes, with or without a reason.
     ExpectAttrs,
+    /// `#[allow(..)]` and `#[expect(..)]` of a lint the crate forbids.
+    ForbidOverrides,
     /// `pub fn` signatures that return `String` errors, `Box<dyn Error>`, `anyhow` or `eyre`.
     ErasedErrors,
     /// `TODO`-style comments without a tracking reference.
