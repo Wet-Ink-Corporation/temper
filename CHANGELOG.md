@@ -22,6 +22,8 @@ The lockfile step also retries until `package-lock.json` has an entry for every 
 
 **The 2.0 engine has its scanner's lexer, test regions and first six rules (port Phase 1a).** `temper-domain` masks Rust source as 1.x does, finds test regions, counts tests, ignores and clones, and runs the `unsafe`, `unwrap`, `panic`, `dbg`, `print` and `expect-attr` rules, with 1.x's patterns and texts. It adds the `regex` and `thiserror` dependencies, and `proptest` for tests. Nothing calls it yet; users run 1.x.
 
+**The 2.0 engine runs `temper scan --all` and `temper scan FILES` (port Phase 1d.2a).** Output matches 1.x, except that the text form sorts files by byte order (D16(l)), and a relative path on another Windows drive such as `D:z.rs` resolves against that drive's root (D16(m)). Bare `temper scan` waits for Phase 4. `temper-domain` adds `serde` (`std` only) for the hit JSON. Nothing routes to the engine yet; users run 1.x.
+
 **The 2.0 engine's scanner has all 60 rules (port Phase 1d).** The doc-comment rules, `new_hits` and path classification are in; nothing calls it yet, and users run 1.x.
 
 **The 2.0 engine's scanner has its finders and 58 of the 60 rules (port Phase 1c).** Nothing calls it yet; users run 1.x.

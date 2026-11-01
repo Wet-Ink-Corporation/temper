@@ -8,16 +8,18 @@ domain.
 
 ## Allowed dependencies
 - Workspace crates: none.
-- Third-party, each added by the phase that first uses it (D10, wi-b03273): `regex`, `toml` (features `std`, `parse`, `preserve_order`), `sha2`, `serde` (with `derive`), `serde_json`, `thiserror`. Dev only: `proptest`, `insta`.
+- Third-party, each added by the phase that first uses it (D10, wi-b03273): `regex`, `toml` (features `std`, `parse`, `preserve_order`), `sha2`, `serde`, `serde_json`, `thiserror`. `serde` is in since Phase 1d.2 with `std` only: `Hit`'s `Serialize` is hand-written (1d-12), and `derive` comes with the first derived DTO. Dev only: `proptest`, `insta`, `serde_json` (until a production reader needs it).
 
 ## Public surface
 Re-exported from `lib.rs`, one path each (API-14):
 - `Scanner` (`new`, `scan`), `ScanOptions` (`kind`, `file`, `forbid`), `ScanReport` (`hits`, `into_hits`, `tests`, `ignores`, `clones`), `ScannerSetupError` (`rule`, `source`).
-- `Hit` (`key`, `id`, `severity`, `line`, `text`, `msg`, `fix`, `exception`), `Severity`, `RuleKey`, `RuleId`, `LineNo`.
+- `Hit` (`key`, `id`, `severity`, `line`, `text`, `msg`, `fix`, `exception`, and `Serialize` in 1.x's key order), `HitAt` (`hit`, `file`; `Serialize` appends `file`), `Severity`, `RuleKey`, `RuleId`, `LineNo`.
 - `CodeKind`, `FileRole`, `classify_path` with `LibTarget` (`Present`, `Absent`), `is_build_script`.
 - `new_hits`.
+- `format_hit`, `render_scan_text` and `NOT_A_RUST_PROJECT`: `temper scan`'s texts.
+- `PathStyle` (`Windows`, `Posix`), `unverbatim` and `js_trim`.
 
-Everything else is `pub(crate)`: the JS helpers in `js` (`js_trim`, `truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`. 1d.2 adds `format_hit` and `Serialize` on `Hit` with `HitAt`, and Phase 4 `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest.
+Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`, and `hit::Exception`. Phase 4 adds `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest. Node's lexical path algebra lives in `temper-app`, beside its readers (OC-1 B).
 
 ## Invariants
 - No `std::fs`, `std::process`, `std::env`, `SystemTime::now` or threads: every input arrives as a value (ARC-02).
@@ -67,3 +69,7 @@ Typed `thiserror` enums per module, added with the code that needs them (ERR-01,
 | 2026-11-01 | `classify_path` and `is_build_script` live in `scan/classify.rs`; `is_build_script`'s public path is unchanged. | ARC-05 | two-way (wi-358920) |
 | 2026-11-01 | 1.x's "every RULES key is reported" test is a witness table: each key with the first 1.x scan that reports it, so the tests need no shared state or order. | TST-10 | two-way (wi-a22589) |
 | 2026-11-01 | The depth walkers move to `scan/lexer/brackets.rs`, the spin-lock and TODO key cases to `key_cases/locks_and_todos.rs`, and the doc oracle tests to `tests/docs.rs`, bodies unchanged. | ARC-06 | two-way (wi-7d932c) |
+| 2026-11-01 | `Hit`'s `Serialize` is hand-written, with a private `Exception { Requested, Attribute }`, so `exception` sits before `msg` for a covering `#[expect]`'s request and after it for the `expect-attr` finder's own hit, as 1.x's object spread orders them; a derive cannot. `HitAt { hit, file }` is a borrowed view that appends `file`. | OUT-01, OWN-01 | two-way (1d-12, wi-e69138) |
+| 2026-11-01 | Only `PathStyle` and `unverbatim` of §1.3's path helpers land here; Node's `resolve`, `relative`, `isAbsolute`, `dirname` and `join` are `pub(crate)` in `temper-app::paths`, where every reader is. | ARC-05, API-14 | two-way (OC-1 B, wi-30e6a5) |
+| 2026-11-01 | `render_scan_text` and `NOT_A_RUST_PROJECT` are public here, beside `format_hit`, like §1.3's `render_gate`: message texts live in domain. | ARC-05, H-16 | owner (OC-2 A, wi-274f9a) |
+| 2026-11-01 | The 1d.1 review's F3 (a named-field `Witness` in `every_key.rs`) waits for a test-only follow-up PR; F1 (`unhide_like_1x`) and F2 (a pre-sized doctest body) land in 1d.2a. | PROC-05 | two-way (OC-7 B, wi-fbe4e1) |

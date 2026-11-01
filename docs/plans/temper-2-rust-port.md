@@ -252,6 +252,9 @@ impl RelPath { pub fn as_str(&self) -> &str; pub fn is_outside(&self) -> bool; }
 pub fn unverbatim(path: &str, style: PathStyle) -> Cow<'_, str>;   // \\?\C:\x -> C:\x, \\?\UNC\h\s -> \\h\s
 pub fn clean_rel(path: &str) -> String;                            // cleanRel: posix-normalise, strip ./ and trailing /
 pub fn js_trim(text: &str) -> &str;                                // JS String.prototype.trim set (incl. U+FEFF, excl. U+0085)
+// 1d.2a has PathStyle, unverbatim and js_trim; RelPath and clean_rel arrive with their first
+// readers (Phases 2 and 3). Node's lexical path algebra (resolve, relative, isAbsolute,
+// dirname, join) is pub(crate) in temper-app::paths, where every reader is (OC-1 B, wi-30e6a5).
 
 // scan
 pub enum CodeKind { Prod, Bin, Example, Test }
@@ -272,10 +275,13 @@ impl Scanner {
 pub struct ScanOptions<'a> { pub kind: CodeKind, pub file: FileRole, pub forbid: Option<&'a BTreeSet<String>> }
 pub enum FileRole { Source, BuildScript }                     // API-10: not a bool
 pub struct ScanReport { /* hits: Vec<Hit>, tests: usize, ignores: usize, clones: usize */ }  // getters
-pub struct Hit { /* key: RuleKey, id: RuleId, severity, line: LineNo, text: String, msg: Cow<'static, str>, fix: &'static str, exception: Option<String> */ }
-#[derive(Serialize)] on Hit with the 1.x field names (key, id, severity, line, text, msg, fix, exception?, file? added by callers via HitAt)
+pub struct Hit { /* key: RuleKey, id: RuleId, severity, line: LineNo, text: String, msg: Cow<'static, str>, fix: &'static str, exception: Option<Exception> (private: Requested | Attribute) */ }
+// Serialize (hand-written, 1d-12): key, id, severity, line, text, exception? (a covering #[expect]'s request), msg, exception? (the expect-attr finder's own), fix; HitAt { hit, file } appends file
+pub struct HitAt<'a> { pub hit: &'a Hit, pub file: &'a str }   // a view: the caller owns hits and paths
 pub fn new_hits(before: &[Hit], after: Vec<Hit>) -> Vec<Hit>;   // consumes `after` (OWN-02): multiset difference on (key, text)
 pub fn format_hit(hit: &Hit, file: Option<&str>) -> String;
+pub fn render_scan_text(hits: Vec<HitAt<'_>>) -> String;      // temper scan's text report, sorted (D16(l)); like render_gate (OC-2 A, wi-274f9a)
+pub const NOT_A_RUST_PROJECT: &str;                            // "temper: not inside a Rust project (no Cargo.toml found)", no newline (OC-2 A)
 
 // manifest
 pub struct Manifest(toml::Table);
@@ -379,6 +385,11 @@ pub struct ProcessOutput { pub status: ExitKind, pub stdout: Vec<u8>, pub stderr
 pub trait Clock { fn now(&self) -> Timestamp; }
 pub trait Ports { type Files: Files; type Process: ProcessRunner; type Clock: Clock;
                   fn files(&self) -> &Self::Files; fn process(&self) -> &Self::Process; fn clock(&self) -> &Self::Clock; }
+// The ports grow with their readers. Files: 1d.2a has read_text, read_dir and real_path, and
+// existsSync is real_path(..) is Ok(Some(_)) because metadata is lstat (OC-9 B, wi-bb98f7); the
+// rest arrive from Phase 2. ProcessRequest: 1d.2b has stdout_cap: ByteCap and no env, and
+// Phase 4 replaces stdout_cap with StdoutSink and adds env (OC-8 B, wi-b175fb). Ports: Files in
+// 1d.2a, Process in 1d.2b, Clock in Phase 3.
 
 /// Environment read once by the binary (ARC-11).
 pub struct RunEnv { pub cwd: PathBuf, pub plugin_root: Option<PathBuf>, pub plugin_data: Option<PathBuf>, pub env_file: Option<PathBuf>,
@@ -387,7 +398,7 @@ pub struct RunEnv { pub cwd: PathBuf, pub plugin_root: Option<PathBuf>, pub plug
 
 pub struct Engine<P> { ports: P, env: RunEnv, scanner: Scanner, rules: RuleMap }   // no bounds on the struct (API-21)
 impl<P: Ports> Engine<P> {
-    pub fn new(ports: P, env: RunEnv, scanner: Scanner, rules: RuleMap) -> Self;
+    pub fn new(ports: P, env: RunEnv, scanner: Scanner, rules: RuleMap) -> Self;   // 1d.2a: new(ports, env, scanner); rules arrives in Phase 5 (1d-15, wi-12a32e)
     pub fn hook(&self, event: HookEvent, input: &HookInput) -> Result<HookOutcome, HookError>;
     pub fn gate(&self, opts: &GateOptions) -> Result<CommandOutput, CommandError>;
     pub fn scan(&self, args: &ScanArgs) -> Result<CommandOutput, CommandError>;
@@ -566,6 +577,7 @@ JS flags and windows (Phase 1b, wi-afd1cd, wi-1636ef):
 - (i) **Retired tests** (H-12): the 6 `vendor.test.mjs` tests, and "CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs" and "CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else" in `baseline.test.mjs`, because vendoring, `--vendor-only` and optional modules no longer exist. The `--vendor-only` test was added to this list by the owner on 2026-10-19, amending wi-348e0b (#64). Replacement tests: setup pins `.claude/temper-version`; setup reports drift between the pin and the binary; `--migrate` replaces only known templates; `--force` on a pinned repository updates only `.claude/temper-version` (replaces the `--vendor-only` test); the example workspace's pin equals the plugin version.
 - (j) SessionStart's timeout rises from 30 to 900 s in `hooks.json` (D6-C).
 - (k) **Retired assertion** (H-12): the `ms < 10_000` wall-clock bound in `scan.test.mjs`'s "large file: a seeded hit near the end of ~5000 lines is reported in bounded time". The Rust port keeps its hit assertion (`scan::tests::whole_file::large_file_seeded_hit_near_the_end_is_reported`), and the bound moves to Phase 1e's scanner corpus CI job as a per-file scan-time budget, because a wall-clock unit test breaks TST-10. Decided by the owner on 2026-11-01 (wi-825595).
+- (l) The text form of `temper scan` sorts files by byte order; 1.x's `localeCompare` order depends on the locale (owner, wi-ecb9dd, 2026-11-01).
 - (m) A Windows drive-relative argument on another drive than the working directory's (`temper scan D:src\x.rs` with the cwd on `C:`) resolves against that drive's root, `D:\`. 1.x consults the hidden `=D:` variable, which only `cmd.exe` sets; when it is unset Node gives the same answer. Decided by the owner on 2026-11-01 (wi-7d8074).
 
 #### 2.5 What is deliberately not parity-tested
@@ -583,10 +595,10 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 | 0a | Workspace skeleton, template lints, 4 crates and xtask with charters, `temper --version`, CI Rust job (fmt, clippy, test, doc, deny on Linux, Windows and macOS (wi-e85ef8), plus an MSRV job) | none |
 | 0b | **Distribution spike**: `scripts/launch.mjs` with node:test tests; `xtask npm-pack`, `check-npm-lock`, `versions`; `release.yml`; publish `2.0.0-alpha.1` to npm under dist-tag `next` from a throwaway `release/2.0.0-alpha.1` branch; `verify-install` matrix on 6 runners (`npm ci --ignore-scripts` in a copied plugin dir, 60 s budget, `--version`); verify-install also covers a claude.ai organization-synced install and a cloud environment setup-script install (manual, recorded in Progress); both must pass before 0b exits (wi-48fb44). Before the first publish, the owner publishes six `0.0.0` placeholder packages by hand with a short-lived token, revokes it, and sets up npm trusted publishing on each, because npm sets up a trusted publisher only for a package that exists (wi-428ed1; checked against npm's rule before acting). `package.json` is **not** on `main` yet. | none |
 | 0c | Fallback build in the launcher: lock, `cargo build --release --locked`, atomic install, `build.failed` marker; D6 behaviours tested with the binary absent | none |
-| 1 | Domain: lexer, regions, rules, finders, `Scanner`, `new_hits`, `classify_path`; scanner differential corpus job. App: minimal `discover`, `crate_of`, `rel_to` (verbatim, 8.3 and symlinked-ancestor cases). `temper scan` | `scan` |
+| 1 | Domain: lexer, regions, rules, finders, `Scanner`, `new_hits`, `classify_path`; scanner differential corpus job. App: minimal `discover`, `crate_of`, `rel_to` (verbatim, 8.3 and symlinked-ancestor cases). `temper scan` | none (`scan` graduates in Phase 4, 1d-10 A) |
 | 2 | Manifest, config, glob; hook I/O; telemetry; skill markers. Handlers `pre-bash`, `pre-edit`, `post-tool`, `user-prompt` (the hot path) | `hook pre-bash`, `hook pre-edit`, `hook post-tool`, `hook user-prompt` |
 | 3 | Fingerprint (parity corpus), sessions (base, start-fp, prune), gate-cache read, verdict extract, validate and record. Handlers `session-start`, `subagent-start`, `pre-handback`, `subagent-stop` (reviewer branch); `status` | those hooks, `status` |
-| 4 | `StdProcess` with timeouts; gate steps, manifests step, scan step, cache, render; `stop` and `subagent-stop` (implementer branch); `temper gate` | `gate`, `hook stop`, `hook subagent-stop` |
+| 4 | `StdProcess` with timeouts; gate steps, manifests step, scan step, cache, render; `stop` and `subagent-stop` (implementer branch); `temper gate`; bare `temper scan` (1.x `scanChanged`) | `gate`, `hook stop`, `hook subagent-stop`, `scan` (1d-10 A, wi-ca29db) |
 | 5 | Cargo message parser (fixtures `clippy-*.jsonl`, `rustdoc-capped.jsonl`), collection and cache, temporary-index diff, renames, crate aliases, ratchet, tighten, init, update, check; `tests/e2e/brownfield.sh` against Rust (`TEMPER_ENGINE=rust`) | `baseline` |
 | 6 | Report model, Markdown and HTML (golden sample), CLI | `report` |
 | 7 | `setup` (templates from `TEMPER_PLUGIN_ROOT`, `.claude/temper-version` pin, `--migrate` with the known-template hash table), `stats` (with `--branch`), `telemetry push`; template changes (§6) prepared on a branch | `setup`, `stats`, `telemetry` |
@@ -598,8 +610,10 @@ Phase 1 lands as six PRs (1d is two, wi-719373), each green with no dead code, b
 - 1c: 9 of the 11 remaining finders, one file per concept (`empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment`, `commented-code`); the regex rules `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and `ScanOptions::forbid` with its only reader (wi-13609d). 58 of the 60 rules in all. The doc group moves to 1d (wi-9f78ea), and `Scanner::rules()` with `RuleInfo` to Phase 4, its first non-test reader (wi-ca74b3).
 - 1d is two PRs (wi-719373):
   - 1d.1: the doc group (`doc-unwrap`, `doc-arg-sections`, doc blocks, the lazy `Env::doc` and `is_rust_fence`, specified in the 1c plan's Appendix A) and the 1.x tests that need the whole table; `new_hits` (wi-46a7f4) and `classify_path` with `LibTarget` (wi-208563). All 60 rules; every `scan.test.mjs` test has a Rust home.
-  - 1d.2: the `temper scan` vertical slice: `format_hit`, `Serialize` on `Hit`, the domain path helpers, the app's `discover`, `crate_of` and `rel_to`, the host's `StdFiles` and `StdProcess`, and the `temper scan` CLI; `serde` and `wait-timeout` added. It gets its own plan once its open calls are settled.
-- 1e: the parity harness's `scan` cases and the scanner differential-corpus job, which also carries the scan-time bound retired from the "large file" unit test (D16(k), wi-825595); `scan` graduates once green on Linux, Windows and macOS.
+  - 1d.2: the `temper scan --all` and `temper scan FILES` vertical slice, in two PRs (OC-5 B, wi-368b47):
+    - 1d.2a: everything without processes: `Serialize` on `Hit` with `HitAt`, `format_hit`, `render_scan_text`, `PathStyle` and `unverbatim`; the app's `Files` port, Node's path rules, the Cargo-walk `discover`, `crate_of`, `rel_to` and `walk`, and `Engine::scan`; the host's `StdFiles`; the `temper scan` CLI. `serde` added.
+    - 1d.2b: `ProcessRunner`, the host's `StdProcess` and the git top level in `discover`; `wait-timeout` added.
+- 1e: the parity harness's `scan` cases and the scanner differential-corpus job, which also carries the scan-time bound retired from the "large file" unit test (D16(k), wi-825595). Graduation moves to Phase 4 (1d-10 A); the corpus job runs the Rust binary directly.
 
 Strangler mechanics during phases 1 to 7:
 - `hooks/hooks.json` is unchanged, so users run 1.x exactly.
@@ -788,8 +802,10 @@ Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
 - [x] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
 - [ ] differential corpus (CI job, not a unit test): zero unexplained diffs over the example workspace, the skill code blocks and the registry sources.
 - [ ] `rel_to`: verbatim `\\?\C:\...` and `//?/C:/...` inputs (domain, both `PathStyle`s); 8.3 short name vs long name is the same root (cli/it, `#[cfg(windows)]`, uses `cmd /c for %I in (..) do @echo %~sI` as 1.x does).
-- [ ] `rel_to`: one directory reached through a symlinked ancestor and through its real path is the same root (cli/it, every OS; ported from the 1.3.0 relTo symlink test; the symlink probe and the Windows privilege handling as in `safe_output_path`).
-- [ ] `temper scan --all --json` and `scan FILE` output equal the parity cases (cli/it with the fixture workspace).
+  - [x] 1d.2a: the verbatim half, as `temper_domain::paths::tests::unverbatim_like_1x` and `temper_app::relpath::tests::rel_to_verbatim_inputs_like_1x` (OC-1 B); the 8.3 assertions that the binary cannot observe, on a simulated short name, in `rel_to_falls_back_to_real_paths_when_lexically_outside`.
+  - [ ] 1d.2b: the cli/it 8.3 test, moved by the 1d.2 plan's size rule.
+- [x] `rel_to`: one directory reached through a symlinked ancestor and through its real path is the same root (cli/it, every OS; ported from the 1.3.0 relTo symlink test; the symlink probe and the Windows privilege handling as in `safe_output_path`): `temper-cli/tests/it/scan.rs`, test of the same name, with the rest in `temper_app::relpath::tests::rel_to_falls_back_to_real_paths_when_lexically_outside` (1d.2a).
+- [x] `temper scan --all --json` and `scan FILE` output equal the parity cases (cli/it with the fixture workspace): `temper-cli/tests/it/scan.rs` against 1.x's recorded output, the text form with D16(l) (1d.2a); the parity harness's cases follow in 1e.
 
 Phase 2: manifests, config, hooks hot path
 - [ ] `Manifest` parses the shapes temper reads; CRLF, escapes, and invalid input give `Err` (ported toml tests; the hand-written parser's own edge tests are replaced by the same inputs through `toml`, D16(c)).
@@ -929,7 +945,7 @@ Phase 8: cutover
 | D13 user CI install | install-action / cargo install / curl | install-action (binstall) | owner (wi-37c1df) | A: install-action |
 | D14 pin location | `.claude/temper-version` / temper.json / workflow | `.claude/temper-version` | owner (wi-3b5428) | A: `.claude/temper-version` |
 | D15 1.x migration | hash-guarded rewrite / manual / force | hash-guarded `--migrate` | owner (wi-cdcecc) | A: hash-guarded `--migrate` |
-| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64); (k) added by wi-825595 on 2026-11-01 |
+| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64); (k) added by wi-825595 on 2026-11-01; (l) by wi-ecb9dd and (m) by wi-7d8074 on 2026-11-01 |
 | D17 PATH export | yes / no | yes | owner (wi-1d4cd6) | A: export |
 | Crate licence | MIT / MIT OR Apache-2.0 | MIT | owner (wi-4679b3) | B: `MIT OR Apache-2.0` (override); add `LICENSE-APACHE`; plugin stays MIT |
 
@@ -971,4 +987,5 @@ Phase 8: cutover
 - 2026-11-01: Phase 1b built on `wip-1b-scanner` (plan `.temper/plans/port-phase-1b.md`): 40 more regex rules in 1.x table order (46 of 60), their look-around and keep predicates, the JS `m` and `i` flags, UTF-16 back-windows, comment records, const and trait-impl regions, and a fallible `js::translate`. `allow-attr`, `discard-ok`, `empty-err-arm` and `ScanOptions::forbid` moved to 1c (wi-13609d). §1.6's predicate table was corrected where it was not faithful to JS backtracking (wi-31f653). Calls 1b-1 to 1b-10 are two-way defaults (wi-13609d, wi-31f653, wi-afd1cd, wi-1636ef, wi-ef9d9d, wi-d31f39, wi-cbeff6, wi-5cb4c8, wi-28a72e, wi-de1207). A local differential over 9,003 files (this repository's Rust and the cargo registry sources), scanned as prod and test and again as bin and example build scripts, matched 1.x `scanSource` filtered to the 46 keys byte for byte (301,336 hits).
 - 2026-11-01: Phase 1c built on `wip-1c-scanner` (plan `.temper/plans/port-phase-1c.md`): `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and the finders `empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment` and `commented-code` (58 of 60 rules); `ScanOptions` gains `forbid` and a lifetime as §1.3 writes it (wi-2d7b05); comment records gain `CommentKind` (wi-91ace5); the 1b review's follow-ups F1 to F4, including the test split by 1.x group (wi-bd9fd8). The doc group moves to 1d (wi-9f78ea) and `Scanner::rules()` to Phase 4 (wi-ca74b3); `struct-bounds`' run-time regexes are hand-written matchers (wi-5842d0), and `other_arm_binds_err` lives with the `empty-if-let-err` finder (wi-5f034a). The owner retired the "large file" test's wall-clock bound into D16(k) (wi-825595). A local differential over 9,021 files (this repository's Rust and the cargo registry sources), scanned as prod and test, as bin and example build scripts, and as prod with a forbid set, matched 1.x `scanSource` filtered to the 58 keys byte for byte (449,925 hits).
 - 2026-11-01: Phase 1d.1 built on `wip-1d-scanner` (plan `.temper/plans/port-phase-1d.md`): `doc-unwrap` and `doc-arg-sections` with doc blocks and the lazy `Env::doc` (60 of 60 rules), `new_hits`, and `classify_path` with `LibTarget` (owner, wi-208563); `is_build_script` moves to `scan/classify.rs` with its public path unchanged. Every `scan.test.mjs` test now has a Rust home, including the rule-table test and the every-key witness table (wi-a22589). The 1c review's follow-ups: each doc rule seen red on an empty finder, the depth walkers in `lexer/brackets.rs` and the lock and TODO key cases in their own module (wi-7d932c), `body_brace`'s case table; `ScanOptions` stays without `Copy` (wi-a4b3a7). Two-way calls: wi-719373, wi-a4b3a7, wi-46a7f4, wi-afb3e9, wi-e9f84d, wi-358920, wi-a22589, wi-7d932c. A local differential over 9,028 files, with no key filter, matched 1.x byte for byte: `scanSource` as prod and test (182,063 hits, 4,602 hard and 4,606 soft `doc-unwrap`, 274 `doc-arg-sections`), as bin and example build scripts (190,838), and as prod with a forbid set (100,866); `newHits` against each file with its first half removed (39,052 fresh hits); `classifyPath` on every path relative to its package, with both library values.
+- 2026-11-01: Phase 1d.2a built on `wip-1d2-cli` (plan `.temper/plans/port-phase-1d2.md`): `temper scan --all` and `temper scan FILES` in the Rust binary, with no processes (OC-5 B). Domain: a hand-written `Serialize` for `Hit` in 1.x's key order and `HitAt` (1d-12), `format_hit`, `render_scan_text` and `NOT_A_RUST_PROJECT` (owner, OC-2 A, wi-274f9a), `PathStyle`, `unverbatim` and a public `js_trim`; the 1d.1 review's F1 and F2. App: the `Files` port (OC-9 B), Node's `path.posix` and `path.win32` as a `pub(crate)` lexical port (OC-1 B), the Cargo-walk `discover`, `crate_of`, `rel_to` with its real-path fallback, `walk`, and `Engine::new(ports, env, scanner)` with `Engine::scan` (1d-15). Host: `StdFiles` and `HostPorts`. CLI: the `scan` arguments, bare `scan` as the usage text with exit 2 (1d-14 A), and a hand-written cause-chain printer (OC-6 B). New divergences D16(l) (owner, wi-ecb9dd) and D16(m) (owner, OC-4 A, wi-7d8074). `serde` added (`std`, no `derive`). The path port matched Node 22.22.0 on about 400,000 random cases off the tree. A local differential on a git-free copy of this repository, its example workspace and 50 registry crates (8,771 hits in 795 files) matched 1.x byte for byte in `--all --json`; in the text form, the only differences (10 crates) are D16(l)'s byte order. `scan FILES` from inside 5 crates' `src/` matched too.
 - Next: Phase 0a (adds `LICENSE-APACHE`), after 1.5.0 (v1 went live on 2026-10-19) and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).
