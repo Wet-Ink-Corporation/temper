@@ -16,16 +16,22 @@ pub(crate) struct Run {
     pub(crate) stderr: String,
 }
 
+/// The `temper` binary, with git kept from looking for a repository above the system's
+/// temporary directory, so a test's tree is a repository only when the test makes it one.
+fn temper_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_temper"));
+    command.env("GIT_CEILING_DIRECTORIES", std::env::temp_dir());
+    command
+}
+
 /// Run `temper <args..>`.
 pub(crate) fn temper(args: &[&str]) -> Result<Run, Box<dyn Error>> {
-    run(Command::new(env!("CARGO_BIN_EXE_temper")).args(args))
+    run(temper_command().args(args))
 }
 
 /// Run `temper <args..>` in `dir`.
 pub(crate) fn temper_in(dir: &Path, args: &[&str]) -> Result<Run, Box<dyn Error>> {
-    run(Command::new(env!("CARGO_BIN_EXE_temper"))
-        .args(args)
-        .current_dir(dir))
+    run(temper_command().args(args).current_dir(dir))
 }
 
 fn run(command: &mut Command) -> Result<Run, Box<dyn Error>> {
@@ -50,7 +56,7 @@ pub(crate) fn temper_in_into_closed_pipe(
 ) -> Result<Option<i32>, Box<dyn Error>> {
     let (reader, writer) = std::io::pipe()?;
     drop(reader);
-    let status = Command::new(env!("CARGO_BIN_EXE_temper"))
+    let status = temper_command()
         .args(args)
         .current_dir(dir)
         .stdout(writer)
@@ -68,4 +74,17 @@ pub(crate) fn write_tree(root: &Path, files: &[(&str, &str)]) -> TestResult {
         fs::write(path, text)?;
     }
     Ok(())
+}
+
+/// `git init -q` in `dir`.
+pub(crate) fn git_init(dir: &Path) -> TestResult {
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("git init failed in {}: {status}", dir.display()).into())
+    }
 }

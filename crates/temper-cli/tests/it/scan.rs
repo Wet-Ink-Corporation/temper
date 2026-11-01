@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::cli::USAGE;
-use crate::support::{TestResult, temper_in, temper_in_into_closed_pipe, write_tree};
+use crate::support::{TestResult, git_init, temper_in, temper_in_into_closed_pipe, write_tree};
 
 /// The 1d.2 fixture, as `oracle/mk.py` writes it.
 const FIXTURE: [(&str, &str); 18] = [
@@ -296,4 +296,67 @@ fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
 #[cfg(windows)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, link)
+}
+
+/// The `file` values of `temper scan --json` output.
+fn files_of(json: &str) -> Vec<&str> {
+    json.lines()
+        .filter_map(|line| line.trim().strip_prefix("\"file\": "))
+        .collect()
+}
+
+/// A temporary directory with the fixture in `g/rust` and a `g/docs` beside it.
+fn nested_fixture() -> Result<tempfile::TempDir, Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    write_tree(&dir.path().join("g/rust"), &FIXTURE)?;
+    write_tree(&dir.path().join("g/docs"), &[("guide.md", "# Guide\n")])?;
+    Ok(dir)
+}
+
+/// 1.x's `discover` takes git's top level as the root when there is one (Node-verified:
+/// `rust/crates/tool/src/cli.rs` with git, `crates/tool/src/cli.rs` without).
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn scan_paths_are_relative_to_the_git_top_level() -> TestResult {
+    let without_git = nested_fixture()?;
+    let with_git = nested_fixture()?;
+    git_init(&with_git.path().join("g"))?;
+    let scan_cli = |dir: &tempfile::TempDir| {
+        temper_in(
+            &dir.path().join("g/rust/crates/tool"),
+            &["scan", "src/cli.rs", "--json"],
+        )
+    };
+
+    let runs = [scan_cli(&with_git)?, scan_cli(&without_git)?];
+
+    assert_eq!(
+        runs.each_ref().map(|run| (files_of(&run.stdout), run.code)),
+        [
+            (vec!["\"rust/crates/tool/src/cli.rs\""], Some(1)),
+            (vec!["\"crates/tool/src/cli.rs\""], Some(1)),
+        ],
+        "{runs:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_git_repository_without_cargo_toml_above_the_cwd_is_not_a_rust_project() -> TestResult {
+    let dir = nested_fixture()?;
+    let top = dir.path().join("g");
+    git_init(&top)?;
+
+    let runs = [
+        temper_in(&top, &["scan", "--all"])?,
+        temper_in(&top.join("docs"), &["scan", "--all"])?,
+    ];
+
+    assert_eq!(
+        runs.map(|run| (run.code, run.stdout, run.stderr)),
+        [(); 2].map(|()| (Some(2), String::new(), NOT_A_RUST_PROJECT.to_owned())),
+        "the Cargo.toml in g/rust is below the cwd"
+    );
+    Ok(())
 }
