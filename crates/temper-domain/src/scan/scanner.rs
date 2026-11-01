@@ -36,7 +36,7 @@ pub enum CodeKind {
 pub enum FileRole {
     /// Any other source file.
     Source,
-    /// `build.rs` at the crate root (see [`is_build_script`]).
+    /// `build.rs` at the crate root (see [`is_build_script`](super::is_build_script)).
     BuildScript,
 }
 
@@ -50,15 +50,6 @@ pub struct ScanOptions<'a> {
     /// The lints the crate forbids (`unsafe_code`, `clippy::unwrap_used`), which the
     /// `forbid-override` rule reads. `None`, or an empty set, finds nothing.
     pub forbid: Option<&'a BTreeSet<String>>,
-}
-
-/// Is the crate-relative path `rel_to_crate` the crate's build script (`build.rs` at its root)?
-///
-/// 1.x compares after turning `\` into `/`; `build.rs` has no separator, so that is plain
-/// equality.
-#[must_use]
-pub fn is_build_script(rel_to_crate: &str) -> bool {
-    rel_to_crate == "build.rs"
 }
 
 /// A built-in scanner pattern did not compile. This is a bug in temper; a unit test guards it.

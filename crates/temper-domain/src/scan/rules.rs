@@ -122,6 +122,10 @@ pub(crate) enum FinderKind {
     TestBranches,
     /// Trait bounds on a generic `struct` or `enum` definition.
     StructBounds,
+    /// Unwrap, expect and panics in compiled doctest fences.
+    DocUnwrap,
+    /// `# Arguments`/`# Returns` sections in doc prose.
+    DocArgSections,
     /// `#[expect(..)]` attributes, with or without a reason.
     ExpectAttrs,
     /// `#[allow(..)]` and `#[expect(..)]` of a lint the crate forbids.

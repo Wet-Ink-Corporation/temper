@@ -1,7 +1,10 @@
 //! The escape-hatch scanner (1.x `scan.mjs` and `lexer.mjs`): pattern rules over masked Rust
-//! source, with test regions and the test, ignore and clone counts.
+//! source, with test regions and the test, ignore and clone counts, plus path classification
+//! and the new-hit difference.
 
+mod classify;
 mod counts;
+mod doc_blocks;
 mod env;
 mod finders;
 mod hit;
@@ -15,7 +18,6 @@ mod strategies;
 #[cfg(test)]
 mod tests;
 
-pub use hit::{Hit, LineNo, RuleId, RuleKey, Severity};
-pub use scanner::{
-    CodeKind, FileRole, ScanOptions, ScanReport, Scanner, ScannerSetupError, is_build_script,
-};
+pub use classify::{LibTarget, classify_path, is_build_script};
+pub use hit::{Hit, LineNo, RuleId, RuleKey, Severity, new_hits};
+pub use scanner::{CodeKind, FileRole, ScanOptions, ScanReport, Scanner, ScannerSetupError};

@@ -3,8 +3,9 @@
 //!
 //! Nothing here touches the file system, processes, the environment or the clock; the
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
-//! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner's
-//! lexer, test regions and 58 of the 60 rules (Phases 1a to 1c), which nothing calls yet.
+//! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner
+//! with its lexer, test regions and all 60 rules, path classification and the new-hit difference
+//! (Phases 1a to 1d), which nothing calls yet.
 //!
 //! # Quick start
 //!
@@ -25,6 +26,6 @@ mod js;
 mod scan;
 
 pub use scan::{
-    CodeKind, FileRole, Hit, LineNo, RuleId, RuleKey, ScanOptions, ScanReport, Scanner,
-    ScannerSetupError, Severity, is_build_script,
+    CodeKind, FileRole, Hit, LibTarget, LineNo, RuleId, RuleKey, ScanOptions, ScanReport, Scanner,
+    ScannerSetupError, Severity, classify_path, is_build_script, new_hits,
 };

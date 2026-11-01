@@ -3,6 +3,7 @@
 use std::cell::OnceCell;
 use std::collections::BTreeSet;
 
+use super::doc_blocks::{DocBlockPatterns, DocBlocks, doc_blocks};
 use super::lexer::{Comment, LineIndex, Masked};
 use super::regions::{RegionPatterns, Regions, const_regions, test_regions, trait_impl_regions};
 use super::scanner::{CodeKind, FileRole, ScanOptions};
@@ -25,9 +26,11 @@ pub(crate) struct Env<'s> {
     /// The lints the crate forbids, which `forbid-override` reads.
     pub(crate) forbid: Option<&'s BTreeSet<String>>,
     // Interior mutability (OWN-12): each is computed on its first read through `&self` and never
-    // changes after, as 1.x's lazy `consts` and `traitImpls` getters; most scans read neither.
+    // changes after, as 1.x's lazy `consts`, `traitImpls` and `doc` getters; most scans read
+    // none of them.
     consts: OnceCell<Regions>,
     trait_impls: OnceCell<Regions>,
+    doc: OnceCell<DocBlocks<'s>>,
 }
 
 impl<'s> Env<'s> {
@@ -50,6 +53,7 @@ impl<'s> Env<'s> {
             forbid: options.forbid,
             consts: OnceCell::new(),
             trait_impls: OnceCell::new(),
+            doc: OnceCell::new(),
         }
     }
 
@@ -63,6 +67,12 @@ impl<'s> Env<'s> {
     pub(crate) fn consts(&self, patterns: &RegionPatterns) -> &Regions {
         self.consts
             .get_or_init(|| const_regions(self.code, patterns))
+    }
+
+    /// The doc comments of the source, split into fences and prose, computed on first use.
+    pub(crate) fn doc(&self, patterns: &DocBlockPatterns) -> &DocBlocks<'s> {
+        self.doc
+            .get_or_init(|| doc_blocks(self.code, self.comments, patterns))
     }
 
     /// The context of the code at `offset`: test inside a test region, else the file's.

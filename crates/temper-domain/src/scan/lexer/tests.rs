@@ -167,6 +167,29 @@ fn match_angle_follows_1x() {
 }
 
 #[test]
+fn body_brace_follows_1x() {
+    let cases = [
+        ("fn f() {}", 0, Some(7)),
+        ("fn f();", 0, None),
+        ("fn f(a: [u8; 2]) {}", 0, Some(17)),
+        ("fn f() -> X where T: Y {", 0, Some(23)),
+        ("", 0, None),
+        ("abc", 0, None),
+        (") {", 0, Some(2)),
+        ("(;", 0, None),
+        ("(;) {", 0, Some(4)),
+        ("]];{", 0, None),
+        ("x { y", 3, None),
+        ("x { y", 99, None),
+        ("é(é;é){", 0, Some(9)),
+    ];
+
+    for (code, from, want) in cases {
+        assert_eq!(body_brace(code, from), want, "{code:?} from {from}");
+    }
+}
+
+#[test]
 fn split_top_follows_1x() {
     let cases: [(&str, u8, &[&str]); 7] = [
         ("a<b,c>,d(e,f),g", b',', &["a<b,c>", "d(e,f)", "g"]),

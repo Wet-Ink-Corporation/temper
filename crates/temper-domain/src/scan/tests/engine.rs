@@ -113,6 +113,83 @@ fn rules_keep_1x_table_order() {
 }
 
 #[test]
+fn rules_are_the_60_1x_rules_in_order() {
+    let keys: Vec<&str> = RULES.iter().map(|spec| spec.key).collect();
+
+    assert_eq!(
+        keys, KEYS_1X,
+        "the table holds every 1.x rule, in 1.x order"
+    );
+}
+
+/// Is `id` a rust-craft rule id: 1 to 4 ASCII uppercase letters, `-`, 2 ASCII digits (1.x
+/// `/^[A-Z]{1,4}-\d{2}$/`)?
+fn is_rule_id(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(letters, digits)| {
+        (1..=4).contains(&letters.len())
+            && letters.bytes().all(|b| b.is_ascii_uppercase())
+            && digits.len() == 2
+            && digits.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
+/// 1.x `rule table: unique keys, rule ids, four contexts, fix text`. The four contexts and
+/// "exactly one of re/find" hold by construction: `Contexts` has the four fields and `Matcher`
+/// is either a pattern or a finder.
+#[test]
+fn rule_table_unique_keys_rule_ids_four_contexts_fix_text() {
+    let mut seen = std::collections::BTreeSet::new();
+    for spec in RULES {
+        assert!(seen.insert(spec.key), "duplicate key {}", spec.key);
+        assert!(is_rule_id(spec.id), "{}: id {}", spec.key, spec.id);
+        assert!(
+            !spec.fix.is_empty() && !spec.msg.is_empty(),
+            "{}: msg and fix",
+            spec.key
+        );
+    }
+    // Rules added or changed in 1.1 name their rule in the fix text.
+    let v11 = [
+        "assert-in-prod",
+        "ignore-no-reason",
+        "extern-crate",
+        "doc-unwrap",
+        "empty-err-arm",
+        "empty-if-let-err",
+        "thread-spawn",
+        "compiler-fence",
+        "global-allocator",
+        "map-index",
+        "filter-map-ok",
+        "parse-unwrap-or",
+        "seqcst",
+        "fetch-update",
+        "crate-lint-attr",
+        "pub-glob-reexport",
+        "prelude-mod",
+        "pub-smart-ptr",
+        "struct-bounds",
+        "ops-impl",
+        "type-alias-primitive",
+        "get-prefix",
+        "doc-arg-sections",
+        "mutex-unit",
+        "detached-spawn",
+    ];
+    for key in v11 {
+        let spec = RULES.iter().find(|spec| spec.key == key);
+        assert!(spec.is_some(), "{key} is in the table");
+        if let Some(spec) = spec {
+            assert!(
+                spec.fix.contains(spec.id),
+                "{key}: fix text should cite {}",
+                spec.id
+            );
+        }
+    }
+}
+
+#[test]
 fn scan_reports_clone_count() {
     assert_eq!(
         scan("fn f(a: &A) -> A { a.clone() }", CodeKind::Prod).clones(),
