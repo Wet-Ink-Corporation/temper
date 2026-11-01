@@ -285,6 +285,12 @@ dependencies = [
 [[package]]
 name = "temper-app"
 version = "2.0.0-alpha.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "temper-domain",
+ "thiserror",
+]
 
 [[package]]
 name = "temper-cli"
