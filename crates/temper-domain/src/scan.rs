@@ -22,4 +22,4 @@ mod text;
 pub use classify::{LibTarget, classify_path, is_build_script};
 pub use hit::{Hit, HitAt, LineNo, RuleId, RuleKey, Severity, new_hits};
 pub use scanner::{CodeKind, FileRole, ScanOptions, ScanReport, Scanner, ScannerSetupError};
-pub use text::format_hit;
+pub use text::{NOT_A_RUST_PROJECT, format_hit, render_scan_text};
