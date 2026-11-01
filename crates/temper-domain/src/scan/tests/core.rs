@@ -1,7 +1,7 @@
 //! 1.x tests 2 to 8: the hard rules, test regions and `#[expect]` exception requests.
 
 use super::{TEST_REGIONS_SRC, full, hit, hits_of, keys, msgs_of, scan, summary};
-use crate::scan::{CodeKind, Hit, Severity};
+use crate::scan::{CodeKind, Hit, Severity, new_hits};
 
 #[test]
 fn hard_hits_in_production_code() {
@@ -264,6 +264,23 @@ fn allow_attr_and_discard_ok_forms() {
         ["H-10:hard@1"],
         "hard in a binary"
     );
+}
+
+#[test]
+fn new_hits_reports_only_introduced_violations() {
+    let before = scan("fn a() { let x = f().unwrap(); }", CodeKind::Prod).into_hits();
+    let after = scan(
+        "fn a() { let x = f().unwrap(); }\nfn b() { g().unwrap(); }",
+        CodeKind::Prod,
+    )
+    .into_hits();
+
+    let fresh: Vec<usize> = new_hits(&before, after)
+        .iter()
+        .map(|h| h.line().get())
+        .collect();
+
+    assert_eq!(fresh, [2], "one fresh hit, on the new line");
 }
 
 /// 1.x test 8, ported last in 1b so it runs against the whole 1b table (decision 1b-10).

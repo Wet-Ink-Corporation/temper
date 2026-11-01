@@ -16,7 +16,7 @@ mod strategies;
 #[cfg(test)]
 mod tests;
 
-pub use hit::{Hit, LineNo, RuleId, RuleKey, Severity};
+pub use hit::{Hit, LineNo, RuleId, RuleKey, Severity, new_hits};
 pub use scanner::{
     CodeKind, FileRole, ScanOptions, ScanReport, Scanner, ScannerSetupError, is_build_script,
 };

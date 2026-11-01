@@ -1,6 +1,7 @@
 //! What a scan reports: one [`Hit`] per rule match, with its key, rule id, severity and line.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -159,9 +160,105 @@ impl Hit {
     }
 }
 
+/// The hits in `after` that `before` does not have (1.x `newHits`).
+///
+/// A multiset difference on the rule key and the hit's text, so a hit that only moved to
+/// another line is not new. Keeps `after`'s order, and hands back `after`'s own hits rather
+/// than copies.
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::{CodeKind, FileRole, ScanOptions, Scanner, new_hits};
+///
+/// let scanner = Scanner::new()?;
+/// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
+/// let before = scanner.scan("fn a() { dbg!(1); }", &options).into_hits();
+/// let after = scanner.scan("\nfn a() { dbg!(1); }\nfn b() { dbg!(2); }", &options).into_hits();
+///
+/// let fresh: Vec<usize> = new_hits(&before, after).iter().map(|h| h.line().get()).collect();
+/// assert_eq!(fresh, [3]);
+/// # Ok::<(), temper_domain::ScannerSetupError>(())
+/// ```
+#[must_use]
+pub fn new_hits(before: &[Hit], mut after: Vec<Hit>) -> Vec<Hit> {
+    // The count of each text per key. Only looked up, never iterated, so the maps' order is
+    // never observed. One map per key, keyed by `&str`, so a hit of `after` can look up its
+    // text by `str` without borrowing for as long as `before`.
+    let mut pool: HashMap<RuleKey, HashMap<&str, usize>> = HashMap::new();
+    for hit in before {
+        pool.entry(hit.key)
+            .or_default()
+            .entry(hit.text.as_str())
+            .and_modify(|n| *n = n.saturating_add(1))
+            .or_insert(1);
+    }
+    after.retain(|hit| {
+        let Some(n) = pool
+            .get_mut(&hit.key)
+            .and_then(|texts| texts.get_mut(hit.text.as_str()))
+        else {
+            return true;
+        };
+        match n.checked_sub(1) {
+            Some(left) => {
+                *n = left;
+                false
+            }
+            None => true,
+        }
+    });
+    after
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan::{CodeKind, FileRole, ScanOptions, Scanner};
+
+    #[test]
+    fn new_hits_is_a_multiset_on_key_and_text() {
+        let scanner = Scanner::new().expect("every built-in pattern compiles");
+        let hits = |src: &str| {
+            let options = ScanOptions {
+                kind: CodeKind::Prod,
+                file: FileRole::Source,
+                forbid: None,
+            };
+            scanner.scan(src, &options).into_hits()
+        };
+        let one = "fn a() { f().unwrap(); }";
+        let two = format!("{one}\n{one}");
+        let cases: [(&str, &str, &[&str]); 7] = [
+            (
+                "fn a() { f().unwrap(); dbg!(1); }",
+                "fn a() { f().unwrap(); dbg!(1); }\nfn a() { f().unwrap(); dbg!(1); }",
+                &["unwrap@2", "dbg@2"],
+            ),
+            (&two, one, &[]),
+            (one, "\n\n  fn a() { f().unwrap(); }  ", &[]),
+            (one, "fn a() {\n f().unwrap(); }", &["unwrap@2"]),
+            (
+                "fn a() { f().unwrap().unwrap(); }",
+                "fn a() { f().unwrap().unwrap(); }\nfn a() { f().unwrap().unwrap(); }",
+                &["unwrap@2", "unwrap@2"],
+            ),
+            (
+                "",
+                "fn a() { dbg!(1); f().unwrap(); }",
+                &["unwrap@1", "dbg@1"],
+            ),
+            (one, "", &[]),
+        ];
+
+        for (before, after, want) in cases {
+            let fresh: Vec<String> = new_hits(&hits(before), hits(after))
+                .iter()
+                .map(|h| format!("{}@{}", h.key(), h.line()))
+                .collect();
+            assert_eq!(fresh, want, "{before:?} -> {after:?}");
+        }
+    }
 
     #[test]
     fn line_no_counts_from_one_and_floors_at_one() {

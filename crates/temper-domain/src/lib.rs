@@ -26,5 +26,5 @@ mod scan;
 
 pub use scan::{
     CodeKind, FileRole, Hit, LineNo, RuleId, RuleKey, ScanOptions, ScanReport, Scanner,
-    ScannerSetupError, Severity, is_build_script,
+    ScannerSetupError, Severity, is_build_script, new_hits,
 };
