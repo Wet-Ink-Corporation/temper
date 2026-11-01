@@ -6,7 +6,7 @@ use proptest::prelude::*;
 fn masks_strings_raw_strings_chars_and_comments_but_keeps_lifetimes() {
     let src = "fn f<'a>(x: &'a str) -> char { let s = \"x.unwrap()\"; let r = r#\"panic!(\"no\")\"#; // .unwrap()\n let c = '\"'; /* unsafe { } */ 'q' }";
 
-    let code = mask_rust(src);
+    let code = mask_rust(src).code;
 
     assert!(
         !code.contains("unwrap"),
@@ -54,14 +54,14 @@ fn masks_edge_literals_like_1x() {
     ];
 
     for (src, expected) in cases {
-        assert_eq!(mask_rust(src), expected, "masking {src:?}");
+        assert_eq!(mask_rust(src).code, expected, "masking {src:?}");
     }
 }
 
 #[test]
 fn masks_an_astral_char_literal_as_four_spaces() {
     assert_eq!(
-        mask_rust("let e = '😀'; x"),
+        mask_rust("let e = '😀'; x").code,
         "let e = '    '; x",
         "a masked char becomes one space per UTF-8 byte"
     );
@@ -70,7 +70,7 @@ fn masks_an_astral_char_literal_as_four_spaces() {
 #[test]
 fn lexer_escaped_quote_char_literal() {
     assert_eq!(
-        mask_rust("let q = ['\\'', ',', 'a']; let s = \".unwrap()\";"),
+        mask_rust("let q = ['\\'', ',', 'a']; let s = \".unwrap()\";").code,
         "let q = ['  ', ' ', ' ']; let s = \"         \";",
         "the 1.x escaped-quote case"
     );
@@ -149,8 +149,55 @@ fn slice_floors_to_char_boundaries() {
     assert_eq!(slice("ab", 0, 99), "ab", "the end clamps to the length");
 }
 
-fn assert_mask_shape(src: &str) -> Result<(), TestCaseError> {
+#[test]
+fn mask_rust_records_comments() {
+    let src = "a // x\r\nb /* y /* z */ */ c /// d\n//! e\n/** f */ /**/ //// g\n/*! h";
+
+    let comments: Vec<(usize, usize, &str)> = mask_rust(src)
+        .comments
+        .iter()
+        .map(|c| (c.start, c.end, c.text))
+        .collect();
+
+    assert_eq!(
+        comments,
+        [
+            (2, 7, "// x\r"),
+            (10, 25, "/* y /* z */ */"),
+            (28, 33, "/// d"),
+            (34, 39, "//! e"),
+            (40, 48, "/** f */"),
+            (49, 53, "/**/"),
+            (54, 60, "//// g"),
+            (61, 66, "/*! h"),
+        ],
+        "every comment, nested and unterminated ones whole, in 1.x's start, end and text"
+    );
+}
+
+fn assert_comment_shape(src: &str) -> Result<(), TestCaseError> {
     let masked = mask_rust(src);
+    let mut after = 0;
+    for c in &masked.comments {
+        prop_assert!(
+            after <= c.start && c.start < c.end,
+            "comments are sorted and disjoint at {}",
+            c.start
+        );
+        prop_assert_eq!(slice(src, c.start, c.end), c.text);
+        let span = masked.code.as_bytes().get(c.start..c.end).unwrap_or(&[]);
+        prop_assert!(
+            span.iter().all(|&b| matches!(b, b' ' | b'\r' | b'\n')),
+            "the comment at {} is masked",
+            c.start
+        );
+        after = c.end;
+    }
+    Ok(())
+}
+
+fn assert_mask_shape(src: &str) -> Result<(), TestCaseError> {
+    let masked = mask_rust(src).code;
     prop_assert_eq!(masked.len(), src.len());
     for (k, (&m, &s)) in masked.as_bytes().iter().zip(src.as_bytes()).enumerate() {
         prop_assert!(m == s || m == b' ', "byte {} changed to {:?}", k, m);
@@ -169,5 +216,15 @@ proptest! {
     #[test]
     fn mask_preserves_length_and_newlines_on_token_soup(src in token_soup()) {
         assert_mask_shape(&src)?;
+    }
+
+    #[test]
+    fn comments_are_sorted_disjoint_and_masked(src in any::<String>()) {
+        assert_comment_shape(&src)?;
+    }
+
+    #[test]
+    fn comments_are_sorted_disjoint_and_masked_on_token_soup(src in token_soup()) {
+        assert_comment_shape(&src)?;
     }
 }

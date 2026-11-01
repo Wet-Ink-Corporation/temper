@@ -199,8 +199,9 @@ impl Scanner {
     /// ```
     #[must_use]
     pub fn scan(&self, src: &str, options: &ScanOptions) -> ScanReport {
-        let code = mask_rust(src);
-        let env = Env::new(src, &code, options, &self.predicates.regions);
+        let masked = mask_rust(src);
+        let env = Env::new(src, &masked, options, &self.predicates.regions);
+        let code = env.code;
         let mut hits = Vec::new();
         // One buffer for the whole scan; each rule's matches are drained into hits (F7).
         let mut found = Vec::new();
@@ -210,9 +211,9 @@ impl Scanner {
         }
         ScanReport {
             hits,
-            tests: count_tests(&code, &self.counts),
-            ignores: count_ignored(&code, &self.counts),
-            clones: count_clones(&code, &self.counts),
+            tests: count_tests(code, &self.counts),
+            ignores: count_ignored(code, &self.counts),
+            clones: count_clones(code, &self.counts),
         }
     }
 
@@ -278,9 +279,14 @@ impl Scanner {
                 at = next_char(code, m.end());
                 continue;
             }
+            // Under `m`, a match may begin with the line terminator its `^` consumed.
+            let skip = match pattern.flags {
+                JsFlags::Multiline => js::terminator_len(m.as_str()),
+                JsFlags::Plain | JsFlags::IgnoreCase => 0,
+            };
             let candidate = Candidate {
-                start: m.start(),
-                text: m.as_str(),
+                start: m.start().saturating_add(skip),
+                text: m.as_str().get(skip..).unwrap_or(""),
             };
             if pattern
                 .look

@@ -45,12 +45,50 @@ pub(crate) fn truncate_utf16(text: &str, max_units: usize) -> &str {
     text.get(..cut).unwrap_or(text)
 }
 
+/// The byte offset in `text` where the last `units` UTF-16 code units before `end` begin: the
+/// start of JS's `text.slice(max(0, end16 - units), end16)`. A char that straddles the cut is
+/// left out, and `end` is floored to a char boundary first.
+pub(crate) fn utf16_window_start(text: &str, end: usize, units: usize) -> usize {
+    let end = text.floor_char_boundary(end);
+    let mut left = units;
+    let mut start = end;
+    for (at, c) in text.get(..end).unwrap_or("").char_indices().rev() {
+        let Some(rest) = left.checked_sub(c.len_utf16()) else {
+            break;
+        };
+        left = rest;
+        start = at;
+    }
+    start
+}
+
+/// The byte length of a leading `\r`, U+2028 or U+2029 in `matched` (0 otherwise): the line
+/// terminator that the `m`-flag translation of `^` consumed, so the JS match starts after it.
+///
+/// This assumes no `m` pattern can itself begin by matching one of them, which holds for the
+/// three in the table (they begin with `[ \t]*`, `pub` or `type`, and `fn`).
+pub(crate) fn terminator_len(matched: &str) -> usize {
+    match matched.chars().next() {
+        Some(c @ ('\r' | '\u{2028}' | '\u{2029}')) => c.len_utf8(),
+        _ => 0,
+    }
+}
+
 /// The JS regex flags 1.x patterns use besides `g` (a closed set).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JsFlags {
     /// No flag.
     Plain,
+    /// `m`: `^` also matches after each JS line terminator (`\n`, `\r`, U+2028, U+2029).
+    Multiline,
+    /// `i` without `u`: ASCII letters match either case. JS never folds an ASCII letter with a
+    /// non-ASCII char (`ſ`, the Kelvin sign), which `regex`'s `(?i)` would.
+    IgnoreCase,
 }
+
+/// JS line terminators other than `\n`, as a `regex` class; the `m` translation of `^` consumes
+/// one of them, since `regex`'s multi-line `^` follows only `\n`.
+const JS_LINE_START: &str = r"(?:(?m:^)|[\r\x{2028}\x{2029}])";
 
 /// A JS regex construct with no faithful `regex` translation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +104,11 @@ pub(crate) enum Construct {
     Escape(char),
     /// `\u` without 4 hex digits or `\x` without 2: JS reads a literal `u` or `x`.
     BareHexEscape(char),
+    /// `$` under `m`: JS also ends a line before `\r`, U+2028 and U+2029.
+    MultilineDollar,
+    /// Under `i`, what JS folds beyond single ASCII letters: a non-ASCII char, a `\u` or `\x`
+    /// escape, or a class range.
+    Folded,
 }
 
 impl fmt::Display for Construct {
@@ -76,6 +119,8 @@ impl fmt::Display for Construct {
             Self::ClassDoubleDash => f.write_str("`--` in a class"),
             Self::Escape(c) => write!(f, "`\\{c}`"),
             Self::BareHexEscape(c) => write!(f, "`\\{c}` without its hex digits"),
+            Self::MultilineDollar => f.write_str("`$` under the m flag"),
+            Self::Folded => f.write_str("a char or range the i flag folds"),
         }
     }
 }
@@ -152,13 +197,45 @@ impl<'j> Translator<'j> {
     /// One char outside a class.
     fn char(&mut self, c: char, at: usize) -> Result<usize, UnsupportedJs> {
         let next = at.saturating_add(c.len_utf8());
+        let multiline = self.flags == JsFlags::Multiline;
         match c {
             '\\' => return self.escape(at),
             '[' => return self.open_class(at),
             '.' => self.out.push_str(JS_DOT),
-            _ => self.out.push(c),
+            '^' if multiline => self.out.push_str(JS_LINE_START),
+            '$' if multiline => {
+                return Err(UnsupportedJs {
+                    construct: Construct::MultilineDollar,
+                    at,
+                });
+            }
+            _ => self.literal(c, at)?,
         }
         Ok(next)
+    }
+
+    /// The literal char `c` at byte `at`. Under `i`, an ASCII letter gets its other case: as a
+    /// class of two outside a class, beside it inside one.
+    fn literal(&mut self, c: char, at: usize) -> Result<(), UnsupportedJs> {
+        if self.flags != JsFlags::IgnoreCase || (c.is_ascii() && !c.is_ascii_alphabetic()) {
+            self.out.push(c);
+            return Ok(());
+        }
+        if !c.is_ascii() {
+            return Err(UnsupportedJs {
+                construct: Construct::Folded,
+                at,
+            });
+        }
+        let pair = [c.to_ascii_lowercase(), c.to_ascii_uppercase()];
+        if self.class.is_some() {
+            self.out.extend(pair);
+        } else {
+            self.out.push('[');
+            self.out.extend(pair);
+            self.out.push(']');
+        }
+        Ok(())
     }
 
     /// `[` or `[^`, rejecting the JS-only `[]` and `[^]`.
@@ -197,7 +274,7 @@ impl<'j> Translator<'j> {
                 ClassPrev::Atom
             }
             _ => {
-                self.out.push(c);
+                self.literal(c, at)?;
                 ClassPrev::Atom
             }
         };
@@ -219,7 +296,15 @@ impl<'j> Translator<'j> {
             .strip_prefix('\\')
             .and_then(|e| e.chars().next())
             .is_some_and(is_class_escape);
-        let literal = !after.starts_with(']') && (prev == ClassPrev::ClassEscape || before_escape);
+        let last = after.starts_with(']');
+        let literal = !last && (prev == ClassPrev::ClassEscape || before_escape);
+        let range = !last && !literal && prev != ClassPrev::Start;
+        if range && self.flags == JsFlags::IgnoreCase {
+            return Err(UnsupportedJs {
+                construct: Construct::Folded,
+                at,
+            });
+        }
         self.out.push_str(if literal { r"\-" } else { "-" });
         self.class = Some(ClassPrev::Dash(at));
         Ok(at.saturating_add(1))
@@ -242,42 +327,11 @@ impl<'j> Translator<'j> {
             }
             return Ok(next);
         }
-        let end = match escaped {
-            'u' | 'x' => self.hex_escape(at, escaped)?,
-            'b' if in_class => {
-                self.out.push_str(r"\x08");
-                next
-            }
-            'b' => {
-                self.out.push_str(r"(?-u:\b)");
-                next
-            }
-            'B' if !in_class => {
-                self.out.push_str(r"(?-u:\B)");
-                next
-            }
-            'f' | 'n' | 'r' | 't' | 'v' => {
-                self.out.push('\\');
-                self.out.push(escaped);
-                next
-            }
-            c if c.is_ascii_alphanumeric() => {
-                return Err(UnsupportedJs {
-                    construct: Construct::Escape(c),
-                    at,
-                });
-            }
-            // `regex` reads `\<` and `\>` as word-start and word-end assertions, and rejects a
-            // non-ASCII escape; JS reads both as the char itself.
-            c if c == '<' || c == '>' || !c.is_ascii() => {
-                self.out.push(c);
-                next
-            }
-            c => {
-                self.out.push('\\');
-                self.out.push(c);
-                next
-            }
+        let end = if matches!(escaped, 'u' | 'x') {
+            self.hex_escape(at, escaped)?
+        } else {
+            self.other_escape(escaped, at, in_class)?;
+            next
         };
         if in_class {
             self.class = Some(ClassPrev::Atom);
@@ -285,8 +339,48 @@ impl<'j> Translator<'j> {
         Ok(end)
     }
 
+    /// An escape other than a class or hex escape: `\escaped`, whose `\` is at byte `at`.
+    fn other_escape(
+        &mut self,
+        escaped: char,
+        at: usize,
+        in_class: bool,
+    ) -> Result<(), UnsupportedJs> {
+        match escaped {
+            'b' if in_class => self.out.push_str(r"\x08"),
+            'b' => self.out.push_str(r"(?-u:\b)"),
+            'B' if !in_class => self.out.push_str(r"(?-u:\B)"),
+            'f' | 'n' | 'r' | 't' | 'v' => {
+                self.out.push('\\');
+                self.out.push(escaped);
+            }
+            c if c.is_ascii_alphanumeric() => {
+                return Err(UnsupportedJs {
+                    construct: Construct::Escape(c),
+                    at,
+                });
+            }
+            // `regex` reads `\<` and `\>` as word-start and word-end assertions; JS as literals.
+            '<' | '>' => self.out.push(escaped),
+            // `regex` rejects a non-ASCII escape; JS reads it as the char itself.
+            c if !c.is_ascii() => self.literal(c, at)?,
+            c => {
+                self.out.push('\\');
+                self.out.push(c);
+            }
+        }
+        Ok(())
+    }
+
     /// `\uHHHH` or `\xHH`, copied with its digits; without them JS reads a literal letter.
     fn hex_escape(&mut self, at: usize, letter: char) -> Result<usize, UnsupportedJs> {
+        if self.flags == JsFlags::IgnoreCase {
+            // The escaped char may be a letter, which JS would fold.
+            return Err(UnsupportedJs {
+                construct: Construct::Folded,
+                at,
+            });
+        }
         let digits = if letter == 'u' { 4 } else { 2 };
         let body = self.rest(at.saturating_add(2));
         let hex = body

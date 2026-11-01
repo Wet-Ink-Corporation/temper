@@ -5,33 +5,84 @@ use std::ops::Range;
 
 use super::hit::LineNo;
 
-/// `src` with comments and the contents of string and char literals replaced by spaces.
-///
-/// The result has the same length, and every byte is either unchanged or a space; `\n` and `\r`
-/// are never replaced, so offsets and line numbers carry over to the source. Lifetimes and labels
-/// stay. A masked char becomes one space per UTF-8 byte (1.x writes one per UTF-16 unit).
-pub(crate) fn mask_rust(src: &str) -> String {
+/// A source with its comments and literal contents masked, and its comments (1.x `maskRust`).
+#[derive(Debug)]
+pub(crate) struct Masked<'s> {
+    /// The source with comments and the contents of string and char literals replaced by
+    /// spaces: the same length, every byte unchanged or a space, `\n` and `\r` never replaced.
+    pub(crate) code: String,
+    /// Every `//` and `/* */` comment, in source order.
+    pub(crate) comments: Vec<Comment<'s>>,
+}
+
+/// A comment of the source (1.x `{ start, end, text }`; the `doc` flag arrives with its
+/// readers in 1c, decision 1b-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Comment<'s> {
+    /// The offset of its first `/`.
+    pub(crate) start: usize,
+    /// The offset after it (exclusive).
+    pub(crate) end: usize,
+    /// `src[start..end]`.
+    pub(crate) text: &'s str,
+}
+
+/// Masks `src` and records its comments. Offsets and line numbers carry over from the source to
+/// the masked code. Lifetimes and labels stay. A masked char becomes one space per UTF-8 byte
+/// (1.x writes one per UTF-16 unit).
+pub(crate) fn mask_rust(src: &str) -> Masked<'_> {
     let bytes = src.as_bytes();
     let mut spans = Vec::new();
+    let mut comments = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
         let step = lex_at(src, at);
-        spans.extend(step.mask);
+        match step.span {
+            Some(Span::Comment(range)) => {
+                comments.push(Comment {
+                    start: range.start,
+                    end: range.end,
+                    text: slice(src, range.start, range.end),
+                });
+                spans.push(range);
+            }
+            Some(Span::Literal(range)) => spans.push(range),
+            None => {}
+        }
         at = step.next;
     }
-    render(src, &spans)
+    Masked {
+        code: render(src, &spans),
+        comments,
+    }
+}
+
+/// A span the lexer blanks.
+#[derive(Debug)]
+enum Span {
+    /// The contents of a string or char literal.
+    Literal(Range<usize>),
+    /// A whole comment.
+    Comment(Range<usize>),
 }
 
 /// What the lexer does at one offset: the span to blank, if any, and where to continue.
 #[derive(Debug)]
 struct Step {
-    mask: Option<Range<usize>>,
+    span: Option<Span>,
     next: usize,
 }
 
 impl Step {
     const fn skip(next: usize) -> Self {
-        Self { mask: None, next }
+        Self { span: None, next }
+    }
+
+    const fn literal(range: Range<usize>, next: usize) -> Self {
+        Self {
+            span: Some(Span::Literal(range)),
+            next,
+        }
     }
 }
 
@@ -70,7 +121,7 @@ fn find_from(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 fn line_comment(bytes: &[u8], at: usize) -> Step {
     let end = find_from(bytes, at, b"\n").unwrap_or(bytes.len());
     Step {
-        mask: Some(at..end),
+        span: Some(Span::Comment(at..end)),
         next: end,
     }
 }
@@ -93,7 +144,7 @@ fn block_comment(bytes: &[u8], at: usize) -> Step {
         }
     }
     Step {
-        mask: Some(at..j),
+        span: Some(Span::Comment(at..j)),
         next: j,
     }
 }
@@ -113,14 +164,8 @@ fn raw_string(bytes: &[u8], at: usize) -> Option<Step> {
     close.resize(hashes.saturating_add(1), b'#');
     let body = quote.saturating_add(1);
     Some(match find_from(bytes, body, &close) {
-        Some(end) => Step {
-            mask: Some(body..end),
-            next: end.saturating_add(close.len()),
-        },
-        None => Step {
-            mask: Some(body..bytes.len()),
-            next: bytes.len(),
-        },
+        Some(end) => Step::literal(body..end, end.saturating_add(close.len())),
+        None => Step::literal(body..bytes.len(), bytes.len()),
     })
 }
 
@@ -134,10 +179,7 @@ fn string(bytes: &[u8], at: usize) -> Step {
         j = j.saturating_add(if b == b'\\' { 2 } else { 1 });
     }
     let body = at.saturating_add(1)..j.min(bytes.len());
-    Step {
-        mask: Some(body),
-        next: j.saturating_add(1),
-    }
+    Step::literal(body, j.saturating_add(1))
 }
 
 /// A char literal (`'x'`, `'\''`, `'\u{1F600}'`), or a lifetime or label left as code.
@@ -151,18 +193,12 @@ fn char_or_lifetime(src: &str, at: usize) -> Step {
             j = j.saturating_add(1);
         }
         if bytes.get(j) == Some(&b'\'') {
-            return Step {
-                mask: Some(body..j),
-                next: j.saturating_add(1),
-            };
+            return Step::literal(body..j, j.saturating_add(1));
         }
     } else if let Some(c) = src.get(body..).and_then(|rest| rest.chars().next()) {
         let close = body.saturating_add(c.len_utf8());
         if c != '\'' && bytes.get(close) == Some(&b'\'') {
-            return Step {
-                mask: Some(body..close),
-                next: close.saturating_add(1),
-            };
+            return Step::literal(body..close, close.saturating_add(1));
         }
     }
     Step::skip(body)

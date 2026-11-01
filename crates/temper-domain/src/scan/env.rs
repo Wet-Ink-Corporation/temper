@@ -2,7 +2,7 @@
 
 use std::cell::OnceCell;
 
-use super::lexer::LineIndex;
+use super::lexer::{Comment, LineIndex, Masked};
 use super::regions::{RegionPatterns, Regions, const_regions, test_regions};
 use super::scanner::{CodeKind, FileRole, ScanOptions};
 
@@ -14,6 +14,8 @@ pub(crate) struct Env<'s> {
     pub(crate) src: &'s str,
     /// The masked source.
     pub(crate) code: &'s str,
+    /// The source's comments, in order.
+    pub(crate) comments: &'s [Comment<'s>],
     /// Lines of the masked source (the same as the source's).
     pub(crate) idx: LineIndex,
     pub(crate) regions: Regions,
@@ -25,16 +27,18 @@ pub(crate) struct Env<'s> {
 }
 
 impl<'s> Env<'s> {
-    /// Indexes the lines of the masked `code` of `src` and finds its test regions.
+    /// Indexes the lines of `src`'s `masked` code and finds its test regions.
     pub(crate) fn new(
         src: &'s str,
-        code: &'s str,
+        masked: &'s Masked<'s>,
         options: &ScanOptions,
         patterns: &RegionPatterns,
     ) -> Self {
+        let code = masked.code.as_str();
         Self {
             src,
             code,
+            comments: &masked.comments,
             idx: LineIndex::new(code),
             regions: test_regions(code, patterns),
             kind: options.kind,

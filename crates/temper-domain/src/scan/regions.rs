@@ -115,7 +115,7 @@ mod tests {
     /// The regions as `(start, end)` pairs, the shape of the 1.x oracle's `[[a, b]]`.
     fn regions_of(src: &str) -> Vec<(usize, usize)> {
         let patterns = RegionPatterns::new().expect("the region patterns compile");
-        test_regions(&mask_rust(src), &patterns)
+        test_regions(&mask_rust(src).code, &patterns)
             .0
             .into_iter()
             .map(RangeInclusive::into_inner)
@@ -201,7 +201,7 @@ mod tests {
         let src = "const A: u8 = 1;\nfn f<const N: usize>() { const { assert!(true) }; }\nfn g(x: u8, const B: u8) {}\nconst _: () = assert!(true);";
         let patterns = RegionPatterns::new().expect("the region patterns compile");
 
-        let regions: Vec<(usize, usize)> = const_regions(&mask_rust(src), &patterns)
+        let regions: Vec<(usize, usize)> = const_regions(&mask_rust(src).code, &patterns)
             .0
             .into_iter()
             .map(RangeInclusive::into_inner)

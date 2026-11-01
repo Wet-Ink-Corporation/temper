@@ -116,6 +116,90 @@ fn non_ascii_identity_escape_is_the_char() {
 }
 
 #[test]
+fn ignore_case_folds_ascii_only() {
+    let seqcst = compiled_with(r"\bSeqCst\b", JsFlags::IgnoreCase);
+    let k = compiled_with("k", JsFlags::IgnoreCase);
+    let class = compiled_with("^[ab_]$", JsFlags::IgnoreCase);
+
+    assert_eq!(
+        ["seqcst", "SEQCST", "\u{17F}eqcst"].map(|s| seqcst.is_match(s)),
+        [true, true, false],
+        "JS non-u /i folds ASCII letters, never ſ to s"
+    );
+    assert!(
+        k.is_match("K") && !k.is_match("\u{212A}"),
+        "nor the Kelvin sign to k"
+    );
+    assert_eq!(
+        ["A", "b", "_", "c"].map(|s| class.is_match(s)),
+        [true, true, true, false],
+        "letters in a class fold too"
+    );
+}
+
+#[test]
+fn ignore_case_rejects_what_it_cannot_fold() {
+    assert_eq!(
+        [
+            translate("é", JsFlags::IgnoreCase),
+            translate("x[a-c]", JsFlags::IgnoreCase),
+            translate(r"y\x41", JsFlags::IgnoreCase),
+        ],
+        [
+            unsupported(Construct::Folded, 0),
+            unsupported(Construct::Folded, 3),
+            unsupported(Construct::Folded, 1),
+        ],
+        "JS /i folds é to É, [a-c] to B and \\x41 to a; no 1.x pattern needs any of them"
+    );
+}
+
+#[test]
+fn utf16_window_start_counts_units_not_bytes() {
+    assert_eq!(
+        utf16_window_start("aé😀b", 8, 3),
+        3,
+        "😀 is two units and b one, so the window starts at 😀"
+    );
+    assert_eq!(
+        utf16_window_start("😀b", 5, 2),
+        4,
+        "a char that straddles the cut is left out"
+    );
+    assert_eq!(
+        utf16_window_start("aé", 99, 1),
+        1,
+        "an end past the length is floored to it"
+    );
+}
+
+#[test]
+fn multiline_caret_matches_after_every_js_line_terminator() {
+    let caret = compiled_with("^a", JsFlags::Multiline);
+
+    let found: Vec<bool> = ["x\na", "x\ra", "x\u{2028}a", "x\u{2029}a", "xa"]
+        .into_iter()
+        .map(|s| caret.is_match(s))
+        .collect();
+
+    assert_eq!(
+        found,
+        [true, true, true, true, false],
+        "JS `^` under m follows \\n, \\r, U+2028 and U+2029"
+    );
+    assert_eq!(
+        ["a", "\ra", "\u{2028}a", "\u{2029}a"].map(terminator_len),
+        [0, 1, 3, 3],
+        "the byte length of the terminator the translated `^` consumed"
+    );
+    assert_eq!(
+        translate("a$", JsFlags::Multiline),
+        unsupported(Construct::MultilineDollar, 1),
+        "no 1.x pattern needs `$` under m"
+    );
+}
+
+#[test]
 fn js_space_matches_nbsp_and_bom_but_not_nel() {
     let space = compiled(r"\s");
 
