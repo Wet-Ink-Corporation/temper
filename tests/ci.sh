@@ -79,7 +79,10 @@ cargo test --workspace --all-features --locked
 
 step "scan parity cases (Rust engine against 1.x)"
 cargo build --locked -p temper-cli
-TEMPER_BIN="$PWD/target/debug/temper$([ -f target/debug/temper.exe ] && echo .exe)" node --test tests/parity/scan.test.mjs
+# Relative, not $PWD: under Windows Git Bash $PWD is an MSYS path that node would misread.
+bin="${CARGO_TARGET_DIR:-target}/debug/temper"
+if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
+TEMPER_BIN="$bin" node --test tests/parity/scan.test.mjs
 
 step "1.x scan tests are mapped to Rust tests"
 python3 tests/parity/check_test_map.py

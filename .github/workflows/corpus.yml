@@ -19,7 +19,10 @@ on:
   pull_request:
     paths:
       - 'crates/**'
+      - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.cargo/**'
       - 'scripts/temper.mjs'
       - 'scripts/lib/**'
       - 'skills/rust-craft/**'
@@ -60,23 +63,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-09-28
         with:
           toolchain: 1.98.1
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the Rust engine (release)
+        id: build
         run: cargo build --release --locked -p temper-cli
       # Relative to the checkout: under Windows bash, $PWD is an MSYS path that node would misread.
       - name: Engine path
+        id: engine
         run: |
           exe=""
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
           echo "TEMPER_BIN=target/release/temper$exe" >> "$GITHUB_ENV"
-      # python3 is python on some Windows images; a missing interpreter fails the step.
+      # python3 is python on some Windows images, and may be the Store alias there; doc_examples.py
+      # needs 3.11 (tomllib). No interpreter that runs and is 3.11 or later fails the step.
       - name: Extract the skill's code blocks
+        id: blocks
         run: |
-          PY=$(command -v python3 || command -v python)
+          PY=""
+          for c in python3 python; do
+            if "$c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then PY=$c; break; fi
+          done
+          if [ -z "$PY" ]; then echo "no Python 3.11 or later on PATH" >&2; exit 1; fi
           "$PY" tests/doc_examples.py --extract "$RUNNER_TEMP/doc-blocks"
       - name: Scan parity cases
         run: node --test tests/parity/scan.test.mjs
+      # Runs even when the parity cases fail, so one run gives both results, but only once its
+      # inputs exist.
       - name: Scanner corpus
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.engine.outcome == 'success' && steps.blocks.outcome == 'success' }}
         run: >-
           node tests/parity/corpus.mjs --bin "$TEMPER_BIN"
           --lock Cargo.toml --lock templates/example-workspace/Cargo.toml

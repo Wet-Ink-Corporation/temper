@@ -15,7 +15,7 @@ import { SCAN_FIXTURE, freshCopy, largeFile, snapshotTree, writeTree } from './l
 import { runInFreshCopy } from './lib/cases.mjs';
 import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from './lib/corpus.mjs';
 import { UsageError, parseArgs } from './corpus.mjs';
-import { dropLoneSurrogateTail, maskRoots, sortHitLines } from './lib/normalise.mjs';
+import { byteOrderHits, dropLoneSurrogateTail, maskRoots } from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -78,20 +78,29 @@ test('maskRoots: on win32 both separator spellings and the JSON-escaped form', (
   assert.equal(maskRoots(text, [root], 'linux'), text.replace(root, '<TMP>'));
 });
 
-test('sortHitLines (D16(l)): case-only path order is normalised; other differences stay', () => {
+test('byteOrderHits (D16(l)): 1.x\'s case-only order becomes Rust\'s; nothing else is forgiven', () => {
+  const hit = (sev, file, line) => `[${sev}] H-02 ${file}:${line}: msg. \`x\`\n    fix: f`;
   const summary = '\n2 blocking, 0 exception request(s), 1 advisory\n';
-  const node = `[hard] src/a.rs:2 x\n[hard] src/B.rs:2 y\n[soft] src/c.rs:1 z\n${summary}`;
-  const rust = `[hard] src/B.rs:2 y\n[hard] src/a.rs:2 x\n[soft] src/c.rs:1 z\n${summary}`;
-  assert.equal(sortHitLines(node), sortHitLines(rust));
-  assert.notEqual(sortHitLines(node), sortHitLines(rust.replace('src/c.rs:1', 'src/c.rs:3')));
-  assert.ok(sortHitLines(node).endsWith(summary));
-  // A hit's indented continuation lines (`    fix: ..`) move with it.
-  const fixA = '[hard] src/a.rs:2 x\n    fix: A\n';
-  const fixB = '[hard] src/B.rs:2 y\n    fix: B\n';
-  assert.equal(sortHitLines(`${fixA}${fixB}${summary}`), sortHitLines(`${fixB}${fixA}${summary}`));
-  assert.equal(sortHitLines(`${fixB}${fixA}${summary}`), `${fixB}${fixA}${summary}`);
+  const doc = (...hits) => `${hits.join('\n')}\n${summary}`;
+  // 1.x (localeCompare) puts a.rs before B.rs; Rust (bytes) puts B.rs first.
+  const node = doc(hit('hard', 'src/a.rs', 2), hit('hard', 'src/B.rs', 2), hit('soft', 'src/c.rs', 1));
+  const rust = doc(hit('hard', 'src/B.rs', 2), hit('hard', 'src/a.rs', 2), hit('soft', 'src/c.rs', 1));
+  assert.equal(byteOrderHits(node), rust, 'each hit moves with its fix line; the summary stays');
+  assert.equal(byteOrderHits(rust), rust);
+  // Lines sort as numbers, inside a file.
+  assert.equal(byteOrderHits(doc(hit('hard', 'a.rs', 10), hit('hard', 'a.rs', 9))), doc(hit('hard', 'a.rs', 9), hit('hard', 'a.rs', 10)));
+  // Only 1.x's side is rewritten, so a Rust line-order swap or file-order swap still differs.
+  const lineSwap = doc(hit('hard', 'src/B.rs', 2), hit('hard', 'src/a.rs', 9), hit('hard', 'src/a.rs', 5));
+  assert.notEqual(byteOrderHits(doc(hit('hard', 'src/B.rs', 2), hit('hard', 'src/a.rs', 5), hit('hard', 'src/a.rs', 9))), lineSwap);
+  const fileSwap = doc(hit('hard', 'z.rs', 1), hit('hard', 'y.rs', 1));
+  assert.notEqual(byteOrderHits(doc(hit('hard', 'z.rs', 1), hit('hard', 'y.rs', 1))), fileSwap);
   // A run ends at a severity change: an ask line never moves above a hard one.
-  assert.equal(sortHitLines('[hard] b\n[ask] a\n[hard] a\n'), '[hard] b\n[ask] a\n[hard] a\n');
+  const mixed = doc(hit('hard', 'b.rs', 1), hit('ask', 'a.rs', 1), hit('hard', 'a.rs', 1));
+  assert.equal(byteOrderHits(mixed), mixed);
+  // UTF-8 byte order, as Rust's &str sorts: U+FF21 (3 bytes) before U+1F600 (4 bytes).
+  assert.equal(byteOrderHits(doc(hit('hard', '\u{1F600}.rs', 1), hit('hard', '\uFF21.rs', 1))),
+    doc(hit('hard', '\uFF21.rs', 1), hit('hard', '\u{1F600}.rs', 1)));
+  assert.throws(() => byteOrderHits('[hard] not a hit\n'), { name: 'HarnessError' });
 });
 
 test('dropLoneSurrogateTail (D16(e)): only a lone high surrogate ending a string value', () => {
@@ -103,6 +112,10 @@ test('dropLoneSurrogateTail (D16(e)): only a lone high surrogate ending a string
   assert.deepEqual(dropLoneSurrogateTail(mid), { text: mid, count: 0 });
   const low = '  "text": "ab\\ude00",\n';
   assert.deepEqual(dropLoneSurrogateTail(low), { text: low, count: 0 });
+  // An escaped backslash then the text `ud800` is not a surrogate; an escaped one before a real one is.
+  const escaped = '  "text": "see \\\\ud800",\n';
+  assert.deepEqual(dropLoneSurrogateTail(escaped), { text: escaped, count: 0 });
+  assert.deepEqual(dropLoneSurrogateTail('  "text": "a\\\\\\ud83d",\n'), { text: '  "text": "a\\\\",\n', count: 1 });
 });
 
 test('hermeticEnv: keeps what the engines need, drops TEMPER_*, CLAUDE* and git redirects', () => {
@@ -178,13 +191,16 @@ test('writeTree, freshCopy and snapshotTree: a copy has the same snapshot; skipp
   t.after(() => fs.rmSync(src, { recursive: true, force: true }));
   writeTree(src, { 'a/b.rs': 'x\r\n', 'c.bin': Buffer.from([0, 0xff]), 'target/t.rs': 't' });
   const snap = snapshotTree(src);
-  assert.deepEqual(snap.map(([p]) => p), ['a/b.rs', 'c.bin', 'target/t.rs']);
+  assert.deepEqual(snap.map(([p]) => p), ['a/', 'a/b.rs', 'c.bin', 'target/', 'target/t.rs']);
   const full = freshCopy(src, { skip: [] });
   const trimmed = freshCopy(src);
   t.after(() => [full, trimmed].forEach((d) => fs.rmSync(d, { recursive: true, force: true })));
   assert.deepEqual(snapshotTree(full), snap);
-  assert.deepEqual(snapshotTree(trimmed).map(([p]) => p), ['a/b.rs', 'c.bin']);
+  assert.deepEqual(snapshotTree(trimmed).map(([p]) => p), ['a/', 'a/b.rs', 'c.bin']);
   assert.notEqual(full, src);
+  const missing = path.join(src, 'missing');
+  assert.throws(() => freshCopy(missing), { name: 'HarnessError', message: `not a directory: ${missing}` });
+  assert.throws(() => freshCopy(path.join(src, 'c.bin')), { name: 'HarnessError' });
 });
 
 test('runInFreshCopy: an engine that writes into the tree is caught (C14 wiring)', (t) => {
@@ -194,6 +210,8 @@ test('runInFreshCopy: an engine that writes into the tree is caught (C14 wiring)
   const writer = stub('require("node:fs").writeFileSync("x.tmp", ""); process.stdout.write(process.cwd())');
   const r = runInFreshCopy(writer, src, { args: [], cwd: 'sub' });
   assert.deepEqual(r.wrote, ['sub/x.tmp']);
+  const mkdir = runInFreshCopy(stub('require("node:fs").mkdirSync("state")'), src, { args: [] });
+  assert.deepEqual(mkdir.wrote, ['state/'], 'an empty directory counts as a write');
   assert.equal(r.stdout, '<TMP>/sub'.replaceAll('/', path.sep));
   const quiet = runInFreshCopy(stub('process.exitCode = 1'), src, { args: [] });
   assert.deepEqual({ exit: quiet.exit, wrote: quiet.wrote, stdout: quiet.stdout, stderr: quiet.stderr },

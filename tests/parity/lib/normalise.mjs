@@ -2,6 +2,8 @@
 // that allows it; anything else that differs is a parity failure.
 import fs from 'node:fs';
 
+import { HarnessError } from './error.mjs';
+
 /**
  * Replaces each temp root with `<TMP>`: as given, as its real path (macOS /var is /private/var),
  * and on win32 in both separator spellings and JSON-escaped. Longest first, so an inner root is
@@ -28,33 +30,39 @@ export function maskRoots(text, roots, platform = process.platform) {
   return out;
 }
 
-const HIT_LINE = /^\[(hard|ask|soft)\] /;
+const HIT_LINE = /^\[(hard|ask|soft)\] \S+ (.+?):(\d+): /;
+
+const utf8Order = (a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'));
 
 /**
- * D16(l) (wi-ecb9dd): 1.x orders text-form hits with `localeCompare`, Rust by byte order, so paths
- * that differ only in case (`B.rs`, `a.rs`) come out in another order. Sorts the hits inside each
- * run of one severity, each hit with its indented continuation lines (`    fix: ..`); the blank line
- * and the summary stay where they are. Applied only to text-form cases whose fixture has such a pair.
+ * D16(l) (wi-ecb9dd): 1.x orders text-form hits by file with `localeCompare`, Rust by byte order,
+ * so paths that differ only in case (`B.rs`, `a.rs`) come out in another order. Re-sorts 1.x's
+ * output the way Rust sorts: inside each run of one severity, a stable sort of the hits by file in
+ * UTF-8 byte order, then by line, each hit with its indented continuation lines (`    fix: ..`).
+ * The blank line and the summary stay where they are. Applied to 1.x's side only, so any other
+ * order difference (a line-order swap, a file order that is not D16(l)'s) still fails.
  */
-export function sortHitLines(text) {
+export function byteOrderHits(text) {
   const out = [];
   let run = [];
   let severity = null;
   const flush = () => {
-    out.push(...run.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).flat());
+    run.sort((a, b) => utf8Order(a.file, b.file) || a.line - b.line);
+    out.push(...run.flatMap((h) => h.lines));
     run = [];
     severity = null;
   };
   for (const line of text.split('\n')) {
     const m = HIT_LINE.exec(line);
     if (!m && severity && /^\s/.test(line)) {
-      run.at(-1).push(line);
+      run.at(-1).lines.push(line);
       continue;
     }
+    if (!m && /^\[(hard|ask|soft)\] /.test(line)) throw new HarnessError(`not a hit line: ${JSON.stringify(line)}`);
     if (!m || m[1] !== severity) flush();
     if (m) {
       severity = m[1];
-      run.push([line]);
+      run.push({ file: m[2], line: Number(m[3]), lines: [line] });
     } else {
       out.push(line);
     }
@@ -67,13 +75,14 @@ export function sortHitLines(text) {
  * D16(e): 1.x cuts a hit's `text` at 160 UTF-16 units and can leave half of an astral character,
  * which JSON.stringify writes as a lone `\udXXX` high surrogate; Rust drops the straddling
  * character. Removes such an escape where it ends a string value (before `"` and an optional comma
- * at the end of a line). Applied to 1.x's output only; `count` goes in the report.
+ * at the end of a line), and only after an even number of backslashes, so an escaped backslash
+ * followed by the text `ud800` is left alone. Applied to 1.x's output only; `count` goes in the report.
  */
 export function dropLoneSurrogateTail(json) {
   let count = 0;
-  const text = json.replace(/\\ud[89ab][0-9a-f]{2}"(?=,?\n)/gi, () => {
+  const text = json.replace(/(?<!\\)((?:\\\\)*)\\ud[89ab][0-9a-f]{2}"(?=,?\n)/gi, (_, pairs) => {
     count += 1;
-    return '"';
+    return `${pairs}"`;
   });
   return { text, count };
 }
