@@ -8,8 +8,7 @@
 
 use super::{FinderKind, HARD, JsFlags, Keep, Look, Matcher, OFF, RuleSpec, SOFT, ctx, re};
 
-/// The rules, in 1.x table order: 58 of the 60, ported in Phases 1a to 1c. 1d adds the doc rules
-/// in place.
+/// The rules, in 1.x table order: all 60, ported in Phases 1a to 1d.
 pub(crate) const RULES: &[RuleSpec] = &[
     RuleSpec {
         key: "unsafe",
@@ -610,6 +609,27 @@ pub(crate) const RULES: &[RuleSpec] = &[
         fix_build: None,
         lints: &[],
         matcher: Matcher::Find(FinderKind::StructBounds),
+    },
+    RuleSpec {
+        key: "doc-unwrap",
+        id: "H-02",
+        // rustdoc runs doctests of library crates only; elsewhere the fence is advisory.
+        contexts: ctx(HARD, SOFT, SOFT, SOFT),
+        msg: "unwrap/expect/panic in a doctest",
+        fix: "Doctests are copied verbatim: use `?` with a hidden `# fn main() -> Result<(), Box<dyn std::error::Error>> {` wrapper or a `# Ok::<(), MyError>(())` tail (TST-11, H-02). Fences tagged `text`, `ignore`, `compile_fail` or `should_panic` are not checked.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::DocUnwrap),
+    },
+    RuleSpec {
+        key: "doc-arg-sections",
+        id: "API-15",
+        contexts: ctx(SOFT, SOFT, OFF, OFF),
+        msg: "`# Arguments`/`# Returns` doc section",
+        fix: "Name parameters in the prose and document what the signature cannot say: behaviour, errors, invariants, units (API-15).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::DocArgSections),
     },
     RuleSpec {
         key: "expect-attr",

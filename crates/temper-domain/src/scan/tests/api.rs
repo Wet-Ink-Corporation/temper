@@ -320,6 +320,23 @@ fn type_alias_after_js_line_terminators() {
 }
 
 #[test]
+fn doc_arg_sections_no_arguments_returns() {
+    let bad = "/// Adds two amounts.\n///\n/// # Arguments\n///\n/// * `a` - the first amount\n///\n/// # Returns\n///\n/// The sum.\npub fn add(a: u64, b: u64) -> u64 { a + b }";
+    let lines: Vec<usize> = has(bad, "doc-arg-sections", CodeKind::Prod)
+        .iter()
+        .map(|h| h.line().get())
+        .collect();
+    assert_eq!(lines, [3, 7], "the two section headings");
+    // ledger-domain/src/account.rs
+    let good = "/// Decides a command.\n///\n/// # Errors\n///\n/// Returns a [`Rejection`] when the command would break an account rule.\n///\n/// ```text\n/// # Returns\n/// ```\npub fn decide() {}";
+    assert_eq!(
+        has(good, "doc-arg-sections", CodeKind::Prod),
+        [],
+        "`# Errors` and a heading inside a fence are fine"
+    );
+}
+
+#[test]
 fn detached_spawn_std_threads_and_statement_level_spawns() {
     let key = "detached-spawn";
     let owned = "\nfn start() -> io::Result<thread::JoinHandle<()>> {\n    thread::Builder::new().name(\"worker\".into()).spawn(work)\n}\nasync fn run(tasks: &mut JoinSet<()>) -> io::Result<()> {\n    let handle = tokio::spawn(async move { poll().await });\n    tasks.spawn(async move { poll().await });\n    tokio::spawn(async move { poll().await }).await?;\n    thread::Builder::new().spawn(work)?.join();\n    thread::scope(|s| {\n        s.spawn(|| work());\n    });\n    handle.await?;\n    Ok(())\n}";

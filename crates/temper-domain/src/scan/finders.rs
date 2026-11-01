@@ -1,6 +1,7 @@
 //! The hand-written finders (1.x `find(env)` rules), one module per concept.
 
 pub(crate) mod comments;
+pub(crate) mod doc_rules;
 pub(crate) mod empty_errs;
 pub(crate) mod erased_errors;
 pub(crate) mod expect_attrs;
@@ -13,6 +14,7 @@ pub(crate) mod test_branches;
 use std::borrow::Cow;
 
 use self::comments::CommentPatterns;
+use self::doc_rules::DocRulePatterns;
 use self::empty_errs::IfLetErrPatterns;
 use self::erased_errors::ErasedPatterns;
 use self::expect_attrs::ExpectPatterns;
@@ -65,6 +67,7 @@ pub(crate) struct FinderPatterns {
     forbid: ForbidPatterns,
     erased: ErasedPatterns,
     comments: CommentPatterns,
+    docs: DocRulePatterns,
 }
 
 impl FinderPatterns {
@@ -80,6 +83,7 @@ impl FinderPatterns {
             forbid: ForbidPatterns::new()?,
             erased: ErasedPatterns::new()?,
             comments: CommentPatterns::new()?,
+            docs: DocRulePatterns::new()?,
         })
     }
 
@@ -91,6 +95,8 @@ impl FinderPatterns {
             FinderKind::SerializedHashMaps => serde_hashmaps::find(env, &self.serde, out),
             FinderKind::TestBranches => test_branches::find(env, &self.test_branch, out),
             FinderKind::StructBounds => struct_bounds::find(env, &self.struct_bounds, out),
+            FinderKind::DocUnwrap => doc_rules::find_doc_unwrap(env, &self.docs, out),
+            FinderKind::DocArgSections => doc_rules::find_doc_arg_sections(env, &self.docs, out),
             FinderKind::ExpectAttrs => expect_attrs::find(env, &self.expect, out),
             FinderKind::ForbidOverrides => forbid_overrides::find(env, &self.forbid, out),
             FinderKind::ErasedErrors => erased_errors::find(env, &self.erased, out),

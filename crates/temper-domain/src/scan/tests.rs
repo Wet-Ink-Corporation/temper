@@ -6,7 +6,9 @@ mod attributes;
 mod concurrency;
 mod core;
 mod discards;
+mod docs;
 mod engine;
+mod every_key;
 mod key_cases;
 mod whole_file;
 

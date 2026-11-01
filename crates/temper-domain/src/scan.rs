@@ -2,6 +2,7 @@
 //! source, with test regions and the test, ignore and clone counts.
 
 mod counts;
+mod doc_blocks;
 mod env;
 mod finders;
 mod hit;
