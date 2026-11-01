@@ -223,7 +223,8 @@ jobs:
               if [ "$remote" = "$local" ]; then echo "$name@$VERSION already published; skipped"; continue; fi
               echo "::error::$name@$VERSION is on the registry with integrity $remote, not $local"; exit 1
             fi
-            npm publish "$tgz" --provenance --access public --tag "$tag"
+            # "./" matters: npm reads a bare "tarballs/x.tgz" as a GitHub user/repo shorthand and tries to clone it.
+            npm publish "./$tgz" --provenance --access public --tag "$tag"
           done
 
   lockfile:
