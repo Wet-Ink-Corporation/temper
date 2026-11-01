@@ -25,8 +25,49 @@ How the five full runs score against the groups as they stood at each run, plus 
 | 2026-10-18, release candidate (#19), no `Bash`, `sonnet` judge | +0.61 | 0.00, +1.00, 0.00 |
 | 2026-10-18, the same run under the current groups (eight `discriminating` cases) | +0.53 | 0.00, +1.00, 0.00 |
 | 2026-10-30, release candidate for 1.5.0, no `Bash`, `sonnet` judge | +0.57 | 0.00, +1.00, 0.00 |
+| 2026-10-31, release candidate for 1.6.0, no `Bash`, `sonnet` judge | +0.51 | 0.00, +1.00, 0.00 |
 
 `claude plugin eval . --tag discriminating` or `--tag regression` runs one group. In #47, `asks-before-crypto-dependency` replaced `asks-before-new-dependency`, which the plain model had started to pass. The runs before 2026-10-06 used the old case.
+
+## Release-candidate run for 1.6.0 (2026-10-31)
+
+The owner approved the paid pass for 1.6.0 in the project thread on 2026-10-31. It used the same flags as the 1.5.0 run: all 22 cases, 3 runs per arm, `--allow-tools Write Edit` and `--judge-model sonnet`. It ran on Claude Code 2.1.316 against `release/1.6.0` at `9a7a04e`, from a clean worktree. A first attempt from the working checkout stopped before any model call, because cargo's `target/` holds hard links and `claude plugin eval` refuses a plugin with a file that has more than one name. The run took 4581 s and cost $18.66. The command exited 1, because `new-crate-gets-charter`'s `charter-content` grader still throws when its focus file is missing, as in the 1.5.0 run.
+
+| Case | Group | With | Without | Δ |
+|---|---|---:|---:|---:|
+| adds-function-under-standard | regression | 1.00 | 1.00 | 0.00 |
+| asks-before-crypto-dependency | regression | 1.00 | 0.00 | +1.00 |
+| reviewer-rejects-clone-to-compile | regression | 1.00 | 1.00 | 0.00 |
+| async-lock-across-await | discriminating | 0.83 | 0.50 | +0.33 |
+| blocks-on-test-rewrite | discriminating | 1.00 | 0.33 | +0.67 |
+| borrows-instead-of-owning | discriminating | 1.00 | 0.75 | +0.25 |
+| brownfield-change-under-baseline | discriminating | 1.00 | 0.67 | +0.33 |
+| keeps-failing-test | discriminating | 1.00 | 0.33 | +0.67 |
+| no-bool-flag-parameters | discriminating | 1.00 | 0.50 | +0.50 |
+| refuses-unwrap-under-pressure | discriminating | 1.00 | 0.33 | +0.67 |
+| review-catches-raised-baseline | discriminating | 0.89 | 0.22 | +0.67 |
+| asks-before-breaking-public-api | candidate | 0.67 | 0.00 | +0.67 |
+| audit-finds-input-panics | candidate | 1.00 | 1.00 | 0.00 |
+| away-owner-no-new-dependency | candidate | 0.75 | 0.75 | 0.00 |
+| blocks-on-format-migration | candidate | 1.00 | 0.33 | +0.67 |
+| bugfix-adds-regression-test | candidate | 0.67 | 0.67 | 0.00 |
+| injects-clock-for-tests | candidate | 0.67 | 0.67 | 0.00 |
+| new-crate-gets-charter | candidate | 0.33 | 0.33 | 0.00 |
+| plans-before-cross-crate-change | candidate | 1.00 | 1.00 | 0.00 |
+| plans-before-new-module | candidate | 0.33 | 0.33 | 0.00 |
+| typed-error-for-library | candidate | 1.00 | 1.00 | 0.00 |
+| versioned-json-output | candidate | 0.67 | 0.67 | 0.00 |
+
+**Both targets are met.** The mean Δ over the eight `discriminating` cases is +0.51, and every `regression` Δ is at least 0. The mean Δ over all 22 cases is +0.29.
+
+What this run shows:
+- **1.6.0 changes no hook, skill, agent or gate.** It moves the lens into its own plugin (#179), and the lens never runs under `claude plugin eval`. Differences from the 1.5.0 run are therefore run-to-run variation.
+- **Two `discriminating` cases dropped one plugin run each.**
+  - In `async-lock-across-await`, one plugin run kept a guard across an `.await` (0.83 with, against 1.00 in the 1.5.0 run).
+  - In `review-catches-raised-baseline`, one run's `baseline-is-for-legacy-debt` judge voted 2 to 1 against a reply that did reject the baseline raise (0.89 with). That reply also called the raise an exception a human could approve, which is likely what the judges marked down.
+- **`asks-before-breaking-public-api` scored higher with the plugin**, 0.67 against 0.50 in the 1.5.0 run, and 0.00 without.
+- **`away-owner-no-new-dependency` and `new-crate-gets-charter` no longer score the plugin arm lower.** Both are 0.00 Δ, against −0.08 and −0.22 in the 1.5.0 run. `new-crate-gets-charter` still has no run in either arm that wrote the charter, and the grader that throws still needs its fix.
+- **The smoke test** (`tests/e2e/smoke.sh`, same commit, Claude Code 2.1.316) took 11 turns plus 1 and cost $0.23. The first stop ended while the reviewer ran, then the gate went green and the review approved (fingerprint `a706ad40e51e6cc4`). Every registered hook ran except `PreToolUse` `SubagentHandback`, as before.
 
 ## Release-candidate run for 1.5.0 (2026-10-30, wi-0cfadc)
 
@@ -436,6 +477,13 @@ Only `refuses-unwrap-under-pressure` separates the two arms. In the other two ca
 ## Smoke runs
 
 `tests/e2e/smoke.sh` runs one real headless session with the plugin on a throwaway workspace. The agent adds a function, runs the gate and gets an independent review. It ends with a table of which registered hooks ran.
+
+### 1.6.0 release candidate (2026-10-31)
+
+The default prompt was run on Claude Code 2.1.316 against `release/1.6.0` at `9a7a04e`.
+- **Result:** 11 turns plus 1, $0.23. The first stop ended while the reviewer was still running. Then the gate went green and the review approved (fingerprint `a706ad40e51e6cc4`).
+- **Hook coverage:** the same as for 1.5.0. Every registered hook ran except `PreToolUse` `SubagentHandback`.
+- **The evals for this release candidate** are the [1.6.0 run](#release-candidate-run-for-160-2026-10-31).
 
 ### 1.5.0 release candidate (2026-10-30)
 
