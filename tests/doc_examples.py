@@ -7,6 +7,7 @@ Run from anywhere:
     python3 tests/doc_examples.py                          # everything
     python3 tests/doc_examples.py --file references/errors.md --keep
     python3 tests/doc_examples.py -v --no-test             # all diagnostics, skip `cargo test`
+    python3 tests/doc_examples.py --extract DIR            # only write the block modules (scanner corpus)
 
 Code-block conventions (adoption spec "Code-block conventions"):
 
@@ -806,7 +807,12 @@ def main(argv):
     ap.add_argument('--timeout', type=int, default=1800, help='seconds per cargo command (default: %(default)s)')
     ap.add_argument('--skill-dir', default=str(SKILL), help='skill to check (default: %(default)s)')
     ap.add_argument('-v', '--verbose', action='store_true', help='print every diagnostic')
+    ap.add_argument('--extract', metavar='DIR',
+                    help='only write the generated workspace\'s block modules to DIR and exit: no cargo, no scan '
+                         '(the scanner corpus, tests/parity/corpus.mjs)')
     args = ap.parse_args(argv)
+    if args.extract and (args.out or args.keep or args.fetch):
+        ap.error('--extract takes no --out, --keep or --fetch')
     skill = Path(args.skill_dir).resolve()
     t0 = time.monotonic()
 
@@ -820,6 +826,14 @@ def main(argv):
                 b.mod = module_name(b.file, b.line, taken)
                 build_module(b)
             blocks.append(b)
+
+    if args.extract:
+        ws = Path(args.extract).resolve()
+        write_workspace(ws, [b for b in blocks if b.kind == 'do'],
+                        [b for b in blocks if b.kind in ('dont', 'fragment')])
+        n = sum(1 for b in blocks if b.kind in ('do', 'dont', 'fragment'))
+        log(f'doc_examples: extracted {n} blocks to {ws}')
+        return 0
 
     for b in blocks:
         if b.kind == 'toml':

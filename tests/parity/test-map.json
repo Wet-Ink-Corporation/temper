@@ -1,0 +1,473 @@
+{
+  "$comment": "The tests/scan.test.mjs part of the port plan's 1.x-to-Rust test map (§2.2; 1e-9, wi-a9dd30), checked by check_test_map.py. Phase 8 adds the other engine tests.",
+  "source": "tests/scan.test.mjs",
+  "crate": "temper-domain",
+  "tests": [
+    {
+      "node": "masks strings, raw strings, chars and comments but keeps lifetimes",
+      "rust": [
+        "scan::lexer::tests::masks_strings_raw_strings_chars_and_comments_but_keeps_lifetimes"
+      ]
+    },
+    {
+      "node": "hard hits in production code",
+      "rust": [
+        "scan::tests::core::hard_hits_in_production_code"
+      ]
+    },
+    {
+      "node": "test regions allow unwrap/panic but not dbg or unsafe",
+      "rust": [
+        "scan::tests::core::test_regions_allow_unwrap_panic_but_not_dbg_or_unsafe"
+      ]
+    },
+    {
+      "node": "#[expect] with a reason converts a hard hit into an exception request",
+      "rust": [
+        "scan::tests::core::expect_with_reason_turns_hard_hit_into_exception_request"
+      ]
+    },
+    {
+      "node": "allow attribute, erased errors in pub signatures, .ok(); discard",
+      "rust": [
+        "scan::tests::core::allow_attribute_erased_errors_in_pub_signatures_ok_discard"
+      ]
+    },
+    {
+      "node": "newHits reports only introduced violations",
+      "rust": [
+        "scan::tests::core::new_hits_reports_only_introduced_violations"
+      ]
+    },
+    {
+      "node": "path classification",
+      "rust": [
+        "scan::tests::core::path_classification"
+      ]
+    },
+    {
+      "node": "no false positives on idiomatic code",
+      "rust": [
+        "scan::tests::core::no_false_positives_on_idiomatic_code"
+      ]
+    },
+    {
+      "node": "rule table: unique keys, rule ids, four contexts, fix text",
+      "rust": [
+        "scan::tests::engine::rule_table_unique_keys_rule_ids_four_contexts_fix_text"
+      ]
+    },
+    {
+      "node": "assert-in-prod: compile-time assertions are exempt",
+      "rust": [
+        "scan::tests::attributes::assert_in_prod_compile_time_assertions_are_exempt"
+      ]
+    },
+    {
+      "node": "ignore-no-reason: also catches cfg_attr(.., ignore)",
+      "rust": [
+        "scan::tests::attributes::ignore_no_reason_also_catches_cfg_attr_ignore"
+      ]
+    },
+    {
+      "node": "extern-crate: alloc and std in a no_std crate are exempt",
+      "rust": [
+        "scan::tests::attributes::extern_crate_alloc_and_std_are_exempt"
+      ]
+    },
+    {
+      "node": "print: build scripts get the writeln! fix text",
+      "rust": [
+        "scan::tests::attributes::print_build_scripts_get_the_writeln_fix_text"
+      ]
+    },
+    {
+      "node": "doc-unwrap: unwrap/expect/panic in doctest fences",
+      "rust": [
+        "scan::tests::docs::doc_unwrap_unwrap_expect_panic_in_doctest_fences"
+      ]
+    },
+    {
+      "node": "doc-unwrap: idiomatic doctests and non-Rust fences are clean",
+      "rust": [
+        "scan::tests::docs::doc_unwrap_idiomatic_doctests_and_non_rust_fences_are_clean",
+        "scan::finders::doc_rules::tests::is_rust_fence_tokens"
+      ]
+    },
+    {
+      "node": "empty-if-let-err finds the body brace by depth; empty-err-arm allows keep-first-error",
+      "rust": [
+        "scan::tests::discards::empty_if_let_err_finds_the_body_brace_by_depth_empty_err_arm_allows_keep_first_error"
+      ]
+    },
+    {
+      "node": "lexer: escaped quote char literal; ignore counting",
+      "rust": [
+        "scan::lexer::tests::lexer_escaped_quote_char_literal",
+        "scan::counts::tests::counts_reasoned_and_unreasoned_ignores_except_miri",
+        "scan::tests::discards::scan_reports_ignore_count"
+      ]
+    },
+    {
+      "node": "empty-err-arm and empty-if-let-err: silent discards",
+      "rust": [
+        "scan::tests::discards::empty_err_arm_and_empty_if_let_err_silent_discards"
+      ]
+    },
+    {
+      "node": "thread-spawn: std::thread::spawn is refused outside tests",
+      "rust": [
+        "scan::tests::concurrency::thread_spawn_is_refused_outside_tests"
+      ]
+    },
+    {
+      "node": "compiler-fence and global-allocator",
+      "rust": [
+        "scan::tests::concurrency::compiler_fence_and_global_allocator"
+      ]
+    },
+    {
+      "node": "map-index: map[&key] is advisory; slices of references are not indexing",
+      "rust": [
+        "scan::tests::concurrency::map_index_is_advisory_slices_of_references_are_not"
+      ]
+    },
+    {
+      "node": "filter-map-ok and parse-unwrap-or: masked failures are advisory",
+      "rust": [
+        "scan::tests::concurrency::filter_map_ok_and_parse_unwrap_or_are_advisory"
+      ]
+    },
+    {
+      "node": "seqcst and fetch-update: atomics advisories",
+      "rust": [
+        "scan::tests::concurrency::seqcst_and_fetch_update_are_atomics_advisories"
+      ]
+    },
+    {
+      "node": "crate-lint-attr, pub-glob-reexport, prelude-mod",
+      "rust": [
+        "scan::tests::api::crate_lint_attr_pub_glob_reexport_prelude_mod"
+      ]
+    },
+    {
+      "node": "pub-smart-ptr: shared mutable state and dyn in public signatures",
+      "rust": [
+        "scan::tests::api::pub_smart_ptr_shared_mutable_state_and_dyn"
+      ]
+    },
+    {
+      "node": "struct-bounds: bounds belong on impls",
+      "rust": [
+        "scan::tests::api::struct_bounds_bounds_belong_on_impls"
+      ]
+    },
+    {
+      "node": "ops-impl: operators must not overflow silently",
+      "rust": [
+        "scan::tests::api::ops_impl_operators_must_not_overflow_silently"
+      ]
+    },
+    {
+      "node": "type-alias-primitive, get-prefix, mutex-unit",
+      "rust": [
+        "scan::tests::api::type_alias_primitive_get_prefix_mutex_unit"
+      ]
+    },
+    {
+      "node": "doc-arg-sections: no # Arguments / # Returns",
+      "rust": [
+        "scan::tests::api::doc_arg_sections_no_arguments_returns"
+      ]
+    },
+    {
+      "node": "detached-spawn: std threads and statement-level spawns",
+      "rust": [
+        "scan::tests::api::detached_spawn_std_threads_and_statement_level_spawns"
+      ]
+    },
+    {
+      "node": "no new-rule hits on an idiomatic ledger module",
+      "rust": [
+        "scan::tests::whole_file::no_new_rule_hits_on_an_idiomatic_ledger_module"
+      ]
+    },
+    {
+      "node": "commented-out code heuristic ignores prose",
+      "rust": [
+        "scan::tests::whole_file::commented_out_code_heuristic_ignores_prose"
+      ]
+    },
+    {
+      "node": "leak: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::leak_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "leak: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::leak_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "catch-unwind: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::catch_unwind_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "catch-unwind: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::catch_unwind_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "exit: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::exit_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "exit: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::exit_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "let-underscore: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::let_underscore_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "let-underscore: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::let_underscore_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "lazy-static: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::lazy_static_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "lazy-static: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::lazy_static_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "path-attr: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::path_attr_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "path-attr: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::path_attr_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "async-trait: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::async_trait_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "async-trait: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::escape_hatches::async_trait_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "shared-mut: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::shared_mut_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "shared-mut: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::shared_mut_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "global-mut: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::global_mut_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "global-mut: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::global_mut_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "deref-inherit: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::deref_inherit_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "deref-inherit: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::deref_inherit_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "sleep: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::sleep_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "sleep: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::sleep_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "unbounded: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::unbounded_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "unbounded: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::unbounded_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "downcast: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::downcast_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "downcast: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::downcast_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "env-var: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::env_var_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "env-var: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::state_and_time::env_var_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "should-panic: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::should_panic_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "should-panic: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::should_panic_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "weak-assert: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::weak_assert_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "weak-assert: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::weak_assert_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "test-branch: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::test_branch_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "test-branch: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::test_branch_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "serde-hashmap: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::serde_hashmap_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "serde-hashmap: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::serde_hashmap_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "ambient-now: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::ambient_now_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "ambient-now: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::tests_and_finders::ambient_now_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "spin-lock: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::locks_and_todos::spin_lock_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "spin-lock: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::locks_and_todos::spin_lock_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "todo-comment: positive cases pin the current id, severity and line",
+      "rust": [
+        "scan::tests::key_cases::locks_and_todos::todo_comment_positive_cases_pin_id_severity_and_line"
+      ]
+    },
+    {
+      "node": "todo-comment: near-miss cases do not fire",
+      "rust": [
+        "scan::tests::key_cases::locks_and_todos::todo_comment_near_misses_do_not_fire"
+      ]
+    },
+    {
+      "node": "forbid-override: fires only for a lint the crate forbids",
+      "rust": [
+        "scan::tests::whole_file::forbid_override_fires_only_for_a_lint_the_crate_forbids"
+      ]
+    },
+    {
+      "node": "large file: a seeded hit near the end of ~5000 lines is reported in bounded time",
+      "rust": [
+        "scan::tests::whole_file::large_file_seeded_hit_near_the_end_is_reported"
+      ],
+      "retired": "D16(k) (wi-825595): the ms < 10_000 wall-clock bound moved to the scanner corpus job as a per-file scan-time budget (tests/parity/corpus.mjs, .github/workflows/corpus.yml); the hit assertion is ported"
+    },
+    {
+      "node": "every RULES key is reported by at least one scan in this file",
+      "rust": [
+        "scan::tests::every_key::every_rules_key_is_reported_by_its_1x_witness"
+      ]
+    }
+  ]
+}
