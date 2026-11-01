@@ -78,6 +78,11 @@ const fn re(source: &'static str) -> Pattern {
 }
 
 impl Pattern {
+    /// The pattern with JS flags other than `g`.
+    const fn flags(self, flags: JsFlags) -> Self {
+        Self { flags, ..self }
+    }
+
     /// The pattern with the rewrite of the look-around its 1.x source had.
     const fn look(self, look: Look) -> Self {
         Self {
