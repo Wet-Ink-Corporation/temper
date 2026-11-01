@@ -1,0 +1,124 @@
+[
+  {
+    "key": "print",
+    "id": "H-06",
+    "severity": "hard",
+    "line": 2,
+    "text": "println!(\"cargo::rerun-if-changed=build.rs\");",
+    "msg": "print macro in production code",
+    "fix": "Build scripts emit directives with `writeln!(io::stdout().lock(), \"cargo::rerun-if-changed=..\")?` from a `main` that returns `Result` (ARC-17, H-06).",
+    "file": "crates/core/build.rs"
+  },
+  {
+    "key": "dbg",
+    "id": "H-06",
+    "severity": "hard",
+    "line": 2,
+    "text": "dbg!(2);",
+    "msg": "`dbg!` left in code",
+    "fix": "Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.",
+    "file": "crates/core/src/a.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "ask",
+    "line": 3,
+    "text": "v.unwrap()",
+    "exception": "clippy::unwrap_used",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/asks.rs"
+  },
+  {
+    "key": "sleep",
+    "id": "TST-10",
+    "severity": "soft",
+    "line": 7,
+    "text": "std::thread::sleep(d);",
+    "msg": "`thread::sleep`",
+    "fix": "In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).",
+    "file": "crates/core/src/asks.rs"
+  },
+  {
+    "key": "expect-attr",
+    "id": "H-05",
+    "severity": "ask",
+    "line": 1,
+    "text": "#[expect(clippy::unwrap_used, reason = \"the caller checked it\")]",
+    "msg": "lint exception requested for `clippy::unwrap_used`",
+    "exception": "clippy::unwrap_used",
+    "fix": "Exception requests need human approval (H-05).",
+    "file": "crates/core/src/asks.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 2,
+    "text": "v.unwrap()",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/crlf.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 5,
+    "text": "v.unwrap()",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/lib.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 9,
+    "text": "v.expect(\"é\u0001\tx\")",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/lib.rs"
+  },
+  {
+    "key": "dbg",
+    "id": "H-06",
+    "severity": "hard",
+    "line": 4,
+    "text": "dbg!(2);",
+    "msg": "`dbg!` left in code",
+    "fix": "Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.",
+    "file": "crates/core/tests/it.rs"
+  },
+  {
+    "key": "exit",
+    "id": "ARC-14",
+    "severity": "hard",
+    "line": 2,
+    "text": "std::process::exit(2);",
+    "msg": "`process::exit` skips destructors and bypasses error reporting",
+    "fix": "Return `ExitCode` (or `Result`) from `main` and map errors to codes at the edge.",
+    "file": "crates/tool/src/cli.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 3,
+    "text": "x.unwrap();",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/tool/src/main.rs"
+  },
+  {
+    "key": "unsafe",
+    "id": "H-01",
+    "severity": "hard",
+    "line": 2,
+    "text": "unsafe {}",
+    "msg": "`unsafe` is forbidden in this workspace",
+    "fix": "Find a safe API or restructure. A genuine need (FFI) is a human decision: isolate it in a -sys crate and change the lint config with approval.",
+    "file": "scripts/gen.rs"
+  }
+]

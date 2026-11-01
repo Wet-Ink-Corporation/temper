@@ -1,0 +1,8 @@
+[hard] H-02 crates/core/src/lib.rs:5: unwrap/expect in production code. `v.unwrap()`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-02 crates/core/src/lib.rs:9: unwrap/expect in production code. `v.expect("é	x")`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-01 scripts/gen.rs:2: `unsafe` is forbidden in this workspace. `unsafe {}`
+    fix: Find a safe API or restructure. A genuine need (FFI) is a human decision: isolate it in a -sys crate and change the lint config with approval.
+
+3 blocking, 0 exception request(s), 0 advisory

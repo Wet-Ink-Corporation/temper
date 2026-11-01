@@ -295,6 +295,12 @@ dependencies = [
 [[package]]
 name = "temper-cli"
 version = "2.0.0-alpha.0"
+dependencies = [
+ "temper-app",
+ "temper-domain",
+ "temper-host",
+ "tempfile",
+]
 
 [[package]]
 name = "temper-domain"
