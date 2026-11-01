@@ -174,3 +174,13 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 1c | Does the 1b review's test split also split `key_cases.rs`? | Yes, into three files by group. Two-way default, 2026-11-01 (wi-bd9fd8). |
 | port 1c | What shape does `ScanOptions::forbid` take? | §1.3's: `Option<&'a BTreeSet<String>>`, so `ScanOptions` gains a lifetime. Two-way default, 2026-11-01 (wi-2d7b05). |
 | port 1c | Where does `other_arm_binds_err` live? | In `scan/finders/empty_errs.rs`, beside the related finder. Two-way default, 2026-11-01 (wi-5f034a). |
+| port 1d | Does §3's Phase 1d ship as one PR? | No: 1d.1 (the doc rules, `new_hits`, `classify_path`) and 1d.2 (the `temper scan` slice), each under the size bound. Two-way default, 2026-11-01 (wi-719373). |
+| port 1d | Does `ScanOptions` derive `Copy` (1c review F3)? | Not now: adding it later breaks nothing, removing it would. Two-way default, 2026-11-01 (wi-a4b3a7). |
+| port 1d | What is `classify_path`'s second parameter? | `lib: LibTarget { Present, Absent }` rather than §1.3's `bool` (API-10); §1.3 corrected. Owner decision, 2026-11-01 (wi-208563). |
+| port 1d | Does `new_hits` land before its first non-test reader (Phase 2)? | Yes: §1.3 fixes its shape and the Phase 1 test list schedules it. Two-way default, 2026-11-01 (wi-46a7f4). |
+| port 1d | Where do doc blocks live? | `scan/doc_blocks.rs`, beside `regions.rs`, so `env` and `finders` do not depend on each other. Two-way default, 2026-11-01 (wi-afb3e9). |
+| port 1d | Is `is_rust_fence` public? | No, private to `finders/doc_rules.rs`, its only reader. Two-way default, 2026-11-01 (wi-e9f84d). |
+| port 1d | Where do `classify_path` and `is_build_script` live? | A new `scan/classify.rs`; `is_build_script`'s public path is unchanged. Two-way default, 2026-11-01 (wi-358920). |
+| port 1d | How is 1.x's "every RULES key is reported" test ported? | As a `WITNESSES` table, so tests stay independent (TST-10). Two-way default, 2026-11-01 (wi-a22589). |
+| port 1d | How far does the 1c review's lexer split go? | `lexer/brackets.rs` takes every depth walker, the spin-lock and TODO key cases get `locks_and_todos.rs`, and doc oracle tests go to `tests/docs.rs`. Two-way default, 2026-11-01 (wi-7d932c). |
+| port 1d | How does Rust `temper scan` sort files in its text output? | By byte order, a new D16(l) divergence from 1.x's locale-dependent `localeCompare`; lands in 1d.2. Owner decision, 2026-11-01 (wi-ecb9dd). |
