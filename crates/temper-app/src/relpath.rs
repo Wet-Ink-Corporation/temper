@@ -156,4 +156,24 @@ mod tests {
             "the real, long forms are compared"
         );
     }
+
+    /// `realpathSync.native` failing for another reason than a missing path (a permission
+    /// error) sends 1.x's `longPath` to the parent, as a missing path does.
+    #[test]
+    fn rel_to_takes_the_parent_when_real_path_fails() {
+        let files = FakeFiles::new(Posix)
+            .with_link("/var", "/private/var")
+            .with_file("/private/var/ws/src/locked.rs", "")
+            .with_unresolvable("/private/var/ws/src/locked.rs");
+        let env = PathEnv {
+            style: Posix,
+            cwd: "/",
+        };
+
+        assert_eq!(
+            rel_to(&files, env, "/private/var/ws", "/var/ws/src/locked.rs"),
+            "src/locked.rs",
+            "the parent's real path, joined with the file name"
+        );
+    }
 }

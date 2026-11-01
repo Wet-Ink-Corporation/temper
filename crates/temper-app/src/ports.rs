@@ -115,6 +115,6 @@ pub trait Ports {
     /// The file system.
     type Files: Files;
 
-    /// The file system.
+    /// The file-system adapter.
     fn files(&self) -> &Self::Files;
 }

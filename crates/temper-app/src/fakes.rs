@@ -21,6 +21,8 @@ pub(crate) struct FakeFiles {
     listings: BTreeMap<String, Option<Vec<DirEntry>>>,
     /// Prefixes that resolve to another path, as a symlinked ancestor or an 8.3 short name does.
     links: Vec<(String, String)>,
+    /// Paths whose real path fails with an error other than "not found".
+    unresolvable: Vec<String>,
 }
 
 impl FakeFiles {
@@ -30,6 +32,7 @@ impl FakeFiles {
             files: BTreeMap::new(),
             listings: BTreeMap::new(),
             links: Vec::new(),
+            unresolvable: Vec::new(),
         }
     }
 
@@ -63,6 +66,12 @@ impl FakeFiles {
     /// `from` and everything below it resolves to `to` and below.
     pub(crate) fn with_link(mut self, from: &str, to: &str) -> Self {
         self.links.push((from.to_owned(), to.to_owned()));
+        self
+    }
+
+    /// `real_path` of `path` fails, as a permission error makes `realpathSync.native` throw.
+    pub(crate) fn with_unresolvable(mut self, path: &str) -> Self {
+        self.unresolvable.push(path.to_owned());
         self
     }
 
@@ -157,6 +166,13 @@ impl Files for FakeFiles {
 
     fn real_path(&self, path: &Path) -> Result<Option<PathBuf>, FsError> {
         let real = self.unlinked(&text_of(path));
+        if self.unresolvable.contains(&real) {
+            return Err(FsError::new(
+                FsOp::RealPath,
+                path,
+                io::Error::from(io::ErrorKind::PermissionDenied),
+            ));
+        }
         Ok(self.exists(&real).then(|| PathBuf::from(real)))
     }
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use temper_domain::LibTarget;
 use temper_domain::PathStyle::{Posix, Windows};
 
-use super::{CrateRoot, Project, crate_of, declares_package, discover};
+use super::{CrateRoot, Project, crate_of, declares_package, discover, exists};
 use crate::engine::RunEnv;
 use crate::fakes::FakeFiles;
 use crate::paths::PathEnv;
@@ -121,4 +121,21 @@ fn discover_is_none_without_a_cargo_toml() {
     };
 
     assert_eq!(discover(&files, &env), None, "not a Rust project");
+}
+
+#[test]
+fn exists_is_false_when_the_path_cannot_be_resolved() {
+    let files = FakeFiles::new(Posix)
+        .with_file("/ws/Cargo.toml", PACKAGE)
+        .with_file("/ws/locked/Cargo.toml", PACKAGE)
+        .with_unresolvable("/ws/locked/Cargo.toml");
+
+    assert_eq!(
+        [
+            exists(&files, "/ws/Cargo.toml"),
+            exists(&files, "/ws/locked/Cargo.toml"),
+        ],
+        [true, false],
+        "existsSync answers false on any error"
+    );
 }
