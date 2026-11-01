@@ -288,6 +288,64 @@ fn rel_to_one_directory_reached_through_a_symlinked_ancestor_and_through_its_rea
     Ok(())
 }
 
+/// A port of 1.x's `baseline.test.mjs` test of the same name, for its scan-observable half
+/// (the "not yet on disk" case is in `rel_to_falls_back_to_real_paths_when_lexically_outside`).
+#[cfg(windows)]
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn rel_to_one_directory_spelled_with_an_8_3_short_name_and_a_long_name_is_the_same_root()
+-> TestResult {
+    let base = tempfile::tempdir()?;
+    let long = base.path().join("long directory name ws");
+    write_tree(
+        &long,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"ws\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            ),
+            ("src/lib.rs", "pub fn f() {\n    dbg!(1);\n}\n"),
+        ],
+    )?;
+    let short = short_name(&long)?;
+    if short == long {
+        // This volume does not make 8.3 names; there is nothing to test.
+        return Ok(());
+    }
+    let file_in = |dir: &Path| dir.join(r"src\lib.rs");
+    let text = |path: &Path| path.to_str().map(str::to_owned).ok_or("a UTF-8 path");
+
+    let runs = [
+        temper_in(&long, &["scan", &text(&file_in(&short))?, "--json"])?,
+        // Windows keeps the short spelling as the child's working directory.
+        temper_in(&short, &["scan", &text(&file_in(&long))?, "--json"])?,
+    ];
+
+    assert_eq!(
+        runs.each_ref().map(|run| files_of(&run.stdout)),
+        [(); 2].map(|()| vec!["\"src/lib.rs\""]),
+        "{runs:?}"
+    );
+    Ok(())
+}
+
+/// The 8.3 short form of `path`, as `cmd`'s `%~sI` prints it.
+#[cfg(windows)]
+fn short_name(path: &Path) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+
+    let output = std::process::Command::new("cmd")
+        .args(["/d", "/c"])
+        .raw_arg(format!("for %I in (\"{}\") do @echo %~sI", path.display()))
+        .output()?;
+    if !output.status.success() {
+        return Err(format!("cmd failed: {}", output.status).into());
+    }
+    Ok(std::path::PathBuf::from(
+        String::from_utf8(output.stdout)?.trim_end(),
+    ))
+}
+
 #[cfg(unix)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
