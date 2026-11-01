@@ -19,7 +19,7 @@ adapter (OS: processes, files, clock).
 ## Invariants
 - Every child process runs under a timeout and is killed and reaped when it expires (H-13).
 - Each child's output is read by two named threads inside `thread::scope`, joined before `run` returns, each reading at most its cap plus one byte. No other threads, no atomics.
-- `kill` reaches only the child. A grandchild that inherits a pipe keeps its reader waiting; Phase 4's cargo needs process groups or job objects.
+- `kill` reaches only the child. A grandchild that inherits a pipe keeps its reader waiting; Phase 4's cargo needs process groups or job objects. A child that `kill` cannot signal keeps `run` waiting on its readers too; Phase 4 bounds both (process groups or job objects).
 - No policy decisions and no message texts: an adapter reports what happened and the use case decides.
 - No read is unbounded: `read_text` reads at most 3 bytes per UTF-16 unit of V8's longest string, plus one.
 

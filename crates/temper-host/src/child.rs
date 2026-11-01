@@ -16,8 +16,9 @@ use wait_timeout::ChildExt;
 /// Two named reader threads drain stdout and stderr inside a `thread::scope`, so both are
 /// joined before `run` returns. A reader past its cap stops reading and closes its pipe; the
 /// child then fails its next write or meets its timeout, so neither memory nor time is
-/// unbounded. `kill` reaches only the child, not its own children: a grandchild that inherits
-/// a pipe keeps its reader waiting (Phase 4 brings process groups for cargo).
+/// unbounded, unless the child cannot be killed or a grandchild holds a pipe. `kill` reaches
+/// only the child, not its own children: a grandchild that inherits a pipe keeps its reader
+/// waiting (Phase 4 brings process groups for cargo).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StdProcess;
 
@@ -77,7 +78,7 @@ impl ProcessRunner for StdProcess {
 }
 
 /// At most a cap's worth of one output stream.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Captured {
     /// The bytes read, at most the cap.
     bytes: Vec<u8>,
@@ -136,8 +137,10 @@ fn wait(child: &mut Child, timeout: Duration) -> io::Result<ExitKind> {
 /// Kills `child` and waits for it, so it leaves no zombie.
 ///
 /// `kill` answers `Ok` for a child that has already exited, so an error means the signal
-/// could not be sent. A child that exited all the same is reaped; one that did not is
-/// reported rather than waited for without a bound.
+/// could not be sent. A child that exited all the same is reaped. One that did not is
+/// reported without a `wait` here, but `run` still joins its readers, which wait until the
+/// child closes its pipes. So a child that `kill` cannot reach keeps `run` waiting, as a
+/// grandchild that holds a pipe does.
 fn kill_and_reap(child: &mut Child) -> io::Result<ExitStatus> {
     match child.kill() {
         Ok(()) => child.wait(),

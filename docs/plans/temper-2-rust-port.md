@@ -843,6 +843,7 @@ Phase 3: state, fingerprint, sessions, verdicts
 
 Phase 4: gate and completion hooks
 - [ ] `StdProcess`: captures stdout and stderr; enforces the stderr cap; a timeout kills the child and returns `TimedOut` (test uses the test binary itself as the child via `std::env::current_exe` with a "hang" argument handled in `tests/it/main.rs`, so no `sleep` is needed: it blocks on reading stdin that never closes); spawn failure gives `ProcessError::Spawn`; stdin is null.
+- [ ] `StdProcess` bounds `run` by its timeout even when the child spawns a grandchild that holds a pipe, or cannot be signalled: each child gets its own process group (Unix, `CommandExt::process_group(0)`) or job object (Windows), and the timeout kills the whole group. Test: a child whose grandchild holds stdout returns `TimedOut` (cli/it, the test binary as the child; no wall clock). std cannot signal a group or create a job object, and H-01 rules out FFI here, so the plan must choose between spawning `kill -- -PGID` or `taskkill /T /F` and a new dependency (`process-wrap` or the like, H-16). From the 1d.2b review (F1, F4).
 - [ ] `default_steps` with and without nextest, `allFeatures`, `doc`; `ratchet_steps` with and without scan (domain).
 - [ ] `summarize` and `tail` (domain, from 1.x log samples).
 - [ ] gate: cargo unusable gives UNAVAILABLE with the manifests checked TOML-only; a new manifest violation is red (ported "gate without cargo still checks member manifests").
