@@ -1,7 +1,7 @@
 # Crate charter: `temper-domain`
 
 ## Purpose
-temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, Phase 1b 40 more rules with their look-around and keep predicates, and Phase 1c the finders and the last regex rules (58 of 60); the rest arrives phase by phase.
+temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, Phase 1b 40 more rules with their look-around and keep predicates, Phase 1c the finders and the last regex rules (58 of 60), and Phase 1d the doc rules (60 of 60), path classification and the new-hit difference; the rest arrives phase by phase.
 
 ## Layer
 domain.
@@ -14,9 +14,10 @@ domain.
 Re-exported from `lib.rs`, one path each (API-14):
 - `Scanner` (`new`, `scan`), `ScanOptions` (`kind`, `file`, `forbid`), `ScanReport` (`hits`, `into_hits`, `tests`, `ignores`, `clones`), `ScannerSetupError` (`rule`, `source`).
 - `Hit` (`key`, `id`, `severity`, `line`, `text`, `msg`, `fix`, `exception`), `Severity`, `RuleKey`, `RuleId`, `LineNo`.
-- `CodeKind`, `FileRole`, `is_build_script`.
+- `CodeKind`, `FileRole`, `classify_path` with `LibTarget` (`Present`, `Absent`), `is_build_script`.
+- `new_hits`.
 
-Everything else is `pub(crate)`: the JS helpers in `js` (`js_trim`, `truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`. 1d adds `classify_path`, `new_hits` and `format_hit`, and Phase 4 `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest.
+Everything else is `pub(crate)`: the JS helpers in `js` (`js_trim`, `truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`. 1d.2 adds `format_hit` and `Serialize` on `Hit` with `HitAt`, and Phase 4 `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest.
 
 ## Invariants
 - No `std::fs`, `std::process`, `std::env`, `SystemTime::now` or threads: every input arrives as a value (ARC-02).
@@ -57,3 +58,12 @@ Typed `thiserror` enums per module, added with the code that needs them (ERR-01,
 | 2026-11-01 | The scanner tests split into one module per 1.x test group, and `key_cases` into three, bodies unchanged. | ARC-06 | two-way (wi-bd9fd8) |
 | 2026-11-01 | `ScanOptions::forbid` is `Option<&'a BTreeSet<String>>`, as §1.3 writes it: the caller lends one set per crate to many scans. | OWN-01, API-14 | two-way (wi-2d7b05) |
 | 2026-11-01 | `other_arm_binds_err` lives in `finders/empty_errs.rs` beside `empty-if-let-err`; its patterns are owned by `PredicatePatterns`, which `empty-err-arm`'s keep receives. | ARC-05 | two-way (wi-5f034a) |
+| 2026-11-01 | Phase 1d is two PRs: 1d.1 finishes the scanner in this crate (the doc rules, `new_hits`, `classify_path`), and 1d.2 is the `temper scan` slice, each item with its first consumer. | ARC-05, H-16 | two-way (wi-719373) |
+| 2026-11-01 | `ScanOptions` stays `Clone` without `Copy`: nothing copies one, and `Copy` can be added later without a break but not removed. | OWN-16, API-06 | two-way (wi-a4b3a7) |
+| 2026-11-01 | `classify_path` takes `lib: LibTarget { Present, Absent }`, not §1.3's `crate_has_lib: bool`. | API-10, H-16 | owner (wi-208563) |
+| 2026-11-01 | `new_hits` lands in 1d.1 with its 1.x test, before its first non-test reader (Phase 2's pre-edit): §1.3 fixes its shape. | API-14, H-16 | two-way (wi-46a7f4) |
+| 2026-11-01 | Doc blocks live in `scan/doc_blocks.rs`, beside `regions.rs`, since `Env::doc` builds them; under `finders/`, `env` and `finders` would depend on each other. | ARC-02, ARC-05 | two-way (wi-afb3e9) |
+| 2026-11-01 | `is_rust_fence` is private to `finders/doc_rules.rs`: its only reader is `doc-unwrap`, and 1.x's `isRustFence` assertions sit beside it. | API-14 | two-way (wi-e9f84d) |
+| 2026-11-01 | `classify_path` and `is_build_script` live in `scan/classify.rs`; `is_build_script`'s public path is unchanged. | ARC-05 | two-way (wi-358920) |
+| 2026-11-01 | 1.x's "every RULES key is reported" test is a witness table: each key with the first 1.x scan that reports it, so the tests need no shared state or order. | TST-10 | two-way (wi-a22589) |
+| 2026-11-01 | The depth walkers move to `scan/lexer/brackets.rs`, the spin-lock and TODO key cases to `key_cases/locks_and_todos.rs`, and the doc oracle tests to `tests/docs.rs`, bodies unchanged. | ARC-06 | two-way (wi-7d932c) |
