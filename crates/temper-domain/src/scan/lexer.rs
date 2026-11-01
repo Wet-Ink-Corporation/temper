@@ -5,33 +5,84 @@ use std::ops::Range;
 
 use super::hit::LineNo;
 
-/// `src` with comments and the contents of string and char literals replaced by spaces.
-///
-/// The result has the same length, and every byte is either unchanged or a space; `\n` and `\r`
-/// are never replaced, so offsets and line numbers carry over to the source. Lifetimes and labels
-/// stay. A masked char becomes one space per UTF-8 byte (1.x writes one per UTF-16 unit).
-pub(crate) fn mask_rust(src: &str) -> String {
+/// A source with its comments and literal contents masked, and its comments (1.x `maskRust`).
+#[derive(Debug)]
+pub(crate) struct Masked<'s> {
+    /// The source with comments and the contents of string and char literals replaced by
+    /// spaces: the same length, every byte unchanged or a space, `\n` and `\r` never replaced.
+    pub(crate) code: String,
+    /// Every `//` and `/* */` comment, in source order.
+    pub(crate) comments: Vec<Comment<'s>>,
+}
+
+/// A comment of the source (1.x `{ start, end, text }`; the `doc` flag arrives with its
+/// readers in 1c, decision 1b-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Comment<'s> {
+    /// The offset of its first `/`.
+    pub(crate) start: usize,
+    /// The offset after it (exclusive).
+    pub(crate) end: usize,
+    /// `src[start..end]`.
+    pub(crate) text: &'s str,
+}
+
+/// Masks `src` and records its comments. Offsets and line numbers carry over from the source to
+/// the masked code. Lifetimes and labels stay. A masked char becomes one space per UTF-8 byte
+/// (1.x writes one per UTF-16 unit).
+pub(crate) fn mask_rust(src: &str) -> Masked<'_> {
     let bytes = src.as_bytes();
     let mut spans = Vec::new();
+    let mut comments = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
         let step = lex_at(src, at);
-        spans.extend(step.mask);
+        match step.span {
+            Some(Span::Comment(range)) => {
+                comments.push(Comment {
+                    start: range.start,
+                    end: range.end,
+                    text: slice(src, range.start, range.end),
+                });
+                spans.push(range);
+            }
+            Some(Span::Literal(range)) => spans.push(range),
+            None => {}
+        }
         at = step.next;
     }
-    render(src, &spans)
+    Masked {
+        code: render(src, &spans),
+        comments,
+    }
+}
+
+/// A span the lexer blanks.
+#[derive(Debug)]
+enum Span {
+    /// The contents of a string or char literal.
+    Literal(Range<usize>),
+    /// A whole comment.
+    Comment(Range<usize>),
 }
 
 /// What the lexer does at one offset: the span to blank, if any, and where to continue.
 #[derive(Debug)]
 struct Step {
-    mask: Option<Range<usize>>,
+    span: Option<Span>,
     next: usize,
 }
 
 impl Step {
     const fn skip(next: usize) -> Self {
-        Self { mask: None, next }
+        Self { span: None, next }
+    }
+
+    const fn literal(range: Range<usize>, next: usize) -> Self {
+        Self {
+            span: Some(Span::Literal(range)),
+            next,
+        }
     }
 }
 
@@ -70,7 +121,7 @@ fn find_from(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 fn line_comment(bytes: &[u8], at: usize) -> Step {
     let end = find_from(bytes, at, b"\n").unwrap_or(bytes.len());
     Step {
-        mask: Some(at..end),
+        span: Some(Span::Comment(at..end)),
         next: end,
     }
 }
@@ -93,7 +144,7 @@ fn block_comment(bytes: &[u8], at: usize) -> Step {
         }
     }
     Step {
-        mask: Some(at..j),
+        span: Some(Span::Comment(at..j)),
         next: j,
     }
 }
@@ -113,14 +164,8 @@ fn raw_string(bytes: &[u8], at: usize) -> Option<Step> {
     close.resize(hashes.saturating_add(1), b'#');
     let body = quote.saturating_add(1);
     Some(match find_from(bytes, body, &close) {
-        Some(end) => Step {
-            mask: Some(body..end),
-            next: end.saturating_add(close.len()),
-        },
-        None => Step {
-            mask: Some(body..bytes.len()),
-            next: bytes.len(),
-        },
+        Some(end) => Step::literal(body..end, end.saturating_add(close.len())),
+        None => Step::literal(body..bytes.len(), bytes.len()),
     })
 }
 
@@ -134,10 +179,7 @@ fn string(bytes: &[u8], at: usize) -> Step {
         j = j.saturating_add(if b == b'\\' { 2 } else { 1 });
     }
     let body = at.saturating_add(1)..j.min(bytes.len());
-    Step {
-        mask: Some(body),
-        next: j.saturating_add(1),
-    }
+    Step::literal(body, j.saturating_add(1))
 }
 
 /// A char literal (`'x'`, `'\''`, `'\u{1F600}'`), or a lifetime or label left as code.
@@ -151,18 +193,12 @@ fn char_or_lifetime(src: &str, at: usize) -> Step {
             j = j.saturating_add(1);
         }
         if bytes.get(j) == Some(&b'\'') {
-            return Step {
-                mask: Some(body..j),
-                next: j.saturating_add(1),
-            };
+            return Step::literal(body..j, j.saturating_add(1));
         }
     } else if let Some(c) = src.get(body..).and_then(|rest| rest.chars().next()) {
         let close = body.saturating_add(c.len_utf8());
         if c != '\'' && bytes.get(close) == Some(&b'\'') {
-            return Step {
-                mask: Some(body..close),
-                next: close.saturating_add(1),
-            };
+            return Step::literal(body..close, close.saturating_add(1));
         }
     }
     Step::skip(body)
@@ -227,22 +263,47 @@ impl LineIndex {
 
 /// The offset of the `}` closing the `{` at `open`, or the last offset when unbalanced.
 pub(crate) fn match_brace(code: &str, open: usize) -> usize {
-    // Signed, as in 1.x: a `}` before any `{` takes the depth below zero.
+    match_pair(code, open, b'{', b'}')
+}
+
+/// The offset of the `close` byte that closes the `open_byte` at `open`, or the last offset when
+/// unbalanced (1.x `matchPair`).
+pub(crate) fn match_pair(code: &str, open: usize, open_byte: u8, close: u8) -> usize {
+    // Signed, as in 1.x: a closer before any opener takes the depth below zero.
     let mut depth = 0_isize;
     let tail = code.as_bytes().iter().enumerate().skip(open);
     for (at, &b) in tail {
-        match b {
-            b'{' => depth = depth.saturating_add(1),
-            b'}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return at;
-                }
+        if b == open_byte {
+            depth = depth.saturating_add(1);
+        } else if b == close {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return at;
             }
-            _ => {}
         }
     }
     code.len().saturating_sub(1)
+}
+
+/// The offset of the `;` that ends the statement or item starting at `from`, or of the closer
+/// of the enclosing block when the statement is a tail expression; the length when neither
+/// follows (1.x `statementEnd`).
+pub(crate) fn statement_end(code: &str, from: usize) -> usize {
+    let mut depth = 0_isize;
+    for (at, &b) in code.as_bytes().iter().enumerate().skip(from) {
+        match b {
+            b'(' | b'[' | b'{' => depth = depth.saturating_add(1),
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth < 0 {
+                    return at;
+                }
+            }
+            b';' if depth == 0 => return at,
+            _ => {}
+        }
+    }
+    code.len()
 }
 
 /// JS `text.slice(from, to)` on byte offsets: both ends clamp to the length and floor to a char
@@ -253,154 +314,4 @@ pub(crate) fn slice(text: &str, from: usize, to: usize) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::scan::strategies::token_soup;
-    use proptest::prelude::*;
-
-    #[test]
-    fn masks_strings_raw_strings_chars_and_comments_but_keeps_lifetimes() {
-        let src = "fn f<'a>(x: &'a str) -> char { let s = \"x.unwrap()\"; let r = r#\"panic!(\"no\")\"#; // .unwrap()\n let c = '\"'; /* unsafe { } */ 'q' }";
-
-        let code = mask_rust(src);
-
-        assert!(
-            !code.contains("unwrap"),
-            "string and comment text is masked"
-        );
-        assert!(!code.contains("panic"), "raw string text is masked");
-        assert!(!code.contains("unsafe"), "block comment text is masked");
-        assert!(code.contains("<'a>"), "lifetimes survive");
-        assert_eq!(code.len(), src.len(), "masking keeps the length");
-        assert_eq!(
-            code,
-            "fn f<'a>(x: &'a str) -> char { let s = \"          \"; let r = r#\"            \"#;             \n let c = ' ';                  ' ' }",
-            "the exact 1.x output"
-        );
-    }
-
-    #[test]
-    fn masks_edge_literals_like_1x() {
-        let cases = [
-            ("a /* x /* y */ z */ b", "a                   b"),
-            ("let s = \"abc", "let s = \"   "),
-            ("x /* never closed", "x                "),
-            ("let r = br#\"a\"b\"#; c", "let r = br#\"   \"#; c"),
-            (
-                "let r = cr\"x\"; let k = r#ident;",
-                "let r = cr\" \"; let k = r#ident;",
-            ),
-            ("let b = b\"\\x00\\\"q\"; z", "let b = b\"       \"; z"),
-            (
-                "let q = '\\''; let n = '\\n'; let u = '\\u{1F600}';",
-                "let q = '  '; let n = '  '; let u = '         ';",
-            ),
-            (
-                "'outer: loop { break 'outer; } fn g<'b>() {}",
-                "'outer: loop { break 'outer; } fn g<'b>() {}",
-            ),
-            ("let x = ''; y", "let x = ''; y"),
-            ("for r in v { bar\"x\" }", "for r in v { bar\" \" }"),
-            ("let s = \"ab\\", "let s = \"   "),
-            ("a // c\r\nb \"s\r\nt\" c", "a     \r\nb \" \r\n \" c"),
-            (
-                "/// doc\n//// not doc\n//! inner\n/** block */\n/**/ x",
-                "       \n            \n         \n            \n     x",
-            ),
-        ];
-
-        for (src, expected) in cases {
-            assert_eq!(mask_rust(src), expected, "masking {src:?}");
-        }
-    }
-
-    #[test]
-    fn masks_an_astral_char_literal_as_four_spaces() {
-        assert_eq!(
-            mask_rust("let e = '😀'; x"),
-            "let e = '    '; x",
-            "a masked char becomes one space per UTF-8 byte"
-        );
-    }
-
-    #[test]
-    fn lexer_escaped_quote_char_literal() {
-        assert_eq!(
-            mask_rust("let q = ['\\'', ',', 'a']; let s = \".unwrap()\";"),
-            "let q = ['  ', ' ', ' ']; let s = \"         \";",
-            "the 1.x escaped-quote case"
-        );
-    }
-
-    #[test]
-    fn line_index_maps_offsets_to_lines() {
-        let src = "a\nbc\n\nd";
-        let idx = LineIndex::new(src);
-
-        let lines: Vec<usize> = [0, 1, 2, 4, 5, 6, 99]
-            .into_iter()
-            .map(|o| idx.line_of(o).get())
-            .collect();
-
-        assert_eq!(idx.starts, [0, 2, 5, 6], "a line starts after each newline");
-        assert_eq!(
-            lines,
-            [1, 1, 2, 2, 3, 4, 4],
-            "offsets past the end are on the last line"
-        );
-        assert_eq!(
-            idx.line_text(LineNo::from_index(1), src),
-            "bc",
-            "line 2 is bc"
-        );
-        assert_eq!(
-            idx.line_text(LineNo::from_index(8), src),
-            "a",
-            "a line past the end reads from offset 0, as 1.x does"
-        );
-    }
-
-    #[test]
-    fn match_brace_returns_last_offset_when_unbalanced() {
-        assert_eq!(
-            match_brace("{ { }", 0),
-            4,
-            "unbalanced runs to the last offset"
-        );
-        assert_eq!(match_brace("a{b}c", 1), 3, "balanced finds the closer");
-    }
-
-    #[test]
-    fn slice_floors_to_char_boundaries() {
-        assert_eq!(
-            slice("aé", 0, 2),
-            "a",
-            "the end inside é floors to its start"
-        );
-        assert_eq!(slice("ab", 2, 1), "", "a reversed range is empty");
-        assert_eq!(slice("ab", 0, 99), "ab", "the end clamps to the length");
-    }
-
-    fn assert_mask_shape(src: &str) -> Result<(), TestCaseError> {
-        let masked = mask_rust(src);
-        prop_assert_eq!(masked.len(), src.len());
-        for (k, (&m, &s)) in masked.as_bytes().iter().zip(src.as_bytes()).enumerate() {
-            prop_assert!(m == s || m == b' ', "byte {} changed to {:?}", k, m);
-            prop_assert_eq!(m == b'\n', s == b'\n', "newline moved at {}", k);
-            prop_assert_eq!(m == b'\r', s == b'\r', "carriage return moved at {}", k);
-        }
-        Ok(())
-    }
-
-    proptest! {
-        #[test]
-        fn mask_preserves_length_and_newlines(src in any::<String>()) {
-            assert_mask_shape(&src)?;
-        }
-
-        #[test]
-        fn mask_preserves_length_and_newlines_on_token_soup(src in token_soup()) {
-            assert_mask_shape(&src)?;
-        }
-    }
-}
+mod tests;

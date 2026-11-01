@@ -16,6 +16,8 @@
 
 **The 2.0 engine has its scanner's lexer, test regions and first six rules (port Phase 1a).** `temper-domain` masks Rust source as 1.x does, finds test regions, counts tests, ignores and clones, and runs the `unsafe`, `unwrap`, `panic`, `dbg`, `print` and `expect-attr` rules, with 1.x's patterns and texts. It adds the `regex` and `thiserror` dependencies, and `proptest` for tests. Nothing calls it yet; users run 1.x.
 
+**The 2.0 engine's scanner has 40 more rules, with their look-around and keep predicates (port Phase 1b).** Nothing calls it yet; users run 1.x.
+
 ## 1.5.0 (2026-10-30)
 
 **Stop closes two worktree-gate gaps (#157).** The main session's `Stop` now gates a commit it made in the main checkout through the shell alone when it stops from inside a subagent's worktree made from that commit and left unchanged. Before, the subagent's earlier record set that worktree's scope, so the commit was in neither scope. For the main agent, and for a reviewer it starts there, a linked worktree's scope now starts at the session base whenever the session base is an ancestor of the commit the worktree was on when first noted. An implementer's `SubagentStop` keeps the worktree's own base. Also, a `git rev-list` that fails while temper decides whether the main checkout already covers a merged worktree no longer counts as covered, so that worktree is gated.

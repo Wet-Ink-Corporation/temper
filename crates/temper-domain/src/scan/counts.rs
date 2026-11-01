@@ -115,7 +115,7 @@ mod tests {
         let src = "\npub fn ok() -> u8 { 1 }\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn t() { assert_eq!(Some(ok()).unwrap(), 1); dbg!(1); }\n    #[test]\n    fn u() { unsafe { } }\n}";
 
         assert_eq!(
-            count_tests(&mask_rust(src), &patterns()),
+            count_tests(&mask_rust(src).code, &patterns()),
             2,
             "two #[test] fns"
         );
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn counts_reasoned_and_unreasoned_ignores_except_miri() {
-        let code = mask_rust(IGNORE_SRC);
+        let code = mask_rust(IGNORE_SRC).code;
 
         assert_eq!(
             count_ignored(&code, &patterns()),
@@ -138,7 +138,7 @@ mod tests {
         let src = "#[derive(Educe)]\n#[educe(Debug, ignore)]\nstruct S;\n#[cfg_attr(feature = \"x\", educe(Debug, ignore))]\nstruct T;";
 
         assert_eq!(
-            count_ignored(&mask_rust(src), &patterns()),
+            count_ignored(&mask_rust(src).code, &patterns()),
             0,
             "an ignore nested in another attribute is not a test ignore"
         );
@@ -150,7 +150,7 @@ mod tests {
             "#[cfg_attr(not(miri), ignore)]\nfn a() {}\n#[cfg_attr( miri , ignore)]\nfn b() {}";
 
         assert_eq!(
-            count_ignored(&mask_rust(src), &patterns()),
+            count_ignored(&mask_rust(src).code, &patterns()),
             1,
             "not(miri) counts; a spaced miri does not"
         );
@@ -163,7 +163,7 @@ mod tests {
             "proptest! { fn p(x in 0..1u8) {} fn q(y in 0..2u8) {} }",
             "#[test]",
         ]
-        .map(|src| count_tests(&mask_rust(src), &patterns()));
+        .map(|src| count_tests(&mask_rust(src).code, &patterns()));
 
         assert_eq!(
             counts,
@@ -177,7 +177,7 @@ mod tests {
         let src = "let a = b.clone(); c . clone ( ); d.clone_from(e);";
 
         assert_eq!(
-            count_clones(&mask_rust(src), &patterns()),
+            count_clones(&mask_rust(src).code, &patterns()),
             2,
             "spaced calls count, clone_from does not"
         );

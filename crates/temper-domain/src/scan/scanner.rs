@@ -5,13 +5,14 @@ use std::borrow::Cow;
 use regex::Regex;
 
 use super::counts::{CountPatterns, count_clones, count_ignored, count_tests};
+use super::env::Env;
 use super::finders::Found;
 use super::finders::expect_attrs::{self, ExpectPatterns, exception_for};
 use super::hit::{Hit, RuleId, RuleKey, Severity};
-use super::lexer::{LineIndex, mask_rust};
-use super::regions::{RegionPatterns, Regions, test_regions};
-use super::rules::{ContextSeverity, FinderKind, Matcher, RULES, RuleSpec};
-use crate::js;
+use super::lexer::mask_rust;
+use super::predicates::{Candidate, Keep, Look, PredicatePatterns};
+use super::rules::{ContextSeverity, FinderKind, Matcher, Pattern, RULES, RuleSpec};
+use crate::js::{self, JsFlags, UnsupportedJs};
 
 /// The most UTF-16 code units of source line a hit's text keeps, as 1.x.
 const HIT_TEXT_UNITS: usize = 160;
@@ -62,7 +63,17 @@ pub fn is_build_script(rel_to_crate: &str) -> bool {
 pub struct ScannerSetupError {
     rule: &'static str,
     #[source]
-    source: regex::Error,
+    source: SetupCause,
+}
+
+/// Why a built-in pattern failed: its JS source has no faithful translation, or `regex` rejects
+/// the translation.
+#[derive(Debug, thiserror::Error)]
+enum SetupCause {
+    #[error(transparent)]
+    Js(#[from] UnsupportedJs),
+    #[error(transparent)]
+    Regex(#[from] regex::Error),
 }
 
 impl ScannerSetupError {
@@ -73,9 +84,21 @@ impl ScannerSetupError {
     }
 }
 
-/// Compiles the 1.x JS regex source `js_source`, named `rule` in the error.
+/// Compiles the 1.x JS regex source `js_source` (no flags), named `rule` in the error.
 pub(crate) fn compile(rule: &'static str, js_source: &str) -> Result<Regex, ScannerSetupError> {
-    Regex::new(&js::translate(js_source)).map_err(|source| ScannerSetupError { rule, source })
+    compile_with(rule, js_source, JsFlags::Plain)
+}
+
+/// Compiles the 1.x JS regex source `js_source` with `flags`, named `rule` in the error.
+pub(crate) fn compile_with(
+    rule: &'static str,
+    js_source: &str,
+    flags: JsFlags,
+) -> Result<Regex, ScannerSetupError> {
+    let compiled = js::translate(js_source, flags)
+        .map_err(SetupCause::from)
+        .and_then(|translated| Regex::new(&translated).map_err(SetupCause::from));
+    compiled.map_err(|source| ScannerSetupError { rule, source })
 }
 
 /// The escape-hatch scanner: every rule's pattern, compiled once.
@@ -96,7 +119,7 @@ pub(crate) fn compile(rule: &'static str, js_source: &str) -> Result<Regex, Scan
 #[derive(Debug)]
 pub struct Scanner {
     rules: Vec<CompiledRule>,
-    regions: RegionPatterns,
+    predicates: PredicatePatterns,
     counts: CountPatterns,
     expect: ExpectPatterns,
 }
@@ -109,8 +132,28 @@ struct CompiledRule {
 
 #[derive(Debug)]
 enum CompiledMatcher {
-    Regex(Regex),
+    Regex(CompiledPattern),
     Find(FinderKind),
+}
+
+/// A table pattern, translated and compiled.
+#[derive(Debug)]
+struct CompiledPattern {
+    re: Regex,
+    flags: JsFlags,
+    look: Option<Look>,
+    keep: Option<Keep>,
+}
+
+impl CompiledPattern {
+    fn new(rule: &'static str, pattern: Pattern) -> Result<Self, ScannerSetupError> {
+        Ok(Self {
+            re: compile_with(rule, pattern.source, pattern.flags)?,
+            flags: pattern.flags,
+            look: pattern.look,
+            keep: pattern.keep,
+        })
+    }
 }
 
 impl Scanner {
@@ -124,7 +167,9 @@ impl Scanner {
             .iter()
             .map(|spec| {
                 let matcher = match spec.matcher {
-                    Matcher::Regex(source) => CompiledMatcher::Regex(compile(spec.key, source)?),
+                    Matcher::Regex(pattern) => {
+                        CompiledMatcher::Regex(CompiledPattern::new(spec.key, pattern)?)
+                    }
                     Matcher::Find(kind) => CompiledMatcher::Find(kind),
                 };
                 Ok(CompiledRule { spec, matcher })
@@ -132,7 +177,7 @@ impl Scanner {
             .collect::<Result<_, ScannerSetupError>>()?;
         Ok(Self {
             rules,
-            regions: RegionPatterns::new()?,
+            predicates: PredicatePatterns::new()?,
             counts: CountPatterns::new()?,
             expect: ExpectPatterns::new()?,
         })
@@ -154,43 +199,31 @@ impl Scanner {
     /// ```
     #[must_use]
     pub fn scan(&self, src: &str, options: &ScanOptions) -> ScanReport {
-        let code = mask_rust(src);
-        let idx = LineIndex::new(&code);
-        let regions = test_regions(&code, &self.regions);
-        let env = Env {
-            src,
-            code: &code,
-            idx: &idx,
-            kind: options.kind,
-            file: options.file,
-            regions: &regions,
-        };
+        let masked = mask_rust(src);
+        let env = Env::new(src, &masked, options, &self.predicates.regions);
+        let code = env.code;
         let mut hits = Vec::new();
+        // One buffer for the whole scan; each rule's matches are drained into hits (F7).
+        let mut found = Vec::new();
         for rule in &self.rules {
-            let found = self.matches(rule, &env);
-            hits.extend(
-                found
-                    .into_iter()
-                    .filter_map(|f| self.hit(rule.spec, &env, f)),
-            );
+            self.matches(rule, &env, &mut found);
+            hits.extend(found.drain(..).filter_map(|f| self.hit(rule.spec, &env, f)));
         }
         ScanReport {
             hits,
-            tests: count_tests(&code, &self.counts),
-            ignores: count_ignored(&code, &self.counts),
-            clones: count_clones(&code, &self.counts),
+            tests: count_tests(code, &self.counts),
+            ignores: count_ignored(code, &self.counts),
+            clones: count_clones(code, &self.counts),
         }
     }
 
-    /// The matches of one rule.
-    fn matches(&self, rule: &CompiledRule, env: &Env<'_>) -> Vec<Found> {
+    /// Pushes the matches of one rule onto `out`.
+    fn matches(&self, rule: &CompiledRule, env: &Env<'_>, out: &mut Vec<Found>) {
         match &rule.matcher {
-            CompiledMatcher::Regex(re) => re
-                .find_iter(env.code)
-                .filter(|m| !m.is_empty())
-                .map(|m| Found::at(m.start()))
-                .collect(),
-            CompiledMatcher::Find(FinderKind::ExpectAttrs) => expect_attrs::find(env, &self.expect),
+            CompiledMatcher::Regex(pattern) => self.regex_matches(pattern, env, out),
+            CompiledMatcher::Find(FinderKind::ExpectAttrs) => {
+                expect_attrs::find(env, &self.expect, out);
+            }
         }
     }
 
@@ -224,10 +257,63 @@ impl Scanner {
             line,
             text: text.to_owned(),
             msg: found.msg.unwrap_or(Cow::Borrowed(spec.msg)),
-            fix: Cow::Borrowed(found.fix.or(build_fix).unwrap_or(spec.fix)),
+            fix: found.fix.or(build_fix).unwrap_or(spec.fix),
             exception,
         })
     }
+
+    /// Pushes every match of `pattern` in the masked code onto `out` (1.x `regexMatches`).
+    ///
+    /// The search resumes where JS's `lastIndex` would: after a match, also one that `keep`
+    /// drops, or one char on after an empty match. `find_at` reads the text before `at` for
+    /// `\b` and `^`, as JS does.
+    fn regex_matches(&self, pattern: &CompiledPattern, env: &Env<'_>, out: &mut Vec<Found>) {
+        let code = env.code;
+        let mut at = 0;
+        // `find_at` panics past the end; every step moves `at` forward, so the loop ends.
+        while at <= code.len() {
+            let Some(m) = pattern.re.find_at(code, at) else {
+                break;
+            };
+            if m.is_empty() {
+                at = next_char(code, m.end());
+                continue;
+            }
+            // Under `m`, a match may begin with the line terminator its `^` consumed.
+            let skip = match pattern.flags {
+                JsFlags::Multiline => js::terminator_len(m.as_str()),
+                JsFlags::Plain | JsFlags::IgnoreCase => 0,
+            };
+            let candidate = Candidate {
+                start: m.start().saturating_add(skip),
+                text: m.as_str().get(skip..).unwrap_or(""),
+            };
+            if pattern
+                .look
+                .is_some_and(|look| !look.holds(env, &self.predicates, candidate))
+            {
+                at = next_char(code, m.start());
+                continue;
+            }
+            at = m.end();
+            if pattern
+                .keep
+                .is_some_and(|keep| !keep.holds(env, &self.predicates, candidate))
+            {
+                continue;
+            }
+            out.push(Found::at(candidate.start));
+        }
+    }
+}
+
+/// The offset after the char at `at`, or `at + 1` at the end of `text`.
+fn next_char(text: &str, at: usize) -> usize {
+    let width = text
+        .get(at..)
+        .and_then(|rest| rest.chars().next())
+        .map_or(1, char::len_utf8);
+    at.saturating_add(width)
 }
 
 /// What one scan reports.
@@ -268,30 +354,5 @@ impl ScanReport {
     #[must_use]
     pub fn clones(&self) -> usize {
         self.clones
-    }
-}
-
-/// A per-scan view of one source that the rules read.
-#[derive(Debug)]
-pub(crate) struct Env<'s> {
-    /// The source as written.
-    pub(crate) src: &'s str,
-    /// The masked source.
-    pub(crate) code: &'s str,
-    /// Lines of the masked source (the same as the source's).
-    pub(crate) idx: &'s LineIndex,
-    pub(crate) kind: CodeKind,
-    pub(crate) file: FileRole,
-    pub(crate) regions: &'s Regions,
-}
-
-impl Env<'_> {
-    /// The context of the code at `offset`: test inside a test region, else the file's.
-    fn context_at(&self, offset: usize) -> CodeKind {
-        if self.kind == CodeKind::Test || self.regions.contains(offset) {
-            CodeKind::Test
-        } else {
-            self.kind
-        }
     }
 }

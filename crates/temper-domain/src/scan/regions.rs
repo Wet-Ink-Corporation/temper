@@ -1,12 +1,14 @@
-//! Test-only regions of masked code: `#[cfg(test)]` items, `#[test]`-style functions and
-//! `proptest!` blocks (1.x `testRegions`).
+//! Regions of masked code: test-only code (`#[cfg(test)]` items, `#[test]`-style functions and
+//! `proptest!` blocks, 1.x `testRegions`), compile-time code (1.x `constRegions`) and trait impl
+//! bodies (1.x `traitImplRegions`).
 
 use std::ops::RangeInclusive;
 
 use regex::Regex;
 
-use super::lexer::match_brace;
+use super::lexer::{match_brace, slice, statement_end};
 use super::scanner::{ScannerSetupError, compile};
+use crate::js::is_js_space;
 
 /// Byte ranges of test-only code, both ends inclusive, in 1.x order: attribute regions, then
 /// `proptest!` blocks. Ranges may nest.
@@ -20,13 +22,17 @@ impl Regions {
     }
 }
 
-/// The compiled patterns behind [`test_regions`].
+/// The compiled patterns behind [`test_regions`] and [`const_regions`].
 #[derive(Debug)]
 pub(crate) struct RegionPatterns {
     attr: Regex,
     test_word: Regex,
     not_test: Regex,
     proptest: Regex,
+    const_block: Regex,
+    const_item: Regex,
+    impl_kw: Regex,
+    for_kw: Regex,
 }
 
 impl RegionPatterns {
@@ -40,8 +46,65 @@ impl RegionPatterns {
             test_word: compile("regions:test-word", r"\btest\b")?,
             not_test: compile("regions:not-test", r"\bnot\s*\(\s*test\b")?,
             proptest: compile("regions:proptest", r"\bproptest\s*!\s*\{")?,
+            const_block: compile("regions:const-block", r"\bconst\s*\{")?,
+            const_item: compile("regions:const-item", r"\bconst\s+(?:_|[A-Za-z_]\w*)\s*:")?,
+            impl_kw: compile("regions:impl", r"\bimpl\b")?,
+            for_kw: compile("regions:for", r"\bfor\b")?,
         })
     }
+}
+
+/// The bodies of trait impls (`impl Trait for Type { .. }`) in masked `code`, whose method names
+/// the trait fixes (1.x `traitImplRegions`). Each runs from `impl` to the brace closing the body.
+pub(crate) fn trait_impl_regions(code: &str, patterns: &RegionPatterns) -> Regions {
+    let regions = patterns.impl_kw.find_iter(code).filter_map(|m| {
+        let open = impl_body(code, m.start().saturating_add(4))?;
+        let header = slice(code, m.start(), open);
+        // `for` not followed by `<` (a `for<'a>` bound), 1.x's `\bfor\b(?!\s*<)`.
+        let trait_for = patterns.for_kw.find_iter(header).any(|f| {
+            let rest = header.get(f.end()..).unwrap_or("");
+            !rest.trim_start_matches(is_js_space).starts_with('<')
+        });
+        trait_for.then(|| m.start()..=match_brace(code, open))
+    });
+    Regions(regions.collect())
+}
+
+/// The `{` opening the body of the impl whose header continues at `from`: the first `{` outside
+/// angle brackets (a `>` after `-` closes none). `None` when a `;` or `)` comes first there, or
+/// nothing does.
+fn impl_body(code: &str, from: usize) -> Option<usize> {
+    let bytes = code.as_bytes();
+    let mut depth = 0_isize;
+    for (at, &b) in bytes.iter().enumerate().skip(from) {
+        match b {
+            b'<' => depth = depth.saturating_add(1),
+            b'>' if at.checked_sub(1).and_then(|p| bytes.get(p)) != Some(&b'-') => {
+                depth = depth.saturating_sub(1);
+            }
+            b'{' if depth <= 0 => return Some(at),
+            b';' | b')' if depth <= 0 => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The regions of masked `code` evaluated at compile time (1.x `constRegions`): each inline
+/// `const { .. }` block, then each `const NAME: T = ..;` item. A const generic parameter (after
+/// `<` or `,`) is not one, and neither is a `const fn`.
+pub(crate) fn const_regions(code: &str, patterns: &RegionPatterns) -> Regions {
+    let blocks = patterns.const_block.find_iter(code).map(|m| {
+        // The match ends with the block's `{`.
+        m.start()..=match_brace(code, m.end().saturating_sub(1))
+    });
+    let items = patterns.const_item.find_iter(code).filter_map(|m| {
+        let before = code.get(..m.start()).unwrap_or("");
+        let prev = before.trim_end_matches(is_js_space).chars().next_back();
+        let generic = matches!(prev, Some('<' | ','));
+        (!generic).then(|| m.start()..=statement_end(code, m.start()))
+    });
+    Regions(blocks.chain(items).collect())
 }
 
 /// The test-only regions of masked `code`: each `#[cfg(..test..)]` (not `not(test)`) or
@@ -93,7 +156,7 @@ mod tests {
     /// The regions as `(start, end)` pairs, the shape of the 1.x oracle's `[[a, b]]`.
     fn regions_of(src: &str) -> Vec<(usize, usize)> {
         let patterns = RegionPatterns::new().expect("the region patterns compile");
-        test_regions(&mask_rust(src), &patterns)
+        test_regions(&mask_rust(src).code, &patterns)
             .0
             .into_iter()
             .map(RangeInclusive::into_inner)
@@ -171,6 +234,42 @@ mod tests {
             regions_of("#[cfg(test)]\nmod t { fn a() {"),
             [(0, 28)],
             "an unclosed body runs to the last offset"
+        );
+    }
+
+    #[test]
+    fn const_regions_skip_const_generics() {
+        let src = "const A: u8 = 1;\nfn f<const N: usize>() { const { assert!(true) }; }\nfn g(x: u8, const B: u8) {}\nconst _: () = assert!(true);";
+        let patterns = RegionPatterns::new().expect("the region patterns compile");
+
+        let regions: Vec<(usize, usize)> = const_regions(&mask_rust(src).code, &patterns)
+            .0
+            .into_iter()
+            .map(RangeInclusive::into_inner)
+            .collect();
+
+        assert_eq!(
+            regions,
+            [(42, 64), (0, 15), (97, 124)],
+            "blocks first, then items; const generic parameters are skipped"
+        );
+    }
+
+    #[test]
+    fn trait_impl_regions_follow_1x() {
+        let src = "impl<T> for<'a> X {}\nimpl Clock for Sys { fn now() {} }\nimpl Sys { fn t() {} }\nimpl<F: Fn() -> u8> Clock for F { }\nfn f(x: impl Fn() -> u8) {}\nimpl Tr for\n  Y {}";
+        let patterns = RegionPatterns::new().expect("the region patterns compile");
+
+        let regions: Vec<(usize, usize)> = trait_impl_regions(&mask_rust(src).code, &patterns)
+            .0
+            .into_iter()
+            .map(RangeInclusive::into_inner)
+            .collect();
+
+        assert_eq!(
+            regions,
+            [(21, 54), (79, 113), (143, 160)],
+            "trait impls only: not `for<'a>`, an inherent impl or `impl Fn` in a parameter"
         );
     }
 

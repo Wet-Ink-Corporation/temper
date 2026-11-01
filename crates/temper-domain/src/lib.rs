@@ -4,7 +4,7 @@
 //! Nothing here touches the file system, processes, the environment or the clock; the
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
 //! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner's
-//! lexer, test regions and its first rules (Phase 1a), which nothing calls yet.
+//! lexer, test regions and 46 of the 60 rules (Phases 1a, 1b), which nothing calls yet.
 //!
 //! # Quick start
 //!
