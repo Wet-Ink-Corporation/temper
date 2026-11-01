@@ -2,5 +2,30 @@
 //! baseline and report models, and every message text the hooks print.
 //!
 //! Nothing here touches the file system, processes, the environment or the clock; the
-//! application layer (`temper-app`) supplies those through ports. The crate is empty until the
-//! port's Phase 1 brings the scanner (`docs/plans/temper-2-rust-port.md`).
+//! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
+//! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner
+//! with its lexer, test regions and all 60 rules, path classification and the new-hit difference
+//! (Phases 1a to 1d), which nothing calls yet.
+//!
+//! # Quick start
+//!
+//! ```
+//! use temper_domain::{CodeKind, FileRole, ScanOptions, Scanner, Severity};
+//!
+//! let scanner = Scanner::new()?;
+//! let src = "pub fn first(v: &[u8]) -> u8 {\n    *v.first().unwrap()\n}\n";
+//! let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
+//! let report = scanner.scan(src, &options);
+//!
+//! let hits: Vec<_> = report.hits().iter().map(|h| (h.id().as_str(), h.severity(), h.line().get())).collect();
+//! assert_eq!(hits, [("H-02", Severity::Hard, 2)]);
+//! # Ok::<(), temper_domain::ScannerSetupError>(())
+//! ```
+
+mod js;
+mod scan;
+
+pub use scan::{
+    CodeKind, FileRole, Hit, LibTarget, LineNo, RuleId, RuleKey, ScanOptions, ScanReport, Scanner,
+    ScannerSetupError, Severity, classify_path, is_build_script, new_hits,
+};

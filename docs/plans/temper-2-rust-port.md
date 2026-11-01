@@ -164,7 +164,7 @@ Approve the list in §2.4 as a whole. Every other observable behaviour stays byt
 2. `fingerprint(project, base)` is bit-identical between 1.x and 2.0 on the same tree, including untracked files and non-UTF-8 diff output. So gate caches and verdicts keyed by fingerprint carry over (§2.3).
 3. Every file temper writes under `.git/temper/`, `${CLAUDE_PLUGIN_DATA}/sessions/` and `.claude/temper-baseline.json` is readable by both engines in both directions.
 4. A hook never exits with code 2. A handler error becomes `{"systemMessage":"temper hook <event> failed: <msg>"}` with exit 0, and malformed stdin JSON exits 0 silently, as in 1.x.
-5. One version string X appears in `Cargo.toml` `[workspace.package]`, `.claude-plugin/plugin.json`, `package.json` (its version and all six exact optionalDependency pins), each npm platform package, `templates/*/.claude/temper-version`, the git tag `vX`, and `temper --version`. `cargo xtask versions --check` fails otherwise.
+5. One version string X appears in `Cargo.toml` `[workspace.package]`, `.claude-plugin/plugin.json`, `plugins/temper-lens/.claude-plugin/plugin.json`, `package.json` (its version and all six exact optionalDependency pins), each npm platform package, `templates/*/.claude/temper-version`, the git tag `vX`, and `temper --version`. `cargo xtask versions --check` fails otherwise.
 6. `package-lock.json` (lockfileVersion 3) lists all six platform packages at version X, with `https` `resolved` URLs, `sha512` `integrity` and matching `os`/`cpu`, and nothing else (the npm/cli#4828 guard). `package.json` has no `scripts`, `overrides` or non-registry dependencies.
 7. On every supported OS/arch, a copy of the plugin directory installed with `npm ci --ignore-scripts` within 60 s runs `node scripts/temper.mjs --version` and prints `temper X`.
 8. Production code has no `unsafe`, `unwrap`/`expect`, panics, `as` casts or print macros, and every spawned thread or process has an owner, a timeout and a capped buffer (H-01..H-13).
@@ -256,19 +256,23 @@ pub fn js_trim(text: &str) -> &str;                                // JS String.
 // scan
 pub enum CodeKind { Prod, Bin, Example, Test }
 pub enum Severity { Hard, Ask, Soft }
-pub fn classify_path(rel_to_crate: &str, crate_has_lib: bool) -> CodeKind;
+pub enum LibTarget { Present, Absent }                        // API-10: not a bool (owner, wi-208563)
+pub fn classify_path(rel_to_crate: &str, lib: LibTarget) -> CodeKind;
 pub fn is_build_script(rel_to_crate: &str) -> bool;
-pub fn is_rust_fence(info: &str) -> bool;
+pub fn new_hits(before: &[Hit], after: Vec<Hit>) -> Vec<Hit>;   // multiset on key + text; keeps after's order
 pub struct Scanner { /* compiled rules */ }
 impl Scanner {
     pub fn new() -> Result<Self, ScannerSetupError>;           // compiles every pattern once; built at the composition root
     pub fn scan(&self, src: &str, options: &ScanOptions<'_>) -> ScanReport;   // infallible, total
     pub fn rules(&self) -> impl Iterator<Item = &RuleInfo> + '_;               // key, id, lints, contexts (rule-table test)
 }
+// `rules()` and `RuleInfo` land with their first non-test reader, the gate's new-code-only
+// set (Phase 4, wi-ca74b3); 1d ports the rule-table test against the in-crate table.
+// `is_rust_fence` is private to the doc-rule finders: its only reader is `doc-unwrap` (wi-e9f84d).
 pub struct ScanOptions<'a> { pub kind: CodeKind, pub file: FileRole, pub forbid: Option<&'a BTreeSet<String>> }
 pub enum FileRole { Source, BuildScript }                     // API-10: not a bool
 pub struct ScanReport { /* hits: Vec<Hit>, tests: usize, ignores: usize, clones: usize */ }  // getters
-pub struct Hit { /* key: RuleKey, id: RuleId, severity, line: LineNo, text: String, msg/fix: Cow<'static, str>, exception: Option<String> */ }
+pub struct Hit { /* key: RuleKey, id: RuleId, severity, line: LineNo, text: String, msg: Cow<'static, str>, fix: &'static str, exception: Option<String> */ }
 #[derive(Serialize)] on Hit with the 1.x field names (key, id, severity, line, text, msg, fix, exception?, file? added by callers via HitAt)
 pub fn new_hits(before: &[Hit], after: Vec<Hit>) -> Vec<Hit>;   // consumes `after` (OWN-02): multiset difference on (key, text)
 pub fn format_hit(hit: &Hit, file: Option<&str>) -> String;
@@ -459,19 +463,25 @@ Translating JS regex classes:
 - `\s` becomes the constant `JS_SPACE = [\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]`.
 - `[^...]` and `.` keep their meaning, since JS `.` excludes `\n`, `\r`, U+2028 and U+2029. Use `[^\n\r\x{2028}\x{2029}]` where `.` appears without the `s` flag.
 
-Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around plus a `keep` predicate. When a predicate rejects a match at start `s`, the search resumes at `s + 1 char`, which reproduces JS `lastIndex` semantics for patterns with no shorter alternative at the same start.
+Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around plus a `look` predicate. When a look predicate rejects a match at start `s`, the search resumes at `s + 1 char`, which reproduces JS `lastIndex` semantics for patterns with no shorter alternative at the same start. A `keep` predicate (1.x's `keep` functions) that rejects a match resumes at its end, as 1.x does. Where JS backtracking at a look-around changes the result, the predicate reproduces it, and the oracle tests pin the cases (Phase 1b, wi-31f653).
 
 | Rule | Look-around | Predicate |
 |---|---|---|
-| `ignore-no-reason` | `(?=[\],)])` | the next byte is `]`, `,` or `)` |
-| `extern-crate` | `(?!(?:alloc\|std)\s*;\|self\s+as\b)` | the rest after the match does not match `^(alloc\|std)JS_SPACE*;` or `^self JS_SPACE+as\b` |
+| `ignore-no-reason` | `(?=[\],)])` | the pattern consumes `[\],)]` and the keep trims it; a JS match never starts with that char, so the result is the same. A plain next-byte test is not faithful: `#[cfg_attr(x, ignorefoo, ignore)]` differs |
+| `extern-crate` | `(?!(?:alloc\|std)\s*;\|self\s+as\b)` | holds when the match ends in two or more JS spaces (JS gives one back and the look-ahead then sees a space), or when the rest after the match does not match `^(alloc\|std)JS_SPACE*;` or `^self JS_SPACE+as\b` (`extern crate  alloc;` and `extern crate\n\nstd;` hit in 1.x) |
 | `get-prefix` | `get_(?!(mut\|ref\|pin_mut\|unchecked(_mut)?)\b)` | the identifier after `get_` is not one of those |
-| `compiler-fence` | `(?<![.\w]\s*\|\bfn\s+)` | walk back over JS_SPACE from the match start: the previous byte is not `.` or a word byte, and the preceding token is not `fn` followed by whitespace |
+| `compiler-fence` | `(?<![.\w]\s*\|\bfn\s+)` | walk back over JS_SPACE from the match start: the previous char is not `.` or an ASCII word char. The `fn` alternative is redundant (`n` is a word char) |
 | `unwrap-or-default` | `(?<!\bparse\s*(?:::\s*<[^>]*>)?\s*\(\s*\)\s*)` | apply the regex `\bparse\s*(::\s*<[^>]*>)?\s*\(\s*\)\s*$` to `code[..start]` (anchored at the end) |
 | shell writes (`shellWrites`) | `(?![\w.])` after the target | the next char is not a word char or `.`; on reject, retry a shorter `[^\s"'\|;&<>]*` prefix by searching for the target name again inside the matched span (covers JS backtracking) |
 | `baselineRaise` flag, `--ignore-rust-version` | `(?![\w-])` | the next char is not `[\w-]` |
 | `emptyIfLetErr` | `=(?!=)` | the next byte is not `=` |
 | `traitImplRegions` | `\bfor\b(?!\s*<)` | the next non-space char is not `<` |
+
+JS flags and windows (Phase 1b, wi-afd1cd, wi-1636ef):
+- `m`: `regex`'s multi-line `^` follows only `\n`, so `^` becomes `(?:(?m:^)|[\r\x{2028}\x{2029}])` and the match start moves past the consumed terminator. `$` under `m` is rejected by `translate`; no 1.x pattern uses it.
+- `i` (without `u`): ASCII letters become two-case classes. `regex`'s `(?i)` would also fold `ſ` and the Kelvin sign with ASCII letters, which JS does not. A non-ASCII char, a `\u`/`\x` escape or a class range under `i` is rejected.
+- `translate` returns `Result<String, UnsupportedJs>` and rejects constructs that `regex` would read with another meaning (`[]`, `[^]`, `--` in a class, letter and digit escapes outside the JS set, `\u`/`\x` without their digits); `Scanner::new` reports them through `ScannerSetupError` (wi-ef9d9d, wi-d31f39).
+- The 40- and 300-unit back-windows (`compiler-fence`, `seqcst`) count UTF-16 code units over the source and then slice the masked code, since masked non-ASCII text is wider in bytes than in units.
 
 - Every regex is compiled once in `Scanner::new()` (and once per process for the hook policies, in their own `Policies::new()`). Nothing is compiled at module scope with a `LazyLock` that would need an `unwrap`.
 - The `RULES` table is a `const` slice of `RuleSpec { key: "unsafe", id: "H-01", contexts: Contexts { prod: Some(Hard), .. }, msg: "...", fix: "...", fix_build: Option<&str>, lints: &[...], matcher: Matcher::Regex { pattern, keep } | Matcher::Find(fn(&Env) -> Vec<Found>) }`. Key and id are written as string literals so that `lint-claims.py` and `gen_rulemap.py` can read them as text: `\bkey:\s*"([a-z0-9-]+)"` and `id:\s*"([A-Z]+-\d{2})"`.
@@ -555,6 +565,7 @@ Rewriting look-arounds (D9-A). Each becomes the pattern without the look-around 
 - (h) Telemetry lines are JSON-equivalent but may order detail keys differently. `stats` output is identical.
 - (i) **Retired tests** (H-12): the 6 `vendor.test.mjs` tests, and "CLI: report and setup say so when this copy lacks report.mjs or vendor.mjs" and "CLI: setup --vendor-only refreshes .claude/temper/ and touches nothing else" in `baseline.test.mjs`, because vendoring, `--vendor-only` and optional modules no longer exist. The `--vendor-only` test was added to this list by the owner on 2026-10-19, amending wi-348e0b (#64). Replacement tests: setup pins `.claude/temper-version`; setup reports drift between the pin and the binary; `--migrate` replaces only known templates; `--force` on a pinned repository updates only `.claude/temper-version` (replaces the `--vendor-only` test); the example workspace's pin equals the plugin version.
 - (j) SessionStart's timeout rises from 30 to 900 s in `hooks.json` (D6-C).
+- (k) **Retired assertion** (H-12): the `ms < 10_000` wall-clock bound in `scan.test.mjs`'s "large file: a seeded hit near the end of ~5000 lines is reported in bounded time". The Rust port keeps its hit assertion (`scan::tests::whole_file::large_file_seeded_hit_near_the_end_is_reported`), and the bound moves to Phase 1e's scanner corpus CI job as a per-file scan-time budget, because a wall-clock unit test breaks TST-10. Decided by the owner on 2026-11-01 (wi-825595).
 
 #### 2.5 What is deliberately not parity-tested
 
@@ -579,6 +590,15 @@ Riskiest first: distribution (Phase 0), then the scanner (Phase 1), whose regex 
 | 6 | Report model, Markdown and HTML (golden sample), CLI | `report` |
 | 7 | `setup` (templates from `TEMPER_PLUGIN_ROOT`, `.claude/temper-version` pin, `--migrate` with the known-template hash table), `stats` (with `--branch`), `telemetry push`; template changes (§6) prepared on a branch | `setup`, `stats`, `telemetry` |
 | 8 | **Cutover (2.0.0)**: `launch.mjs` replaces `scripts/temper.mjs`; delete `scripts/lib/`, the Node tests, `tests/parity/` and the vendored copy in `templates/example-workspace/.claude/temper/`; `package.json` and `package-lock.json` land; `hooks.json` SessionStart timeout and status message; docs, CHANGELOG, Python checks, `tests/ci.sh`; release 2.0.0 (§4) | everything |
+
+Phase 1 lands as six PRs (1d is two, wi-719373), each green with no dead code, because every helper arrives with its first consumer (wi-a5a813):
+- 1a: the `js` helpers, the lexer, test regions, the counts, `Hit`, and the `Scanner` with six rules (`unsafe`, `unwrap`, `panic`, `dbg`, `print`, `expect-attr`); `regex`, `thiserror` and dev `proptest` added.
+- 1b: the lexer's comment records and remaining helpers, and 40 more regex rules in 1.x table order with the `keep` and look-around predicates (46 of the 60 in all).
+- 1c: 9 of the 11 remaining finders, one file per concept (`empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment`, `commented-code`); the regex rules `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and `ScanOptions::forbid` with its only reader (wi-13609d). 58 of the 60 rules in all. The doc group moves to 1d (wi-9f78ea), and `Scanner::rules()` with `RuleInfo` to Phase 4, its first non-test reader (wi-ca74b3).
+- 1d is two PRs (wi-719373):
+  - 1d.1: the doc group (`doc-unwrap`, `doc-arg-sections`, doc blocks, the lazy `Env::doc` and `is_rust_fence`, specified in the 1c plan's Appendix A) and the 1.x tests that need the whole table; `new_hits` (wi-46a7f4) and `classify_path` with `LibTarget` (wi-208563). All 60 rules; every `scan.test.mjs` test has a Rust home.
+  - 1d.2: the `temper scan` vertical slice: `format_hit`, `Serialize` on `Hit`, the domain path helpers, the app's `discover`, `crate_of` and `rel_to`, the host's `StdFiles` and `StdProcess`, and the `temper scan` CLI; `serde` and `wait-timeout` added. It gets its own plan once its open calls are settled.
+- 1e: the parity harness's `scan` cases and the scanner differential-corpus job, which also carries the scan-time bound retired from the "large file" unit test (D16(k), wi-825595); `scan` graduates once green on Linux, Windows and macOS.
 
 Strangler mechanics during phases 1 to 7:
 - `hooks/hooks.json` is unchanged, so users run 1.x exactly.
@@ -625,6 +645,7 @@ Triggered by `workflow_dispatch` with the input `version` on branch `release/<ve
 - **Versioning:** `xtask versions --set X` rewrites:
   - `Cargo.toml` `[workspace.package].version` and the sibling `version` fields;
   - `.claude-plugin/plugin.json`;
+  - `plugins/temper-lens/.claude-plugin/plugin.json`, from the cutover, as for `.claude-plugin/plugin.json` (both stay 1.x during the port);
   - `package.json` `version` and all six pins;
   - `templates/workspace/.claude/temper-version` and `templates/example-workspace/.claude/temper-version`;
   - it then runs `cargo update --workspace` and checks that CHANGELOG has a `## X` heading.
@@ -746,21 +767,24 @@ Phase 0
 - [ ] verify-install, manual, once in Phase 0b: install `2.0.0-alpha.1` through a claude.ai organization sync (`~/.claude/plugins/synced/`) and through a cloud environment's setup script (`claude plugin marketplace add` plus `claude plugin install`). Record in Progress whether `node_modules/@wet-ink/temper-*` is present in each, and if not, whether the fallback build or D6 degraded mode follows. Phase 0b does not exit until both paths have an engine (wi-48fb44): a path that skips `npm ci` gets a step in the environment's setup script that installs the npm package, and this check is run again.
 
 Phase 1: lexer and scanner (domain; ported from `scan.test.mjs`, in its order)
-- [ ] masks strings, raw strings, chars and comments but keeps lifetimes (incl. `'\''`, `br#".."#`, nested block comments, unterminated string at EOF).
-- [ ] property: `mask_rust(src).code.len() == src.len()` and newline positions are identical for arbitrary strings (proptest, TST-06).
-- [ ] property: `scan` never panics and line numbers are in `1..=lines(src)` for arbitrary input (proptest).
-- [ ] hard hits in production code (each H-rule key in the 1.x table).
-- [ ] test regions allow unwrap/panic but not dbg or unsafe.
-- [ ] `#[expect]` with a reason converts a hard hit into an exception request.
-- [ ] allow attribute, erased errors in pub signatures, `.ok();` discard.
-- [ ] `new_hits` reports only introduced violations (multiset on key+text).
-- [ ] path classification (`classify_path`, `is_build_script`).
-- [ ] no false positives on idiomatic code.
-- [ ] rule table: unique keys, rule ids, four contexts, fix text.
-- [ ] then, one per 1.x test: assert-in-prod; ignore-no-reason (incl. `cfg_attr`, `educe(Debug, ignore)` not counted; look-ahead predicate); extern-crate (look-ahead predicate); print fix text for build scripts; doc-unwrap positive and negative; empty-if-let-err depth and keep-first-error; escaped quote char and ignore counting; empty arms; thread-spawn; compiler-fence (look-behind predicate, `fn compiler_fence` and `x.compiler_fence(` not flagged) and global-allocator; map-index; filter-map-ok and parse-unwrap-or; seqcst and fetch-update; crate-lint-attr, pub-glob-reexport, prelude-mod; pub-smart-ptr; struct-bounds; ops-impl; type-alias-primitive, get-prefix (predicate), mutex-unit; doc-arg-sections; detached-spawn; idiomatic ledger module; commented-out code heuristic.
-- [ ] unwrap-or-default: `x.parse::<u8>().unwrap_or_default()` is not flagged (look-behind predicate) but `x.unwrap_or_default()` is.
-- [ ] JS class translation: `\b` adjacent to a non-ASCII letter behaves as in JS (é is not a word char); `\s` matches U+00A0 and U+FEFF but not U+0085.
-- [ ] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
+- [x] masks strings, raw strings, chars and comments but keeps lifetimes (incl. `'\''`, `br#".."#`, nested block comments, unterminated string at EOF).
+- [x] property: `mask_rust(src).code.len() == src.len()` and newline positions are identical for arbitrary strings (proptest, TST-06).
+- [x] property: `scan` never panics and line numbers are in `1..=lines(src)` for arbitrary input (proptest; the token soup reaches every 1b predicate).
+- [x] hard hits in production code (each H-rule key in the 1.x table).
+- [x] test regions allow unwrap/panic but not dbg or unsafe.
+- [x] `#[expect]` with a reason converts a hard hit into an exception request.
+- [x] allow attribute, erased errors in pub signatures, `.ok();` discard.
+- [x] `new_hits` reports only introduced violations (multiset on key+text).
+- [x] path classification (`classify_path`, `is_build_script`).
+- [x] no false positives on idiomatic code.
+- [x] rule table: unique keys, rule ids, four contexts, fix text.
+- [x] then, one per 1.x test: assert-in-prod; ignore-no-reason (incl. `cfg_attr`, `educe(Debug, ignore)` not counted; look-ahead predicate); extern-crate (look-ahead predicate); print fix text for build scripts; doc-unwrap positive and negative; empty-if-let-err depth and keep-first-error; escaped quote char and ignore counting; empty arms; thread-spawn; compiler-fence (look-behind predicate, `fn compiler_fence` and `x.compiler_fence(` not flagged) and global-allocator; map-index; filter-map-ok and parse-unwrap-or; seqcst and fetch-update; crate-lint-attr, pub-glob-reexport, prelude-mod; pub-smart-ptr; struct-bounds; ops-impl; type-alias-primitive, get-prefix (predicate), mutex-unit; doc-arg-sections; detached-spawn; idiomatic ledger module; commented-out code heuristic.
+  - [x] 1b: the regex entries (assert-in-prod, ignore-no-reason, extern-crate, print fix text, thread-spawn, compiler-fence with its predicate, global-allocator, map-index, filter-map-ok and parse-unwrap-or, seqcst and fetch-update, crate-lint-attr, pub-glob-reexport, prelude-mod, pub-smart-ptr, ops-impl, type-alias-primitive, get-prefix with its predicate, mutex-unit, detached-spawn, idiomatic ledger module), with oracle tests for every predicate.
+  - [x] 1c: empty-if-let-err depth and keep-first-error, the escaped quote char and ignore counting (the scan half; the lexer half landed in 1a), empty arms, struct-bounds, commented-out code; with the finder `KEY_CASES` (test-branch, serde-hashmap, spin-lock, todo-comment), forbid-override, and "large file" without its timing (D16(k)); oracle tests for every finder and helper.
+  - [x] 1d: doc-unwrap positive and negative, doc-arg-sections (moved from 1c, wi-9f78ea).
+- [x] unwrap-or-default: `x.parse::<u8>().unwrap_or_default()` is not flagged (look-behind predicate) but `x.unwrap_or_default()` is.
+- [x] JS class translation: `\b` adjacent to a non-ASCII letter behaves as in JS (é is not a word char); `\s` matches U+00A0 and U+FEFF but not U+0085.
+- [x] hit text: `js_trim` plus 160 UTF-16-unit truncation, with an astral character at the boundary (D16(e)).
 - [ ] differential corpus (CI job, not a unit test): zero unexplained diffs over the example workspace, the skill code blocks and the registry sources.
 - [ ] `rel_to`: verbatim `\\?\C:\...` and `//?/C:/...` inputs (domain, both `PathStyle`s); 8.3 short name vs long name is the same root (cli/it, `#[cfg(windows)]`, uses `cmd /c for %I in (..) do @echo %~sI` as 1.x does).
 - [ ] `rel_to`: one directory reached through a symlinked ancestor and through its real path is the same root (cli/it, every OS; ported from the 1.3.0 relTo symlink test; the symlink probe and the Windows privilege handling as in `safe_output_path`).
@@ -904,7 +928,7 @@ Phase 8: cutover
 | D13 user CI install | install-action / cargo install / curl | install-action (binstall) | owner (wi-37c1df) | A: install-action |
 | D14 pin location | `.claude/temper-version` / temper.json / workflow | `.claude/temper-version` | owner (wi-3b5428) | A: `.claude/temper-version` |
 | D15 1.x migration | hash-guarded rewrite / manual / force | hash-guarded `--migrate` | owner (wi-cdcecc) | A: hash-guarded `--migrate` |
-| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64) |
+| D16 divergences + retired tests | approve list §2.4 | approve | owner (wi-348e0b) | A: approve; (i) amended by wi-5fbb56 and on 2026-10-19 (#64); (k) added by wi-825595 on 2026-11-01 |
 | D17 PATH export | yes / no | yes | owner (wi-1d4cd6) | A: export |
 | Crate licence | MIT / MIT OR Apache-2.0 | MIT | owner (wi-4679b3) | B: `MIT OR Apache-2.0` (override); add `LICENSE-APACHE`; plugin stays MIT |
 
@@ -942,4 +966,8 @@ Phase 8: cutover
   - the launcher `scripts/launch.mjs` and `.github/workflows/release-2.yml`, kept beside `release.yml` until the cutover (wi-96fbfe) (#177).
 
   A packing dry run found that npm drops `LICENSE-*` files unless `files` names them, so `files` now lists both licences. Phase 0c adds `scripts/fallback.mjs`: the fallback build and the D6-C behaviours, with the binary absent, tested with a fake `cargo`. Two-way calls: wi-654352, wi-4769ed, wi-f83377, wi-a6e98e and wi-6bf67c. Phase 0b does not exit until two owner steps are done: the first `2.0.0-alpha.1` publish, which waits on the owner's six placeholder packages and trusted publishers (wi-428ed1), and the manual verify-install on the organization-sync and cloud setup-script paths (wi-48fb44).
+- 2026-11-01: Phase 1a built on `wip-1-scanner`: in `temper-domain`, the `js` helpers (`js_trim`, UTF-16 truncation, JS-to-`regex` translation), the masking lexer, test regions, the test, ignore and clone counts, `Hit` and the `Scanner` with its first six rules. The 1.x tests "masks strings…", "test regions allow…", "#[expect] with a reason…", "print: build scripts…" and "lexer: escaped quote char literal; ignore counting" are ported, with the masking and scan properties. A local differential run over 4,041 files (this repository's Rust and the cargo registry sources) gave zero diffs from 1.x for the six rules and the counts. Two-way calls: wi-a5a813, wi-466849, wi-5eed96, wi-c0f25b, wi-962170, wi-41c92b, wi-77bafb and wi-256d4d; `regex` under D10 (wi-b03273).
+- 2026-11-01: Phase 1b built on `wip-1b-scanner` (plan `.temper/plans/port-phase-1b.md`): 40 more regex rules in 1.x table order (46 of 60), their look-around and keep predicates, the JS `m` and `i` flags, UTF-16 back-windows, comment records, const and trait-impl regions, and a fallible `js::translate`. `allow-attr`, `discard-ok`, `empty-err-arm` and `ScanOptions::forbid` moved to 1c (wi-13609d). §1.6's predicate table was corrected where it was not faithful to JS backtracking (wi-31f653). Calls 1b-1 to 1b-10 are two-way defaults (wi-13609d, wi-31f653, wi-afd1cd, wi-1636ef, wi-ef9d9d, wi-d31f39, wi-cbeff6, wi-5cb4c8, wi-28a72e, wi-de1207). A local differential over 9,003 files (this repository's Rust and the cargo registry sources), scanned as prod and test and again as bin and example build scripts, matched 1.x `scanSource` filtered to the 46 keys byte for byte (301,336 hits).
+- 2026-11-01: Phase 1c built on `wip-1c-scanner` (plan `.temper/plans/port-phase-1c.md`): `allow-attr`, `discard-ok` and `empty-err-arm` (with `otherArmBindsErr`), and the finders `empty-if-let-err`, `spin-lock`, `serde-hashmap`, `test-branch`, `struct-bounds`, `forbid-override`, `erased-error`, `todo-comment` and `commented-code` (58 of 60 rules); `ScanOptions` gains `forbid` and a lifetime as §1.3 writes it (wi-2d7b05); comment records gain `CommentKind` (wi-91ace5); the 1b review's follow-ups F1 to F4, including the test split by 1.x group (wi-bd9fd8). The doc group moves to 1d (wi-9f78ea) and `Scanner::rules()` to Phase 4 (wi-ca74b3); `struct-bounds`' run-time regexes are hand-written matchers (wi-5842d0), and `other_arm_binds_err` lives with the `empty-if-let-err` finder (wi-5f034a). The owner retired the "large file" test's wall-clock bound into D16(k) (wi-825595). A local differential over 9,021 files (this repository's Rust and the cargo registry sources), scanned as prod and test, as bin and example build scripts, and as prod with a forbid set, matched 1.x `scanSource` filtered to the 58 keys byte for byte (449,925 hits).
+- 2026-11-01: Phase 1d.1 built on `wip-1d-scanner` (plan `.temper/plans/port-phase-1d.md`): `doc-unwrap` and `doc-arg-sections` with doc blocks and the lazy `Env::doc` (60 of 60 rules), `new_hits`, and `classify_path` with `LibTarget` (owner, wi-208563); `is_build_script` moves to `scan/classify.rs` with its public path unchanged. Every `scan.test.mjs` test now has a Rust home, including the rule-table test and the every-key witness table (wi-a22589). The 1c review's follow-ups: each doc rule seen red on an empty finder, the depth walkers in `lexer/brackets.rs` and the lock and TODO key cases in their own module (wi-7d932c), `body_brace`'s case table; `ScanOptions` stays without `Copy` (wi-a4b3a7). Two-way calls: wi-719373, wi-a4b3a7, wi-46a7f4, wi-afb3e9, wi-e9f84d, wi-358920, wi-a22589, wi-7d932c. A local differential over 9,028 files, with no key filter, matched 1.x byte for byte: `scanSource` as prod and test (182,063 hits, 4,602 hard and 4,606 soft `doc-unwrap`, 274 `doc-arg-sections`), as bin and example build scripts (190,838), and as prod with a forbid set (100,866); `newHits` against each file with its first half removed (39,052 fresh hits); `classifyPath` on every path relative to its package, with both library values.
 - Next: Phase 0a (adds `LICENSE-APACHE`), after 1.5.0 (v1 went live on 2026-10-19) and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).
