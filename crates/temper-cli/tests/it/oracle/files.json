@@ -1,0 +1,32 @@
+[
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 5,
+    "text": "v.unwrap()",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/lib.rs"
+  },
+  {
+    "key": "unwrap",
+    "id": "H-02",
+    "severity": "hard",
+    "line": 9,
+    "text": "v.expect(\"é\u0001\tx\")",
+    "msg": "unwrap/expect in production code",
+    "fix": "Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \"Eliminating unwrap/expect\".",
+    "file": "crates/core/src/lib.rs"
+  },
+  {
+    "key": "unsafe",
+    "id": "H-01",
+    "severity": "hard",
+    "line": 2,
+    "text": "unsafe {}",
+    "msg": "`unsafe` is forbidden in this workspace",
+    "fix": "Find a safe API or restructure. A genuine need (FFI) is a human decision: isolate it in a -sys crate and change the lint config with approval.",
+    "file": "scripts/gen.rs"
+  }
+]

@@ -221,6 +221,26 @@ fn hit_text_is_js_trimmed_and_cut_at_160_utf16_units() {
     );
 }
 
+/// A requested `exception` (written before `msg`) comes from a rule's `lints`, and a finder's
+/// own `msg` from a finder. Only regex rules list lints, so no hit has both, and the hit JSON's
+/// two `exception` positions can be told apart from the hit alone (port plan 1d.2, Invariant 2).
+#[test]
+fn exception_requests_come_only_from_regex_rules() {
+    use crate::scan::rules::Matcher;
+
+    let finders_with_lints: Vec<&str> = RULES
+        .iter()
+        .filter(|rule| !rule.lints.is_empty() && !matches!(rule.matcher, Matcher::Regex(_)))
+        .map(|rule| rule.key)
+        .collect();
+
+    assert_eq!(
+        finders_with_lints,
+        Vec::<&str>::new(),
+        "finder rules that list lints"
+    );
+}
+
 #[test]
 fn into_hits_hands_back_the_hits() {
     let report = scan("fn f() { dbg!(1); }", CodeKind::Prod);

@@ -49,7 +49,13 @@ pub(crate) fn find_doc_unwrap(env: &Env<'_>, p: &DocRulePatterns, out: &mut Vec<
         if !is_rust_fence(fence.info) || p.should_panic.is_match(fence.info) {
             continue;
         }
-        let mut body = String::new();
+        // The lines plus one newline between each: an upper bound, since unhiding only removes.
+        let size = fence
+            .lines
+            .iter()
+            .fold(0_usize, |n, line| n.saturating_add(line.text.len()))
+            .saturating_add(fence.lines.len().saturating_sub(1));
+        let mut body = String::with_capacity(size);
         for (i, line) in fence.lines.iter().enumerate() {
             if i > 0 {
                 body.push('\n');
@@ -131,6 +137,31 @@ fn split_js_spaces(text: &str) -> (&str, &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.x's two `replace` calls, run under Node 22.22.0 on each row (1d.1 review F1): only JS
+    /// spaces count as indent, so U+00A0, U+FEFF and U+2028 do and U+0085 does not.
+    #[test]
+    fn unhide_like_1x() {
+        let rows = [
+            ("\u{a0}# x", "\u{a0}x"),
+            ("\u{feff}#", "\u{feff}"),
+            ("\u{85}# x", "\u{85}# x"),
+            ("#x", "#x"),
+            ("  #", "  "),
+            ("# ", ""),
+            ("#", ""),
+            ("  # #", "  "),
+            ("\u{2028}# y", "\u{2028}y"),
+        ];
+
+        let wrong: Vec<(&str, String)> = rows
+            .iter()
+            .filter(|(line, want)| unhide(line) != *want)
+            .map(|(line, _)| (*line, unhide(line).into_owned()))
+            .collect();
+
+        assert_eq!(wrong, Vec::new(), "lines unhidden as 1.x does");
+    }
 
     /// 1.x test 15's `isRustFence` assertions, with the oracle's extra tokens.
     #[test]

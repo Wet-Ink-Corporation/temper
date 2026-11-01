@@ -10,6 +10,7 @@ mod docs;
 mod engine;
 mod every_key;
 mod key_cases;
+mod output;
 mod whole_file;
 
 use std::collections::BTreeSet;

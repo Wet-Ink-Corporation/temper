@@ -1,0 +1,28 @@
+[hard] H-06 crates/core/build.rs:2: print macro in production code. `println!("cargo::rerun-if-changed=build.rs");`
+    fix: Build scripts emit directives with `writeln!(io::stdout().lock(), "cargo::rerun-if-changed=..")?` from a `main` that returns `Result` (ARC-17, H-06).
+[hard] H-06 crates/core/src/B.rs:2: `dbg!` left in code. `dbg!(1);`
+    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.
+[hard] H-06 crates/core/src/a.rs:2: `dbg!` left in code. `dbg!(2);`
+    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.
+[hard] H-02 crates/core/src/crlf.rs:2: unwrap/expect in production code. `v.unwrap()`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-02 crates/core/src/lib.rs:5: unwrap/expect in production code. `v.unwrap()`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-02 crates/core/src/lib.rs:9: unwrap/expect in production code. `v.expect("é	x")`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-06 crates/core/tests/it.rs:4: `dbg!` left in code. `dbg!(2);`
+    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.
+[hard] ARC-14 crates/tool/src/cli.rs:2: `process::exit` skips destructors and bypasses error reporting. `std::process::exit(2);`
+    fix: Return `ExitCode` (or `Result`) from `main` and map errors to codes at the edge.
+[hard] H-02 crates/tool/src/main.rs:3: unwrap/expect in production code. `x.unwrap();`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[hard] H-01 scripts/gen.rs:2: `unsafe` is forbidden in this workspace. `unsafe {}`
+    fix: Find a safe API or restructure. A genuine need (FFI) is a human decision: isolate it in a -sys crate and change the lint config with approval.
+[ask] H-05 crates/core/src/asks.rs:1: lint exception requested for `clippy::unwrap_used`. `#[expect(clippy::unwrap_used, reason = "the caller checked it")]`
+    fix: Exception requests need human approval (H-05).
+[ask] H-02 crates/core/src/asks.rs:3: unwrap/expect in production code. `v.unwrap()`
+    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md "Eliminating unwrap/expect".
+[soft] TST-10 crates/core/src/asks.rs:7: `thread::sleep`. `std::thread::sleep(d);`
+    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).
+
+10 blocking, 2 exception request(s), 1 advisory

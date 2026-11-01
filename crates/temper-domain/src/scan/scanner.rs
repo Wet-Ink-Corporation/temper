@@ -9,7 +9,7 @@ use super::counts::{CountPatterns, count_clones, count_ignored, count_tests};
 use super::env::Env;
 use super::finders::expect_attrs::exception_for;
 use super::finders::{FinderPatterns, Found};
-use super::hit::{Hit, RuleId, RuleKey, Severity};
+use super::hit::{Exception, Hit, RuleId, RuleKey, Severity};
 use super::lexer::{mask_rust, next_char};
 use super::predicates::{Candidate, Keep, Look, PredicatePatterns};
 use super::rules::{ContextSeverity, FinderKind, Matcher, Pattern, RULES, RuleSpec};
@@ -223,16 +223,17 @@ impl Scanner {
 
     /// The hit for one match, or `None` when the rule ignores the match's context.
     fn hit(&self, spec: &'static RuleSpec, env: &Env<'_>, found: Found) -> Option<Hit> {
+        let attribute = found.exception.map(Exception::Attribute);
         let (severity, exception) = match found.severity {
-            Some(forced) => (forced, found.exception),
+            Some(forced) => (forced, attribute),
             None => match spec.contexts.get(env.context_at(found.offset))? {
                 ContextSeverity::Hard => {
                     match exception_for(env, found.offset, spec.lints, &self.finders.expect) {
-                        Some(lint) => (Severity::Ask, Some(lint.to_owned())),
-                        None => (Severity::Hard, found.exception),
+                        Some(lint) => (Severity::Ask, Some(Exception::Requested(lint.to_owned()))),
+                        None => (Severity::Hard, attribute),
                     }
                 }
-                ContextSeverity::Soft => (Severity::Soft, found.exception),
+                ContextSeverity::Soft => (Severity::Soft, attribute),
             },
         };
         let line = env.idx.line_of(found.offset);

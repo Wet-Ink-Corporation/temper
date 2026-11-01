@@ -3,7 +3,7 @@
 use crate::support::{TestResult, temper, temper_into_closed_pipe};
 
 /// The 1.x usage text, copied verbatim from `scripts/temper.mjs` (the `default:` case).
-const USAGE: &str = "usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status [--json] [--session ID] | setup [--dry-run] [--force | --vendor-only] | stats [--json] [--session ID] [--branch [NAME]] | telemetry push --session ID\n              | baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]\n              | report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]>\n";
+pub(crate) const USAGE: &str = "usage: temper <hook EVENT | gate [--check] [--no-cache] [--json] | scan [FILES..] [--all] [--json] | status [--json] [--session ID] | setup [--dry-run] [--force | --vendor-only] | stats [--json] [--session ID] [--branch [NAME]] | telemetry push --session ID\n              | baseline [--init | --update | --tighten | --check [--base REF] [--findings-out FILE] [--json]]\n              | report [--findings FILE] [--base REF] [--out DIR] [--format json,md,html]>\n";
 
 #[test]
 #[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
