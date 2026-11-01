@@ -149,10 +149,22 @@ pub(super) fn resolve(cwd: &str, path: &str) -> String {
     resolved.finish()
 }
 
-/// The working directory of `device` for a drive-relative path such as `D:x`. Node reads the
-/// `=D:` variable, which only `cmd.exe` sets, then falls back to `process.cwd()`.
-fn drive_cwd<'a>(_device: &str, cwd: &'a str) -> Cow<'a, str> {
-    Cow::Borrowed(cwd)
+/// The working directory of `device` for a drive-relative path such as `D:x`.
+///
+/// Node reads the `=D:` variable, which only `cmd.exe` sets, then falls back to
+/// `process.cwd()`, and to the drive's root when that is a path on another drive. temper does
+/// not carry the `=D:` variables, so another drive resolves against its root (OC-4 A, port
+/// plan D16(m)): Node's own answer when the variable is unset.
+fn drive_cwd<'a>(device: &str, cwd: &'a str) -> Cow<'a, str> {
+    // Node compares UTF-16 units: the first two, lowered, and the third.
+    let mut units = cwd.encode_utf16();
+    let head: Vec<u16> = units.by_ref().take(2).collect();
+    let other_drive = String::from_utf16_lossy(&head).to_lowercase() != device.to_lowercase();
+    if other_drive && units.next() == Some(BACKSLASH) {
+        Cow::Owned([device, "\\"].concat())
+    } else {
+        Cow::Borrowed(cwd)
+    }
 }
 
 /// Node's `win32.isAbsolute(path)`.

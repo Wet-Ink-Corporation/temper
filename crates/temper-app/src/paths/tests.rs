@@ -27,6 +27,9 @@ fn resolve_like_node_win32() {
         ("/x.rs", r"C:\x.rs"),
         (r"D:\y\..\z.rs", r"D:\z.rs"),
         ("C:z.rs", r"C:\ws\crates\core\z.rs"),
+        // Another drive's working directory is not known: its root (OC-4 A, D16(m)).
+        ("D:z.rs", r"D:\z.rs"),
+        ("d:z.rs", r"d:\z.rs"),
         (r"\\h\s\a\..\b.rs", r"\\h\s\b.rs"),
         ("//h/s", r"\\h\s\"),
         ("", WIN_CWD),
