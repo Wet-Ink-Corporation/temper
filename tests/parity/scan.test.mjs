@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 import { runInFreshCopy } from './lib/cases.mjs';
 import { nodeEngine, rustEngine } from './lib/engines.mjs';
-import { SCAN_FIXTURE, largeCrate, largeFile, writeTree } from './lib/fixtures.mjs';
-import { sortHitLines } from './lib/normalise.mjs';
+import { SCAN_FIXTURE, SURROGATE_FIXTURE, largeCrate, largeFile, writeTree } from './lib/fixtures.mjs';
+import { byteOrderHits, dropLoneSurrogateTail } from './lib/normalise.mjs';
 
 // Invariant 5 (H-12): without the binary the file fails; it never skips.
 const bin = process.env.TEMPER_BIN;
@@ -26,7 +26,7 @@ const engines = [nodeEngine(REPO), rustEngine(bin)];
 const dirs = {};
 
 before(() => {
-  for (const [name, files] of [['fixture', SCAN_FIXTURE], ['large', largeCrate()], ['empty', {}]]) {
+  for (const [name, files] of [['fixture', SCAN_FIXTURE], ['large', largeCrate()], ['surrogate', SURROGATE_FIXTURE], ['empty', {}]]) {
     dirs[name] = fs.mkdtempSync(path.join(os.tmpdir(), `temper-parity-${name}-`));
     writeTree(dirs[name], files);
   }
@@ -36,14 +36,15 @@ after(() => {
 });
 
 /**
- * Runs both engines on fresh copies of `src` and asserts they agree and wrote nothing. Returns
- * the agreed `{ exit, stdout, stderr }`, so a case can also pin what it is about.
+ * Runs both engines on fresh copies of `src` and asserts they agree and wrote nothing. `node1x`
+ * rewrites 1.x's stdout only, by an allowed divergence; Rust's output is compared as it is.
+ * Returns the agreed `{ exit, stdout, stderr }`, so a case can also pin what it is about.
  */
-function parity(src, { args, cwd = '.', git = false, skip = [], normalise = (s) => s }) {
-  const [node, rust] = engines.map((engine) => {
+function parity(src, { args, cwd = '.', git = false, skip = [], node1x = (s) => s }) {
+  const [node, rust] = engines.map((engine, i) => {
     const r = runInFreshCopy(engine, src, { args, cwd, git, skip });
     assert.deepStrictEqual(r.wrote, [], `${engine.name} wrote into the tree`);
-    return { exit: r.exit, stdout: normalise(r.stdout), stderr: normalise(r.stderr) };
+    return { exit: r.exit, stdout: i === 0 ? node1x(r.stdout) : r.stdout, stderr: r.stderr };
   });
   assert.deepStrictEqual(rust, node);
   return node;
@@ -67,8 +68,8 @@ test('S2 scan --all --json from a subdirectory of a git repository: the root is 
   assert.ok(files(r.stdout).includes('crates/tool/src/main.rs'));
 });
 
-test('S3 scan --all, text form, through the D16(l) sort (B.rs and a.rs)', () => {
-  const r = parity(dirs.fixture, { args: ['scan', '--all'], normalise: sortHitLines });
+test('S3 scan --all, text form, with 1.x re-sorted by D16(l) (B.rs and a.rs)', () => {
+  const r = parity(dirs.fixture, { args: ['scan', '--all'], node1x: byteOrderHits });
   assert.match(r.stdout, /\n\d+ blocking, \d+ exception request\(s\), \d+ advisory\n$/);
 });
 
@@ -120,6 +121,22 @@ test('S12 the large file through the CLI: exactly its seeded hit', () => {
   const r = parity(dirs.large, { args: ['scan', '--all', '--json'] });
   assert.deepEqual(JSON.parse(r.stdout).map((h) => `${h.key}:${h.id}:${h.severity}@${h.line}`),
     [`unwrap:H-02:hard@${largeFile().seedLine}`]);
+});
+
+test('S14 D16(e) end to end: UTF-16 truncation, and the straddling emoji 1.x leaves half of', () => {
+  let count = 0;
+  const node1x = (stdout) => {
+    const tail = dropLoneSurrogateTail(stdout);
+    count += tail.count;
+    return tail.text;
+  };
+  const r = parity(dirs.surrogate, { args: ['scan', '--all', '--json'], node1x });
+  assert.equal(count, 1, 'one lone surrogate in 1.x\'s output, the straddling one');
+  const texts = JSON.parse(r.stdout).map((h) => h.text);
+  assert.equal(texts.length, 2);
+  assert.equal(texts[0].length, 160, 'the emoji counts as two units');
+  assert.ok(texts[0].includes('\u{1F600}'));
+  assert.equal(texts[1].length, 159, 'the straddling emoji is dropped');
 });
 
 if (process.platform === 'win32') {

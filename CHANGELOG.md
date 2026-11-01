@@ -28,7 +28,9 @@ The lockfile step also retries until `package-lock.json` has an entry for every 
 
 **The 2.0 engine's scanner has all 60 rules (port Phase 1d).** The doc-comment rules, `new_hits` and path classification are in; nothing calls it yet, and users run 1.x.
 
-**The 2.0 engine's `temper scan` is compared with 1.x in CI (port Phase 1e).** A new scanner-corpus workflow runs both engines over the example workspace, every code block in the rust-craft skill, and the source of every crate in temper's lockfiles, on Linux, Windows and macOS, and fails on any difference in output. It also fails if the Rust engine takes 10 s or more on any file, the bound the retired "large file" unit test held (D16(k)). The harness lives in `tests/parity/`; its `scan` cases and the map from each 1.x scanner test to its Rust tests also run in `tests/ci.sh`. Nothing routes to the engine yet; users run 1.x.
+**The 2.0 engine's `temper scan` is compared with 1.x in CI (port Phase 1e).** A new scanner-corpus workflow runs both engines over the example workspace, every code block in the rust-craft skill, and the source of every crate in temper's lockfiles, on Linux, Windows and macOS, and fails on any difference in output other than the counted D16(e) truncation. It also fails if the Rust engine takes 10 s or more on any file, the bound the retired "large file" unit test held (D16(k)). The harness lives in `tests/parity/`; its `scan` cases and the map from each 1.x scanner test to its Rust tests also run in `tests/ci.sh`. Nothing routes to the engine yet; users run 1.x.
+
+**The scanner parity checks are stricter (port Phase 1e).** The text-form comparison now re-sorts only 1.x's output into Rust's byte order (D16(l)), so a Rust order bug in that form can no longer hide. A new case runs the D16(e) truncation end to end, the corpus job also runs when the parity cases fail, and it starts on pull requests that change the root `Cargo.toml`, `rust-toolchain.toml` or `.cargo/`. Nothing routes to the engine yet; users run 1.x.
 
 **The 2.0 engine's scanner has its finders and 58 of the 60 rules (port Phase 1c).** Nothing calls it yet; users run 1.x.
 

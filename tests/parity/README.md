@@ -13,7 +13,7 @@ The 2.0 port (`docs/plans/temper-2-rust-port.md` §2.2 item 2) holds the Rust en
 | `lib/diff.mjs` | How a mismatch is explained: the first differing byte, and the hits only one side has |
 | `lib/corpus.mjs` | The corpus comparison and the D16(k) per-file bound, with the run and the walk injected |
 | `harness.test.mjs` | Tests of `lib/` and of `doc_examples.py --extract`, with stub engines; no binary needed |
-| `scan.test.mjs` | The `temper scan` parity cases S1 to S13; needs `TEMPER_BIN` |
+| `scan.test.mjs` | The `temper scan` parity cases S1 to S14; needs `TEMPER_BIN` |
 | `corpus.mjs` | The scanner corpus driver (a script, not a node:test file) |
 | `test-map.json`, `check_test_map.py` | Every `tests/scan.test.mjs` test mapped to its Rust tests (Phase 8 adds the other engine tests) |
 
@@ -40,7 +40,7 @@ node tests/parity/corpus.mjs --bin target/release/temper \
 - **Same inputs for both engines.** Each case runs each engine in its own fresh copy, with the same arguments, the same cwd and the same hermetic environment: `PATH`, `HOME`, the temp variables, `LANG` and, on Windows, `SystemRoot`, `PATHEXT` and `COMSPEC`, plus `GIT_CONFIG_NOSYSTEM=1` and a `GIT_CEILING_DIRECTORIES` above the root. The tree's snapshot must not change.
 - **Bytes decide.** The hit diff only explains a mismatch (1e-6, wi-9817a6). The normalisers are the whole list:
   - `maskRoots`: the temp root, its real path and, on Windows, its other spellings become `<TMP>` (§2.2).
-  - `sortHitLines`: D16(l) (wi-ecb9dd). It applies only to text-form cases whose fixture has paths that differ only in case.
+  - `byteOrderHits`: D16(l) (wi-ecb9dd). It re-sorts 1.x's text-form hits as Rust sorts them (by file in UTF-8 byte order, then line, within each severity) and leaves Rust's output alone, so any other order difference still fails. It applies only to text-form cases whose fixture has paths that differ only in case.
   - `dropLoneSurrogateTail`: D16(e). It applies to 1.x's side only, and its count is in the report.
-- **The corpus is a function of the commit** (1e-2, wi-37a444). It is the registry packages of both lockfiles, the example workspace, the skill's code blocks and the large file, never whatever the registry cache happens to hold.
+- **The corpus is a function of the commit and the OS** (1e-2, wi-37a444). On Windows, Python writes the extracted code blocks with CRLF line ends; both engines read the same bytes, so parity is unaffected. It is the registry packages of both lockfiles, the example workspace, the skill's code blocks and the large file, never whatever the registry cache happens to hold.
 - **The D16(k) bound** (wi-825595, measured as 1e-5 decided, wi-a24829). A root whose Rust run takes under 10 s bounds every file in it. A root at or over the bound is timed file by file, and a file fails at `ms >= 10_000`. The bound is absolute, with no retry.

@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { HarnessError } from './error.mjs';
+
 // A hit line of 170 ASCII characters: 1.x cuts hit text at 160 UTF-16 units.
 const LONG = `    let v = x.unwrap(); // ${'a'.repeat(170 - 27)}`;
 
@@ -39,6 +41,20 @@ export const SCAN_FIXTURE = {
     Buffer.from([0xe9, 0xff]), Buffer.from("\n}\n"),
   ]),
   "crates/core/src/long.rs": `pub fn f(x: Option<u8>) {\n${LONG}\n    drop(v);\n}\n`,
+};
+
+// After trim, a hit line starts with these 23 UTF-16 units.
+const HEAD = 'let v = x.unwrap(); // ';
+
+/**
+ * D16(e) end to end: one hit line with an emoji well before 1.x's 160-unit cut (two units, so a
+ * count of characters would keep one unit too many), and one whose emoji straddles the cut (units
+ * 159 and 160), which 1.x leaves as a lone high surrogate and Rust drops.
+ */
+export const SURROGATE_FIXTURE = {
+  'Cargo.toml': '[package]\nname = "surrogate"\nversion = "0.1.0"\nedition = "2024"\n',
+  'src/lib.rs': `pub fn f(x: Option<u8>) {\n    ${HEAD}${'a'.repeat(20)}\u{1F600}${'a'.repeat(150)}\n`
+    + `    ${HEAD}${'b'.repeat(159 - HEAD.length)}\u{1F600}cccc\n}\n`,
 };
 
 /**
@@ -83,8 +99,14 @@ export function writeTree(root, files) {
   }
 }
 
-/** A copy of `src` in a new temp directory, without directories named in `skip`. */
+/**
+ * A copy of `src` in a new temp directory, without directories named in `skip`. A missing or
+ * non-directory `src` is a HarnessError, raised before any temp directory exists.
+ */
 export function freshCopy(src, { skip = ['target', '.git'] } = {}) {
+  if (!fs.statSync(src, { throwIfNoEntry: false })?.isDirectory()) {
+    throw new HarnessError(`not a directory: ${src}`);
+  }
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-parity-'));
   fs.cpSync(src, dest, {
     recursive: true,
@@ -93,15 +115,20 @@ export function freshCopy(src, { skip = ['target', '.git'] } = {}) {
   return dest;
 }
 
-/** Every file under `root`, as sorted `[relPath, sha256]` pairs with `/` separators. */
+/**
+ * Every file and directory under `root`, as sorted `[relPath, sha256]` pairs with `/` separators;
+ * a directory's pair is `[relPath + '/', 'dir']`, so an engine that creates an empty one is seen.
+ */
 export function snapshotTree(root) {
   const out = [];
   const rec = (dir, rel) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) rec(p, r);
-      else out.push([r, crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]);
+      if (e.isDirectory()) {
+        out.push([`${r}/`, 'dir']);
+        rec(p, r);
+      } else out.push([r, crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')]);
     }
   };
   rec(root, '');
