@@ -66,9 +66,11 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the Rust engine (release)
+        id: build
         run: cargo build --release --locked -p temper-cli
       # Relative to the checkout: under Windows bash, $PWD is an MSYS path that node would misread.
       - name: Engine path
+        id: engine
         run: |
           exe=""
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
@@ -76,6 +78,7 @@ jobs:
       # python3 is python on some Windows images, and may be the Store alias there; doc_examples.py
       # needs 3.11 (tomllib). No interpreter that runs and is 3.11 or later fails the step.
       - name: Extract the skill's code blocks
+        id: blocks
         run: |
           PY=""
           for c in python3 python; do
@@ -85,9 +88,10 @@ jobs:
           "$PY" tests/doc_examples.py --extract "$RUNNER_TEMP/doc-blocks"
       - name: Scan parity cases
         run: node --test tests/parity/scan.test.mjs
-      # Runs even when the parity cases fail, so one run gives both results.
+      # Runs even when the parity cases fail, so one run gives both results, but only once its
+      # inputs exist.
       - name: Scanner corpus
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.engine.outcome == 'success' && steps.blocks.outcome == 'success' }}
         run: >-
           node tests/parity/corpus.mjs --bin "$TEMPER_BIN"
           --lock Cargo.toml --lock templates/example-workspace/Cargo.toml
