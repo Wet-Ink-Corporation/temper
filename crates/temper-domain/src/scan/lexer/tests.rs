@@ -150,6 +150,41 @@ fn slice_floors_to_char_boundaries() {
 }
 
 #[test]
+fn match_angle_follows_1x() {
+    let cases = [
+        ("a<b<c>>d", 1, Some(6)),
+        ("f<T: Fn() -> u8>", 1, Some(15)),
+        ("<->>", 0, Some(3)),
+        ("a<b{>", 1, None),
+        ("a<b;>", 1, None),
+        ("a<b", 1, None),
+        ("x>y<z>", 0, None),
+    ];
+
+    for (code, open, want) in cases {
+        assert_eq!(match_angle(code, open), want, "{code} from {open}");
+    }
+}
+
+#[test]
+fn split_top_follows_1x() {
+    let cases: [(&str, u8, &[&str]); 7] = [
+        ("a<b,c>,d(e,f),g", b',', &["a<b,c>", "d(e,f)", "g"]),
+        ("x -> y, z", b',', &["x -> y", " z"]),
+        (")a,b", b',', &[")a,b"]),
+        ("", b',', &[""]),
+        ("A + 'a + ?Sized", b'+', &["A ", " 'a ", " ?Sized"]),
+        ("a,{b,c},[d,e],", b',', &["a", "{b,c}", "[d,e]", ""]),
+        ("é,😀<a,b>,c", b',', &["é", "😀<a,b>", "c"]),
+    ];
+
+    for (s, sep, want) in cases {
+        let pieces: Vec<&str> = split_top(s, sep).collect();
+        assert_eq!(pieces, want, "{s:?} on {:?}", char::from(sep));
+    }
+}
+
+#[test]
 fn mask_rust_records_comments() {
     let src = "a // x\r\nb /* y /* z */ */ c /// d\n//! e\n/** f */ /**/ //// g\n/*! h";
 
@@ -172,6 +207,37 @@ fn mask_rust_records_comments() {
             (61, 66, "/*! h"),
         ],
         "every comment, nested and unterminated ones whole, in 1.x's start, end and text"
+    );
+}
+
+#[test]
+fn mask_rust_marks_doc_comments_like_1x() {
+    use CommentKind::{Doc, Plain};
+    let src =
+        "/// a\n//// b\n//! c\n/** d */\n/**/\n/*! e */\n/*** f */\n// g\n/* h */\n///\n/*!*/";
+
+    let kinds: Vec<(usize, usize, CommentKind)> = mask_rust(src)
+        .comments
+        .iter()
+        .map(|c| (c.start, c.end, c.kind))
+        .collect();
+
+    assert_eq!(
+        kinds,
+        [
+            (0, 5, Doc),
+            (6, 12, Plain),
+            (13, 18, Doc),
+            (19, 27, Doc),
+            (28, 32, Plain),
+            (33, 41, Doc),
+            (42, 51, Doc),
+            (52, 56, Plain),
+            (57, 64, Plain),
+            (65, 68, Doc),
+            (69, 74, Doc),
+        ],
+        "`///` but not `////`, `//!`, `/**` but not `/**/`, and `/*!`"
     );
 }
 

@@ -16,6 +16,8 @@
 
 **The 2.0 engine has its scanner's lexer, test regions and first six rules (port Phase 1a).** `temper-domain` masks Rust source as 1.x does, finds test regions, counts tests, ignores and clones, and runs the `unsafe`, `unwrap`, `panic`, `dbg`, `print` and `expect-attr` rules, with 1.x's patterns and texts. It adds the `regex` and `thiserror` dependencies, and `proptest` for tests. Nothing calls it yet; users run 1.x.
 
+**The 2.0 engine's scanner has its finders and 58 of the 60 rules (port Phase 1c).** Nothing calls it yet; users run 1.x.
+
 **The 2.0 engine's scanner has 40 more rules, with their look-around and keep predicates (port Phase 1b).** Nothing calls it yet; users run 1.x.
 
 ## 1.5.0 (2026-10-30)

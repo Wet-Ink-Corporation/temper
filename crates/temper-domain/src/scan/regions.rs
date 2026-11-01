@@ -22,6 +22,12 @@ impl Regions {
     }
 }
 
+impl FromIterator<RangeInclusive<usize>> for Regions {
+    fn from_iter<I: IntoIterator<Item = RangeInclusive<usize>>>(iter: I) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
 /// The compiled patterns behind [`test_regions`] and [`const_regions`].
 #[derive(Debug)]
 pub(crate) struct RegionPatterns {

@@ -1,15 +1,16 @@
 //! The scanner: compiles the rule table once and runs it over a source (1.x `scanSource`).
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 
 use regex::Regex;
 
 use super::counts::{CountPatterns, count_clones, count_ignored, count_tests};
 use super::env::Env;
-use super::finders::Found;
-use super::finders::expect_attrs::{self, ExpectPatterns, exception_for};
+use super::finders::expect_attrs::exception_for;
+use super::finders::{FinderPatterns, Found};
 use super::hit::{Hit, RuleId, RuleKey, Severity};
-use super::lexer::mask_rust;
+use super::lexer::{mask_rust, next_char};
 use super::predicates::{Candidate, Keep, Look, PredicatePatterns};
 use super::rules::{ContextSeverity, FinderKind, Matcher, Pattern, RULES, RuleSpec};
 use crate::js::{self, JsFlags, UnsupportedJs};
@@ -41,11 +42,14 @@ pub enum FileRole {
 
 /// Options for one scan.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScanOptions {
+pub struct ScanOptions<'a> {
     /// The context of the file's code.
     pub kind: CodeKind,
     /// Whether the file is a build script.
     pub file: FileRole,
+    /// The lints the crate forbids (`unsafe_code`, `clippy::unwrap_used`), which the
+    /// `forbid-override` rule reads. `None`, or an empty set, finds nothing.
+    pub forbid: Option<&'a BTreeSet<String>>,
 }
 
 /// Is the crate-relative path `rel_to_crate` the crate's build script (`build.rs` at its root)?
@@ -109,7 +113,7 @@ pub(crate) fn compile_with(
 /// use temper_domain::{CodeKind, FileRole, ScanOptions, Scanner, Severity};
 ///
 /// let scanner = Scanner::new()?;
-/// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source };
+/// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
 /// let report = scanner.scan("fn f() { dbg!(1); }", &options);
 ///
 /// let hit = report.hits().first().map(|h| (h.key().as_str(), h.severity()));
@@ -121,7 +125,7 @@ pub struct Scanner {
     rules: Vec<CompiledRule>,
     predicates: PredicatePatterns,
     counts: CountPatterns,
-    expect: ExpectPatterns,
+    finders: FinderPatterns,
 }
 
 #[derive(Debug)]
@@ -179,7 +183,7 @@ impl Scanner {
             rules,
             predicates: PredicatePatterns::new()?,
             counts: CountPatterns::new()?,
-            expect: ExpectPatterns::new()?,
+            finders: FinderPatterns::new()?,
         })
     }
 
@@ -192,13 +196,14 @@ impl Scanner {
     ///
     /// let scanner = Scanner::new()?;
     /// let src = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n";
-    /// let report = scanner.scan(src, &ScanOptions { kind: CodeKind::Prod, file: FileRole::Source });
+    /// let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
+    /// let report = scanner.scan(src, &options);
     ///
     /// assert_eq!((report.hits().len(), report.tests()), (0, 1));
     /// # Ok::<(), temper_domain::ScannerSetupError>(())
     /// ```
     #[must_use]
-    pub fn scan(&self, src: &str, options: &ScanOptions) -> ScanReport {
+    pub fn scan(&self, src: &str, options: &ScanOptions<'_>) -> ScanReport {
         let masked = mask_rust(src);
         let env = Env::new(src, &masked, options, &self.predicates.regions);
         let code = env.code;
@@ -221,9 +226,7 @@ impl Scanner {
     fn matches(&self, rule: &CompiledRule, env: &Env<'_>, out: &mut Vec<Found>) {
         match &rule.matcher {
             CompiledMatcher::Regex(pattern) => self.regex_matches(pattern, env, out),
-            CompiledMatcher::Find(FinderKind::ExpectAttrs) => {
-                expect_attrs::find(env, &self.expect, out);
-            }
+            CompiledMatcher::Find(kind) => self.finders.find(*kind, env, out),
         }
     }
 
@@ -233,7 +236,7 @@ impl Scanner {
             Some(forced) => (forced, found.exception),
             None => match spec.contexts.get(env.context_at(found.offset))? {
                 ContextSeverity::Hard => {
-                    match exception_for(env, found.offset, spec.lints, &self.expect) {
+                    match exception_for(env, found.offset, spec.lints, &self.finders.expect) {
                         Some(lint) => (Severity::Ask, Some(lint.to_owned())),
                         None => (Severity::Hard, found.exception),
                     }
@@ -305,15 +308,6 @@ impl Scanner {
             out.push(Found::at(candidate.start));
         }
     }
-}
-
-/// The offset after the char at `at`, or `at + 1` at the end of `text`.
-fn next_char(text: &str, at: usize) -> usize {
-    let width = text
-        .get(at..)
-        .and_then(|rest| rest.chars().next())
-        .map_or(1, char::len_utf8);
-    at.saturating_add(width)
 }
 
 /// What one scan reports.

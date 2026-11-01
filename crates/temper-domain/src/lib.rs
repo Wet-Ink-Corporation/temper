@@ -4,7 +4,7 @@
 //! Nothing here touches the file system, processes, the environment or the clock; the
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
 //! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner's
-//! lexer, test regions and 46 of the 60 rules (Phases 1a, 1b), which nothing calls yet.
+//! lexer, test regions and 58 of the 60 rules (Phases 1a to 1c), which nothing calls yet.
 //!
 //! # Quick start
 //!
@@ -13,7 +13,8 @@
 //!
 //! let scanner = Scanner::new()?;
 //! let src = "pub fn first(v: &[u8]) -> u8 {\n    *v.first().unwrap()\n}\n";
-//! let report = scanner.scan(src, &ScanOptions { kind: CodeKind::Prod, file: FileRole::Source });
+//! let options = ScanOptions { kind: CodeKind::Prod, file: FileRole::Source, forbid: None };
+//! let report = scanner.scan(src, &options);
 //!
 //! let hits: Vec<_> = report.hits().iter().map(|h| (h.id().as_str(), h.severity(), h.line().get())).collect();
 //! assert_eq!(hits, [("H-02", Severity::Hard, 2)]);

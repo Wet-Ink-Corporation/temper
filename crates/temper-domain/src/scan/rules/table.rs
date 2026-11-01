@@ -8,7 +8,8 @@
 
 use super::{FinderKind, HARD, JsFlags, Keep, Look, Matcher, OFF, RuleSpec, SOFT, ctx, re};
 
-/// The rules, in 1.x table order. Phases 1a and 1b port these; 1c adds the finders in place.
+/// The rules, in 1.x table order: 58 of the 60, ported in Phases 1a to 1c. 1d adds the doc rules
+/// in place.
 pub(crate) const RULES: &[RuleSpec] = &[
     RuleSpec {
         key: "unsafe",
@@ -60,6 +61,16 @@ pub(crate) const RULES: &[RuleSpec] = &[
         matcher: Matcher::Regex(
             re(r"\b(?:assert|assert_eq|assert_ne)\s*!").keep(Keep::OutsideConst),
         ),
+    },
+    RuleSpec {
+        key: "allow-attr",
+        id: "H-05",
+        contexts: ctx(HARD, HARD, HARD, HARD),
+        msg: "`#[allow]` suppresses a lint",
+        fix: "Fix the code the lint points at. If an exception is truly warranted, use `#[expect(lint, reason = \"...\")]`; a human will be asked to approve it.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Regex(re(r"#\s*!?\s*\[\s*allow\s*\(")),
     },
     RuleSpec {
         key: "dbg",
@@ -114,6 +125,39 @@ pub(crate) const RULES: &[RuleSpec] = &[
         fix_build: None,
         lints: &["clippy::exit"],
         matcher: Matcher::Regex(re(r"\bprocess\s*::\s*exit\s*\(")),
+    },
+    RuleSpec {
+        key: "discard-ok",
+        id: "H-10",
+        contexts: ctx(HARD, HARD, HARD, SOFT),
+        msg: "`.ok();` silently discards an error",
+        fix: "Handle or propagate the error. If it is truly irrelevant, say why in a comment and use an explicit `if let Err(e) = ... { tracing::debug!(...) }`.",
+        fix_build: None,
+        lints: &["clippy::unused_result_ok"],
+        matcher: Matcher::Regex(re(r"\.\s*ok\s*\(\s*\)\s*;")),
+    },
+    RuleSpec {
+        key: "empty-err-arm",
+        id: "H-10",
+        contexts: ctx(HARD, HARD, HARD, SOFT),
+        msg: "empty `Err` match arm silently discards the error",
+        fix: "Handle or propagate the error. If it is truly irrelevant, bind and log it (`Err(e) => tracing::debug!(error = %e, \"..\")`) with a comment saying why (H-10, ERR-12).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Regex(
+            re(r"\bErr\s*\(\s*(?:_\w*|\.\.)\s*\)\s*=>\s*(?:\{\s*\}|\(\s*\))")
+                .keep(Keep::NoArmBindsErr),
+        ),
+    },
+    RuleSpec {
+        key: "empty-if-let-err",
+        id: "H-10",
+        contexts: ctx(HARD, HARD, HARD, SOFT),
+        msg: "empty `if let Err(_)` block silently discards the error",
+        fix: "Handle or propagate the error. If it is truly irrelevant, bind and log it (`if let Err(e) = .. { tracing::debug!(error = %e, \"..\") }`) with a comment saying why (H-10, ERR-12).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::EmptyIfLetErr),
     },
     RuleSpec {
         key: "let-underscore",
@@ -309,6 +353,16 @@ pub(crate) const RULES: &[RuleSpec] = &[
         matcher: Matcher::Regex(re(r"\bunbounded(?:_channel)?\s*(?:::\s*<[^>]*>\s*)?\(")),
     },
     RuleSpec {
+        key: "spin-lock",
+        id: "ASY-17",
+        contexts: ctx(SOFT, SOFT, SOFT, OFF),
+        msg: "spin loop or atomic swap/compare-exchange in a loop",
+        fix: "Do not build a lock, once-cell, semaphore or channel from atomics: use `Mutex`, `OnceLock`, `Condvar` or a bounded channel (ASY-17, ASY-16). For a computed atomic update, use `update`/`try_update` or a `fetch_*` method (MOD-07).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::SpinLocks),
+    },
+    RuleSpec {
         key: "seqcst",
         id: "ASY-13",
         contexts: ctx(SOFT, SOFT, SOFT, OFF),
@@ -398,6 +452,28 @@ pub(crate) const RULES: &[RuleSpec] = &[
             re(r"\b(?:SystemTime|Utc|Local|Timestamp|Zoned)\s*::\s*now\s*\(|\bOffsetDateTime\s*::\s*now_(?:utc|local)\s*\(|\bUuid\s*::\s*new_v[47]\s*\(")
                 .keep(Keep::OutsideTraitImpl),
         ),
+    },
+    RuleSpec {
+        key: "serde-hashmap",
+        id: "OUT-04",
+        contexts: ctx(SOFT, SOFT, OFF, OFF),
+        msg: "`HashMap`/`HashSet` field in a `Serialize` type",
+        fix: "Use `BTreeMap`/`BTreeSet` (or a sorted `Vec`) so the output order is stable, or sort on the way out with `serialize_with` (OUT-04).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::SerializedHashMaps),
+    },
+    RuleSpec {
+        // The finder forces the severity from the file's kind (1.x `TEST_BRANCH_CTX`), which this
+        // row repeats. 1.x's `newCodeOnly` flag lands with its first reader in Phase 4.
+        key: "test-branch",
+        id: "TST-09",
+        contexts: ctx(HARD, HARD, HARD, OFF),
+        msg: "test-only branch in production code (`cfg!(test)` or `#[cfg(test)]` inside a function body)",
+        fix: "The shipped code must be the tested code: take the behaviour that differs as a port trait (or a parameter) and pass a hand-written fake from the test (TST-09, ARC-03).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::TestBranches),
     },
     RuleSpec {
         key: "global-allocator",
@@ -526,6 +602,16 @@ pub(crate) const RULES: &[RuleSpec] = &[
         ),
     },
     RuleSpec {
+        key: "struct-bounds",
+        id: "API-21",
+        contexts: ctx(SOFT, SOFT, OFF, OFF),
+        msg: "trait bound on a generic type definition",
+        fix: "Move the bounds to the `impl` blocks that need them; every bound on the type is forced on every user and test fake (API-21). Exceptions: a field names an associated type, `?Sized`, or a `Drop` impl needs it.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::StructBounds),
+    },
+    RuleSpec {
         key: "expect-attr",
         id: "H-05",
         contexts: ctx(HARD, HARD, HARD, HARD),
@@ -534,5 +620,47 @@ pub(crate) const RULES: &[RuleSpec] = &[
         fix_build: None,
         lints: &[],
         matcher: Matcher::Find(FinderKind::ExpectAttrs),
+    },
+    RuleSpec {
+        // E0453 ("incompatible with previous forbid") is a hard error that `--cap-lints warn`
+        // hides, so the ratchet collection checks it here, given `ScanOptions::forbid`.
+        key: "forbid-override",
+        id: "H-05",
+        contexts: ctx(HARD, HARD, HARD, HARD),
+        msg: "`#[allow]`/`#[expect]` of a lint the workspace forbids (E0453 without --cap-lints)",
+        fix: "Remove the attribute and fix the code: a forbidden lint admits no exception (H-05). Changing the forbid is a human decision.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::ForbidOverrides),
+    },
+    RuleSpec {
+        key: "erased-error",
+        id: "H-09",
+        contexts: ctx(HARD, OFF, OFF, OFF),
+        msg: "public library signature returns an erased error",
+        fix: "Define a typed error enum with `thiserror` and return it (ERR-01, ERR-03).",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::ErasedErrors),
+    },
+    RuleSpec {
+        key: "todo-comment",
+        id: "CRF-04",
+        contexts: ctx(SOFT, SOFT, SOFT, SOFT),
+        msg: "TODO without a tracking reference",
+        fix: "Link a tracking issue (`TODO(#123)`), or do it now.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::TodoComments),
+    },
+    RuleSpec {
+        key: "commented-code",
+        id: "H-06",
+        contexts: ctx(SOFT, SOFT, SOFT, SOFT),
+        msg: "commented-out code",
+        fix: "Delete it; version control remembers.",
+        fix_build: None,
+        lints: &[],
+        matcher: Matcher::Find(FinderKind::CommentedCode),
     },
 ];
