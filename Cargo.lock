@@ -284,15 +284,15 @@ dependencies = [
 
 [[package]]
 name = "temper-app"
-version = "2.0.0-alpha.0"
+version = "2.0.0-alpha.1"
 
 [[package]]
 name = "temper-cli"
-version = "2.0.0-alpha.0"
+version = "2.0.0-alpha.1"
 
 [[package]]
 name = "temper-domain"
-version = "2.0.0-alpha.0"
+version = "2.0.0-alpha.1"
 dependencies = [
  "proptest",
  "regex",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "temper-host"
-version = "2.0.0-alpha.0"
+version = "2.0.0-alpha.1"
 
 [[package]]
 name = "tempfile"
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "2.0.0-alpha.0"
+version = "2.0.0-alpha.1"
 dependencies = [
  "serde_json",
  "tempfile",
