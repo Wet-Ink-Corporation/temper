@@ -1,7 +1,7 @@
 //! 1.x tests 2 to 8: the hard rules, test regions and `#[expect]` exception requests.
 
 use super::{TEST_REGIONS_SRC, full, hit, hits_of, keys, msgs_of, scan, summary};
-use crate::scan::{CodeKind, Hit, Severity, new_hits};
+use crate::scan::{CodeKind, Hit, LibTarget, Severity, classify_path, new_hits};
 
 #[test]
 fn hard_hits_in_production_code() {
@@ -281,6 +281,24 @@ fn new_hits_reports_only_introduced_violations() {
         .collect();
 
     assert_eq!(fresh, [2], "one fresh hit, on the new line");
+}
+
+#[test]
+fn path_classification() {
+    use LibTarget::{Absent, Present};
+    let cases = [
+        ("src/lib.rs", Present, CodeKind::Prod),
+        ("src/main.rs", Present, CodeKind::Bin),
+        ("src/cli/args.rs", Absent, CodeKind::Bin),
+        ("tests/it/main.rs", Present, CodeKind::Test),
+        ("src/parser/tests.rs", Present, CodeKind::Test),
+        ("examples/demo.rs", Present, CodeKind::Example),
+        ("benches/b.rs", Present, CodeKind::Example),
+    ];
+
+    for (path, lib, want) in cases {
+        assert_eq!(classify_path(path, lib), want, "{path} ({lib:?})");
+    }
 }
 
 /// 1.x test 8, ported last in 1b so it runs against the whole 1b table (decision 1b-10).
