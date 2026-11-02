@@ -3,11 +3,13 @@
 
 mod json;
 mod map;
+mod replace;
 mod translate;
 mod value;
 
 pub use json::JsonParseError;
 pub(crate) use map::JsMap;
+pub(crate) use replace::{Replacement, next_boundary, replace_all};
 pub(crate) use translate::{JsFlags, UnsupportedJs, translate};
 pub use value::{Object, Value};
 pub(crate) use value::{
