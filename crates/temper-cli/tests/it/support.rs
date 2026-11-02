@@ -71,12 +71,18 @@ pub(crate) fn hook_in(
         command.env(name, value);
     }
     let mut child = command.spawn()?;
-    // Dropping the handle after the write closes the pipe, so the hook reads to its end.
-    child
+    // Dropping the handle after the write closes the pipe, so the hook reads to its end. A hook
+    // that reads no input (an unknown event, as in 1.x) may exit before the write lands, and the
+    // write then fails with a broken pipe; the run's output still decides the test.
+    let written = child
         .stdin
         .take()
         .ok_or("stdin is piped")?
-        .write_all(stdin.as_bytes())?;
+        .write_all(stdin.as_bytes());
+    match written {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => return Err(error.into()),
+        Ok(()) | Err(_) => {}
+    }
     let output = child.wait_with_output()?;
     Ok(Run {
         code: output.status.code(),
