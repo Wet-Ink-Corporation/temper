@@ -2,7 +2,11 @@
 
 use std::fmt::Write as _;
 
-use super::SkillVia;
+mod redact;
+
+pub(crate) use redact::Redactor;
+
+use super::{RaiseFlag, SkillVia};
 use crate::js::{Value, js_json, json_string};
 use crate::time::Timestamp;
 
@@ -45,17 +49,95 @@ pub enum TelemetryEvent {
         /// How many things need approval.
         count: usize,
     },
+    /// `deny-shell-write`: a shell command writing a file the shell must not write.
+    DenyShellWrite {
+        /// Which file.
+        file: ShellWriteFile,
+        /// The command, redacted and clipped.
+        cmd: String,
+    },
+    /// `deny-lockfile` with `via: "shell"`: a shell write to `Cargo.lock`.
+    DenyShellLockfile {
+        /// The command, redacted and clipped.
+        cmd: String,
+    },
+    /// `deny-baseline-raise`: `temper baseline --init` or `--update` was refused.
+    DenyBaselineRaise {
+        /// The flag (`via` is `baseline <flag>`).
+        flag: RaiseFlag,
+        /// The command, redacted and clipped.
+        cmd: String,
+    },
+    /// `deny-ignore-rust-version`: a cargo command with `--ignore-rust-version`.
+    DenyIgnoreRustVersion {
+        /// The command, redacted and clipped.
+        cmd: String,
+    },
+    /// `ask` from `pre-bash`: a shell command needs the human's approval.
+    ShellAsk {
+        /// Why.
+        via: ShellAskVia,
+    },
+}
+
+/// What a `deny-shell-write` row says was written (its `file`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellWriteFile {
+    /// A `.rs` file; the row has no `file`.
+    RustSource,
+    /// `Cargo.toml`.
+    Manifest,
+    /// `temper-baseline.json`.
+    Baseline,
+    /// `.claude/temper/`, the vendored CLI.
+    Vendored,
+}
+
+impl ShellWriteFile {
+    /// The row's `file`, if it has one.
+    const fn name(self) -> Option<&'static str> {
+        match self {
+            Self::RustSource => None,
+            Self::Manifest => Some("Cargo.toml"),
+            Self::Baseline => Some("temper-baseline.json"),
+            Self::Vendored => Some(".claude/temper/"),
+        }
+    }
+}
+
+/// Why `pre-bash` asked (an `ask` row's `via`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellAskVia {
+    /// `TEMPER_ALLOW_RAISE`.
+    AllowRaise,
+    /// `git-restore-claude`.
+    ClaudeRestore,
+    /// `cargo-deps`.
+    CargoDeps,
+}
+
+impl ShellAskVia {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::AllowRaise => "TEMPER_ALLOW_RAISE",
+            Self::ClaudeRestore => "git-restore-claude",
+            Self::CargoDeps => "cargo-deps",
+        }
+    }
 }
 
 impl TelemetryEvent {
     const fn name(&self) -> &'static str {
         match self {
             Self::SkillLoaded { .. } => "skill-loaded",
-            Self::DenyLockfile { .. } => "deny-lockfile",
+            Self::DenyLockfile { .. } | Self::DenyShellLockfile { .. } => "deny-lockfile",
             Self::DenySkillGate { .. } => "deny-skill-gate",
             Self::DenyManifest { .. } => "deny-manifest",
             Self::DenyScan { .. } => "deny-scan",
-            Self::Ask { .. } => "ask",
+            Self::Ask { .. } | Self::ShellAsk { .. } => "ask",
+            Self::DenyShellWrite { .. } => "deny-shell-write",
+            Self::DenyBaselineRaise { .. } => "deny-baseline-raise",
+            Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
         }
     }
 
@@ -75,6 +157,26 @@ impl TelemetryEvent {
                 push_field(out, "file", &json_string(file));
                 push_field(out, "count", &count.to_string());
             }
+            Self::DenyShellWrite { file, cmd } => {
+                if let Some(file) = file.name() {
+                    push_field(out, "file", &json_string(file));
+                }
+                push_field(out, "cmd", &json_string(cmd));
+            }
+            Self::DenyShellLockfile { cmd } => {
+                push_field(out, "via", r#""shell""#);
+                push_field(out, "cmd", &json_string(cmd));
+            }
+            Self::DenyBaselineRaise { flag, cmd } => {
+                push_field(
+                    out,
+                    "via",
+                    &json_string(&format!("baseline {}", flag.flag())),
+                );
+                push_field(out, "cmd", &json_string(cmd));
+            }
+            Self::DenyIgnoreRustVersion { cmd } => push_field(out, "cmd", &json_string(cmd)),
+            Self::ShellAsk { via } => push_field(out, "via", &json_string(via.name())),
         }
     }
 }

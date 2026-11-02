@@ -20,21 +20,24 @@ use temper_domain::{
 };
 
 use self::edited::{After, edited_text};
-use super::HookCall;
 use super::input::{given, js_string_or_empty};
 use super::skill::skill_loaded;
+use super::{HookCall, answered, logged};
 use crate::engine::HookError;
 use crate::manifests::{RootFor, own_lints_member, workspace_root_for};
 use crate::paths::{self, PathEnv};
 use crate::ports::{Files, Ports};
 use crate::project::{Workspace, crate_of};
 use crate::relpath::rel_to;
-use crate::telemetry;
 
 /// V8's text when a non-string reaches `path.resolve`.
 const PATH_NOT_A_STRING: &str = "The \"paths[0]\" argument must be of type string";
-/// V8's text when the scan or the manifest checks split written content that is not a string.
+/// V8's text when the scan splits written content that is not a string.
 const CONTENT_NOT_A_STRING: &str = "src.split is not a function";
+/// V8's text when `lintSections` or `depNamesByLine` splits written manifest content that is
+/// not a string.
+const MANIFEST_NOT_A_STRING: &str =
+    "toml.split is not a function or its return value is not iterable";
 
 /// The edited file, as the checks name it.
 #[derive(Clone, Copy)]
@@ -116,7 +119,7 @@ fn checked(
     call: &HookCall<'_, impl Ports>,
     scanner: &Scanner,
     edited: Edited<'_>,
-    after: After,
+    after: After<'_>,
 ) -> Result<HookOutcome, HookError> {
     let Edited {
         rel,
@@ -140,11 +143,10 @@ fn checked(
     }
     let after = match after {
         After::Text(text) => text,
-        After::NotText if rust || manifest => {
-            return Err(HookError::InputType(CONTENT_NOT_A_STRING));
-        }
+        After::NotText(_) if rust => return Err(HookError::InputType(CONTENT_NOT_A_STRING)),
+        After::NotText(value) if manifest => manifest_text(value, before)?,
         // Only the protected-config check runs, and it reads no text.
-        After::NotText => String::new(),
+        After::NotText(_) => String::new(),
     };
     let protected = Globs::new(config.protected().iter().map(String::as_str))?;
     let exempt;
@@ -171,11 +173,25 @@ fn checked(
         protected: &protected,
         target,
     };
-    let decision = edit_policy(facts, scanner);
-    Ok(match &decision.telemetry {
-        Some(event) => logged(call, workspace, event, decision.outcome),
-        None => decision.outcome,
-    })
+    Ok(answered(call, workspace, edit_policy(facts, scanner)))
+}
+
+/// Written manifest content that is not a string, as 1.x's checks read it: `parseToml` reads
+/// `String(value)`, so the checks go on with that text when it parses and the file before the
+/// edit is empty or parses. Otherwise `lintConfigChanged` falls back to `lintSections`, which
+/// splits the value itself and throws.
+///
+/// # Errors
+///
+/// [`HookError::InputType`] with V8's text where 1.x throws.
+fn manifest_text(value: &JsValue, before: &str) -> Result<String, HookError> {
+    let text = value.to_js_string();
+    let parses = |text: &str| text.parse::<Manifest>().is_ok();
+    if parses(&text) && (before.is_empty() || parses(before)) {
+        Ok(text.into_owned())
+    } else {
+        Err(HookError::InputType(MANIFEST_NOT_A_STRING))
+    }
 }
 
 /// 1.x `deny(reason)`.
@@ -195,20 +211,6 @@ fn is_named(rel: &str, name: &str) -> bool {
 /// `PRELOADED.test(input.agent_type ?? '')`.
 fn preloaded(call: &HookCall<'_, impl Ports>) -> bool {
     skill_preloaded(&js_string_or_empty(call.input.given("agent_type")))
-}
-
-/// `outcome`, after a telemetry row for `event`.
-fn logged(
-    call: &HookCall<'_, impl Ports>,
-    workspace: &Workspace,
-    event: &TelemetryEvent,
-    outcome: HookOutcome,
-) -> HookOutcome {
-    match telemetry::log(call, workspace, event) {
-        // Telemetry is best effort (1.x): a row that cannot be written does not change the
-        // answer.
-        Ok(()) | Err(_) => outcome,
-    }
 }
 
 /// How 1.x scans the edited Rust file: classified by its crate, a build script by its path.

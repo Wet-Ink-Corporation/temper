@@ -1,7 +1,7 @@
 //! The `temper` binary: the composition root of the 2.0 port.
 //!
 //! Until the 2.0.0 cutover it answers `--version`, the usage text, `temper scan --all`,
-//! `temper scan FILES..` and `temper hook post-tool`, `user-prompt` and `pre-edit`; nothing
+//! `temper scan FILES..` and `temper hook post-tool`, `user-prompt`, `pre-edit` and `pre-bash`; nothing
 //! routes to it yet, and every 1.x subcommand still runs in the Node engine
 //! (`scripts/temper.mjs`).
 

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use temper_domain::{GlobError, HookEvent, HookOutcome, PathStyle, Scanner};
+use temper_domain::{GlobError, HookEvent, HookOutcome, PathStyle, PolicySetupError, Scanner};
 
 use crate::hooks::{self, HookCall, HookInput};
 use crate::ports::{FsError, Ports};
@@ -94,6 +94,9 @@ pub enum HookError {
     /// can fail.
     #[error(transparent)]
     Glob(#[from] GlobError),
+    /// A built-in hook pattern does not compile, which is a bug in temper.
+    #[error(transparent)]
+    Setup(#[from] PolicySetupError),
     /// The event's handler is not in this build yet (port plan 2-13).
     #[error("temper hook {} is not ported to this engine yet", event.name())]
     NotPorted {

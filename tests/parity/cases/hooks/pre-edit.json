@@ -445,6 +445,40 @@
     "maskFailure": 4
   },
   {
+    "name": "manifest content that is not a string is checked as its JS string, else fails as lintSections throws",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/newc/Cargo.toml\",\"content\":[]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/newc/Cargo.toml\",\"content\":[\"a = 1\"]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/newc/Cargo.toml\",\"content\":[\"[package]\\nname='x'\\n[lints]\\nworkspace = true\"]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"content\":[]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/newc/Cargo.toml\",\"content\":[[\"[package]\"],\"x=1\"]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"content\":{}}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"content\":true}}"
+      }
+    ]
+  },
+  {
     "name": "skill gate: a Rust or manifest edit is denied until the skill is loaded, with a deny-skill-gate row",
     "fixture": "workspace",
     "pluginData": true,
