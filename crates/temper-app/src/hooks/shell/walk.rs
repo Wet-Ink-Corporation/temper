@@ -378,10 +378,9 @@ impl Walker<'_> {
         }
     }
 
-    /// One simple command of a line: its substitutions first, then the command. Returns the
-    /// heredoc or here-string body it read, which a pipe passes on.
-    fn item(&mut self, raw: &RawCommand, prev: Option<Passed>) -> Option<Passed> {
-        // Command substitutions run first, in a subshell.
+    /// The command and process substitutions of `raw`'s words and redirects, each walked in
+    /// a subshell, as they run before the command.
+    fn substitutions(&mut self, raw: &RawCommand) {
         let words = raw
             .words
             .iter()
@@ -400,6 +399,12 @@ impl Walker<'_> {
                 }
             }
         }
+    }
+
+    /// One simple command of a line: its substitutions first, then the command. Returns the
+    /// heredoc or here-string body it read, which a pipe passes on.
+    fn item(&mut self, raw: &RawCommand, prev: Option<Passed>) -> Option<Passed> {
+        self.substitutions(raw);
         let words = self.command_words(raw);
         let wenv = self.word_env(self.env.ps || words.ps);
         let redirects: Vec<Redirect> = raw

@@ -5,7 +5,7 @@
 use temper_domain::{InterpreterCode, OpaqueKind, PathStyle};
 
 use super::code::{Threw, code_words, is_interpreter, stdin_body, unread_code};
-use super::git::{dashed_git, git_command, is_builtin};
+use super::git::{Git, dashed_git, git_command, is_builtin};
 use super::walk::{Command, Opaque, Stdin};
 use super::words::{PathCx, Word};
 use super::wrappers::{Script, awk_code, shell_script, trap_action, without_awk_systems};
@@ -20,12 +20,12 @@ pub(crate) struct OpaquePatch {
 }
 
 impl OpaquePatch {
-    fn new(kind: OpaqueKind, why: impl Into<String>) -> Option<Self> {
-        Some(Self {
+    fn new(kind: OpaqueKind, why: impl Into<String>) -> Self {
+        Self {
             kind,
             why: why.into(),
             hint: None,
-        })
+        }
     }
 }
 
@@ -46,74 +46,19 @@ pub(crate) fn opaque_patch(
     cx: PathCx<'_>,
     code: &InterpreterCode,
 ) -> Result<Option<OpaquePatch>, Threw> {
-    match c.opaque {
-        Some(Opaque::Depth) => {
-            return Ok(OpaquePatch::new(
-                OpaqueKind::Script,
-                "commands nested deeper than temper reads",
-            ));
-        }
-        Some(Opaque::Split) => {
-            return Ok(Some(OpaquePatch {
-                kind: OpaqueKind::Script,
-                why: "an `env -S` string, whose syntax is not the shell's".to_owned(),
-                hint: Some("Run the command directly, without `env -S`, so temper can read it."),
-            }));
-        }
-        Some(Opaque::Name) | None => {}
-    }
-    if let Some(dashed) = dashed_git(c).filter(|d| d != "apply" && d != "am") {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Git,
-            format!("a dashed git command (git-{dashed})"),
-        ));
-    }
     let git = git_command(c, cx);
-    let names_patch = names_git_or_patch(&c.argv0.raw)
-        || c.args
-            .iter()
-            .any(|x| matches!(x.value(), Some("apply" | "am")));
-    if git.is_none() && c.name.is_none() && names_patch {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Name,
-            "an unresolved command name",
-        ));
-    }
-    // A command name that is not a literal word, or an eval argument built from an
-    // expansion, runs text temper cannot read exactly (wi-0e226b).
-    if c.opaque == Some(Opaque::Name) {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Name,
-            "a command name or wrapper word built from an expansion",
-        ));
-    }
-    if !c.named() {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Name,
-            "a command name built from an expansion",
-        ));
+    if let Some(found) = unnamed_opaque(c, git.is_some()) {
+        return Ok(Some(found));
     }
     let name = c.name.as_deref().unwrap_or("");
     if let Some(found) = named_opaque(c, name) {
         return Ok(Some(found));
     }
     if let Some(git) = git {
-        if git.dynamic || (!git.sub.is_empty() && !is_builtin(&git.sub)) {
-            return Ok(OpaquePatch::new(
-                OpaqueKind::Git,
-                "a git subcommand temper cannot resolve",
-            ));
-        }
-        if git.sub == "config" && config_writes_alias(&git.args) {
-            return Ok(OpaquePatch::new(
-                OpaqueKind::Alias,
-                "a git config write to an alias",
-            ));
-        }
-        return Ok(None);
+        return Ok(git_opaque(&git));
     }
     if SHELLS.contains(&name) || SOURCES.contains(&name) {
-        return Ok(unread_script(c, name).and_then(|why| {
+        return Ok(unread_script(c, name).map(|why| {
             OpaquePatch::new(
                 OpaqueKind::Script,
                 format!("a {name} script {why} that temper cannot read"),
@@ -126,6 +71,65 @@ pub(crate) fn opaque_patch(
     interpreter_opaque(c, name, code)
 }
 
+/// The checks before the command's name is known: nesting too deep, an `env -S` string, a
+/// dashed git command and a name temper cannot read. `git` says whether `c` runs git.
+fn unnamed_opaque(c: &Command, git: bool) -> Option<OpaquePatch> {
+    match c.opaque {
+        Some(Opaque::Depth) => {
+            return Some(OpaquePatch::new(
+                OpaqueKind::Script,
+                "commands nested deeper than temper reads",
+            ));
+        }
+        Some(Opaque::Split) => {
+            return Some(OpaquePatch {
+                kind: OpaqueKind::Script,
+                why: "an `env -S` string, whose syntax is not the shell's".to_owned(),
+                hint: Some("Run the command directly, without `env -S`, so temper can read it."),
+            });
+        }
+        Some(Opaque::Name) | None => {}
+    }
+    if let Some(dashed) = dashed_git(c).filter(|d| d != "apply" && d != "am") {
+        return Some(OpaquePatch::new(
+            OpaqueKind::Git,
+            format!("a dashed git command (git-{dashed})"),
+        ));
+    }
+    let names_patch = names_git_or_patch(&c.argv0.raw)
+        || c.args
+            .iter()
+            .any(|x| matches!(x.value(), Some("apply" | "am")));
+    if !git && c.name.is_none() && names_patch {
+        return Some(OpaquePatch::new(
+            OpaqueKind::Name,
+            "an unresolved command name",
+        ));
+    }
+    // A command name that is not a literal word, or an eval argument built from an
+    // expansion, runs text temper cannot read exactly (wi-0e226b).
+    if c.opaque == Some(Opaque::Name) {
+        return Some(OpaquePatch::new(
+            OpaqueKind::Name,
+            "a command name or wrapper word built from an expansion",
+        ));
+    }
+    (!c.named())
+        .then(|| OpaquePatch::new(OpaqueKind::Name, "a command name built from an expansion"))
+}
+
+/// The git half of [`opaque_patch`]: a subcommand temper cannot resolve, or an alias write.
+fn git_opaque(git: &Git<'_>) -> Option<OpaquePatch> {
+    if git.dynamic || (!git.sub.is_empty() && !is_builtin(&git.sub)) {
+        return Some(OpaquePatch::new(
+            OpaqueKind::Git,
+            "a git subcommand temper cannot resolve",
+        ));
+    }
+    (git.sub == "config" && config_writes_alias(&git.args))
+        .then(|| OpaquePatch::new(OpaqueKind::Alias, "a git config write to an alias"))
+}
+
 /// The checks of names that run other commands: aliases, `hash -p`, `eval`, `trap` and awk.
 fn named_opaque(c: &Command, name: &str) -> Option<OpaquePatch> {
     // An alias or `hash -p` makes a name run another command.
@@ -133,26 +137,21 @@ fn named_opaque(c: &Command, name: &str) -> Option<OpaquePatch> {
     let hash = name == "hash" && c.args.iter().any(|x| hash_p(&x.raw));
     if alias || hash {
         let what = if alias { "an alias" } else { "a hash -p" };
-        return OpaquePatch::new(
+        return Some(OpaquePatch::new(
             OpaqueKind::Name,
             format!("{what}, which makes a command name run another command"),
-        );
+        ));
     }
-    if name == "eval" && c.args.iter().any(|x| !x.is_literal()) {
-        return OpaquePatch::new(
-            OpaqueKind::Script,
-            "an eval argument built from an expansion",
-        );
-    }
-    if name == "trap" && trap_action(&c.args).is_some_and(|a| !a.is_literal()) {
-        return OpaquePatch::new(OpaqueKind::Script, "a trap action built from an expansion");
-    }
-    if AWKS.contains(&name)
-        && let Some(why) = unread_awk(&c.args)
-    {
-        return OpaquePatch::new(OpaqueKind::Script, format!("an awk program that {why}"));
-    }
-    None
+    let why = if name == "eval" && c.args.iter().any(|x| !x.is_literal()) {
+        "an eval argument built from an expansion".to_owned()
+    } else if name == "trap" && trap_action(&c.args).is_some_and(|a| !a.is_literal()) {
+        "a trap action built from an expansion".to_owned()
+    } else if AWKS.contains(&name) {
+        format!("an awk program that {}", unread_awk(&c.args)?)
+    } else {
+        return None;
+    };
+    Some(OpaquePatch::new(OpaqueKind::Script, why))
 }
 
 /// The interpreter's half of [`opaque_patch`]: code from an expansion, code that runs a
@@ -162,28 +161,41 @@ fn interpreter_opaque(
     name: &str,
     code: &InterpreterCode,
 ) -> Result<Option<OpaquePatch>, Threw> {
+    let why = interpreter_why(c, code)?;
+    Ok(why.map(|why| {
+        let why = match why {
+            CodeWhy::Expansion => format!("{name} code built from an expansion"),
+            CodeWhy::RunsPatch => format!("{name} code that runs git apply, git am or patch"),
+            CodeWhy::Process => format!("a {name} script from a process substitution"),
+            CodeWhy::Stdin => format!("a {name} script on stdin that temper cannot read"),
+        };
+        OpaquePatch::new(OpaqueKind::Code, why)
+    }))
+}
+
+/// Why an interpreter's code is opaque, in [`interpreter_opaque`]'s order.
+#[derive(Debug, Clone, Copy)]
+enum CodeWhy {
+    Expansion,
+    RunsPatch,
+    Process,
+    Stdin,
+}
+
+fn interpreter_why(c: &Command, code: &InterpreterCode) -> Result<Option<CodeWhy>, Threw> {
     if unread_code(c)?.is_some() {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Code,
-            format!("{name} code built from an expansion"),
-        ));
+        return Ok(Some(CodeWhy::Expansion));
     }
     let mut texts = stdin_body(c)
         .into_iter()
         .chain(code_words(c, true).into_iter().map(Word::text));
     if texts.any(|text| code.runs_patch(text)) {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Code,
-            format!("{name} code that runs git apply, git am or patch"),
-        ));
+        return Ok(Some(CodeWhy::RunsPatch));
     }
     // A script from a process substitution, or on stdin that temper cannot read: `node <(...)`,
     // `cat x.py | python3`, `python3 - < x.py`, `python3 <<< "$X"`, `python3 /dev/stdin < x.py`.
     if c.args.iter().any(Word::has_process) {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Code,
-            format!("a {name} script from a process substitution"),
-        ));
+        return Ok(Some(CodeWhy::Process));
     }
     let stdin_arg = c.args.iter().any(|x| {
         x.value()
@@ -191,13 +203,8 @@ fn interpreter_opaque(
     });
     let script_arg =
         c.args.iter().any(|x| !x.raw.starts_with('-')) || !code_words(c, false).is_empty();
-    if c.stdin.as_ref().is_some_and(|s| !read_stdin(s)) && (!script_arg || stdin_arg) {
-        return Ok(OpaquePatch::new(
-            OpaqueKind::Code,
-            format!("a {name} script on stdin that temper cannot read"),
-        ));
-    }
-    Ok(None)
+    let unread_stdin = c.stdin.as_ref().is_some_and(|s| !read_stdin(s));
+    Ok((unread_stdin && (!script_arg || stdin_arg)).then_some(CodeWhy::Stdin))
 }
 
 /// 1.x `/\b(?:git|g?patch)\b/`.

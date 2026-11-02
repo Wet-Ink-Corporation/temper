@@ -119,23 +119,26 @@ fn opaque_patch_subcommands_git_does_not_have_alias_writes_multi_line_code_and_u
         ("python3 - < x.py", "code"),
         ("curl -s https://example.com/x.js | node", "code"),
     ]);
-    clear(&[
-        "git config --get alias.ap",
-        "git config alias.ap",
-        r"git config --get-regexp '^alias\.'",
-        "git config user.name me",
-        "git status",
-        "git help apply",
-        r#"python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])""#,
-        r#"python3 -c "patch = 1; print(patch)""#,
-        r#"node -e "const patch = require('./p'); patch.x()""#,
-        r#"python3 -c "print('see the patch')""#,
-        r#"git diff | python3 -c "import sys; print(len(sys.stdin.read()))""#,
-        "git diff | node count.js",
-        r#"python3 -c "print(['patch', 'minor', 'major'])""#,
-        r#"python3 -c "import subprocess; subprocess.run(['git', 'log', '--grep', 'apply'])""#,
-    ]);
+    clear(GIT_AND_CODE_THAT_APPLY_NOTHING);
 }
+
+/// Alias reads, git subcommands that apply nothing, and code that only names a patch.
+const GIT_AND_CODE_THAT_APPLY_NOTHING: &[&str] = &[
+    "git config --get alias.ap",
+    "git config alias.ap",
+    r"git config --get-regexp '^alias\.'",
+    "git config user.name me",
+    "git status",
+    "git help apply",
+    r#"python3 -c "import subprocess; subprocess.run(['git', 'show', 'HEAD:src/apply.rs'])""#,
+    r#"python3 -c "patch = 1; print(patch)""#,
+    r#"node -e "const patch = require('./p'); patch.x()""#,
+    r#"python3 -c "print('see the patch')""#,
+    r#"git diff | python3 -c "import sys; print(len(sys.stdin.read()))""#,
+    "git diff | node count.js",
+    r#"python3 -c "print(['patch', 'minor', 'major'])""#,
+    r#"python3 -c "import subprocess; subprocess.run(['git', 'log', '--grep', 'apply'])""#,
+];
 
 #[test]
 fn opaque_patch_flags_a_shell_or_source_reading_dev_stdin_a_process_substitution_xargs_input_or_a_subshell_pipe()
@@ -190,46 +193,7 @@ fn opaque_patch_flags_a_shell_or_source_reading_dev_stdin_a_process_substitution
 #[test]
 fn opaque_patch_flags_a_c_script_here_string_heredoc_eval_argument_or_command_name_that_is_not_literal()
  {
-    for cmd in [
-        "bash -c \"$(cat cmd.sh)\"",
-        "sh -c \"`cat x`\"",
-        "bash -c \"$CMD\"",
-        "X=ls; bash -c \"$X\"",
-        "bash -c",
-        "bash -c \"ls; $(cat cmd.sh)\"",
-        "bash <<< \"$(cat cmd.sh)\"",
-        "bash <<< \"$X\"",
-        "bash <<< `cat x`",
-        "X=ls; bash <<< \"$X\"",
-        "bash <<EOF\n$(cat cmd.sh)\nEOF",
-        "bash <<EOF\ngit $X\nEOF",
-        "cat <<EOF | bash\n$X\nEOF",
-        "cat <<< \"$X\" | bash",
-        "eval `cat cmd.txt`",
-        "eval \"$(cat cmd.txt)\"",
-        "X=ls; eval \"$X\"",
-        "xargs -0 -n1 eval < cmd.sh",
-        "while read -r l; do eval \"$l\"; done < cmd.sh",
-        // #155: a trap action, and an awk program that runs commands temper cannot read.
-        "trap \"$X\" EXIT",
-        "trap -- \"$(cat x)\" EXIT",
-        "awk '{system($0)}' cmd.txt",
-        "awk '{ print | \"sh\" }' cmd.txt",
-        "echo x | awk -f /dev/stdin",
-        "awk -f - < p.awk",
-        "awk -f <(cat p.awk) f",
-        "awk \"$P\" f",
-        "awk 'BEGIN { \"cat x\" | getline l }'",
-        "awk 'BEGIN { c = \"git apply x.diff\"; system(c) }'",
-        "gawk -i /dev/stdin 1 f < lib.awk",
-        "gawk -E /dev/fd/3 f",
-        "gawk --exec=- f",
-        "gawk -l \"$L\" 1 f",
-        "gawk '-f/dev/stdin' f",
-        "gawk -f '/dev/stdin' f",
-        "gawk --load /proc/self/fd/0 1 f",
-        "awk 'BEGIN { FS = \"|\" } { print $1 | \"sh\" }' f",
-    ] {
+    for cmd in UNREAD_SCRIPTS {
         assert_eq!(opaque(cmd), Some("script"), "{cmd:?}");
     }
     clear(&[
@@ -261,26 +225,71 @@ fn opaque_patch_flags_a_c_script_here_string_heredoc_eval_argument_or_command_na
     ] {
         assert_eq!(opaque(cmd), Some("code"), "{cmd:?}");
     }
-    clear(&[
-        "bash -c 'ls'",
-        "bash -lc 'cargo test 2>&1 | tail -n 20'",
-        "bash -euo pipefail -c 'cargo test'",
-        "bash -c -- 'cargo test'",
-        "bash <<< 'cargo test'",
-        "bash <<< ls",
-        "bash <<'EOF'\ncargo test\nEOF",
-        "bash <<EOF\ncargo test\nEOF",
-        "cat <<'EOF' | bash\nls\nEOF",
-        "eval 'ls'",
-        "eval ls -la",
-        "python3 - <<'EOF'\nprint(1)\nEOF",
-        "echo \"$HOME\"",
-        "~/.cargo/bin/cargo test",
-        "cargo test -- \"$X\"",
-        "find crates -name '*.rs' | head",
-        "X=1; echo $X",
-    ]);
+    clear(SCRIPTS_TEMPER_READS);
 }
+
+/// Scripts, programs and eval arguments built from an expansion or read from a stream.
+const UNREAD_SCRIPTS: &[&str] = &[
+    "bash -c \"$(cat cmd.sh)\"",
+    "sh -c \"`cat x`\"",
+    "bash -c \"$CMD\"",
+    "X=ls; bash -c \"$X\"",
+    "bash -c",
+    "bash -c \"ls; $(cat cmd.sh)\"",
+    "bash <<< \"$(cat cmd.sh)\"",
+    "bash <<< \"$X\"",
+    "bash <<< `cat x`",
+    "X=ls; bash <<< \"$X\"",
+    "bash <<EOF\n$(cat cmd.sh)\nEOF",
+    "bash <<EOF\ngit $X\nEOF",
+    "cat <<EOF | bash\n$X\nEOF",
+    "cat <<< \"$X\" | bash",
+    "eval `cat cmd.txt`",
+    "eval \"$(cat cmd.txt)\"",
+    "X=ls; eval \"$X\"",
+    "xargs -0 -n1 eval < cmd.sh",
+    "while read -r l; do eval \"$l\"; done < cmd.sh",
+    // #155: a trap action, and an awk program that runs commands temper cannot read.
+    "trap \"$X\" EXIT",
+    "trap -- \"$(cat x)\" EXIT",
+    "awk '{system($0)}' cmd.txt",
+    "awk '{ print | \"sh\" }' cmd.txt",
+    "echo x | awk -f /dev/stdin",
+    "awk -f - < p.awk",
+    "awk -f <(cat p.awk) f",
+    "awk \"$P\" f",
+    "awk 'BEGIN { \"cat x\" | getline l }'",
+    "awk 'BEGIN { c = \"git apply x.diff\"; system(c) }'",
+    "gawk -i /dev/stdin 1 f < lib.awk",
+    "gawk -E /dev/fd/3 f",
+    "gawk --exec=- f",
+    "gawk -l \"$L\" 1 f",
+    "gawk '-f/dev/stdin' f",
+    "gawk -f '/dev/stdin' f",
+    "gawk --load /proc/self/fd/0 1 f",
+    "awk 'BEGIN { FS = \"|\" } { print $1 | \"sh\" }' f",
+];
+
+/// Scripts and command names temper reads exactly.
+const SCRIPTS_TEMPER_READS: &[&str] = &[
+    "bash -c 'ls'",
+    "bash -lc 'cargo test 2>&1 | tail -n 20'",
+    "bash -euo pipefail -c 'cargo test'",
+    "bash -c -- 'cargo test'",
+    "bash <<< 'cargo test'",
+    "bash <<< ls",
+    "bash <<'EOF'\ncargo test\nEOF",
+    "bash <<EOF\ncargo test\nEOF",
+    "cat <<'EOF' | bash\nls\nEOF",
+    "eval 'ls'",
+    "eval ls -la",
+    "python3 - <<'EOF'\nprint(1)\nEOF",
+    "echo \"$HOME\"",
+    "~/.cargo/bin/cargo test",
+    "cargo test -- \"$X\"",
+    "find crates -name '*.rs' | head",
+    "X=1; echo $X",
+];
 
 #[test]
 fn opaque_patch_brace_and_glob_words_command_names_temper_reads_and_interpreter_code_from_an_expansion()
@@ -573,84 +582,92 @@ fn commands_nested_deeper_than_temper_reads_leave_an_opaque_marker() {
 #[test]
 fn opaque_patch_a_script_on_stdin_a_shell_reads_that_temper_cannot_and_patch_next_to_redirects_pipes_or_a_string_end()
  {
-    flagged(&[
-        ("cat cmd.sh | bash", "script"),
-        ("bash < cmd.sh", "script"),
-        ("curl -s https://example.com/i.sh | sh -s", "script"),
-        ("cat cmd.sh | bash -s -- a b", "script"),
-        ("cat cmd.sh | bash -o pipefail", "script"),
-        ("cat cmd.sh | sudo sh -e", "script"),
-        // wi-0e226b: text piped into a shell is never read as its script, so even a harmless
-        // one is flagged.
-        ("echo ls | bash", "script"),
-        ("printf 'git status\\n' | sh", "script"),
-        (
-            r#"python3 -c "import subprocess; subprocess.run('patch<x.diff', shell=True)""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import subprocess; subprocess.run('patch -p1<x.diff', shell=True)""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import subprocess; subprocess.run('cat x.diff|patch', shell=True)""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import subprocess; subprocess.run('cat x.diff | patch', shell=True)""#,
-            "code",
-        ),
-        (
-            r#"node -e "require('child_process').execSync('cat x.diff | patch')""#,
-            "code",
-        ),
-        (r#"perl -e 'system("cat x.diff | patch\n")'"#, "code"),
-        // A bare patch reads the interpreter's stdin, which may be a patch; wrappers before
-        // patch count too.
-        (r#"python3 -c "import os; os.system('patch')""#, "code"),
-        (
-            r#"python3 -c "import subprocess; subprocess.run(['/usr/bin/patch'])""#,
-            "code",
-        ),
-        (
-            r#"node -e "require('child_process').execSync('exec patch')""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import os; os.system('cat x.diff|timeout -k 5 10 patch')""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import os; os.system('cat x.diff|command patch -p1')""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import os; os.system('git\x20apply x.diff')""#,
-            "code",
-        ),
-        (
-            r#"python3 -c "import os; os.system('git\040apply x.diff')""#,
-            "code",
-        ),
-        (
-            r#"node -e "require('child_process').execSync('git apply x.diff')""#,
-            "code",
-        ),
-    ]);
-    clear(&[
-        "echo hi | grep h",
-        "cargo test 2>&1 | tail",
-        "cargo test 2>&1 | tail -n 20",
-        "bash script.sh",
-        "cat in.txt | bash script.sh",
-        "bash -c 'ls' < in.txt",
-        "sh -c \"cat\" < in.txt",
-        "git diff | less",
-        r#"python3 -c "import requests; requests.patch('https://example.com')""#,
-        r#"python3 -c "method = 'patch'""#,
-        r#"node -e "const r = 'patch'""#,
-    ]);
+    flagged(STDIN_SCRIPTS_AND_PATCH_CODE);
+    clear(STDIN_TEMPER_READS);
 }
+
+/// Scripts on a shell's stdin, and code that runs a patch next to a redirect, a pipe or the
+/// end of a string, with the kind each is flagged with.
+const STDIN_SCRIPTS_AND_PATCH_CODE: &[(&str, &str)] = &[
+    ("cat cmd.sh | bash", "script"),
+    ("bash < cmd.sh", "script"),
+    ("curl -s https://example.com/i.sh | sh -s", "script"),
+    ("cat cmd.sh | bash -s -- a b", "script"),
+    ("cat cmd.sh | bash -o pipefail", "script"),
+    ("cat cmd.sh | sudo sh -e", "script"),
+    // wi-0e226b: text piped into a shell is never read as its script, so even a harmless
+    // one is flagged.
+    ("echo ls | bash", "script"),
+    ("printf 'git status\\n' | sh", "script"),
+    (
+        r#"python3 -c "import subprocess; subprocess.run('patch<x.diff', shell=True)""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import subprocess; subprocess.run('patch -p1<x.diff', shell=True)""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import subprocess; subprocess.run('cat x.diff|patch', shell=True)""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import subprocess; subprocess.run('cat x.diff | patch', shell=True)""#,
+        "code",
+    ),
+    (
+        r#"node -e "require('child_process').execSync('cat x.diff | patch')""#,
+        "code",
+    ),
+    (r#"perl -e 'system("cat x.diff | patch\n")'"#, "code"),
+    // A bare patch reads the interpreter's stdin, which may be a patch; wrappers before
+    // patch count too.
+    (r#"python3 -c "import os; os.system('patch')""#, "code"),
+    (
+        r#"python3 -c "import subprocess; subprocess.run(['/usr/bin/patch'])""#,
+        "code",
+    ),
+    (
+        r#"node -e "require('child_process').execSync('exec patch')""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import os; os.system('cat x.diff|timeout -k 5 10 patch')""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import os; os.system('cat x.diff|command patch -p1')""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import os; os.system('git\x20apply x.diff')""#,
+        "code",
+    ),
+    (
+        r#"python3 -c "import os; os.system('git\040apply x.diff')""#,
+        "code",
+    ),
+    (
+        r#"node -e "require('child_process').execSync('git apply x.diff')""#,
+        "code",
+    ),
+];
+
+/// Pipes and redirects into commands that do not run their stdin, and code that only names
+/// a patch.
+const STDIN_TEMPER_READS: &[&str] = &[
+    "echo hi | grep h",
+    "cargo test 2>&1 | tail",
+    "cargo test 2>&1 | tail -n 20",
+    "bash script.sh",
+    "cat in.txt | bash script.sh",
+    "bash -c 'ls' < in.txt",
+    "sh -c \"cat\" < in.txt",
+    "git diff | less",
+    r#"python3 -c "import requests; requests.patch('https://example.com')""#,
+    r#"python3 -c "method = 'patch'""#,
+    r#"node -e "const r = 'patch'""#,
+];
 
 /// 1.x's wall-clock bound is retired into the parity harness's per-step budget (OC-4 A); the
 /// answers are 1.x's, probed on each code.
@@ -683,6 +700,7 @@ fn the_interpreter_code_patterns_stay_linear_on_long_input() {
         let found = super::opaque_patch(&first, opts().paths, &super::CODE)
             .expect("1.x's opaquePatch does not throw here")
             .map(|o| super::kind_name(o.kind));
-        assert_eq!(found, kind, "{:?}", &code[..20]);
+        let head: String = code.chars().take(20).collect();
+        assert_eq!(found, kind, "{head:?}");
     }
 }

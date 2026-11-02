@@ -33,7 +33,7 @@ mod writes;
 
 pub(crate) use code::Threw;
 pub(crate) use deletes::command_deletes;
-pub(crate) use opaque::{OpaquePatch, opaque_patch};
+pub(crate) use opaque::opaque_patch;
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
 pub(crate) use words::{

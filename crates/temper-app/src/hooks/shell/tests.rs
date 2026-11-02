@@ -821,6 +821,45 @@ fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them()
     assert_eq!(opaque("tr a-z A-Z <<'EOF' | bash\nls\nEOF"), Some("script"));
 }
 
+/// Command names, and wrapper words, built from an expansion: each is opaque under
+/// `untracked`, whatever its last segment.
+const BUILT_NAMES: [&str; 34] = [
+    "\"$X/git\" apply x.diff",
+    "\"$X/patch\" -p1 < x.diff",
+    "\"$X\"/../git am x.mbox",
+    "\"$X/bin/sudo\" git apply x.diff",
+    "timeout 5 \"$X/git\" apply x.diff",
+    "\"$HOME/.cargo/bin/cargo\" test",
+    "source \"$HOME/.cargo/env\"; \"$HOME/.cargo/bin/cargo\" test",
+    "\"$CARGO_HOME/bin/cargo\" test",
+    "cd crates/a && \"$PWD/../../target/debug/a\"",
+    "HOME=/x; \"$HOME/cargo\" test",
+    "read X; \"$X/cargo\" test",
+    "\"${X:-/usr}/bin/cargo\" test",
+    "\"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
+    "\"$X\"/cargo test",
+    "\"$X\"/'cargo' test",
+    "timeout 60 \"$X/cargo\" test",
+    "$HOME/.cargo/bin/cargo test",
+    "$PWD/target/debug/a",
+    "${HOME}/.cargo/bin/cargo test",
+    "\"$X\"",
+    "\"$X$Y\"",
+    "\"$(which cargo)\"",
+    "\"$X/\"",
+    "\"$X/c$Y\"",
+    "\"$X\"/{a,b}",
+    "\"$X\"/c*",
+    "\"$@/cargo\"",
+    "\"${A[@]}/cargo\"",
+    "\"$X\"/$Y",
+    "env \"$X/cargo\" test",
+    "nice \"$X/cargo\" test",
+    "xargs \"$X/cargo\" test",
+    "\"$HOME/bin/timeout\" 5 cargo test",
+    "nohup \"$HOME/bin/timeout\" 5 cargo test",
+];
+
 #[test]
 fn a_command_name_built_from_an_expansion_is_not_read_whatever_its_last_segment() {
     let untracked_tool = |cmd: &str| {
@@ -836,42 +875,7 @@ fn a_command_name_built_from_an_expansion_is_not_read_whatever_its_last_segment(
             "{cmd:?}"
         );
     }
-    for cmd in [
-        "\"$X/git\" apply x.diff",
-        "\"$X/patch\" -p1 < x.diff",
-        "\"$X\"/../git am x.mbox",
-        "\"$X/bin/sudo\" git apply x.diff",
-        "timeout 5 \"$X/git\" apply x.diff",
-        "\"$HOME/.cargo/bin/cargo\" test",
-        "source \"$HOME/.cargo/env\"; \"$HOME/.cargo/bin/cargo\" test",
-        "\"$CARGO_HOME/bin/cargo\" test",
-        "cd crates/a && \"$PWD/../../target/debug/a\"",
-        "HOME=/x; \"$HOME/cargo\" test",
-        "read X; \"$X/cargo\" test",
-        "\"${X:-/usr}/bin/cargo\" test",
-        "\"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
-        "\"$X\"/cargo test",
-        "\"$X\"/'cargo' test",
-        "timeout 60 \"$X/cargo\" test",
-        "$HOME/.cargo/bin/cargo test",
-        "$PWD/target/debug/a",
-        "${HOME}/.cargo/bin/cargo test",
-        "\"$X\"",
-        "\"$X$Y\"",
-        "\"$(which cargo)\"",
-        "\"$X/\"",
-        "\"$X/c$Y\"",
-        "\"$X\"/{a,b}",
-        "\"$X\"/c*",
-        "\"$@/cargo\"",
-        "\"${A[@]}/cargo\"",
-        "\"$X\"/$Y",
-        "env \"$X/cargo\" test",
-        "nice \"$X/cargo\" test",
-        "xargs \"$X/cargo\" test",
-        "\"$HOME/bin/timeout\" 5 cargo test",
-        "nohup \"$HOME/bin/timeout\" 5 cargo test",
-    ] {
+    for cmd in BUILT_NAMES {
         assert_eq!(opaque_with(cmd, untracked()), Some("name"), "{cmd:?}");
     }
     // Other agents' commands keep main's reading: a name temper cannot read is not git apply

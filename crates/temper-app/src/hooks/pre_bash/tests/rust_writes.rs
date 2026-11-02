@@ -44,7 +44,7 @@ fn text(case: &JsValue, key: &str) -> Option<String> {
             };
             let mut out = String::new();
             for run in runs {
-                let piece = at(run, 0).and_then(JsValue::as_str).expect("a piece");
+                let piece = at(run, 0).and_then(JsValue::as_str)?;
                 out.push_str(&piece.repeat(count(at(run, 1))));
             }
             Some(out)
@@ -61,12 +61,12 @@ fn snapshot(all: &JsValue, snap: usize) -> FakeFiles {
     };
     let mut files = FakeFiles::new(Posix);
     let mut dirs = Vec::new();
-    let mut children: BTreeMap<String, BTreeMap<String, EntryKind>> = BTreeMap::new();
+    let mut children = Children::new();
     let mut linked = BTreeSet::new();
     for e in entries {
         let kind = at(e, 0).and_then(JsValue::as_str).expect("a kind");
         let path = at(e, 1).and_then(JsValue::as_str).expect("a path");
-        let (parent, name) = path.rsplit_once('/').expect("an absolute path");
+        let (parent, _) = path.rsplit_once('/').expect("an absolute path");
         let entry = match kind {
             "file" => {
                 let body = at(texts, count(at(e, 2)))
@@ -87,19 +87,7 @@ fn snapshot(all: &JsValue, snap: usize) -> FakeFiles {
             }
             _ => EntryKind::Other,
         };
-        children
-            .entry(parent.to_owned())
-            .or_default()
-            .insert(name.to_owned(), entry);
-        // Each ancestor lists the directory below it.
-        let mut child = parent;
-        while let Some((up, name)) = child.rsplit_once('/').filter(|(up, _)| !up.is_empty()) {
-            children
-                .entry(up.to_owned())
-                .or_default()
-                .insert(name.to_owned(), EntryKind::Dir);
-            child = up;
-        }
+        note(&mut children, path, entry);
     }
     for dir in &linked {
         let entries: Vec<(&str, EntryKind)> = children[dir]
@@ -116,18 +104,91 @@ fn snapshot(all: &JsValue, snap: usize) -> FakeFiles {
     files
 }
 
+/// What each directory of a snapshot holds.
+type Children = BTreeMap<String, BTreeMap<String, EntryKind>>;
+
+/// `path` is a `kind` in its directory, and each ancestor lists the directory below it.
+fn note(children: &mut Children, path: &str, kind: EntryKind) {
+    let mut child = path;
+    let mut kind = kind;
+    while let Some((up, name)) = child.rsplit_once('/').filter(|(up, _)| !up.is_empty()) {
+        children
+            .entry(up.to_owned())
+            .or_default()
+            .insert(name.to_owned(), kind);
+        kind = EntryKind::Dir;
+        child = up;
+    }
+}
+
 /// The answer as the capture writes it.
 fn answer(outcome: &HookOutcome) -> (&'static str, Option<&str>, Option<&str>) {
-    fn some(s: &Option<String>) -> Option<&str> {
-        s.as_deref().filter(|s| !s.is_empty())
+    fn some(s: Option<&String>) -> Option<&str> {
+        s.map(String::as_str).filter(|s| !s.is_empty())
     }
     match outcome {
         HookOutcome::Pass => ("none", None, None),
-        HookOutcome::Ask { reason, context } => ("ask", Some(reason), some(context)),
-        HookOutcome::Deny { reason, context } => ("deny", Some(reason), some(context)),
+        HookOutcome::Ask { reason, context } => ("ask", Some(reason), some(context.as_ref())),
+        HookOutcome::Deny { reason, context } => ("deny", Some(reason), some(context.as_ref())),
         HookOutcome::Context { text, .. } => ("context", None, Some(text)),
         HookOutcome::Notice { message } => ("notice", Some(message), None),
     }
+}
+
+/// The hook input of a case: its command, `cwd` and agent type.
+fn input_of(case: &JsValue, cmd: &str) -> HookInput {
+    let json = |s: &str| JsValue::String(s.to_owned()).to_json();
+    let mut input = [
+        r#"{"tool_name":"Bash","session_id":"hooks-test","tool_input":{"command":"#,
+        &json(cmd),
+        "}",
+    ]
+    .concat();
+    if let Some(cwd) = text(case, "cwd") {
+        input.push_str(&[r#","cwd":"#, &json(&cwd)].concat());
+    }
+    if let Some(agent) = text(case, "agent") {
+        input.push_str(&[r#","agent_type":"#, &json(&agent)].concat());
+    }
+    input.push('}');
+    HookInput::parse(&input).expect("the input is JSON")
+}
+
+/// How the answer to one case differs from 1.x's, if it does.
+fn differs(case: &JsValue, cmd: &str, ports: &FakePorts, scanner: &Scanner) -> Option<String> {
+    let input = input_of(case, cmd);
+    let env = RunEnv {
+        cwd: PathBuf::from("/"),
+        style: Posix,
+        plugin_data: None,
+        temp_dir: PathBuf::from("/tmp"),
+        home: PathBuf::from(text(case, "home").unwrap_or_default()),
+        remote_session: None,
+    };
+    let call = crate::hooks::HookCall {
+        ports,
+        env: &env,
+        input: &input,
+    };
+    let got = crate::hooks::run(&call, scanner, HookEvent::PreBash).expect("an answer");
+    let (reason, context) = (text(case, "reason"), text(case, "context"));
+    let decision = text(case, "decision").unwrap_or_default();
+    let want = (decision.as_str(), reason.as_deref(), context.as_deref());
+    let answered = answer(&got);
+    (answered != want).then(|| {
+        let short: String = cmd.chars().take(160).collect();
+        format!("{short:?}: {answered:?}\n   1.x: {want:?}")
+    })
+}
+
+/// The files of snapshot `snap`, with a git that answers every call with exit 128.
+fn ports_of(all: &JsValue, snap: usize) -> FakePorts {
+    let mut ports = FakePorts::new(snapshot(all, snap));
+    ports.process = FakeProcess::new().otherwise(Reply::Exit {
+        status: ExitKind::Code(128),
+        stdout: String::new(),
+    });
+    ports
 }
 
 /// Every captured call of 1.x's test `test` gets 1.x's answer.
@@ -148,61 +209,10 @@ fn replays(test: &str) {
     let mut wrong = Vec::new();
     for case in cases {
         let snap = count(case.get("snap"));
-        let ports = ports.entry(snap).or_insert_with(|| {
-            let mut ports = FakePorts::new(snapshot(&all, snap));
-            ports.process = FakeProcess::new().otherwise(Reply::Exit {
-                status: ExitKind::Code(128),
-                stdout: String::new(),
-            });
-            ports
-        });
+        let ports = ports.entry(snap).or_insert_with(|| ports_of(&all, snap));
         let cmd = text(case, "cmd").expect("a command");
-        let cwd = text(case, "cwd");
-        let mut input = format!(
-            r#"{{"tool_name":"Bash","session_id":"hooks-test","tool_input":{{"command":{}}}"#,
-            JsValue::String(cmd.clone()).to_json() // the input's own copy
-        );
-        if let Some(cwd) = &cwd {
-            input.push_str(&format!(
-                r#","cwd":{}"#,
-                JsValue::String(cwd.clone()).to_json()
-            ));
-        }
-        if let Some(agent) = text(case, "agent") {
-            input.push_str(&format!(
-                r#","agent_type":{}"#,
-                JsValue::String(agent).to_json()
-            ));
-        }
-        input.push('}');
-        let env = RunEnv {
-            cwd: PathBuf::from("/"),
-            style: Posix,
-            plugin_data: None,
-            temp_dir: PathBuf::from("/tmp"),
-            home: PathBuf::from(text(case, "home").unwrap_or_default()),
-            remote_session: None,
-        };
-        let input = HookInput::parse(&input).expect("the input is JSON");
-        let call = crate::hooks::HookCall {
-            ports: &*ports,
-            env: &env,
-            input: &input,
-        };
-        let got = crate::hooks::run(&call, &scanner, HookEvent::PreBash).expect("an answer");
-        let reason = text(case, "reason");
-        let context = text(case, "context");
-        let want = (
-            text(case, "decision").unwrap_or_default(),
-            reason.as_deref(),
-            context.as_deref(),
-        );
-        let (decision, reason, context) = answer(&got);
-        if (decision, reason, context) != (want.0.as_str(), want.1, want.2) {
-            let short: String = cmd.chars().take(160).collect();
-            wrong.push(format!(
-                "{short:?}: {decision} {reason:?} {context:?}\n   1.x: {want:?}"
-            ));
+        if let Some(why) = differs(case, &cmd, ports, &scanner) {
+            wrong.push(why);
         }
     }
     assert!(

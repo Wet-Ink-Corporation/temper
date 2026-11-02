@@ -29,6 +29,19 @@ pub(super) enum Xargs {
     Replace(String),
 }
 
+/// A chain of wrapper words, and the indices of the wrappers' own command words in it.
+#[derive(Clone, Copy)]
+struct Chain<'a> {
+    words: &'a [Word],
+    cmds: &'a [usize],
+}
+
+impl<'a> Chain<'a> {
+    fn new(words: &'a [Word], cmds: &'a [usize]) -> Self {
+        Self { words, cmds }
+    }
+}
+
 /// A wrapper: its name, and its options that take a separate value.
 #[derive(Clone, Copy)]
 struct Wrapper<'n> {
@@ -191,7 +204,7 @@ impl Walker<'_> {
             };
             let watch_exec = self.options(wrapper, &words, &mut run)?;
             if name == "watch" && !watch_exec {
-                self.unread(&words, k..run.at, None, &cmds);
+                self.unread(Chain::new(&words, &cmds), k..run.at, None);
                 if let Some(rest) = words.get(run.at..).filter(|r| !r.is_empty())
                     && let Some(script) = join_texts(rest, &self.overflow)
                 {
@@ -207,7 +220,7 @@ impl Walker<'_> {
                 run.at = run.at.saturating_add(1);
             }
         }
-        self.unread(&words, k..run.at, Some(run.at), &cmds);
+        self.unread(Chain::new(&words, &cmds), k..run.at, Some(run.at));
         // A `GIT_CONFIG*` assignment is a cheap flag; `xargs` holds at most its replace string.
         run.words = words;
         Some(run)
@@ -218,10 +231,11 @@ impl Walker<'_> {
     /// assignment that is neither literal nor [`Word::fixed`]), else the command name at
     /// `name` when it is not literal, is reported as an [`Opaque::Name`] marker. The command
     /// is still read after it.
-    fn unread(&mut self, words: &[Word], span: Range<usize>, name: Option<usize>, cmds: &[usize]) {
+    fn unread(&mut self, chain: Chain<'_>, span: Range<usize>, name: Option<usize>) {
         if !self.opts.untracked {
             return;
         }
+        let Chain { words, cmds } = chain;
         let Range { start, end } = span;
         let wrapper = words.get(start..end).and_then(|ws| {
             ws.iter().zip(start..).find_map(|(y, j)| {
@@ -628,58 +642,16 @@ impl<'w> AwkArgs<'w> {
             a.raw.as_str()
         };
         let next = k.saturating_add(1);
-        let stop_if = |stop: bool, at: usize| {
-            if stop {
-                AwkStep::Stop(at)
-            } else {
-                AwkStep::Next(at)
-            }
-        };
         if r == "--" {
             return AwkStep::Stop(next);
         }
-        if let Some((key, value)) = r.strip_prefix("--").and_then(|l| l.split_once('='))
-            && AWK_LONG.contains(&key)
-        {
-            match key {
-                "source" => self.progs.push(AwkProgram::of(a, value)),
-                "field-separator" | "assign" => {}
-                _ => {
-                    self.files.push(AwkProgram::of(a, value));
-                    self.main |= key == "file" || key == "exec";
-                }
-            }
-            return stop_if(key == "exec", next);
+        if let Some(step) = self.long_assign(a, r, next) {
+            return step;
         }
         let long = r.strip_prefix("--").is_some_and(|l| AWK_LONG.contains(&l));
         let short = r.len() == 2 && r.strip_prefix('-').is_some_and(|f| "evfFEil".contains(f));
         if long || short {
-            let value = args.get(next);
-            if let Some(v) = value
-                && (r == "-e" || r == "--source")
-            {
-                self.progs.push(AwkProgram::of(v, v.text()));
-            }
-            let file = [
-                "-f",
-                "-E",
-                "-i",
-                "-l",
-                "--file",
-                "--exec",
-                "--include",
-                "--load",
-            ];
-            if file.contains(&r) {
-                self.files.push(value.map_or(
-                    AwkProgram {
-                        literal: true,
-                        text: Cow::Borrowed(""),
-                    },
-                    |v| AwkProgram::of(v, v.text()),
-                ));
-            }
-            self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
+            self.valued(args.get(next), r);
             return stop_if(r == "-E" || r == "--exec", next.saturating_add(1));
         }
         let mut chars = r.chars();
@@ -701,6 +673,61 @@ impl<'w> AwkArgs<'w> {
         } else {
             AwkStep::Stop(k)
         }
+    }
+
+    /// A long option with its value after `=`, `--file=x`, in word `a` read as `r`.
+    fn long_assign(&mut self, a: &'w Word, r: &'w str, next: usize) -> Option<AwkStep> {
+        let (key, value) = r.strip_prefix("--").and_then(|l| l.split_once('='))?;
+        if !AWK_LONG.contains(&key) {
+            return None;
+        }
+        match key {
+            "source" => self.progs.push(AwkProgram::of(a, value)),
+            "field-separator" | "assign" => {}
+            _ => {
+                self.files.push(AwkProgram::of(a, value));
+                self.main |= key == "file" || key == "exec";
+            }
+        }
+        Some(stop_if(key == "exec", next))
+    }
+
+    /// Option `r`, whose value is the next word, `value`.
+    fn valued(&mut self, value: Option<&'w Word>, r: &str) {
+        if let Some(v) = value
+            && (r == "-e" || r == "--source")
+        {
+            self.progs.push(AwkProgram::of(v, v.text()));
+        }
+        let file = [
+            "-f",
+            "-E",
+            "-i",
+            "-l",
+            "--file",
+            "--exec",
+            "--include",
+            "--load",
+        ];
+        if file.contains(&r) {
+            self.files.push(value.map_or(
+                AwkProgram {
+                    literal: true,
+                    text: Cow::Borrowed(""),
+                },
+                |v| AwkProgram::of(v, v.text()),
+            ));
+        }
+        self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
+    }
+}
+
+/// Stop at `at` when `stop`, else read the option there.
+fn stop_if(stop: bool, at: usize) -> AwkStep {
+    if stop {
+        AwkStep::Stop(at)
+    } else {
+        AwkStep::Next(at)
     }
 }
 

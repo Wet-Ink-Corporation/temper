@@ -256,6 +256,17 @@ impl Shared {
     }
 }
 
+/// What [`Vars::lookup`] finds for a name.
+#[derive(Debug, Clone, Copy)]
+enum Lookup<'v> {
+    /// The line did not set it.
+    NotSet,
+    /// The line set it to a value temper does not know.
+    Unknown,
+    /// The line set it to this value.
+    Known(&'v Shared),
+}
+
 impl Vars {
     /// No variables yet; `untracked` makes every name set unknown.
     pub(super) fn new(untracked: bool) -> Self {
@@ -273,10 +284,13 @@ impl Vars {
             .map(|v| &*v.text)
     }
 
-    /// `Some` when the line set the name: its value, for a word to share, which is `None`
-    /// when unknown.
-    fn lookup(&self, name: &str) -> Option<Option<&Shared>> {
-        self.map.get(name).map(Option::as_ref)
+    /// Whether the line set the name, and to what value, for a word to share.
+    fn lookup(&self, name: &str) -> Lookup<'_> {
+        match self.map.get(name) {
+            None => Lookup::NotSet,
+            Some(None) => Lookup::Unknown,
+            Some(Some(value)) => Lookup::Known(value),
+        }
     }
 
     /// 1.x `setVar`: `None` deletes, and under `untracked` every value is unknown.
@@ -418,6 +432,18 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     {
         glob = true;
     }
+    Word {
+        raw,
+        text: Text::of(pieces),
+        known,
+        quoted: parts.iter().any(|p| p.quoted),
+        assign: assign_len(parts),
+        form: form_of(parts, glob),
+    }
+}
+
+/// How a word of `parts` was made; `glob` says whether it is one.
+fn form_of(parts: &[Part], glob: bool) -> Form {
     // An unquoted `{` may open a brace list, one that spans a quoted part too.
     let expanded = if parts.iter().any(|p| matches!(p.kind, PartKind::Proc(_))) {
         Expansions::Process
@@ -436,21 +462,14 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         && parts
             .iter()
             .all(|p| p.quoted || (p.is_lit() && !p.text.replace("{}", "").contains('{')));
-    Word {
-        raw,
-        text: Text::of(pieces),
-        known,
-        quoted: parts.iter().any(|p| p.quoted),
-        assign: assign_len(parts),
-        form: if literal {
-            Form::Literal
-        } else {
-            Form::Made {
-                glob,
-                expanded,
-                fixed,
-            }
-        },
+    if literal {
+        Form::Literal
+    } else {
+        Form::Made {
+            glob,
+            expanded,
+            fixed,
+        }
     }
 }
 
@@ -537,8 +556,10 @@ fn part_value(part: &Part, env: &WordEnv<'_>) -> Option<Shared> {
     match &part.kind {
         PartKind::Var(name) => {
             // A name the line set wins over the shell's own, even when its value is unknown.
-            if let Some(value) = env.vars.lookup(name) {
-                return value.cloned(); // a shared handle on the value
+            match env.vars.lookup(name) {
+                Lookup::Known(value) => return Some(value.clone()), // a shared handle on the value
+                Lookup::Unknown => return None,
+                Lookup::NotSet => {}
             }
             match name.as_str() {
                 "HOME" => Some(Shared::of(env.home)),

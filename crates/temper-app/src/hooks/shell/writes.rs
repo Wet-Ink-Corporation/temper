@@ -145,21 +145,27 @@ pub(crate) fn command_writes<'c>(
     if let Some((dest, op)) = copy {
         add(Verb::Named(name), dest, Some(op), cwd());
     }
-    let literal = |lit: &str| Cow::Owned(Word::plain(lit));
+    for word in code_writes(c, name, code) {
+        add(Verb::Code, Cow::Owned(word), None, cwd());
+    }
+    out
+}
+
+/// The files that the code an interpreter `name` runs, or a PowerShell expression, writes.
+fn code_writes(c: &Command, name: &str, code: &InterpreterCode) -> Vec<Word> {
+    let mut out = Vec::new();
     if is_interpreter(name) {
         for body in interpreter_code(c) {
-            for lit in code.write_targets(body) {
-                add(Verb::Code, literal(&lit), None, cwd());
-            }
+            let lits = code.write_targets(body);
+            out.extend(lits.iter().map(String::as_str).map(Word::plain));
         }
     }
     // A PowerShell expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`); `[ -f x ]`
     // is a test.
     let a0 = c.argv0.raw.as_str();
     if a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[[" {
-        for lit in c.line.code_targets(code) {
-            add(Verb::Code, literal(lit), None, cwd());
-        }
+        let lits = c.line.code_targets(code);
+        out.extend(lits.iter().map(String::as_str).map(Word::plain));
     }
     out
 }
