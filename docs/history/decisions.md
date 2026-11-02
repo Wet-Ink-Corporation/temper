@@ -235,3 +235,9 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 2 | How are `os.tmpdir()` and `os.homedir()` reproduced (2-24)? | From environment lookups in `temper-cli::wire`, since `std::env::temp_dir` ignores `TMP` and `TEMP` on Unix. Two-way default, 2026-11-02 (wi-cd2957). |
 | port 2 | Does `ConfigLoad::problem` land before its readers (2-25)? | Yes, in 2a with a domain test; Phase 3's `status` and SessionStart read it, and the hooks stay silent as 1.x is. Two-way default, 2026-11-02 (wi-9b33d6). |
 | port 2 | Where does `clean_rel` live (2-26)? | `pub(crate)` in `temper-app::paths`, beside its readers, consistent with OC-1 B. Two-way default, 2026-11-02 (wi-0897df). |
+| port 2a | How does `Manifest` read TOML without `toml`'s `serde` feature (2a)? | Through `toml::de::DeTable` into a JS value model, `js::Value`, as 1.x's `toml.mjs` builds it; exact for numbers and datetimes, and only the approved `parse` feature. Two-way default, 2026-11-02 (wi-d11e14). |
+| port 2a | What does `Config::load` do with a document that is not a JSON object (2a)? | Defaults plus `ConfigProblem::NotAnObject`, as D16(d). Two-way default, 2026-11-02 (wi-e93652). |
+| port 2a | How does `GateConfig` hold its switches (2a)? | A `CargoFeatures` enum and two `Switch` enums instead of three bools (API-10). Two-way default, 2026-11-02 (wi-4ceb35). |
+| port 2a | When does `gate.steps` land (2a)? | With its Phase 4 reader, not in 2a (no dead code). Two-way default, 2026-11-02 (wi-3c8044). |
+| port 2a | When do `Manifest`'s getters and `workspace_excludes` land (2a)? | In 2c, with their first reader. Two-way default, 2026-11-02 (wi-d6d807). |
+| port 2a | How does the test map track 1.x tests that later PRs port (2a)? | A `pending` note per source, checked by `check_test_map.py`. Two-way default, 2026-11-02 (wi-43b503). |
