@@ -255,3 +255,5 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 2b | Does the hook stdin reader's InputError keep no io::Error cause? | Yes: 1.x's notice names none. Two-way default, 2026-11-02 (wi-ecd2f2). |
 | port 2b | Does 2-15 A's eager Scanner::new stay on the hot path? | Yes: Release hook user-prompt 17 ms against 1.x's 76 ms. Two-way default, 2026-11-02 (wi-3f94f2). |
 | port 2b | Do hook parity masks apply before a written file's SHA-256 is taken? | Yes: Large masked files compare correctly. Two-way default, 2026-11-02 (wi-abee8a). |
+| port 2b | Should D16 gain an item for `Object.prototype` names as hook events (`toString`, `__proto__`), which 1.x runs as handlers? | Yes, D16(r): the engine treats them as unknown events; Claude Code never sends them and the launcher never routes them. Owner decision, 2026-11-02 (wi-4a72d5). |
+| port 2b | Should D16(n)'s "nesting deeper than 128" read "128 levels or more", the bound serde_json enforces? | Yes, the wording is corrected; the behaviour is unchanged and pinned by `js::json::tests`. Owner decision, 2026-11-02 (wi-8fa0dc). |
