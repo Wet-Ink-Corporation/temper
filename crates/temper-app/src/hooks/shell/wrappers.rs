@@ -3,9 +3,10 @@
 //! `awkString`, and the `bash -c`, `eval`, `trap`, awk and `pwsh -Command` branches).
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use super::walk::{Inner, Meta, Walker};
-use super::words::{Dir, Word, name_of, resolve_path};
+use super::words::{Dir, Word, js_len, name_of, push_js, resolve_path};
 
 /// What the wrappers leave: the words, the index of the command word in them, its directory,
 /// and xargs.
@@ -186,8 +187,9 @@ impl Walker<'_> {
             };
             let watch_exec = self.options(wrapper, &words, &mut run)?;
             if name == "watch" && !watch_exec {
-                if let Some(rest) = words.get(run.at..).filter(|r| !r.is_empty()) {
-                    let script = join_texts(rest);
+                if let Some(rest) = words.get(run.at..).filter(|r| !r.is_empty())
+                    && let Some(script) = join_texts(rest, &self.overflow)
+                {
                     let cwd = run.cwd.take();
                     self.deeper(|walker| walker.sub_in(&script, cwd, false));
                 }
@@ -234,7 +236,7 @@ impl Walker<'_> {
             }
             if name == "sudo" && (opt == "-C" || opt == "--chdir") {
                 let value = words.get(run.at).and_then(Word::value);
-                run.cwd = resolve_path(self.opts.paths, value, run.cwd.as_deref()).map(Dir::from);
+                run.cwd = self.option_dir(value, run.cwd.as_deref());
                 run.at = run.at.saturating_add(1);
                 continue;
             }
@@ -277,9 +279,13 @@ impl Walker<'_> {
                     .map_or("", |next| next.text.as_str())
             });
             let mut script = env_split_spaces(text);
+            let mut units = js_len(&script);
             for rest in words.get(run.at..).unwrap_or(&[]) {
-                script.push(' ');
-                script.push_str(&rest.text);
+                let fits = push_js(&mut script, &mut units, " ", &self.overflow)
+                    && push_js(&mut script, &mut units, &rest.text, &self.overflow);
+                if !fits {
+                    return None;
+                }
             }
             let cwd = run.cwd.take();
             self.deeper(|walker| walker.sub_in(&script, cwd, false));
@@ -290,9 +296,14 @@ impl Walker<'_> {
             words.get(run.at.saturating_sub(1)).and_then(Word::value)
         });
         if flag.opt == 'C' {
-            run.cwd = resolve_path(self.opts.paths, value, run.cwd.as_deref()).map(Dir::from);
+            run.cwd = self.option_dir(value, run.cwd.as_deref());
         }
         Some(())
+    }
+
+    /// The directory a wrapper's `-C value` runs its command in, from `cwd`.
+    fn option_dir(&self, value: Option<&str>, cwd: Option<&str>) -> Option<Dir> {
+        self.capped(resolve_path(self.opts.paths, value, cwd).map(Dir::from))
     }
 }
 
@@ -328,8 +339,14 @@ fn replace_string(opt: &str, rest: &str, words: &[Word], at: &mut usize) -> Stri
     }
 }
 
-/// What `name` runs inside it, from its arguments and stdin.
-pub(super) fn inner_script(name: &str, args: &[Word], meta: &Meta) -> Option<Inner> {
+/// What `name` runs inside it, from its arguments and stdin; a script joined past V8's
+/// longest string marks `overflow`.
+pub(super) fn inner_script(
+    name: &str,
+    args: &[Word],
+    meta: &Meta,
+    overflow: &Cell<bool>,
+) -> Option<Inner> {
     match name {
         "bash" | "sh" | "zsh" | "dash" | "ksh" => {
             // The script is walked after the command is pushed, which takes its words.
@@ -351,7 +368,7 @@ pub(super) fn inner_script(name: &str, args: &[Word], meta: &Meta) -> Option<Inn
                 Some(first) if first.value() == Some("--") => args.get(1..).unwrap_or(&[]),
                 _ => args,
             };
-            Some(Inner::Run(join_texts(args)))
+            join_texts(args, overflow).map(Inner::Run)
         }
         "trap" => trap_action(args)
             .filter(|a| !a.text.is_empty())
@@ -372,25 +389,26 @@ pub(super) fn inner_script(name: &str, args: &[Word], meta: &Meta) -> Option<Inn
             let rest = args
                 .get(flag.saturating_add(1)..)
                 .filter(|r| !r.is_empty())?;
-            Some(Inner::Sub {
-                src: join_texts(rest),
-                ps: true,
-            })
+            join_texts(rest, overflow).map(|src| Inner::Sub { src, ps: true })
         }
         _ => None,
     }
 }
 
-/// The words' texts, joined by spaces.
-fn join_texts(words: &[Word]) -> String {
+/// The words' texts, joined by spaces, or `None` (marking `overflow`) when that is longer
+/// than a JS string can be, where 1.x's `join(' ')` throws.
+fn join_texts(words: &[Word], overflow: &Cell<bool>) -> Option<String> {
     let mut out = String::new();
+    let mut units = 0;
     for (k, w) in words.iter().enumerate() {
-        if k > 0 {
-            out.push(' ');
+        let sep = if k > 0 { " " } else { "" };
+        let fits = push_js(&mut out, &mut units, sep, overflow)
+            && push_js(&mut out, &mut units, &w.text, overflow);
+        if !fits {
+            return None;
         }
-        out.push_str(&w.text);
     }
-    out
+    Some(out)
 }
 
 /// 1.x `v.replace(/\\[_tnvfr]/g, ' ')`.

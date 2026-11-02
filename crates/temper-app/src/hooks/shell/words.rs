@@ -3,12 +3,14 @@
 
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use temper_domain::{PathStyle, js_trim};
 
 use super::lex::{Part, PartKind, name_len};
+use crate::paths::{self, PathEnv};
+use crate::project::is_js_space;
 
 /// V8's `String::kMaxLength` on a 64-bit host, in UTF-16 units: 1.x throws `RangeError:
 /// Invalid string length` when a word's text would grow past it (`X=$X$X` repeated), and its
@@ -33,6 +35,15 @@ pub(super) fn push_js(
     true
 }
 
+/// Whether `s` fits in a JS string; when it does not, marks `overflow`, where 1.x throws.
+pub(super) fn fits_js(s: &str, overflow: &Cell<bool>) -> bool {
+    let fits = js_len(s) <= JS_MAX_STRING;
+    if !fits {
+        overflow.set(true);
+    }
+    fits
+}
+
 /// A string's length in UTF-16 units, as JS counts it.
 pub(crate) fn js_len(s: &str) -> usize {
     if s.is_ascii() {
@@ -41,8 +52,6 @@ pub(crate) fn js_len(s: &str) -> usize {
         s.encode_utf16().count()
     }
 }
-use crate::paths::{self, PathEnv};
-use crate::project::is_js_space;
 
 /// A word: `raw` (quotes removed, expansions as written), `text` (known expansions replaced,
 /// unknown ones as written) and whether every part is known, which makes `text` its value.
@@ -152,18 +161,26 @@ impl Word {
 }
 
 /// Shell variables, with a journal so a subshell's or a substitution's changes are undone in
-/// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). A change made
-/// while no scope is open is never undone, so it is not journaled: `a=$a/b` repeated at the
-/// top level keeps one value, not every earlier one.
+/// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). Each open scope
+/// journals a name once, with its value at the mark, which is all its rollback needs: `a=$a/b`
+/// repeated inside `( ... )` keeps one old value, not every earlier one (#201 F1). A change made
+/// while no scope is open is never undone, so it is not journaled.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
     map: HashMap<String, String>,
     journal: Vec<(String, Option<String>)>,
-    /// How many marks are open. A scope the line leaves unclosed is never rolled back, so its
-    /// mark stays open and only costs journaling.
-    open: usize,
+    /// Per open mark, innermost last, the names it has journaled. A scope the line leaves
+    /// unclosed is closed by the rollback of the one outside it, or never.
+    saved: Vec<HashSet<String>>,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
+}
+
+/// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Mark {
+    journal: usize,
+    depth: usize,
 }
 
 impl Vars {
@@ -174,7 +191,10 @@ impl Vars {
     /// 1.x `setVar`: `None` deletes.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
         let old = self.put(name, value);
-        if self.open > 0 {
+        if let Some(saved) = self.saved.last_mut()
+            && !saved.contains(name)
+        {
+            saved.insert(name.to_owned());
             self.journal.push((name.to_owned(), old));
         }
     }
@@ -195,20 +215,26 @@ impl Vars {
         old
     }
 
-    /// Opens a scope: where the journal is now, for [`Self::rollback`], which closes it.
-    pub(super) fn mark(&mut self) -> usize {
-        self.open = self.open.saturating_add(1);
-        self.journal.len()
+    /// Opens a scope, for [`Self::rollback`], which closes it.
+    pub(super) fn mark(&mut self) -> Mark {
+        let mark = Mark {
+            journal: self.journal.len(),
+            depth: self.saved.len(),
+        };
+        self.saved.push(HashSet::new());
+        mark
     }
 
-    /// Undoes every change since `mark` and closes its scope.
-    pub(super) fn rollback(&mut self, mark: usize) {
-        while self.journal.len() > mark {
+    /// Undoes every change since `mark` and closes its scope, with any opened inside it. The
+    /// journal holds each name's value at the mark of the scope that first changed it, so
+    /// undoing newest first leaves each name as it was at `mark`.
+    pub(super) fn rollback(&mut self, mark: Mark) {
+        while self.journal.len() > mark.journal {
             if let Some((name, old)) = self.journal.pop() {
                 self.put(&name, old);
             }
         }
-        self.open = self.open.saturating_sub(1);
+        self.saved.truncate(mark.depth);
     }
 
     /// Some variable set earlier is a `GIT_CONFIG*` one.
@@ -695,6 +721,35 @@ mod tests {
         vars.rollback(outer);
         assert_eq!(vars.get("a"), Some("x/b/b"));
         vars.set("a", Some("z".to_owned()));
+        assert_eq!(vars.journal.len(), 0);
+    }
+
+    /// A scope keeps one undo record per name, the value at its mark, however often the name
+    /// changes in it: `( a=$a/b; a=$a/b; ...)` keeps one old value, not every one (#201 F1).
+    #[test]
+    fn a_scope_journals_each_name_once_and_rolls_back_to_its_value_at_the_mark() {
+        let mut vars = Vars::default();
+        vars.set("a", Some("x".to_owned()));
+        let outer = vars.mark();
+        for value in ["x/b", "x/b/b", "x/b/b/b"] {
+            vars.set("a", Some(value.to_owned()));
+        }
+        assert_eq!(vars.journal.len(), 1);
+        let inner = vars.mark();
+        vars.set("a", Some("y".to_owned()));
+        vars.set("a", Some("y/b".to_owned()));
+        vars.set("c", Some("1".to_owned()));
+        assert_eq!(vars.journal.len(), 3);
+        vars.rollback(inner);
+        assert_eq!((vars.get("a"), vars.get("c")), (Some("x/b/b/b"), None));
+        // A mark left open (an unclosed `(`) is closed by the rollback of the one outside it.
+        let _unclosed = vars.mark();
+        vars.set("a", Some("z".to_owned()));
+        vars.set("a", Some("z/b".to_owned()));
+        vars.rollback(outer);
+        assert_eq!(vars.get("a"), Some("x"));
+        assert_eq!(vars.journal.len(), 0);
+        vars.set("a", Some("w".to_owned()));
         assert_eq!(vars.journal.len(), 0);
     }
 

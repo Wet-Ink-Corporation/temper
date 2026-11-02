@@ -1,10 +1,12 @@
 //! The walker (1.x `shell.mjs` `parseCommands`, `run`, `sub`, `simple`): the simple commands
 //! a command line runs, in order, each with the directory it runs in.
 //!
-//! Variables live in a journal ([`Vars`]) and directories are shared [`Dir`]s, so a subshell,
-//! a substitution or a `cd` costs what it changes, not what came before it (1.x copies the
-//! variable map at every `(` and `$(`).
+//! Variables live in a journal ([`Vars`]) and directories are shared [`Dir`]s, so opening and
+//! closing a subshell or a substitution costs the names it changes, not the variables before
+//! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the directory it
+//! builds, never a re-read of the whole path ([`cd_step`]).
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -12,8 +14,8 @@ use temper_domain::{PathStyle, js_trim};
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
-    Dir, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len, make_word, name_of,
-    push_js, word_path,
+    Dir, Mark, PathCx, Vars, Word, WordEnv, fits_js, git_rev_parse, is_ps_var, js_len, make_word,
+    name_of, push_js, word_path,
 };
 use super::wrappers::{Run, Xargs, inner_script};
 
@@ -162,12 +164,12 @@ pub(super) struct Meta {
 
 pub(super) struct Walker<'o> {
     pub(super) opts: ParseOpts<'o>,
-    /// The last directory `cd` resolved, which is in Node's normal form: a `cd` from it into
-    /// one more name appends the name instead of normalising the whole path again, so a
-    /// line of `cd a;` costs a copy of the directory per `cd` (1.x normalises it each time).
+    /// The last directory `cd` resolved, which is in Node's normal form: a relative `cd` from
+    /// it steps the value's names instead of normalising the whole path again, so a line of
+    /// `cd a/b;` costs a copy of the directory per `cd` (1.x normalises it each time).
     normal: Option<Dir>,
-    /// A word grew past V8's longest string (see [`TooLong`]).
-    overflow: Cell<bool>,
+    /// A word, directory or joined script grew past V8's longest string (see [`TooLong`]).
+    pub(super) overflow: Cell<bool>,
     pub(super) env: Env,
     pub(super) out: Vec<Command>,
     /// How deep in subshells, substitutions and inner scripts the walk is (1.x's `depth`).
@@ -179,7 +181,7 @@ struct Scope {
     cwd: Option<Dir>,
     prev: Option<Dir>,
     dirs: usize,
-    vars: usize,
+    vars: Mark,
 }
 
 /// 1.x `KEYWORDS`.
@@ -217,6 +219,12 @@ impl Walker<'_> {
     /// 1.x `wordPath(w, cwd)`.
     pub(super) fn word_path(&self, word: &Word, cwd: Option<&str>) -> Option<String> {
         word_path(self.opts.paths, word, cwd)
+    }
+
+    /// `dir`, unless it is longer than a JS string can be: 1.x's `path.resolve` throws there,
+    /// so this marks the overflow that stops the reader (see [`TooLong`]).
+    pub(super) fn capped(&self, dir: Option<Dir>) -> Option<Dir> {
+        dir.filter(|d| fits_js(d, &self.overflow))
     }
 
     /// Runs `walk` one level deeper (1.x's `depth + 1`).
@@ -548,7 +556,7 @@ impl Walker<'_> {
         let inner = if name == "find" {
             find_execs(args, run.cwd.as_ref(), self.depth)
         } else {
-            inner_script(&name, args, &meta)
+            inner_script(&name, args, &meta, &self.overflow)
         };
         // The inner commands run in the command's directory; `Dir` is a shared handle.
         let cwd = run.cwd.clone();
@@ -609,7 +617,7 @@ impl Walker<'_> {
                 [] => Some(Dir::from(self.opts.home)),
                 [only] if only.value() == Some("-") => self.env.prev.clone(),
                 [only] => {
-                    let dir = self.cd_into(only);
+                    let dir = self.capped(self.cd_into(only));
                     self.normal.clone_from(&dir); // the handle the next `cd` compares with
                     dir
                 }
@@ -619,8 +627,8 @@ impl Walker<'_> {
         self.env.prev = before;
     }
 
-    /// The directory `cd <word>` enters: Node's `path.resolve(cwd, value)`, by appending a
-    /// plain name to (or taking the parent of) a directory already in normal form.
+    /// The directory `cd <word>` enters: Node's `path.resolve(cwd, value)`, stepping a relative
+    /// value's names from a directory already in normal form ([`cd_step`]).
     fn cd_into(&self, word: &Word) -> Option<Dir> {
         let normal = self.env.cwd.as_ref().filter(|cwd| {
             self.normal
@@ -637,34 +645,45 @@ impl Walker<'_> {
     }
 }
 
-/// `path.resolve(base, value)` for a `base` in normal form and a `value` of one segment:
-/// `None` when the value is anything else, for the full resolve to read.
-fn cd_step(style: PathStyle, base: &Dir, value: &str) -> Option<Dir> {
-    let separators: &[char] = match style {
-        PathStyle::Posix => &['/'],
-        PathStyle::Windows => &['/', '\\', ':'],
-    };
-    if value.is_empty() || value.contains(separators) {
+/// `path.resolve(base, value)` for a `base` in normal form and a relative `value`, as Node's
+/// normalisation reads it: each name is appended and each `..` takes the parent, skipping
+/// empty names and `.`. That costs `base` once plus `value`, where the full resolve walks the
+/// whole joined path. `None` for an empty or absolute value, or on Windows one that names a
+/// drive (`D:x`), for the full resolve to read.
+pub(super) fn cd_step(style: PathStyle, base: &Dir, value: &str) -> Option<Dir> {
+    let windows = style == PathStyle::Windows;
+    let rooted = windows && (value.starts_with('\\') || value.contains(':'));
+    if value.is_empty() || value.starts_with('/') || rooted {
         return None;
     }
-    match value {
-        "." => Some(Rc::clone(base)),
-        ".." => Some(Dir::from(crate::paths::dirname(style, base))),
-        name => {
-            let sep = match style {
-                PathStyle::Posix => '/',
-                PathStyle::Windows => '\\',
-            };
-            let mut dir =
-                String::with_capacity(base.len().saturating_add(name.len()).saturating_add(1));
-            dir.push_str(base);
-            if !base.ends_with(sep) {
+    // Windows reads `\` as a separator too: as `/`, the split below finds both with `memchr`.
+    let value = if windows && value.contains('\\') {
+        Cow::Owned(value.replace('\\', "/"))
+    } else {
+        Cow::Borrowed(value)
+    };
+    let sep = if windows { '\\' } else { '/' };
+    let mut names = value
+        .split('/')
+        .filter(|name| !name.is_empty() && *name != ".")
+        .peekable();
+    if names.peek().is_none() {
+        return Some(Rc::clone(base));
+    }
+    let mut dir = String::with_capacity(base.len().saturating_add(value.len()).saturating_add(1));
+    dir.push_str(base);
+    for name in names {
+        if name == ".." {
+            let parent = crate::paths::dirname(style, &dir).len();
+            dir.truncate(parent);
+        } else {
+            if !dir.ends_with(sep) {
                 dir.push(sep);
             }
             dir.push_str(name);
-            Some(Dir::from(dir))
         }
     }
+    Some(Dir::from(dir))
 }
 
 /// A command's words, and whether they were made as PowerShell's.

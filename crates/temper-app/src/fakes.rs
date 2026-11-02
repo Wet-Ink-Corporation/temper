@@ -1,7 +1,7 @@
 //! In-memory fakes of the ports, for this crate's tests (TST-09). A `test-util` feature will
 //! expose them when another crate's tests need them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
@@ -318,6 +318,8 @@ pub(crate) enum Reply {
 pub(crate) struct FakeProcess {
     replies: Vec<(String, Vec<OsString>, PathBuf, Reply)>,
     otherwise: Option<Reply>,
+    /// How many requests it has answered.
+    calls: Cell<usize>,
 }
 
 impl FakeProcess {
@@ -339,10 +341,16 @@ impl FakeProcess {
             .push(((*program).to_owned(), args, PathBuf::from(cwd), reply));
         self
     }
+
+    /// How many requests it has answered so far.
+    pub(crate) fn calls(&self) -> usize {
+        self.calls.get()
+    }
 }
 
 impl ProcessRunner for FakeProcess {
     fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+        self.calls.set(self.calls.get().saturating_add(1));
         let program = request.program.to_owned();
         let reply = self
             .replies

@@ -1071,7 +1071,8 @@
           "crate": "temper-app",
           "rust": [
             "hooks::shell::tests::cd_pushd_popd_subshells_and_pipelines_set_the_directory_each_command_runs_in",
-            "hooks::shell::tests::a_cd_of_one_segment_lands_where_the_full_resolve_does"
+            "hooks::shell::tests::a_cd_of_one_segment_lands_where_the_full_resolve_does",
+            "hooks::shell::tests::a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands"
           ]
         },
         {
@@ -1231,7 +1232,11 @@
             "hooks::shell::tests::long_inputs::unclosed_quotes_and_expansions_repeated_read_as_1x_reads_them",
             "hooks::shell::tests::long_inputs::variables_and_git_paths_repeated_read_as_1x_reads_them",
             "hooks::shell::tests::long_inputs::cd_and_pushd_repeated_land_the_write_under_every_directory",
-            "hooks::shell::tests::long_inputs::a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws"
+            "hooks::shell::tests::long_inputs::a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws",
+            "hooks::shell::tests::long_inputs::a_variable_grown_inside_a_scope_reads_as_1x_reads_it",
+            "hooks::shell::tests::long_inputs::a_cd_of_several_names_repeated_lands_the_write_under_every_one",
+            "hooks::shell::tests::long_inputs::a_directory_past_v8s_longest_string_stops_the_reader_as_1x_throws",
+            "hooks::shell::tests::long_inputs::a_joined_inner_script_past_v8s_longest_string_stops_the_reader_as_1x_throws"
           ],
           "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the word-scan decisions are ported at 2^15 to 2^17 repeats; the code-scan half arrives in port Phase 2f"
         },

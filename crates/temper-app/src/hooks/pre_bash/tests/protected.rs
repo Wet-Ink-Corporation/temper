@@ -265,6 +265,49 @@ fn protected_config_written_by_a_clustered_curl_wget_output_option_or_by_a_recur
     );
 }
 
+/// Not in 1.x's tests: a restore git is asked about once per line, however often the line
+/// repeats it (#201 F4: two git calls per restore, 9.2 s for 2,000 of them).
+#[test]
+fn a_restore_repeated_on_one_line_asks_git_about_it_once() {
+    let ran = |stdout: &str| Reply::Exit {
+        status: ExitKind::Code(0),
+        stdout: stdout.to_owned(),
+    };
+    let diff = [
+        "git",
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        "v1",
+        "--",
+        "*.toml",
+    ];
+    let calls = |n: usize| {
+        let mut ws = Ws::with(hooks_ws());
+        ws.ports.process = FakeProcess::new()
+            .answering(
+                &["git", "rev-parse", "--show-toplevel"],
+                "/ws",
+                ran("/ws\n"),
+            )
+            .answering(&diff, "/ws", ran("clippy.toml\0"))
+            .otherwise(Reply::Exit {
+                status: ExitKind::Code(128),
+                stdout: String::new(),
+            });
+        let cmd = "git checkout v1 -- '*.toml'; ".repeat(n);
+        let json = format!(
+            r#"{{"tool_name":"Bash","cwd":"/ws","session_id":"s","tool_input":{{"command":{}}}}}"#,
+            JsValue::String(cmd).to_json()
+        );
+        let got = ws.run(HookEvent::PreBash, &json);
+        assert_eq!(answer(&got).0, "ask", "{n} restores");
+        ws.ports.process.calls()
+    };
+    assert_eq!(calls(3), calls(1));
+}
+
 #[test]
 fn a_protected_config_ask_does_not_hide_the_dependency_or_snapshot_ask_in_the_same_command() {
     replays(

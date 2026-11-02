@@ -133,6 +133,7 @@ pub(super) fn protected_shell_writes(
         start: &start,
         globs,
         owners: HashMap::new(),
+        listed: HashMap::new(),
         changes: Changes::default(),
     };
     match commands.iter().try_for_each(|c| reader.command(c)) {
@@ -163,14 +164,28 @@ struct Reader<'a, 'c, P> {
     globs: Globs,
     /// 1.x `ownerOf`'s cache: each ancestor checked, and the checkout there, if any.
     owners: HashMap<String, Option<Owner>>,
+    /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
+    /// the line repeats one, though the answer cannot change within a line (#201 F4).
+    listed: HashMap<(String, String, String), Listed>,
     changes: Changes,
 }
 
+/// What git says a restore would change.
+#[derive(Clone)]
+enum Listed {
+    /// These files, resolved; a shared handle, so a repeat replays them without a copy.
+    Files(Rc<[String]>),
+    /// git could not say.
+    Unknown,
+    /// Not a repository, or no such revision: the restore fails too.
+    Failed,
+}
+
 /// Where a relative name may resolve: the command's directory, else the start and the root.
-fn bases<'b>(cwd: Option<&'b str>, start: &'b str, root: &'b str) -> Vec<&'b str> {
+fn bases<'b>(cwd: Option<&'b str>, start: &'b str, root: &'b str) -> [Option<&'b str>; 2] {
     match cwd {
-        Some(dir) => vec![dir],
-        None => vec![start, root],
+        Some(dir) => [Some(dir), None],
+        None => [Some(start), Some(root)],
     }
 }
 
@@ -208,7 +223,10 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let style = self.cx.at.style;
         // A delete takes the file, or with -r a whole directory and the protected files in it.
         for d in command_deletes(c, self.cx) {
-            for base in bases(d.cwd.as_deref(), start, &ws.root) {
+            for base in bases(d.cwd.as_deref(), start, &ws.root)
+                .into_iter()
+                .flatten()
+            {
                 let Some(abs) = self.word_abs(&d.word, Some(base)) else {
                     continue;
                 };
@@ -248,7 +266,10 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             .collect();
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(p.cwd.as_deref(), start, &ws.root) {
+        for base in bases(p.cwd.as_deref(), start, &ws.root)
+            .into_iter()
+            .flatten()
+        {
             for v in &named {
                 if let Some(abs) = resolve_path(self.cx, *v, Some(base)) {
                     self.check(&abs, false, List::Written)?;
@@ -285,7 +306,10 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         });
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(t.cwd.as_deref(), start, &ws.root) {
+        for base in bases(t.cwd.as_deref(), start, &ws.root)
+            .into_iter()
+            .flatten()
+        {
             if let Some(restore) = restore
                 && pathspec_pattern(t.word.raw())
             {
@@ -341,6 +365,38 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         base: &str,
         fallback: bool,
     ) -> Result<(), GlobError> {
+        let key = (
+            base.to_owned(),
+            restore.source.to_owned(),
+            restore.pathspec.to_owned(),
+        );
+        let listed = if let Some(listed) = self.listed.get(&key) {
+            listed.clone() // an `Rc` handle, or a unit variant
+        } else {
+            let listed = self.list(restore, base);
+            self.listed.insert(key, listed.clone()); // an `Rc` handle, or a unit variant
+            listed
+        };
+        match listed {
+            Listed::Files(files) => {
+                for f in files.iter() {
+                    self.check(f, false, List::Written)?;
+                }
+                Ok(())
+            }
+            Listed::Unknown => {
+                let ws = self.ws;
+                if fallback {
+                    self.check(&ws.root, true, List::Written)?;
+                }
+                Ok(())
+            }
+            Listed::Failed => Ok(()),
+        }
+    }
+
+    /// Asks git, in `base`, which files `restore` would change.
+    fn list(&self, restore: Restore<'_>, base: &str) -> Listed {
         let process = self.call.ports.process();
         let dir = Path::new(base);
         let top = git::short(process, dir, &["rev-parse", "--show-toplevel"]);
@@ -357,24 +413,16 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         match (top, diff) {
             (Short::Ran(top), Short::Ran(names)) => {
                 let top = temper_domain::js_trim(&top);
-                for f in names.split('\0').filter(|f| !f.is_empty()) {
-                    self.check(
-                        &paths::resolve(self.cx.at.style, top, f),
-                        false,
-                        List::Written,
-                    )?;
-                }
-                Ok(())
+                let style = self.cx.at.style;
+                let files = names
+                    .split('\0')
+                    .filter(|f| !f.is_empty())
+                    .map(|f| paths::resolve(style, top, f))
+                    .collect();
+                Listed::Files(files)
             }
-            (Short::Unknown, _) | (_, Short::Unknown) => {
-                let ws = self.ws;
-                if fallback {
-                    self.check(&ws.root, true, List::Written)?;
-                }
-                Ok(())
-            }
-            // Not a repository, or no such revision: the restore fails too.
-            (Short::Failed, _) | (_, Short::Failed) => Ok(()),
+            (Short::Unknown, _) | (_, Short::Unknown) => Listed::Unknown,
+            (Short::Failed, _) | (_, Short::Failed) => Listed::Failed,
         }
     }
 

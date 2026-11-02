@@ -9,8 +9,12 @@
 //! Node's path algebra, and is crate-private (port plan OC-1 B, wi-30e6a5).
 //!
 //! Each scan reads its input forward once per nesting level the walker follows (at most
-//! [`walk::MAX_DEPTH`] deep), so a command's cost is linear in its length at each level; the
-//! variables and directories a subshell restores are journaled, not copied.
+//! [`walk::MAX_DEPTH`] deep). On top of that, each value or directory the line builds costs
+//! its length once: an assignment copies its value and a `cd` its directory, so `a=$a/b` or
+//! `cd a` repeated n times costs O(n^2) bytes copied, as in 1.x, though no step re-reads a
+//! path. The variables a subshell restores are journaled once per name per scope, and its
+//! directories by stack length, not copied; each string is held to V8's longest (see
+//! [`walk::TooLong`]).
 
 mod deletes;
 mod git;

@@ -9,11 +9,11 @@ mod long_inputs;
 
 use temper_domain::PathStyle;
 
-use super::words::word_path;
+use super::words::{Dir, word_path};
 use super::{
     Command, CopyDest, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
     command_writes, landing, parse_commands, patch_command, patch_files, pathspec_pattern,
-    resolve_path,
+    resolve_path, walk,
 };
 use crate::paths::PathEnv;
 
@@ -302,6 +302,63 @@ fn a_cd_of_one_segment_lands_where_the_full_resolve_does() {
     assert_eq!(win("cd a; cd ..; cd ..; cd b; > o"), one(r"C:\b\o"));
     assert_eq!(win("cd a; cd b; > o"), one(r"C:\r\a\b\o"));
     assert_eq!(win("cd D:; cd x; > o"), one(r"D:\x\o"));
+}
+
+/// Not in 1.x's tests: `walk::cd_step` reads any relative value from a resolved directory, by
+/// names and `..`s, and lands where the full resolve does; an absolute or drive value is left
+/// to the full resolve (#201 F2: a `cd a/b` re-normalised the whole directory).
+#[test]
+fn a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands() {
+    let windows = PathCx {
+        at: PathEnv {
+            style: PathStyle::Windows,
+            cwd: r"C:\work",
+        },
+        os_tmp: r"C:\Temp",
+    };
+    let cases: [(PathCx<'_>, &[&str], &[&str]); 2] = [
+        (
+            cx(),
+            &["/r/s", "/"],
+            &[
+                "a/b", "./a", "a/../b", "../../x", "a//b/", "./", "../..", "a/./b/.", "b c/d",
+                "a\\b", "...", "..a/..",
+            ],
+        ),
+        (
+            windows,
+            &[r"C:\r\s", r"C:\", r"\\h\s\x"],
+            &[
+                r"a\b",
+                "a/b",
+                r"a/b\..\c",
+                r"..\..\..\x",
+                r".\a",
+                r"a\\b\",
+                "...",
+                ".",
+                "..",
+            ],
+        ),
+    ];
+    for (cx, bases, values) in cases {
+        let style = cx.at.style;
+        for base in bases {
+            for value in values {
+                let stepped = walk::cd_step(style, &Dir::from(*base), value);
+                let full = resolve_path(cx, Some(value), Some(base));
+                assert_eq!(stepped.as_deref(), full.as_deref(), "{base:?} + {value:?}");
+            }
+        }
+    }
+    let base = Dir::from("/r");
+    for value in ["/x", ""] {
+        assert_eq!(walk::cd_step(PathStyle::Posix, &base, value), None);
+    }
+    let base = Dir::from(r"C:\r");
+    for value in [r"\x", "/c/x", "D:x", r"D:\x"] {
+        assert_eq!(walk::cd_step(PathStyle::Windows, &base, value), None);
+    }
 }
 
 fn opts_home(home: &str) -> ParseOpts<'_> {
@@ -1005,7 +1062,7 @@ fn bash_drops_a_backslash_before_any_char_outside_quotes() {
         .and_then(|c| c.stdin.clone());
     assert_eq!(
         stdin,
-        Some(super::walk::Stdin::Heredoc {
+        Some(walk::Stdin::Heredoc {
             body: Some(std::rc::Rc::from("$x\n")),
             literal: true
         })

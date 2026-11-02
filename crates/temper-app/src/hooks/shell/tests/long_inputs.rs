@@ -42,17 +42,24 @@ fn decide(cmd: &str) -> Decision {
 
 /// `shape` `n` times, then `tail`, reads as `(commands, writes, first)`.
 fn expect(shape: &str, n: usize, tail: &str, want: (usize, usize, Option<&str>)) {
+    expect_in(("", tail), shape, n, want);
+}
+
+/// `around.0`, then `shape` `n` times, then `around.1`, reads as `(commands, writes, first)`.
+fn expect_in(around: (&str, &str), shape: &str, n: usize, want: (usize, usize, Option<&str>)) {
     let (commands, writes, first) = want;
-    let got = decide(&[shape.repeat(n).as_str(), tail].concat());
+    let (head, tail) = around;
+    let got = decide(&[head, shape.repeat(n).as_str(), tail].concat());
     let want = Decision {
         commands,
         writes,
         first: first.map(str::to_owned),
         deletes: 0,
     };
-    assert_eq!(got, want, "{shape:?} x {n} then {tail:?}");
+    assert_eq!(got, want, "{head:?}, {shape:?} x {n}, {tail:?}");
 }
 
+const N16: usize = 1 << 16;
 const O: Option<&str> = Some("/r/o");
 
 #[test]
@@ -124,6 +131,19 @@ fn variables_and_git_paths_repeated_read_as_1x_reads_them() {
     expect("popd; ", N17, "> o", (1, 1, None));
 }
 
+/// A scope keeps one old value per name, so a value grown inside `(`, `$(` or `bash -c` costs
+/// its final length, not the sum of every earlier one (#201 F1: 4,197 MB at 2^16 before).
+#[test]
+fn a_variable_grown_inside_a_scope_reads_as_1x_reads_it() {
+    let grow = "a=$a/b; ";
+    let deep = ["/r/x", &"/b".repeat(N16)].concat();
+    expect_in(("( a=x; ", ") > o"), grow, N16, (1, 1, O));
+    expect_in(("echo $( a=x; ", ") > o"), grow, N16, (1, 1, O));
+    expect_in(("bash -c 'a=x; ", "' > o"), grow, N16, (1, 1, O));
+    expect_in(("( a=x; ", "echo > $a)"), grow, N16, (1, 1, Some(&deep)));
+    expect_in(("( a=x; ", ") ; echo > $a"), grow, N16, (1, 1, None));
+}
+
 #[test]
 fn long_rm_operand_lists_are_each_a_delete() {
     let got = decide(&"rm -rf a ".repeat(N17));
@@ -157,6 +177,43 @@ fn a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws() {
     );
 }
 
+/// Each `tail`, after `$X` is set to 2^27 chars, stops the reader with `TooLong`.
+fn too_long_after_x27(tails: &[&str]) {
+    let x27 = ["X=a; ", &"X=$X$X; ".repeat(27)].concat();
+    for tail in tails {
+        let opts = ParseOpts {
+            cwd: Some("/r"),
+            ..super::opts()
+        };
+        let got = parse_commands(&[x27.as_str(), tail].concat(), opts).map(|c| c.len());
+        assert_eq!(got, Err(TooLong), "{tail}");
+    }
+}
+
+/// A directory past V8's longest string stops the reader too, where 1.x's `path.resolve`
+/// throws (#201 F3). `$X` is 2^27 chars; four or five of them pass it.
+#[test]
+fn a_directory_past_v8s_longest_string_stops_the_reader_as_1x_throws() {
+    too_long_after_x27(&[
+        "cd $X; cd $X; cd $X; cd $X; cd $X; > clippy.toml",
+        "pushd $X; pushd $X; pushd $X; pushd $X; pushd $X; > clippy.toml",
+        "(cd $X; cd $X; cd $X; cd $X; cd $X); > clippy.toml",
+        "cd $X; cd $X; cd $X; sudo -C $X ls; > clippy.toml",
+        "cd $X; cd $X; cd $X; env -C $X ls; > clippy.toml",
+    ]);
+}
+
+/// So does an inner script joined from words, where 1.x's `join(' ')` throws (#201 F3).
+#[test]
+fn a_joined_inner_script_past_v8s_longest_string_stops_the_reader_as_1x_throws() {
+    too_long_after_x27(&[
+        "eval $X $X $X $X $X; > clippy.toml",
+        "watch $X $X $X $X $X; > clippy.toml",
+        "env -S $X $X $X $X $X; > clippy.toml",
+        "pwsh -c $X $X $X $X $X; > clippy.toml",
+    ]);
+}
+
 /// The directory grows with each `cd`, so these cost the directory's length per `cd`; 1.x
 /// takes 46 s to 66 s on 2^15 of them.
 #[test]
@@ -165,4 +222,14 @@ fn cd_and_pushd_repeated_land_the_write_under_every_directory() {
     expect("cd a; ", N15, "cp a o", (1, 1, Some(&deep)));
     expect("cd a && ", N15, "> o", (1, 1, Some(&deep)));
     expect("pushd a; ", N15, "> o", (1, 1, Some(&deep)));
+}
+
+/// A `cd` of several names, or with `.` in it, steps from the directory too (#201 F2: 17.9 s
+/// for `cd a/b; ` x 2^15 before; 1.x takes 99 s and 46 s on these).
+#[test]
+fn a_cd_of_several_names_repeated_lands_the_write_under_every_one() {
+    let ab = ["/r", &"/a/b".repeat(N15), "/o"].concat();
+    let a = ["/r", &"/a".repeat(N15), "/o"].concat();
+    expect("cd a/b; ", N15, "> o", (1, 1, Some(&ab)));
+    expect("cd ./a; ", N15, "> o", (1, 1, Some(&a)));
 }
