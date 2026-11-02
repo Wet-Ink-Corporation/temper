@@ -2,8 +2,12 @@
 //! UTF-16 length limits, and the translation of 1.x regex sources to `regex` syntax.
 
 mod translate;
+mod value;
 
 pub(crate) use translate::{JsFlags, UnsupportedJs, translate};
+pub(crate) use value::{
+    Object, Value, entries, integer_from_radix, js_json, js_string, number_from_text, truthy,
+};
 
 /// JS `\s` (the spec's `WhiteSpace` and `LineTerminator`) as the body of a `regex` class.
 const JS_SPACE_SET: &str = r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";

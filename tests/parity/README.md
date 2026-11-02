@@ -15,7 +15,7 @@ The 2.0 port (`docs/plans/temper-2-rust-port.md` §2.2 item 2) holds the Rust en
 | `harness.test.mjs` | Tests of `lib/` and of `doc_examples.py --extract`, with stub engines; no binary needed |
 | `scan.test.mjs` | The `temper scan` parity cases S1 to S14; needs `TEMPER_BIN` |
 | `corpus.mjs` | The scanner corpus driver (a script, not a node:test file) |
-| `test-map.json`, `check_test_map.py` | Every `tests/scan.test.mjs` test mapped to its Rust tests (Phase 8 adds the other engine tests) |
+| `test-map.json`, `check_test_map.py` | 1.x engine tests mapped to their Rust tests, one source per 1.x test file: all of `tests/scan.test.mjs`, and the ported part of `tests/toml.test.mjs` and `tests/hooks.test.mjs`, whose other tests a `pending` note assigns to later phases (Phase 8 maps every engine test) |
 
 ## Running it
 
