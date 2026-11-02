@@ -4,8 +4,9 @@
 //! It depends only on `temper-domain`; `temper-host` implements the ports. So far it has
 //! `temper scan --all` and `temper scan FILES..` ([`Engine::scan`], port Phase 1d.2), and the
 //! `post-tool` and `user-prompt` hooks ([`Engine::hook`], port Phase 2b) with their skill
-//! markers and telemetry, over the [`Files`], [`ProcessRunner`] and [`Clock`] ports, with
-//! 1.x's project discovery (the git top level first, the state dir, the config) and path rules.
+//! markers and telemetry, and the `pre-edit` hook (port Phase 2c) with the manifests' workspace
+//! roots, over the [`Files`], [`ProcessRunner`] and [`Clock`] ports, with 1.x's project
+//! discovery (the git top level first, the state dir, the config) and path rules.
 
 mod engine;
 #[cfg(test)]

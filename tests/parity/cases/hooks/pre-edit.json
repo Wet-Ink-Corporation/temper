@@ -1,0 +1,518 @@
+[
+  {
+    "name": "new member crate without [lints] workspace = true is denied (MOD-09)",
+    "fixture": "ledger",
+    "event": "pre-edit",
+    "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-extra/Cargo.toml\",\"content\":\"[package]\\nname = \\\"ledger-extra\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+  },
+  {
+    "name": "new member crate with lint inheritance asks as a crate boundary, and logs the ask",
+    "fixture": "ledger",
+    "event": "pre-edit",
+    "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-extra/Cargo.toml\",\"content\":\"[package]\\nname = \\\"ledger-extra\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[lints]\\nworkspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+  },
+  {
+    "name": "an excluded crate is not a member, by name or by path components",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/scratch/Cargo.toml\",\"content\":\"[package]\\nname = \\\"scratch\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/tools/gen/Cargo.toml\",\"content\":\"[package]\\nname = \\\"gen\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a member gaining [lints] workspace = true passes; removing or moving it is denied",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/legacy/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[lints]\\nworkspace = true\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/legacy/Cargo.toml\",\"old_string\":\"[package]\\n\",\"new_string\":\"lints.workspace = true\\n\\n[package]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[lints]\\nworkspace = true\\n\",\"new_string\":\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"content\":\"[package]\\nname = \\\"ledger-domain\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\nlints.workspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "ratchet: a legacy member without inheritance or with a profile only advises",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/legacy/Cargo.toml\",\"old_string\":\"description = \\\"Pure account rules\\\"\",\"new_string\":\"description = \\\"Legacy rules\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/profiled/Cargo.toml\",\"old_string\":\"description = \\\"Pure account rules\\\"\",\"new_string\":\"description = \\\"Profiled\\\"\"}}"
+      }
+    ]
+  },
+  {
+    "name": "manifests.ownLints: a listed member asks for its own [lints], else is denied; an unlisted one is denied",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/foo-sys/Cargo.toml\",\"content\":\"[package]\\nname = \\\"foo-sys\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[lints.rust]\\nunsafe_code = \\\"deny\\\"\\n\\n[lints.clippy]\\nundocumented_unsafe_blocks = \\\"deny\\\"\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/foo-sys/Cargo.toml\",\"content\":\"[package]\\nname = \\\"foo-sys\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/bar-sys/Cargo.toml\",\"content\":\"[package]\\nname = \\\"bar-sys\\\"\\ndescription = \\\"Pure account rules\\\"\\nedition.workspace = true\\nversion.workspace = true\\nrust-version.workspace = true\\npublish.workspace = true\\n\\n[lints.rust]\\nunsafe_code = \\\"deny\\\"\\n\\n[lints.clippy]\\nundocumented_unsafe_blocks = \\\"deny\\\"\\n\\n[dependencies]\\nthiserror = { workspace = true }\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a member that overrides lints is denied; a root lint change asks (H-05)",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[lints]\\nworkspace = true\\n\",\"new_string\":\"[lints.clippy]\\nunwrap_used = \\\"allow\\\"\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"unwrap_used = \\\"deny\\\"\",\"new_string\":\"unwrap_used = \\\"warn\\\"\"}}"
+      }
+    ]
+  },
+  {
+    "name": "[profile] in a member manifest is denied (PERF-09); in the root it asks",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[profile.release]\\nopt-level = 3\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"lto = \\\"thin\\\"\",\"new_string\":\"lto = \\\"fat\\\"\"}}"
+      }
+    ]
+  },
+  {
+    "name": "test, doctest, harness and autotests switches ask (H-12); a bench harness does not",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[lib]\\ntest = false\\ndoctest = false\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[[test]]\\nname = \\\"it\\\"\\nharness = false\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[[bench]]\\nname = \\\"decide\\\"\\nharness = false\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"publish.workspace = true\\n\",\"new_string\":\"publish.workspace = true\\nautotests = false\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "[patch.crates-io] asks (H-16)",
+    "fixture": "ledger",
+    "event": "pre-edit",
+    "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"[workspace.lints.rust]\",\"new_string\":\"[patch.crates-io]\\nthiserror = { git = \\\"https://github.com/dtolnay/thiserror\\\" }\\n\\n[workspace.lints.rust]\"}}"
+  },
+  {
+    "name": "a rust-version bump and default features ask (H-16); a comment edit does not",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"rust-version = \\\"1.96\\\"\",\"new_string\":\"rust-version = \\\"1.97\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"# Workspace manifest (from the temper template).\",\"new_string\":\"# Workspace manifest.\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[features]\\ndefault = [\\\"std\\\"]\\nstd = []\\n\\n[dependencies]\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "non-caret requirements get an ARC-12 advisory",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"=2.0.12\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"~2.0\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\">=2\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\">=2, <3\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"*\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"2.0.12\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"^2\\\"\"}}"
+      }
+    ]
+  },
+  {
+    "name": "Cargo.lock is never edited by hand (PROC-13), with a deny-lockfile row",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.lock\",\"old_string\":\"version = 4\",\"new_string\":\"version = 3\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.lock\",\"content\":\"version = 4\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"MultiEdit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.lock\",\"edits\":[{\"old_string\":\"version = 4\",\"new_string\":\"version = 3\"}]}}"
+      }
+    ]
+  },
+  {
+    "name": "CRLF manifests are handled",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-win/Cargo.toml\",\"content\":\"[package]\\r\\nname = \\\"ledger-win\\\"\\r\\ndescription = \\\"Pure account rules\\\"\\r\\nedition.workspace = true\\r\\nversion.workspace = true\\r\\nrust-version.workspace = true\\r\\npublish.workspace = true\\r\\n\\r\\n[dependencies]\\r\\nthiserror = { workspace = true }\\r\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-win/Cargo.toml\",\"content\":\"[package]\\r\\nname = \\\"ledger-win\\\"\\r\\ndescription = \\\"Pure account rules\\\"\\r\\nedition.workspace = true\\r\\nversion.workspace = true\\r\\nrust-version.workspace = true\\r\\npublish.workspace = true\\r\\n\\r\\n[lints]\\r\\nworkspace = true\\r\\n\\r\\n[dependencies]\\r\\nthiserror = { workspace = true }\\r\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "new dependencies: a [[bench]] after [dev-dependencies] is not one; dotted keys are",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"thiserror = { workspace = true }\\n\",\"new_string\":\"thiserror = { workspace = true }\\n\\n[dev-dependencies]\\nproptest = { workspace = true }\\n\\n[[bench]]\\nname = \\\"decide\\\"\\nharness = false\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"thiserror = { workspace = true }\\n\",\"new_string\":\"thiserror = { workspace = true }\\nnix.workspace = true\\nrand.version = \\\"0.8\\\"\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a dependency major-version bump asks (H-16); a minor bump does not",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"3\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = \\\"2.0.12\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/Cargo.toml\",\"old_string\":\"thiserror = \\\"2\\\"\",\"new_string\":\"thiserror = { version = \\\"2.1\\\", default-features = false }\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a mocking crate in [dependencies] is denied (TST-09); in [dev-dependencies] it asks",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"thiserror = { workspace = true }\\n\",\"new_string\":\"thiserror = { workspace = true }\\nmockall = \\\"0.13\\\"\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"thiserror = { workspace = true }\\n\",\"new_string\":\"thiserror = { workspace = true }\\n\\n[dev-dependencies]\\nmockall = \\\"0.13\\\"\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "[lib] bench = false passes; package.build and autobins ask",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"[dependencies]\\n\",\"new_string\":\"[lib]\\nbench = false\\n\\n[dependencies]\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"publish.workspace = true\\n\",\"new_string\":\"publish.workspace = true\\nbuild = false\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/Cargo.toml\",\"old_string\":\"publish.workspace = true\\n\",\"new_string\":\"publish.workspace = true\\nautobins = false\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "#[ignore] added to an existing test asks (H-12); a new ignored test and the Miri form do not",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"    #[test]\\n    fn is_one\",\"new_string\":\"    #[test]\\n    #[ignore = \\\"flaky on CI\\\"]\\n    fn is_one\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"    #[test]\\n    fn is_one\",\"new_string\":\"    #[test]\\n    #[cfg_attr(miri, ignore = \\\"needs a real clock\\\")]\\n    fn is_one\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"        assert_eq!(one(), 1);\\n    }\\n\",\"new_string\":\"        assert_eq!(one(), 1);\\n    }\\n\\n    #[test]\\n    #[ignore = \\\"needs a network\\\"]\\n    fn fetches() {\\n        assert_eq!(one(), 1);\\n    }\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "new escape hatches in a Rust edit are denied with a deny-scan row; a clean edit passes",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"    1\\n}\",\"new_string\":\"    \\\"1\\\".parse().unwrap()\\n}\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/extra.rs\",\"content\":\"//! Extra.\\n\\npub fn f() {\\n    dbg!(1);\\n    unsafe { core::hint::unreachable_unchecked() }\\n}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"/// One.\",\"new_string\":\"/// The number one.\"}}"
+      }
+    ]
+  },
+  {
+    "name": "removing a test and an #[expect] ask; a clone advises; a new mod.rs is denied (ARC-06)",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"\\n    #[test]\\n    fn is_one() {\\n        assert_eq!(one(), 1);\\n    }\\n\",\"new_string\":\"\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"#[must_use]\\npub fn one\",\"new_string\":\"#[must_use]\\n#[expect(clippy::missing_const_for_fn, reason = \\\"kept simple\\\")]\\npub fn one\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"/// One.\",\"new_string\":\"/// One.\\npub fn two(v: Vec<u8>) -> Vec<u8> {\\n    v.clone()\\n}\\n\\n/// One again.\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/inner/mod.rs\",\"content\":\"//! Inner.\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "protected configuration asks; other files pass",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/.claude/temper.json\",\"content\":\"{}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/clippy.toml\",\"content\":\"msrv = \\\"1.96\\\"\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/NOTES.md\",\"content\":\"x\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "edits under .git/ and the state dir are denied without a row",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/target/temper/gate/x.json\",\"content\":\"{}\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/.git/config\",\"content\":\"x\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/target/temperx/a.json\",\"content\":\"{}\"}}"
+      }
+    ]
+  },
+  {
+    "name": "MultiEdit applies every edit in order before the scan; a missing old_string passes",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"MultiEdit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"edits\":[{\"old_string\":\"/// One.\",\"new_string\":\"/// The number one.\"},{\"old_string\":\"    1\\n\",\"new_string\":\"    \\\"1\\\".parse().unwrap()\\n\"}]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"MultiEdit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"edits\":[{\"old_string\":\"no such text\",\"new_string\":\"dbg!(1);\"}]}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"old_string\":\"1\",\"new_string\":\"2\",\"replace_all\":true}}"
+      }
+    ]
+  },
+  {
+    "name": "a file outside the project, a missing or falsy file_path, and odd tool_input pass",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":0}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":\"<ROOT>/crates/ledger-domain/src/lib.rs\"}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"/elsewhere/x.rs\",\"content\":\"fn f() { dbg!(1); }\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a file_path that is not a string, null input and non-iterable edits fail the handler",
+    "fixture": "ledger",
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"tool_input\":{\"file_path\":5}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "null"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"MultiEdit\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"edits\":5}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"hooks-test\",\"agent_type\":\"temper:rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/ledger-domain/src/lib.rs\",\"content\":5}}"
+      }
+    ],
+    "maskFailure": 4
+  },
+  {
+    "name": "skill gate: a Rust or manifest edit is denied until the skill is loaded, with a deny-skill-gate row",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\npub fn two() {}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Edit\",\"cwd\":\"<ROOT>\",\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/Cargo.toml\",\"old_string\":\"name = \\\"core\\\"\",\"new_string\":\"name = \\\"core2\\\"\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"<ROOT>/NOTES.md\",\"content\":\"x\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"s1\",\"tool_input\":{\"skill\":\"temper:rust-craft\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s1\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\npub fn two() {}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s1\",\"agent_id\":\"gp1\",\"agent_type\":\"general-purpose\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "skill gate: the preloaded agents pass, plain and plugin-prefixed",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s2\",\"agent_id\":\"a1\",\"agent_type\":\"rust-implementer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s2\",\"agent_id\":\"a1\",\"agent_type\":\"temper:rust-reviewer\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s2\",\"agent_id\":\"a1\",\"agent_type\":\"rust-architect\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s2\",\"agent_id\":\"a1\",\"agent_type\":\"temper:rust-architect\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s2\",\"agent_id\":\"a1\",\"agent_type\":\"rust-implementer-x\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "skill gate: skillGate false in temper.json turns it off",
+    "fixture": "no-skill-gate",
+    "pluginData": true,
+    "event": "pre-edit",
+    "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"session_id\":\"s3\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\"}}"
+  },
+  {
+    "name": "pre-edit outside any Rust project passes",
+    "fixture": "empty",
+    "event": "pre-edit",
+    "stdin": "{\"tool_name\":\"Write\",\"cwd\":\"<ROOT>\",\"tool_input\":{\"file_path\":\"<ROOT>/src/lib.rs\",\"content\":\"fn f() { dbg!(1); }\"}}"
+  }
+]

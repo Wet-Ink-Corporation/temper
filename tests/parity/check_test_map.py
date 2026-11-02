@@ -7,9 +7,11 @@ ported, retired or replaced"; 1e-9, wi-a9dd30), one entry per 1.x test file unde
     python3 tests/parity/check_test_map.py --self-test
 
 For each source, the 1.x names come from `node --test --test-reporter=tap <source>`, the Rust
-names from `cargo test -p <crate> --all-features --locked -- --list`. Fails, naming each problem,
-when a 1.x test has no entry or two, an entry names no 1.x test, a mapped Rust path is not a test,
-or an entry with no Rust path (or a `retired` note) cites no D16 item. A source whose port is not
+names from `cargo test -p <crate> --all-features --locked -- --list` for each entry's own `crate`,
+since one 1.x file's tests can land in several crates (2a review, F9). Fails, naming each problem,
+when a 1.x test has no entry or two, an entry names no 1.x test, an entry with Rust paths names no
+known crate, a mapped Rust path is not a test of its crate, or an entry with no Rust path (or a
+`retired` note) cites no D16 item. A source whose port is not
 finished carries a `pending` note naming the phases that port the rest; its unmapped tests are
 counted, not failed, and every source without one is checked in full. Exit 1 on a problem, 2 when
 node or cargo cannot be run: never a skip.
@@ -25,6 +27,8 @@ MAP = Path(__file__).resolve().parent / 'test-map.json'
 D16 = re.compile(r'D16\([a-z]\)')
 TAP_TOP = re.compile(r'^(?:not )?ok \d+ - (.*?)(?: # (?:SKIP|TODO)\b.*)?$')
 RUST_TEST = re.compile(r'^(\S+): test$')
+# The crates an entry may name; the listing of any other is never run.
+KNOWN_CRATES = ('temper-domain', 'temper-app', 'temper-host', 'temper-cli')
 
 
 class HarnessError(Exception):
@@ -46,7 +50,7 @@ def rust_names(listing):
 
 
 def check(entries, node, rust, pending=None):
-    """The problems with `entries` against the 1.x names `node` and the Rust paths `rust`.
+    """The problems with `entries` against the 1.x names `node` and `rust`, each crate's Rust paths.
 
     With a `pending` note, a 1.x test that has no entry yet is left to a later phase."""
     problems = []
@@ -67,9 +71,13 @@ def check(entries, node, rust, pending=None):
         if name not in known:
             problems.append(f'entry names no 1.x test: {name!r}')
         paths = e.get('rust', [])
-        for p in paths:
-            if p not in rust:
-                problems.append(f'not a Rust test: {p!r} (for {name!r})')
+        crate = e.get('crate')
+        if paths and crate not in rust:
+            problems.append(f'entry names no known crate: {crate!r} (for {name!r})')
+        else:
+            for p in paths:
+                if p not in rust[crate]:
+                    problems.append(f'not a Rust test of {crate}: {p!r} (for {name!r})')
         retired = e.get('retired')
         if (not paths or retired is not None) and not (isinstance(retired, str) and D16.search(retired)):
             problems.append(f'retired entry cites no D16 item: {name!r}')
@@ -94,22 +102,28 @@ def eq(got, want):
 
 def self_test():
     node = ['a', 'b # c', 'large']
-    rust = {'x::a', 'x::b', 'x::large'}
-    good = [{'node': 'a', 'rust': ['x::a']}, {'node': 'b # c', 'rust': ['x::b']},
-            {'node': 'large', 'rust': ['x::large'], 'retired': 'its timing bound, D16(k)'}]
+    rust = {'k': {'x::a', 'x::large'}, 'j': {'x::b'}}
+    good = [{'node': 'a', 'crate': 'k', 'rust': ['x::a']}, {'node': 'b # c', 'crate': 'j', 'rust': ['x::b']},
+            {'node': 'large', 'crate': 'k', 'rust': ['x::large'], 'retired': 'its timing bound, D16(k)'}]
     eq(check(good, node, rust), [])
     eq(check(good[:2], node, rust), ["unmapped 1.x test: 'large'"])
     eq(check(good + [good[0]], node, rust), ["1.x test mapped twice: 'a'"])
-    eq(check(good + [{'node': 'gone', 'rust': ['x::a']}], node, rust), ["entry names no 1.x test: 'gone'"])
-    missing = [{'node': 'a', 'rust': ['x::nope']}, *good[1:]]
-    eq(check(missing, node, rust), ["not a Rust test: 'x::nope' (for 'a')"])
+    eq(check(good + [{'node': 'gone', 'crate': 'k', 'rust': ['x::a']}], node, rust), ["entry names no 1.x test: 'gone'"])
+    missing = [{'node': 'a', 'crate': 'k', 'rust': ['x::nope']}, *good[1:]]
+    eq(check(missing, node, rust), ["not a Rust test of k: 'x::nope' (for 'a')"])
+    elsewhere = [{'node': 'a', 'crate': 'j', 'rust': ['x::a']}, *good[1:]]
+    eq(check(elsewhere, node, rust), ["not a Rust test of j: 'x::a' (for 'a')"])
+    for crate in [{}, {'crate': 'nope'}]:
+        eq(check([{'node': 'a', 'rust': ['x::a'], **crate}, *good[1:]], node, rust),
+           [f"entry names no known crate: {crate.get('crate')!r} (for 'a')"])
     for retired in [{'node': 'large', 'rust': []}, {'node': 'large', 'rust': [], 'retired': 'moved to CI'},
-                    {'node': 'large', 'rust': ['x::large'], 'retired': 'moved to CI'}]:
+                    {'node': 'large', 'crate': 'k', 'rust': ['x::large'], 'retired': 'moved to CI'}]:
         eq(check(good[:2] + [retired], node, rust), ["retired entry cites no D16 item: 'large'"])
     eq(check(good[:2] + [{'node': 'large', 'retired': 'D16(k)'}], node, rust), [])
     eq(check(good[:2], node, rust, pending='port phase 2c'), [])
     eq(check(good[:2], node, rust, pending=' '), ['a pending note must name the phases that port the rest'])
-    eq(check(good + [{'node': 'gone', 'rust': ['x::a']}], node, rust, pending='2c'), ["entry names no 1.x test: 'gone'"])
+    eq(check(good + [{'node': 'gone', 'crate': 'k', 'rust': ['x::a']}], node, rust, pending='2c'),
+       ["entry names no 1.x test: 'gone'"])
     tap = 'TAP version 13\n# Subtest: a\n    ok 1 - inner\nok 1 - a\nnot ok 2 - b \\# c\nok 3 - large # SKIP slow\n1..3\n'
     eq(node_names(tap), node)
     eq(rust_names('x::a: test\nx::b: test\n\n2 tests, 0 benchmarks\nsrc/lib.rs - f (line 3): test\n'), {'x::a', 'x::b'})
@@ -130,17 +144,19 @@ def main(argv):
         node = node_names(run(['node', '--test', '--test-reporter=tap', src['source']]))
         if not node:
             raise HarnessError(f'no test names in the TAP output of {src["source"]}')
-        crate = src['crate']
-        if crate not in rust_by_crate:
-            listing = run(['cargo', 'test', '-p', crate, '--all-features', '--locked', '-q', '--', '--list'])
-            rust_by_crate[crate] = rust_names(listing)
-        problems = check(src['tests'], node, rust_by_crate[crate], src.get('pending'))
+        crates = sorted({e['crate'] for e in src['tests'] if e.get('crate') in KNOWN_CRATES})
+        for crate in crates:
+            if crate not in rust_by_crate:
+                listing = run(['cargo', 'test', '-p', crate, '--all-features', '--locked', '-q', '--', '--list'])
+                rust_by_crate[crate] = rust_names(listing)
+        problems = check(src['tests'], node, rust_by_crate, src.get('pending'))
         for p in problems:
             print(f'check_test_map: {src["source"]}: {p}', file=sys.stderr)
         failed = failed or bool(problems)
         mapped = len({e.get('node') for e in src['tests']} & set(node))
         rest = f'; {len(node) - mapped} pending ({src["pending"]})' if src.get('pending') else ''
-        print(f'check_test_map: {mapped} of {len(node)} 1.x tests in {src["source"]} mapped to {crate} tests{rest}')
+        print(f'check_test_map: {mapped} of {len(node)} 1.x tests in {src["source"]} mapped to '
+              f'{", ".join(crates) or "no crate"} tests{rest}')
     return 1 if failed else 0
 
 

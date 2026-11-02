@@ -1,5 +1,5 @@
-//! `temper hook <event>`: the protocol, `post-tool` and `user-prompt` against the real file
-//! system and git, and `hooks/hooks.json`.
+//! `temper hook <event>`: the protocol, `post-tool`, `user-prompt` and `pre-edit` against the
+//! real file system and git, and `hooks/hooks.json`.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -220,6 +220,145 @@ fn a_marker_that_cannot_be_written_is_reported_and_exits_0() -> TestResult {
         "{}",
         run.stdout
     );
+    Ok(())
+}
+
+/// Ported from `messages.test.mjs`.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_hook_given_malformed_input_says_nothing_was_checked_and_still_exits_0_with_no_decision()
+-> TestResult {
+    let dir = workspace()?;
+    let off = [("TEMPER_DISABLE", OsStr::new("1"))];
+
+    let malformed = hook_in(dir.path(), "pre-edit", "{\"tool_name\": \"Write\",", &[])?;
+    let empty = hook_in(dir.path(), "pre-edit", "", &[])?;
+    let disabled = hook_in(dir.path(), "pre-edit", "not json", &off)?;
+
+    assert_eq!(
+        (malformed.code, malformed.stdout.as_str()),
+        (
+            Some(0),
+            "{\"systemMessage\":\"temper hook pre-edit: could not parse the hook input as JSON; nothing was checked\"}"
+        ),
+        "the notice and no decision"
+    );
+    assert_eq!(
+        [empty, disabled].map(|r| (r.code, r.stdout)),
+        [(Some(0), String::new()), (Some(0), String::new())],
+        "empty input reads as {{}}, and TEMPER_DISABLE=1 stays silent"
+    );
+    Ok(())
+}
+
+/// The Iron rules' IDs in `skills/rust-craft/SKILL.md`'s table, in order.
+fn iron_rule_ids() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/rust-craft/SKILL.md");
+    Ok(fs::read_to_string(path)?
+        .lines()
+        .filter_map(|line| line.strip_prefix("| H-"))
+        .filter_map(|rest| rest.split_once(' '))
+        .map(|(number, _)| format!("H-{number}"))
+        .collect())
+}
+
+/// Ported from `messages.test.mjs`; the IDs come from the standard itself.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn the_skill_gate_denial_lists_every_iron_rule_h_01_to_h_16() -> TestResult {
+    let dir = workspace()?;
+    write_tree(
+        dir.path(),
+        &[("crates/a/Cargo.toml", "[package]\nname = \"a\"\n")],
+    )?;
+    let plugin = tempfile::tempdir()?;
+    let file = dir
+        .path()
+        .join("crates")
+        .join("a")
+        .join("src")
+        .join("lib.rs");
+    let stdin = format!(
+        r#"{{"tool_name":"Write","session_id":"messages","tool_input":{{"file_path":{},"content":"//! A.\n"}}}}"#,
+        JsValue::String(file.to_string_lossy().into_owned()).to_json()
+    );
+
+    let run = hook_in(dir.path(), "pre-edit", &stdin, &data(plugin.path()))?;
+
+    let out = JsValue::from_json(&run.stdout)?;
+    let specific = out.get("hookSpecificOutput").ok_or(run.stdout.as_str())?;
+    assert_eq!(
+        specific.get("permissionDecision").and_then(JsValue::as_str),
+        Some("deny")
+    );
+    let reason = specific
+        .get("permissionDecisionReason")
+        .and_then(JsValue::as_str)
+        .ok_or("a reason")?;
+    assert!(
+        reason.contains("the rust-craft standard is not loaded"),
+        "{reason}"
+    );
+    let ids = iron_rule_ids()?;
+    assert_eq!(ids.len(), 16, "{ids:?}");
+    let missing: Vec<&String> = ids
+        .iter()
+        .filter(|id| !reason.contains(&format!("{id} ")))
+        .collect();
+    assert!(missing.is_empty(), "{missing:?} in {reason}");
+    for rule in temper_domain::IRON_RULES {
+        assert!(reason.contains(rule), "{rule}");
+    }
+    Ok(())
+}
+
+/// Ported from `hooks.test.mjs`: the project is found from a member's directory without git.
+/// Its root is the workspace (the lockfile row names `Cargo.lock`), and with no git directory
+/// its state dir is `target/temper`.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn the_throwaway_workspace_is_discovered_without_git() -> TestResult {
+    let dir = workspace()?;
+    write_tree(
+        dir.path(),
+        &[
+            ("crates/a/Cargo.toml", "[package]\nname = \"a\"\n"),
+            ("Cargo.lock", "version = 4\n"),
+        ],
+    )?;
+    let lock = dir.path().join("Cargo.lock");
+    let stdin = format!(
+        r#"{{"tool_name":"Write","session_id":"s1","tool_input":{{"file_path":{},"content":"version = 3\n"}}}}"#,
+        JsValue::String(lock.to_string_lossy().into_owned()).to_json()
+    );
+
+    let run = hook_in(
+        &dir.path().join("crates").join("a"),
+        "pre-edit",
+        &stdin,
+        &[],
+    )?;
+
+    let out = JsValue::from_json(&run.stdout)?;
+    assert_eq!(
+        out.get("hookSpecificOutput")
+            .and_then(|o| o.get("permissionDecision"))
+            .and_then(JsValue::as_str),
+        Some("deny"),
+        "{}",
+        run.stdout
+    );
+    let (row, _) = row_without_time(
+        &dir.path()
+            .join("target")
+            .join("temper")
+            .join("telemetry.jsonl"),
+    )?;
+    assert_eq!(
+        row,
+        r#"{"t":"<T>","sid":"s1","agent":"main","event":"deny-lockfile","file":"Cargo.lock"}"#
+    );
+    assert!(!dir.path().join(".git").exists(), "no git");
     Ok(())
 }
 
