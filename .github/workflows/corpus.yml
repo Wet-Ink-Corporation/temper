@@ -5,7 +5,8 @@ name: Scanner corpus
 # a real-world corpus (tests/parity/corpus.mjs): the registry packages of both committed lockfiles,
 # the example workspace, every code block in the rust-craft skill and the generated large file
 # (1e-2, wi-37a444). It also enforces the D16(k) bound: no file takes the Rust engine 10 s or more
-# (1e-5, wi-a24829). Linux, Windows and macOS (1e-4, wi-fc6a1c).
+# (1e-5, wi-a24829). Linux, Windows and macOS (1e-4, wi-fc6a1c). Since Phase 2b it also runs the
+# hook parity cases (tests/parity/hooks.test.mjs), whose three-OS pass graduates a hook (OC-5 A).
 #
 # Advisory, not a required check (wi-68036c): the parity cases also run under the required
 # `Checks` job through tests/ci.sh. Triggers (wi-295cf1): weekly, release branches, by hand, and
@@ -25,6 +26,7 @@ on:
       - '.cargo/**'
       - 'scripts/temper.mjs'
       - 'scripts/lib/**'
+      - 'hooks/hooks.json'
       - 'skills/rust-craft/**'
       - 'templates/example-workspace/**'
       - 'tests/parity/**'
@@ -88,6 +90,10 @@ jobs:
           "$PY" tests/doc_examples.py --extract "$RUNNER_TEMP/doc-blocks"
       - name: Scan parity cases
         run: node --test tests/parity/scan.test.mjs
+      # Runs even when the scan cases fail, so one run gives every result.
+      - name: Hook parity cases
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.engine.outcome == 'success' }}
+        run: node --test tests/parity/hooks.test.mjs
       # Runs even when the parity cases fail, so one run gives both results, but only once its
       # inputs exist.
       - name: Scanner corpus

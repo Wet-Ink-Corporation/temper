@@ -528,6 +528,38 @@
           ]
         }
       ]
+    },
+    {
+      "source": "tests/hooks-registry.test.mjs",
+      "crate": "temper-cli",
+      "pending": "port Phase 4 (\"every registered hook names a handler the CLI knows\": the binary answers the unported events as unported subcommands until they are ported, 2b-1)",
+      "tests": [
+        {
+          "node": "the PreToolUse SubagentHandback hook is registered: cloud subagents deliver their report through it (#97)",
+          "rust": [
+            "hooks::the_pre_tool_use_subagent_handback_hook_is_registered_cloud_subagents_deliver_their_report_through_it"
+          ]
+        },
+        {
+          "node": "SubagentStart and SubagentStop run for every agent type, so telemetry sees types the handlers skip",
+          "rust": [
+            "hooks::subagent_start_and_subagent_stop_run_for_every_agent_type_so_telemetry_sees_types_the_handlers_skip"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/state-retention.test.mjs",
+      "crate": "temper-app",
+      "pending": "port Phase 3 (prune, SessionStart) and Phase 7 (temper stats)",
+      "tests": [
+        {
+          "node": "telemetry: below the cap it appends; at the cap it rotates to telemetry.1.jsonl, keeping one old file",
+          "rust": [
+            "telemetry::tests::telemetry_below_the_cap_appends_and_at_the_cap_rotates_keeping_one_old_file"
+          ]
+        }
+      ]
     }
   ]
 }

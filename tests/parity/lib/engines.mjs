@@ -27,14 +27,17 @@ export function hermeticEnv(env = process.env, platform = process.platform) {
  * Runs `engine` with `args` in `cwd` and returns `{ exit, stdout, stderr, ms }`, the streams as
  * Buffers and `ms` the wall time of the spawn. Every exit code is data. A spawn failure, a timeout,
  * a stream past `maxBuffer` or a death by signal is a HarnessError. `ceiling` sets
- * GIT_CEILING_DIRECTORIES, so git in a temp root never finds a repository above it.
+ * GIT_CEILING_DIRECTORIES, so git in a temp root never finds a repository above it. `input` (a
+ * string or Buffer) is piped to stdin; without it stdin is the null device. `env` is merged over
+ * the hermetic environment and the ceiling.
  */
-export function runEngine(engine, args, cwd, { timeoutMs = 600_000, maxBuffer = 512 << 20, ceiling = null } = {}) {
+export function runEngine(engine, args, cwd, { timeoutMs = 600_000, maxBuffer = 512 << 20, ceiling = null, input = undefined, env: extra = {} } = {}) {
   const env = hermeticEnv();
   if (ceiling) env.GIT_CEILING_DIRECTORIES = ceiling;
+  Object.assign(env, extra);
   const t0 = process.hrtime.bigint();
   const r = spawnSync(engine.cmd, [...engine.pre, ...args], {
-    cwd, env, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, maxBuffer, windowsHide: true,
+    cwd, env, input, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], timeout: timeoutMs, maxBuffer, windowsHide: true,
   });
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   const what = `${engine.name} ${args.join(' ')} (in ${cwd})`;

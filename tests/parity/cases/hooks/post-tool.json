@@ -1,0 +1,183 @@
+[
+  {
+    "name": "Skill temper:rust-craft marks the session and logs skill-loaded",
+    "fixture": "workspace",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}",
+    "stdout": [
+      ""
+    ],
+    "wrote": [
+      "tree/target/",
+      "tree/target/temper/",
+      "tree/target/temper/telemetry.jsonl",
+      "scratch/data/",
+      "scratch/data/sessions/",
+      "scratch/data/sessions/s1/",
+      "scratch/data/sessions/s1/skill-main",
+      "scratch/tmp/"
+    ]
+  },
+  {
+    "name": "Skill rust-craft from a subagent: its agent_id keys the marker, its agent_type is the row's agent",
+    "fixture": "workspace",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"agent_id\": \"a/1 b\", \"agent_type\": \"rust-implementer\", \"tool_input\": {\"skill\": \"rust-craft\"}}"
+  },
+  {
+    "name": "Skill with name instead of skill, and other names that are not the standard",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"n\", \"tool_input\": {\"name\": \"other:rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"x1\", \"tool_input\": {\"skill\": \"rust-craft-x\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"x2\", \"tool_input\": {\"skill\": \"temper:rust-craft \"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"x3\", \"tool_input\": {\"skill\": \"\", \"name\": \"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"skill\", \"session_id\": \"x4\", \"tool_input\": {\"skill\": \"rust-craft\"}}"
+      }
+    ]
+  },
+  {
+    "name": "Read of rust-craft/SKILL.md, with either separator, loads it; other reads do not",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Read\", \"session_id\": \"r1\", \"tool_input\": {\"file_path\": \"/p/skills/rust-craft/SKILL.md\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Read\", \"session_id\": \"r2\", \"tool_input\": {\"file_path\": \"C:\\\\p\\\\skills\\\\rust-craft\\\\SKILL.md\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Read\", \"session_id\": \"x1\", \"tool_input\": {\"file_path\": \"/p/rust-craft/skill.md\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Read\", \"session_id\": \"x2\", \"tool_input\": {\"file_path\": \"rust-craft/SKILL.md\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Write\", \"session_id\": \"x3\", \"tool_input\": {\"file_path\": \"/p/rust-craft/SKILL.md\"}}"
+      }
+    ]
+  },
+  {
+    "name": "odd session ids, agent ids and agent types: coerced and sanitised as 1.x does",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":5,\"agent_id\":0,\"agent_type\":null,\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"\\ud83d\\ude00 é\",\"agent_id\":[1,null,2],\"agent_type\":{\"b\":1,\"2\":[true]},\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"\",\"agent_id\":1.5e300,\"agent_type\":\"\",\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":null,\"agent_id\":true,\"agent_type\":7,\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      }
+    ]
+  },
+  {
+    "name": "outside a Rust project the marker is written and no row",
+    "fixture": "empty",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}",
+    "wrote": [
+      "scratch/data/",
+      "scratch/data/sessions/",
+      "scratch/data/sessions/s1/",
+      "scratch/data/sessions/s1/skill-main",
+      "scratch/tmp/"
+    ]
+  },
+  {
+    "name": "in a git repository the row goes to .git/temper, from a subdirectory too",
+    "fixture": "workspace",
+    "git": true,
+    "cwd": "crates/core",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  },
+  {
+    "name": "without CLAUDE_PLUGIN_DATA the marker is under the temp dir",
+    "fixture": "workspace",
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  },
+  {
+    "name": "CLAUDE_CODE_REMOTE_SESSION_ID adds ccr to the row",
+    "fixture": "workspace",
+    "pluginData": true,
+    "env": {
+      "CLAUDE_CODE_REMOTE_SESSION_ID": "cse_1"
+    },
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  },
+  {
+    "name": "the input's cwd picks the workspace; a missing one falls back to the process cwd",
+    "fixture": "nested",
+    "cwd": "notes",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"a\", \"cwd\": \"<ROOT>/ws\", \"tool_input\": {\"skill\": \"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"b\", \"cwd\": \"<ROOT>/nope\", \"tool_input\": {\"skill\": \"rust-craft\"}}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"c\",\"cwd\":5,\"tool_input\":{\"skill\":\"rust-craft\"}}"
+      }
+    ]
+  },
+  {
+    "name": "telemetry one byte under the cap appends",
+    "fixture": "below-cap",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  },
+  {
+    "name": "telemetry at the cap rotates, replacing the old file",
+    "fixture": "at-cap",
+    "pluginData": true,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  }
+]

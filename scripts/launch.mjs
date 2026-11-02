@@ -21,7 +21,8 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /** The subcommands the Rust engine handles, keyed as `hook <event>` or the first argument. */
-export const RUST_READY = new Set(['--version']);
+// Graduated: --version (Phase 0b); hook post-tool and hook user-prompt (Phase 2b, port-phase-2 2-20).
+export const RUST_READY = new Set(['--version', 'hook post-tool', 'hook user-prompt']);
 
 /** Subcommands that exist only in 2.0, so they go to the engine without TEMPER_ENGINE (D16(g)). */
 const NEW_IN_2 = new Set(['--version']);

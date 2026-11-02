@@ -1,0 +1,185 @@
+[
+  {
+    "name": "an unknown event is reported on stderr and exits 0",
+    "fixture": "workspace",
+    "event": "bogus",
+    "stdin": "{}",
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "a missing event reads as undefined",
+    "fixture": "workspace",
+    "event": null,
+    "stdin": "{}",
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "an unknown event with input that is not JSON reads no stdin",
+    "fixture": "workspace",
+    "event": "bogus",
+    "stdin": "not json",
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "input that is not JSON gives the notice",
+    "fixture": "workspace",
+    "event": "user-prompt",
+    "stdin": "{\"tool_name\": \"Write\",",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook user-prompt: could not parse the hook input as JSON; nothing was checked\"}"
+    ]
+  },
+  {
+    "name": "whitespace-only input is not JSON",
+    "fixture": "workspace",
+    "event": "post-tool",
+    "stdin": " \n\t",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook post-tool: could not parse the hook input as JSON; nothing was checked\"}"
+    ]
+  },
+  {
+    "name": "a byte order mark before the JSON is not JSON",
+    "fixture": "workspace",
+    "event": "user-prompt",
+    "stdin": "﻿{}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook user-prompt: could not parse the hook input as JSON; nothing was checked\"}"
+    ]
+  },
+  {
+    "name": "TEMPER_DISABLE=1 silences the notice",
+    "fixture": "workspace",
+    "event": "user-prompt",
+    "stdin": "not json",
+    "env": {
+      "TEMPER_DISABLE": "1"
+    },
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "TEMPER_DISABLE=1 with valid input does nothing and writes nothing",
+    "fixture": "workspace",
+    "pluginData": true,
+    "env": {
+      "TEMPER_DISABLE": "1"
+    },
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      }
+    ],
+    "stdout": [
+      "",
+      ""
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
+    ]
+  },
+  {
+    "name": "null input fails each handler with V8's message",
+    "fixture": "workspace",
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "null"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "null"
+      }
+    ],
+    "stdout": [
+      "{\"systemMessage\":\"temper hook post-tool failed: Cannot read properties of null (reading 'tool_input')\"}",
+      "{\"systemMessage\":\"temper hook user-prompt failed: Cannot read properties of null (reading 'session_id')\"}"
+    ]
+  },
+  {
+    "name": "empty, missing and non-object input read as an empty object",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "user-prompt",
+        "stdin": ""
+      },
+      {
+        "event": "user-prompt"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "5"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "[1]"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "\"s\""
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "true"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "[]"
+      }
+    ],
+    "stdout": [
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      ""
+    ]
+  },
+  {
+    "name": "JSON.parse's reading: duplicate keys, escapes, exponents and deep nesting",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Read\",\"tool_name\":\"Skill\",\"session_id\":\"s\\u0031\",\"tool_input\":{\"skill\":\"x\",\"skill\":\"rust-craft\"},\"deep\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1e2]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\",\"n\":-0.0e-0}"
+      }
+    ],
+    "stdout": [
+      "",
+      ""
+    ]
+  },
+  {
+    "name": "a marker that cannot be written is reported and exits 0 (OC-3 (p))",
+    "fixture": "workspace",
+    "pluginData": "Cargo.toml",
+    "maskFailure": 1,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook post-tool failed: <MSG>\"}"
+    ]
+  }
+]

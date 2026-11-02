@@ -6,16 +6,17 @@ The 2.0 port (`docs/plans/temper-2-rust-port.md` §2.2 item 2) holds the Rust en
 
 | Path | What |
 |---|---|
-| `lib/engines.mjs` | The hermetic environment, `runEngine`, and the two engines (`node scripts/temper.mjs` and `TEMPER_BIN`) |
-| `lib/fixtures.mjs` | `SCAN_FIXTURE` (1d.2's oracle tree plus a BOM, invalid UTF-8 and a long hit line), the "large file", tree copies and snapshots |
-| `lib/cases.mjs` | One parity-case run: an engine in its own fresh copy, plus the files it wrote |
+| `lib/engines.mjs` | The hermetic environment, `runEngine` (with optional stdin and extra environment), and the two engines (`node scripts/temper.mjs` and `TEMPER_BIN`) |
+| `lib/fixtures.mjs` | `SCAN_FIXTURE` (1d.2's oracle tree plus a BOM, invalid UTF-8 and a long hit line), the "large file", `HOOK_FIXTURES` (the hook cases' trees), tree copies and snapshots |
+| `lib/cases.mjs` | One parity-case run: an engine in its own fresh copy, plus the files it wrote; `runHookCase` runs a hook case's steps with stdin, environment, a scratch temp dir and a plugin data dir, and returns what it wrote |
 | `lib/normalise.mjs` | The only output rewrites, each citing its decision |
 | `lib/diff.mjs` | How a mismatch is explained: the first differing byte, and the hits only one side has |
 | `lib/corpus.mjs` | The corpus comparison and the D16(k) per-file bound, with the run and the walk injected |
 | `harness.test.mjs` | Tests of `lib/` and of `doc_examples.py --extract`, with stub engines; no binary needed |
 | `scan.test.mjs` | The `temper scan` parity cases S1 to S14; needs `TEMPER_BIN` |
+| `hooks.test.mjs`, `cases/hooks/*.json` | The `temper hook` parity cases, one JSON list per area (`protocol`, `post-tool`, `user-prompt`); needs `TEMPER_BIN` |
 | `corpus.mjs` | The scanner corpus driver (a script, not a node:test file) |
-| `test-map.json`, `check_test_map.py` | 1.x engine tests mapped to their Rust tests, one source per 1.x test file: all of `tests/scan.test.mjs`, and the ported part of `tests/toml.test.mjs` and `tests/hooks.test.mjs`, whose other tests a `pending` note assigns to later phases (Phase 8 maps every engine test) |
+| `test-map.json`, `check_test_map.py` | 1.x engine tests mapped to their Rust tests, one source per 1.x test file: all of `tests/scan.test.mjs`, and the ported part of `tests/toml.test.mjs`, `tests/hooks.test.mjs`, `tests/hooks-registry.test.mjs` and `tests/state-retention.test.mjs`, whose other tests a `pending` note assigns to later phases (Phase 8 maps every engine test) |
 
 ## Running it
 
@@ -23,6 +24,7 @@ The 2.0 port (`docs/plans/temper-2-rust-port.md` §2.2 item 2) holds the Rust en
 node --test tests/parity/harness.test.mjs
 python3 tests/parity/check_test_map.py --self-test
 cargo build -p temper-cli && TEMPER_BIN=target/debug/temper node --test tests/parity/scan.test.mjs
+TEMPER_BIN=target/debug/temper node --test tests/parity/hooks.test.mjs
 python3 tests/parity/check_test_map.py
 
 cargo build --release -p temper-cli
@@ -32,7 +34,7 @@ node tests/parity/corpus.mjs --bin target/release/temper \
   --root templates/example-workspace --root /tmp/doc-blocks --report /tmp/corpus-report
 ```
 
-`tests/ci.sh` runs the first two in both modes and the next two in full mode, under the required `Checks` job. `.github/workflows/corpus.yml` runs the parity cases and the corpus on Linux, Windows and macOS. That job is advisory (wi-68036c). It runs weekly, on `release/**`, by hand, and on PRs that touch the engines, the scanner's inputs or this directory (wi-295cf1). On failure it uploads `report.json` and `summary.md` for 14 days.
+`tests/ci.sh` runs the first two in both modes and the next three in full mode, under the required `Checks` job. `.github/workflows/corpus.yml` runs the scan and hook parity cases and the corpus on Linux, Windows and macOS; a hook graduates into the launcher's `RUST_READY` when its cases pass there (OC-5 A, 2-20). That job is advisory (wi-68036c). It runs weekly, on `release/**`, by hand, and on PRs that touch the engines, the scanner's inputs or this directory (wi-295cf1). On failure it uploads `report.json` and `summary.md` for 14 days.
 
 ## Rules
 
@@ -42,5 +44,9 @@ node tests/parity/corpus.mjs --bin target/release/temper \
   - `maskRoots`: the temp root, its real path and, on Windows, its other spellings become `<TMP>` (§2.2).
   - `byteOrderHits`: D16(l) (wi-ecb9dd). It re-sorts 1.x's text-form hits as Rust sorts them (by file in UTF-8 byte order, then line, within each severity) and leaves Rust's output alone, so any other order difference still fails. It applies only to text-form cases whose fixture has paths that differ only in case.
   - `dropLoneSurrogateTail`: D16(e). It applies to 1.x's side only, and its count is in the report.
+  - `maskTelemetryTimes`: a telemetry row's leading `"t"` time becomes `<T>` (§2.2, "`at` … fields are masked"). The rest of the row is compared as text, so key order is checked (2-14).
+  - `maskMarkerTime`: a skill marker's content, an ISO time, becomes `<T>` (§2.2).
+  - `maskFailureText`: the text after `temper hook <event> failed: ` becomes `<MSG>` (OC-3 (p)), only in the cases that set `maskFailure` to the expected count; both sides must mask the same number.
+- **Hook cases.** Each case is `{ name, fixture, git?, cwd?, pluginData?, env?, steps | event + stdin, maskFailure?, stdout?, wrote? }`. The steps run in order in one fresh copy, so a marker one writes is read by the next. Each engine gets its own scratch directory whose `tmp/` is `TMPDIR`, `TMP` and `TEMP`, and `pluginData: true` points `CLAUDE_PLUGIN_DATA` at a fresh `data/` there (a string points it at a path in the copy). `<ROOT>` in `stdin` and `env` is the copy's path. The comparison covers each step's exit, stdout and stderr, the copy's changed files and every file in the scratch directory, with their contents. `stdout` and `wrote` pin the agreed result. Every Rust step must take under 2 s (OC-4 A).
 - **The corpus is a function of the commit and the OS** (1e-2, wi-37a444). On Windows, Python writes the extracted code blocks with CRLF line ends; both engines read the same bytes, so parity is unaffected. It is the registry packages of both lockfiles, the example workspace, the skill's code blocks and the large file, never whatever the registry cache happens to hold.
 - **The D16(k) bound** (wi-825595, measured as 1e-5 decided, wi-a24829). A root whose Rust run takes under 10 s bounds every file in it. A root at or over the bound is timed file by file, and a file fails at `ms >= 10_000`. The bound is absolute, with no retry.

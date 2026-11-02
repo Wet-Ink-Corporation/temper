@@ -3,8 +3,8 @@
 #
 #   tests/ci.sh            # all checks
 #   tests/ci.sh --quick    # skip the steps that compile Rust (the workspace's clippy, tests,
-#                          # scan parity cases, test map, docs and licence check, doc examples,
-#                          # brownfield e2e, example workspace gate)
+#                          # scan and hook parity cases, test map, docs and licence check, doc
+#                          # examples, brownfield e2e, example workspace gate)
 #
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
 # templates/workspace/rust-toolchain.toml with clippy and rustfmt (the example
@@ -67,7 +67,7 @@ step "release check (both plugin.json files, CHANGELOG heading and vendored VERS
 bash tests/release-check.sh
 
 if [ "$quick" = 1 ]; then
-  step "skipped: the workspace's clippy, tests, scan parity cases, test map, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
+  step "skipped: the workspace's clippy, tests, scan and hook parity cases, test map, docs, licence and version checks, doc examples, the brownfield e2e and the example workspace gate (--quick)"
   exit 0
 fi
 
@@ -84,7 +84,10 @@ bin="${CARGO_TARGET_DIR:-target}/debug/temper"
 if [ -f "$bin.exe" ]; then bin="$bin.exe"; fi
 TEMPER_BIN="$bin" node --test tests/parity/scan.test.mjs
 
-step "1.x scan tests are mapped to Rust tests"
+step "hook parity cases (Rust engine against 1.x)"
+TEMPER_BIN="$bin" node --test tests/parity/hooks.test.mjs
+
+step "1.x engine tests are mapped to Rust tests"
 python3 tests/parity/check_test_map.py
 
 step "workspace docs"

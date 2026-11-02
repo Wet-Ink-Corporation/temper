@@ -16,6 +16,8 @@ None: a binary. Nothing routes to it until a subcommand graduates (port plan §3
 - `temper` with no arguments, or an empty first argument: the 1.x usage text on stdout, exit 0.
 - `temper scan --all [--json]` and `temper scan FILES.. [--json]` (Phase 1d.2a): 1.x's output, byte for byte, except that the text form sorts files by byte order (D16(l)). Inside a git repository, paths are relative to git's top level (1d.2b). As in 1.x, `--json` and `--all` are read anywhere, every other argument that does not start with `--` is a file, other `--` flags are ignored, and files win over `--all`.
 - bare `temper scan` (1.x `scanChanged`, with or without `--json`): the usage text, exit 2, until Phase 4 ports it (1d-14 A).
+- `temper hook post-tool` and `temper hook user-prompt` (Phase 2b): 1.x's hook protocol (port plan §2.1). Stdin is read whole, up to 256 MiB, and lossily decoded; empty input reads as `{}`. Input that is not JSON, or is over the cap, prints the "could not parse the hook input as JSON; nothing was checked" notice (D16(n)); `TEMPER_DISABLE=1` gives silence; a handler error prints `temper hook <event> failed: <the error chain>` (OC-3 (p)). All exit 0. An unknown event, or a missing one (`undefined`), writes `temper: unknown hook event X` on stderr and exits 0 without reading stdin.
+- the seven other 1.x hook events (`session-start`, `pre-bash`, `pre-edit`, `subagent-start`, `pre-handback`, `stop`, `subagent-stop`): the usage text, exit 2, as an unported subcommand, until each is ported (2b-1).
 - anything else: the same usage text on stdout, exit 2, as 1.x does for an unknown subcommand. Each 1.x subcommand moves here when it graduates (port plan §3).
 
 Exit codes:
@@ -34,7 +36,7 @@ When the reader of a stdout pipe has gone (`temper .. | head`), temper stops wri
 A command's refusal (`CommandError::Refused`) prints its message and keeps its exit. Any other failure prints `temper: ` and the error with each of its causes joined by `: ` (anyhow's `{:#}` shape), and exits 1. The chain printer is hand-written: three error sites need no `.context()` yet (OC-6 B); `anyhow` stays allowed for when they do (ERR-06).
 
 ## Test strategy
-- Unit: argument parsing in `src/args.rs`.
+- Unit: argument parsing in `src/args.rs`, the stdin reader in `src/hook_io.rs`, and Node's `os.tmpdir()` in `src/wire.rs` against values Node prints.
 - End to end: `tests/it/` runs the real binary (`CARGO_BIN_EXE_temper`) and asserts stdout, stderr and exit codes; `tests/it/scan.rs` writes the 1d.2 fixture at test time and compares with 1.x's recorded output in `tests/it/oracle/`. Every run sets `GIT_CEILING_DIRECTORIES` to the system temporary directory, so a test tree is a git repository only when the test runs `git init` in it; the git cases need `git` on `PATH`, and the 8.3 short-name case runs only on Windows. Miri cannot spawn processes, so these tests carry `#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]` (TST-17, H-12).
 - Run: `cargo test -p temper-cli`.
 
@@ -51,3 +53,6 @@ A command's refusal (`CommandError::Refused`) prints its message and keeps its e
 | 2026-11-01 | Only `scan --all` and `scan FILES` are ported in Phase 1d.2; `scan` graduates in Phase 4, and the launcher is unchanged. | ARC-05 | two-way (1d-10 A, wi-ca29db) |
 | 2026-11-01 | Bare `temper scan` prints the usage text and exits 2 until Phase 4 ports `scanChanged`. | OUT-06 | two-way (1d-14 A, wi-c027c1) |
 | 2026-11-01 | A hand-written cause-chain printer instead of `anyhow` at this edge, for now; a deviation from ERR-06 (SHOULD), revisited in Phase 2. | ERR-06 | two-way (OC-6 B, wi-950997) |
+| 2026-11-02 | The hook events not yet ported answer as unported subcommands (usage text, exit 2), not with 2-13 A's `failed: not in this build yet` notice, so the existing `hook stop` expectations stay; the engine still has `HookError::NotPorted` for them, and the launcher never routes them. | OUT-06, H-12 | two-way (2b-1) |
+| 2026-11-02 | `RunEnv`'s temp dir reproduces Node's `os.tmpdir()` from `TMPDIR`, `TMP` and `TEMP` (Windows: `TEMP`, `TMP`, then `%SystemRoot%\temp`), since `std::env::temp_dir` ignores `TMP` and `TEMP` on Unix (2-24); an empty `CLAUDE_PLUGIN_DATA` or `CLAUDE_CODE_REMOTE_SESSION_ID` reads as unset, as `||` does. | OUT-06 | two-way (2-24, 2b) |
+| 2026-11-02 | The stdin reader keeps no cause for a failed read: 1.x's notice names none. | ERR-03 | two-way (2b) |
