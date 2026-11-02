@@ -5,7 +5,7 @@
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
 //! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner
 //! with its lexer, test regions and all 60 rules, path classification and the new-hit difference
-//! (Phases 1a to 1d), which nothing calls yet.
+//! (Phases 1a to 1d), and the manifest policy, the config and glob matching (Phase 2a).
 //!
 //! # Quick start
 //!
@@ -22,11 +22,25 @@
 //! # Ok::<(), temper_domain::ScannerSetupError>(())
 //! ```
 
+mod config;
+mod glob;
 mod js;
+mod manifest;
 mod paths;
 mod scan;
 
+pub use config::{
+    CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
+};
+pub use glob::{Glob, GlobError, Globs};
 pub use js::js_trim;
+pub use manifest::{
+    Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
+    ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
+    benign_when_new, dep_names, dep_requirements, dependency_names, lint_config_changed,
+    lint_sections, major_of, manifest_checks, member_problems, non_caret_requirement,
+    split_problems, watched_keys,
+};
 pub use paths::{PathStyle, unverbatim};
 pub use scan::{
     CodeKind, FileRole, Hit, HitAt, LibTarget, LineNo, NOT_A_RUST_PROJECT, RuleId, RuleKey,

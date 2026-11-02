@@ -1,14 +1,14 @@
 # Crate charter: `temper-domain`
 
 ## Purpose
-temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, Phase 1b 40 more rules with their look-around and keep predicates, Phase 1c the finders and the last regex rules (58 of 60), and Phase 1d the doc rules (60 of 60), path classification and the new-hit difference; the rest arrives phase by phase.
+temper's pure policy: the masking lexer and scanner rules, the manifest policy, config and glob matching, the verdict and fingerprint rules, the findings, baseline, ratchet and report models with their renderers, and every message text the hooks print (port plan §1.3). Phase 1a brought the scanner's lexer, test regions, counts and first six rules, Phase 1b 40 more rules with their look-around and keep predicates, Phase 1c the finders and the last regex rules (58 of 60), Phase 1d the doc rules (60 of 60), path classification and the new-hit difference, and Phase 2a the manifest policy, the config and glob matching; the rest arrives phase by phase.
 
 ## Layer
 domain.
 
 ## Allowed dependencies
 - Workspace crates: none.
-- Third-party, each added by the phase that first uses it (D10, wi-b03273): `regex`, `toml` (features `std`, `parse`, `preserve_order`), `sha2`, `serde`, `serde_json`, `thiserror`. `serde` is in since Phase 1d.2 with `std` only: `Hit`'s `Serialize` is hand-written (1d-12), and `derive` comes with the first derived DTO. Dev only: `proptest`, `insta`, `serde_json` (until a production reader needs it).
+- Third-party, each added by the phase that first uses it (D10, wi-b03273): `regex`, `toml` (features `std`, `parse`, `preserve_order`), `sha2`, `serde`, `serde_json`, `thiserror`. `serde` is in since Phase 1d.2 with `std` only: `Hit`'s `Serialize` is hand-written (1d-12), and `derive` comes with the first derived DTO. `toml` and `serde_json` are in since Phase 2a; `toml` is read through `toml::de::DeTable`, since `toml::Table` needs the `serde` feature D10 does not list. Dev only: `proptest`, `insta`.
 
 ## Public surface
 Re-exported from `lib.rs`, one path each (API-14):
@@ -18,8 +18,11 @@ Re-exported from `lib.rs`, one path each (API-14):
 - `new_hits`.
 - `format_hit`, `render_scan_text` and `NOT_A_RUST_PROJECT`: `temper scan`'s texts.
 - `PathStyle` (`Windows`, `Posix`), `unverbatim` and `js_trim`.
+- `Manifest` (`FromStr`), `ManifestParseError`; `member_problems` with `GoverningRoot`, `RootRelation`, `OwnLints` and `ManifestProblem` (`id`, `key`, `msg`, `fix`, `new_only`); `split_problems` and `SplitProblems`; `watched_keys`, `WatchedKey` and `benign_when_new`; `dependency_names`, `dep_names`, `DepName` and `DepKind`; `dep_requirements`, `major_of` and `non_caret_requirement`; `lint_sections` and `lint_config_changed`; `manifest_checks` with `ManifestEditFacts`, `Before` and `ManifestFindings`.
+- `Config` (`load`, `defaults` and a getter per key), `ConfigLoad`, `ConfigProblem` (`NotJson`, `NotAnObject`, `WrongType`), `ReviewMode`, `GateConfig` with `CargoFeatures` and `Switch`, `ExemptRule`.
+- `Glob`, `Globs` and `GlobError` (`pattern`).
 
-Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`, `utf16_window_start`, `translate`), the lexer, regions, counts, rule table, predicates and finders under `scan`, and `hit::Exception`. Phase 4 adds `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest. Node's lexical path algebra lives in `temper-app`, beside its readers (OC-1 B).
+Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`, `utf16_window_start`, `translate`, and the JS value model `Object` and `Value` with `entries`, `integer_from_radix`, `js_json`, `js_string`, `number_from_text` and `truthy`, and `JsMap`, JS `Map` and `Set` order with hashed lookups), the lexer, regions, counts, rule table, predicates and finders under `scan`, and `hit::Exception`. Phase 4 adds `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest. Node's lexical path algebra lives in `temper-app`, beside its readers (OC-1 B).
 
 ## Invariants
 - No `std::fs`, `std::process`, `std::env`, `SystemTime::now` or threads: every input arrives as a value (ARC-02).
@@ -29,8 +32,8 @@ Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`,
 Typed `thiserror` enums per module, added with the code that needs them (ERR-01, H-09).
 
 ## Test strategy
-- Unit tests beside the code; property tests (proptest, in use since Phase 1a) for the lexer, the scanner and the glob matcher; `insta` snapshots for rendered reports. Commit `proptest-regressions/` when proptest writes one.
-- Scanner-level tests port `tests/scan.test.mjs` in its order, one module per 1.x test group (`src/scan/tests/`, support in `src/scan/tests.rs`); lexer, region and count tests use values computed by running 1.x on the same input.
+- Unit tests beside the code; property tests (proptest, in use since Phase 1a) for the lexer, the scanner, the glob matcher and JSON string escaping; `insta` snapshots for rendered reports. Commit `proptest-regressions/` when proptest writes one.
+- Scanner-level tests port `tests/scan.test.mjs` in its order, one module per 1.x test group (`src/scan/tests/`, support in `src/scan/tests.rs`); manifest tests port `tests/toml.test.mjs` and the domain half of `hooks.test.mjs`'s manifest cases (`src/manifest/tests/`), with each expected text printed by 1.x on the same input; lexer, region and count tests use values computed by running 1.x on the same input.
 - Parity with 1.x is checked by the port's harness (§2.2), not here.
 - Run: `cargo test -p temper-domain`.
 
@@ -73,3 +76,8 @@ Typed `thiserror` enums per module, added with the code that needs them (ERR-01,
 | 2026-11-01 | Only `PathStyle` and `unverbatim` of §1.3's path helpers land here; Node's `resolve`, `relative`, `isAbsolute`, `dirname` and `join` are `pub(crate)` in `temper-app::paths`, where every reader is. | ARC-05, API-14 | two-way (OC-1 B, wi-30e6a5) |
 | 2026-11-01 | `render_scan_text` and `NOT_A_RUST_PROJECT` are public here, beside `format_hit`, like §1.3's `render_gate`: message texts live in domain. | ARC-05, H-16 | owner (OC-2 A, wi-274f9a) |
 | 2026-11-01 | The 1d.1 review's F3 (a named-field `Witness` in `every_key.rs`) lands in a test-only follow-up PR, after Phase 1e; F1 (`unhide_like_1x`) and F2 (a pre-sized doctest body) land in 1d.2a. | PROC-05 | two-way (OC-7 B, wi-fbe4e1) |
+| 2026-11-02 | `toml` added with D10's features (`std`, `parse`, `preserve_order`) and `serde_json` made a normal dependency (2a). | ARC-12, H-16 | owner (D10, wi-b03273) |
+| 2026-11-02 | `Manifest` holds the JS model `toml.mjs` builds, read from `toml::de::DeTable`: JS numbers, a date or time as its source text, JS property order. `toml::Table` would need `toml`'s `serde` feature, and would print datetimes in `toml`'s form. | OUT-01, H-16 | two-way (2a) |
+| 2026-11-02 | `Config` is infallible and holds pattern strings (2-8); a wrongly typed key takes its default and is reported, and a document that is not an object is `ConfigProblem::NotAnObject` (OC-2 B). `gate.steps` lands with its reader (Phase 4). | ERR-01, H-10 | two-way (wi-d42162); owner (wi-470923) |
+| 2026-11-02 | `GateConfig` holds `CargoFeatures` and two `Switch`es, not three bools. | API-10 | two-way (2a) |
+| 2026-11-02 | `Manifest`'s getters and `workspace_excludes` wait for `workspace_root_for` (2c), their first reader. | ARC-05, API-14 | two-way (2a) |

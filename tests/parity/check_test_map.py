@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Every 1.x scanner test has a Rust home: the `tests/scan.test.mjs` part of the port plan's test
-map (§2.2, "every 1.x test is ported, retired or replaced"; 1e-9, wi-a9dd30). Phase 8 extends the
-map to every engine test.
+"""Every ported 1.x engine test has a Rust home: the port plan's test map (§2.2, "every 1.x test is
+ported, retired or replaced"; 1e-9, wi-a9dd30), one entry per 1.x test file under `sources`
+(port plan Phase 2, 2-18). Phase 8 extends the map to every engine test.
 
     python3 tests/parity/check_test_map.py               # check tests/parity/test-map.json
     python3 tests/parity/check_test_map.py --self-test
 
-The 1.x names come from `node --test --test-reporter=tap tests/scan.test.mjs`, the Rust names from
-`cargo test -p temper-domain --all-features --locked -- --list`. Fails, naming each problem, when a
-1.x test has no entry or two, an entry names no 1.x test, a mapped Rust path is not a test, or an
-entry with no Rust path (or a `retired` note) cites no D16 item. Exit 1 on a problem, 2 when node
-or cargo cannot be run: never a skip.
+For each source, the 1.x names come from `node --test --test-reporter=tap <source>`, the Rust
+names from `cargo test -p <crate> --all-features --locked -- --list`. Fails, naming each problem,
+when a 1.x test has no entry or two, an entry names no 1.x test, a mapped Rust path is not a test,
+or an entry with no Rust path (or a `retired` note) cites no D16 item. A source whose port is not
+finished carries a `pending` note naming the phases that port the rest; its unmapped tests are
+counted, not failed, and every source without one is checked in full. Exit 1 on a problem, 2 when
+node or cargo cannot be run: never a skip.
 """
 import json
 import re
@@ -43,15 +45,20 @@ def rust_names(listing):
     return {m.group(1) for m in map(RUST_TEST.match, listing.splitlines()) if m}
 
 
-def check(entries, node, rust):
-    """The problems with `entries` against the 1.x names `node` and the Rust paths `rust`."""
+def check(entries, node, rust, pending=None):
+    """The problems with `entries` against the 1.x names `node` and the Rust paths `rust`.
+
+    With a `pending` note, a 1.x test that has no entry yet is left to a later phase."""
     problems = []
     counts = {}
     for e in entries:
         counts[e.get('node')] = counts.get(e.get('node'), 0) + 1
+    if pending is not None and not (isinstance(pending, str) and pending.strip()):
+        problems.append('a pending note must name the phases that port the rest')
     for name in node:
         if counts.get(name, 0) == 0:
-            problems.append(f'unmapped 1.x test: {name!r}')
+            if pending is None:
+                problems.append(f'unmapped 1.x test: {name!r}')
         elif counts[name] > 1:
             problems.append(f'1.x test mapped twice: {name!r}')
     known = set(node)
@@ -100,6 +107,9 @@ def self_test():
                     {'node': 'large', 'rust': ['x::large'], 'retired': 'moved to CI'}]:
         eq(check(good[:2] + [retired], node, rust), ["retired entry cites no D16 item: 'large'"])
     eq(check(good[:2] + [{'node': 'large', 'retired': 'D16(k)'}], node, rust), [])
+    eq(check(good[:2], node, rust, pending='port phase 2c'), [])
+    eq(check(good[:2], node, rust, pending=' '), ['a pending note must name the phases that port the rest'])
+    eq(check(good + [{'node': 'gone', 'rust': ['x::a']}], node, rust, pending='2c'), ["entry names no 1.x test: 'gone'"])
     tap = 'TAP version 13\n# Subtest: a\n    ok 1 - inner\nok 1 - a\nnot ok 2 - b \\# c\nok 3 - large # SKIP slow\n1..3\n'
     eq(node_names(tap), node)
     eq(rust_names('x::a: test\nx::b: test\n\n2 tests, 0 benchmarks\nsrc/lib.rs - f (line 3): test\n'), {'x::a', 'x::b'})
@@ -114,17 +124,24 @@ def main(argv):
         print('usage: check_test_map.py [--self-test]', file=sys.stderr)
         return 2
     doc = json.loads(MAP.read_text(encoding='utf-8'))
-    node = node_names(run(['node', '--test', '--test-reporter=tap', doc['source']]))
-    if not node:
-        raise HarnessError(f'no test names in the TAP output of {doc["source"]}')
-    rust = rust_names(run(['cargo', 'test', '-p', doc['crate'], '--all-features', '--locked', '-q', '--', '--list']))
-    problems = check(doc['tests'], node, rust)
-    for p in problems:
-        print(f'check_test_map: {p}', file=sys.stderr)
-    if problems:
-        return 1
-    print(f'check_test_map: {len(node)} 1.x tests in {doc["source"]} mapped to {doc["crate"]} tests')
-    return 0
+    rust_by_crate = {}
+    failed = False
+    for src in doc['sources']:
+        node = node_names(run(['node', '--test', '--test-reporter=tap', src['source']]))
+        if not node:
+            raise HarnessError(f'no test names in the TAP output of {src["source"]}')
+        crate = src['crate']
+        if crate not in rust_by_crate:
+            listing = run(['cargo', 'test', '-p', crate, '--all-features', '--locked', '-q', '--', '--list'])
+            rust_by_crate[crate] = rust_names(listing)
+        problems = check(src['tests'], node, rust_by_crate[crate], src.get('pending'))
+        for p in problems:
+            print(f'check_test_map: {src["source"]}: {p}', file=sys.stderr)
+        failed = failed or bool(problems)
+        mapped = len({e.get('node') for e in src['tests']} & set(node))
+        rest = f'; {len(node) - mapped} pending ({src["pending"]})' if src.get('pending') else ''
+        print(f'check_test_map: {mapped} of {len(node)} 1.x tests in {src["source"]} mapped to {crate} tests{rest}')
+    return 1 if failed else 0
 
 
 if __name__ == '__main__':
