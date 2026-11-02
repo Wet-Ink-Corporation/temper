@@ -35,7 +35,7 @@ pub(crate) fn run<P: Ports>(
         HookEvent::UserPrompt => skill::user_prompt(call),
         HookEvent::PostTool => skill::post_tool(call),
         HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
-        HookEvent::PreBash => pre_bash::pre_bash(call),
+        HookEvent::PreBash => pre_bash::pre_bash(call, scanner),
         HookEvent::SessionStart
         | HookEvent::PreHandback
         | HookEvent::Stop

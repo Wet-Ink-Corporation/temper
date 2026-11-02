@@ -7,6 +7,7 @@
 
 mod protected;
 mod rows;
+mod rust_writes;
 mod state_dir;
 
 use temper_domain::{HookEvent, HookOutcome, PathStyle::Posix, Scanner};

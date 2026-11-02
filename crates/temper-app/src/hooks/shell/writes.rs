@@ -24,6 +24,9 @@ pub(crate) enum Verb<'c> {
     Redirect,
     /// A command named for what it does: `tee`, `cp`, `curl`, `Copy-Item`, ...
     Named(&'c str),
+    /// A directory such a command writes into (`curl --output-dir`, `wget -P`, `tar -x -C`,
+    /// `unzip -d`; 1.x `dir: true`).
+    Into(&'c str),
     /// `sed -i` and `perl -i`.
     InPlace(&'c str),
     /// `git mv`.
@@ -76,9 +79,7 @@ pub(crate) struct Target<'c> {
 impl Target<'_> {
     /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
     /// the directory is unknown, or the line went past a bound. Built when a rule reads it;
-    /// [`command_writes`] has already checked that it fits (#201 F2). The scan of copies onto
-    /// `.rs` files reads it from port Phase 2f; until then only the tests do.
-    #[cfg(test)]
+    /// [`command_writes`] has already checked that it fits (#201 F2).
     pub(crate) fn path(&self, cx: PathCx<'_>) -> Option<String> {
         self.fits
             .then(|| super::words::word_path(cx, &self.word, self.cwd.as_ref()))
@@ -131,8 +132,12 @@ pub(crate) fn command_writes<'c>(
             None
         }
         _ => {
-            for word in named_writes(name, args) {
+            let (files, dirs) = named_writes(name, args);
+            for word in files {
                 add(Verb::Named(name), word, None, cwd());
+            }
+            for word in dirs {
+                add(Verb::Into(name), word, None, cwd());
             }
             None
         }
@@ -160,42 +165,44 @@ pub(crate) fn command_writes<'c>(
 }
 
 /// The files a command named for what it does writes: `tee`, `truncate`, `curl -o`,
-/// `wget -O`, `dd of=`, `tar -x -C`, `unzip -d`, `Set-Content` and its kin.
-fn named_writes<'c>(name: &str, args: &'c [Word]) -> Vec<Cow<'c, Word>> {
+/// `wget -O`, `dd of=`, `Set-Content` and its kin; then the directories it writes into
+/// (`curl --output-dir`, `wget -P`, `tar -x -C`, `unzip -d`, 1.x `dir: true`).
+fn named_writes<'c>(name: &str, args: &'c [Word]) -> (Vec<Cow<'c, Word>>, Vec<Cow<'c, Word>>) {
     let file = |a: &Cow<'c, Word>| a.raw != "-";
     match name {
-        "tee" | "sponge" => args
-            .iter()
-            .filter(|a| !a.raw.starts_with('-'))
-            .map(Cow::Borrowed)
-            .collect(),
-        "truncate" => truncate_files(args),
+        "tee" | "sponge" => (
+            args.iter()
+                .filter(|a| !a.raw.starts_with('-'))
+                .map(Cow::Borrowed)
+                .collect(),
+            Vec::new(),
+        ),
+        "truncate" => (truncate_files(args), Vec::new()),
         "curl" => {
             let mut out = option_values(args, Some('o'), &["--output"], CURL_VALUES);
             out.retain(file);
-            out.extend(option_values(args, None, &["--output-dir"], ""));
-            out
+            (out, option_values(args, None, &["--output-dir"], ""))
         }
         "wget" => {
             let mut out = option_values(args, Some('O'), &["--output-document"], WGET_VALUES);
             out.retain(file);
-            out.extend(option_values(
-                args,
-                Some('P'),
-                &["--directory-prefix"],
-                WGET_VALUES,
-            ));
-            out
+            let dirs = option_values(args, Some('P'), &["--directory-prefix"], WGET_VALUES);
+            (out, dirs)
         }
-        "dd" => args
-            .iter()
-            .filter(|a| a.raw.starts_with("of="))
-            .map(|a| Cow::Owned(a.sliced(3, 3)))
-            .collect(),
-        "tar" if tar_extracts(args) => option_values(args, Some('C'), &["--directory"], ""),
-        "unzip" => option_values(args, Some('d'), &[], ""),
-        _ if is_ps_content(name) => ps_content_path(args).into_iter().collect(),
-        _ => Vec::new(),
+        "dd" => (
+            args.iter()
+                .filter(|a| a.raw.starts_with("of="))
+                .map(|a| Cow::Owned(a.sliced(3, 3)))
+                .collect(),
+            Vec::new(),
+        ),
+        "tar" if tar_extracts(args) => (
+            Vec::new(),
+            option_values(args, Some('C'), &["--directory"], ""),
+        ),
+        "unzip" => (Vec::new(), option_values(args, Some('d'), &[], "")),
+        _ if is_ps_content(name) => (ps_content_path(args).into_iter().collect(), Vec::new()),
+        _ => (Vec::new(), Vec::new()),
     }
 }
 

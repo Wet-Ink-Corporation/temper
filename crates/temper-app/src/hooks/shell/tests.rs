@@ -9,13 +9,13 @@ mod opaque;
 
 use std::sync::LazyLock;
 
-use temper_domain::{InterpreterCode, PathStyle};
+use temper_domain::{InterpreterCode, OpaqueKind, PathStyle};
 
 use super::words::{Dir, word_path};
 use super::{
-    Command, CopyDest, OpaqueKind, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb,
-    command_deletes, command_writes, landing, opaque_patch, parse_commands, patch_command,
-    patch_files, pathspec_pattern, resolve_path, walk,
+    Command, CopyDest, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
+    command_writes, landing, opaque_patch, parse_commands, patch_command, patch_files,
+    pathspec_pattern, resolve_path, walk,
 };
 use crate::paths::PathEnv;
 
@@ -69,7 +69,7 @@ fn parse_with(cmd: &str, opts: ParseOpts<'_>) -> Vec<Command> {
 fn verb(t: &Target<'_>) -> String {
     match &t.verb {
         Verb::Redirect => "redirect".to_owned(),
-        Verb::Named(name) => (*name).to_owned(),
+        Verb::Named(name) | Verb::Into(name) => (*name).to_owned(),
         Verb::InPlace(name) => format!("{name} -i"),
         Verb::GitMv => "git mv".to_owned(),
         Verb::GitRestore { checkout: true, .. } => "git checkout".to_owned(),
@@ -1110,6 +1110,23 @@ fn a_long_chain_of_wrappers_or_reserved_words_parses_to_one_command() {
     ] {
         assert_eq!(parse(&cmd).len(), 1, "{:?}", cmd.get(..20));
     }
+}
+
+/// 1.x `hooks.test.mjs` "git-bash paths (/c/..., /tmp/...) are read as Windows paths on
+/// Windows", with `os.tmpdir()` at `C:/Users/me/AppData/Local/Temp`.
+#[test]
+fn git_bash_paths_are_read_as_windows_paths_on_windows() {
+    use super::msys_path;
+    let tmp = "C:/Users/me/AppData/Local/Temp";
+    let win = |t| msys_path(t, PathStyle::Windows, tmp).into_owned();
+    let linux = |t| msys_path(t, PathStyle::Posix, tmp).into_owned();
+    assert_eq!(win("/c/Users/me/x.rs"), "C:/Users/me/x.rs");
+    assert_eq!(win("/tmp/x.rs"), format!("{tmp}/x.rs"));
+    assert_eq!(win("/tmp"), tmp);
+    assert_eq!(linux("/c/Users/me/x.rs"), "/c/Users/me/x.rs");
+    assert_eq!(linux("/tmp/x.rs"), "/tmp/x.rs");
+    assert_eq!(win("C:/x.rs"), "C:/x.rs");
+    assert_eq!(win("/usr/x.rs"), "/usr/x.rs");
 }
 
 #[test]

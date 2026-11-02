@@ -2,7 +2,7 @@
 //! `unreadAwk`, `unreadScript`, `readStdin` and `configWritesAlias`), for the reviewer's
 //! fail-closed check. Patterns, not a parse: read with [`super::ParseOpts::untracked`].
 
-use temper_domain::{InterpreterCode, PathStyle};
+use temper_domain::{InterpreterCode, OpaqueKind, PathStyle};
 
 use super::code::{Threw, code_words, is_interpreter, stdin_body, unread_code};
 use super::git::{dashed_git, git_command, is_builtin};
@@ -10,23 +10,6 @@ use super::walk::{Command, Opaque, Stdin};
 use super::words::{PathCx, Word};
 use super::wrappers::{Script, awk_code, shell_script, trap_action, without_awk_systems};
 use crate::paths;
-
-/// What kind of command temper cannot read (1.x `opaquePatch`'s `kind`), which picks the
-/// reviewer's hint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OpaqueKind {
-    /// A git subcommand temper cannot resolve, or one git does not have.
-    Git,
-    /// A command name that is not a literal word, or one that runs another command.
-    Name,
-    /// Interpreter code that runs a patch, built from an expansion, or read from where temper
-    /// cannot.
-    Code,
-    /// A script a shell reads that temper cannot.
-    Script,
-    /// `git config` setting an alias, which could name git apply later.
-    Alias,
-}
 
 /// 1.x `opaquePatch(c)`'s answer: the kind, why, and a hint of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]

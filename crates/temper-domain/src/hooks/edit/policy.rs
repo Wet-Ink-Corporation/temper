@@ -114,7 +114,7 @@ impl<'a> Exemptions<'a> {
     }
 
     /// Is `hit` exempt under `rel`? (`e.rule === h.id && e.paths.some(..)`.)
-    fn covers(&self, hit: &Hit, rel: &str) -> bool {
+    pub(crate) fn covers(&self, hit: &Hit, rel: &str) -> bool {
         self.0
             .iter()
             .any(|(rule, paths)| *rule == hit.id().as_str() && paths.any_match(rel))
@@ -122,11 +122,11 @@ impl<'a> Exemptions<'a> {
 }
 
 /// The findings of one edit, each list in 1.x's order.
-#[derive(Default)]
-struct Findings {
-    denies: Vec<String>,
-    asks: Vec<String>,
-    advice: Vec<String>,
+#[derive(Debug, Default)]
+pub(crate) struct Findings {
+    pub(crate) denies: Vec<String>,
+    pub(crate) asks: Vec<String>,
+    pub(crate) advice: Vec<String>,
 }
 
 /// 1.x `preEdit`'s checks after the skill gate, with its texts and telemetry.
@@ -250,14 +250,14 @@ fn rust_findings(found: &mut Findings, texts: Texts<'_>, edit: &RustEdit<'_>, sc
 
 /// A scan's counts of tests, `#[ignore]`s and clones.
 #[derive(Clone, Copy)]
-struct Counts {
-    tests: usize,
-    ignores: usize,
-    clones: usize,
+pub(crate) struct Counts {
+    pub(crate) tests: usize,
+    pub(crate) ignores: usize,
+    pub(crate) clones: usize,
 }
 
 impl Counts {
-    fn of(report: &ScanReport) -> Self {
+    pub(crate) fn of(report: &ScanReport) -> Self {
         Self {
             tests: report.tests(),
             ignores: report.ignores(),
@@ -267,14 +267,14 @@ impl Counts {
 }
 
 /// 1.x `/(^|\/)mod\.rs$/`.
-fn is_mod_rs(rel: &str) -> bool {
+pub(crate) fn is_mod_rs(rel: &str) -> bool {
     rel == "mod.rs" || rel.ends_with("/mod.rs")
 }
 
 /// The new hits as denies, asks and advice. One approval line per exception: an ask that an
 /// `#[expect]` attribute's own ask already covers (its lint text contains the hit's lint) is
 /// dropped, since the attribute carries the reason.
-fn hit_findings(found: &mut Findings, fresh: &[Hit], rel: &str) {
+pub(crate) fn hit_findings(found: &mut Findings, fresh: &[Hit], rel: &str) {
     // 1.x's `String(l)` of a missing exception is `undefined`.
     let attr_lints: Vec<&str> = fresh
         .iter()

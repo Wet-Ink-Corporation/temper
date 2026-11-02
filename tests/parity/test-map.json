@@ -606,15 +606,8 @@
     },
     {
       "source": "tests/hooks.test.mjs",
-      "pending": "port Phase 2f (the patch, copy-onto-.rs and reviewer branches of the Bash handler; the interpreter-code, PowerShell-expression and .rs-patch rows of the protected-config tests mapped here, which carry until_2f) and Phase 4 (the gate tests)",
+      "pending": "port Phase 4 (the gate tests)",
       "tests": [
-        {
-          "node": "lintConfigChanged ignores plain inheritance and comments",
-          "crate": "temper-domain",
-          "rust": [
-            "manifest::tests::sections::lint_config_changed_ignores_plain_inheritance_and_comments"
-          ]
-        },
         {
           "node": "the throwaway workspace is discovered without git",
           "crate": "temper-cli",
@@ -721,6 +714,303 @@
           ]
         },
         {
+          "node": "lintConfigChanged ignores plain inheritance and comments",
+          "crate": "temper-domain",
+          "rust": [
+            "manifest::tests::sections::lint_config_changed_ignores_plain_inheritance_and_comments"
+          ]
+        },
+        {
+          "node": "Bash: --ignore-rust-version is denied (MOD-01)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::ignore_rust_version_is_denied_mod_01"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to Cargo.lock are denied; cargo and git are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_cargo_lock_are_denied_cargo_and_git_are_not"
+          ]
+        },
+        {
+          "node": "Bash: --no-verify and lint lowering in a message, here-document or search pattern are allowed (H-12, H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::no_verify_and_lint_lowering_in_a_message_here_document_or_search_pattern_are_allowed_h_12_h_05"
+          ]
+        },
+        {
+          "node": "Bash: skipping git hooks stays denied however it is quoted or handed on (H-12)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::skipping_git_hooks_stays_denied_however_it_is_quoted_or_handed_on_h_12"
+          ]
+        },
+        {
+          "node": "Bash: lowering lint levels stays denied however it is quoted or handed on (H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::lowering_lint_levels_stays_denied_however_it_is_quoted_or_handed_on_h_05"
+          ]
+        },
+        {
+          "node": "Bash: the flag checks stay fast on long commands",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::the_flag_checks_stay_fast_on_long_commands"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "Bash: --ignore-rust-version only counts as a cargo flag",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::ignore_rust_version_only_counts_as_a_cargo_flag"
+          ]
+        },
+        {
+          "node": "Bash: cp/mv/install/Copy-Item onto a .rs file is scanned like a Write: new escape hatches deny, #[expect] and test removal ask",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_copy_onto_rs_is_scanned_like_a_write"
+          ]
+        },
+        {
+          "node": "Bash: a copy onto .rs whose content temper cannot read is refused with the Edit/Write guidance",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_copy_onto_rs_whose_content_temper_cannot_read_is_refused"
+          ]
+        },
+        {
+          "node": "Bash: git apply and patch that touch .rs files are refused; read-only forms and non-Rust patches are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::git_apply_and_patch_that_touch_rs_files_are_refused"
+          ]
+        },
+        {
+          "node": "Bash: a denied Rust patch names the scanned routes and says a retry is denied again",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_denied_rust_patch_names_the_scanned_routes"
+          ]
+        },
+        {
+          "node": "Bash: the read-only reviewer may not apply any patch, and is told not to retry",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::the_read_only_reviewer_may_not_apply_any_patch"
+          ]
+        },
+        {
+          "node": "Bash: every command temper tells the reviewer to run is not denied",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::every_command_temper_tells_the_reviewer_to_run_is_not_denied"
+          ]
+        },
+        {
+          "node": "Bash: interpreter code with a megabyte of spaces or 50,000 escapes after a call is decided in under a second",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::interpreter_code_with_a_megabyte_of_spaces_or_escapes_is_decided"
+          ]
+        },
+        {
+          "node": "blankProse: a megabyte of starts, assignments, paths or newlines is blanked in well under a second",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::bash::tests::blank_prose_leaves_a_megabyte_of_starts_assignments_paths_or_newlines_unchanged"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "Bash: a megabyte of spaces, parentheses or call openers is decided in under a second",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_megabyte_of_spaces_parentheses_or_call_openers_is_decided"
+          ]
+        },
+        {
+          "node": "Bash: a long run of shell-writer words or `=` is decided in under a second",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_long_run_of_shell_writer_words_or_equals_is_decided"
+          ]
+        },
+        {
+          "node": "Bash: a 48 KB printf command piped into a shell is decided in well under a second",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_48_kb_printf_piped_into_a_shell_is_decided"
+          ]
+        },
+        {
+          "node": "Bash: gpatch, busybox patch, watch and git -c aliases that touch .rs files are refused for any agent (#151)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::gpatch_busybox_patch_watch_and_git_c_aliases_touching_rs_are_refused"
+          ]
+        },
+        {
+          "node": "Bash: renames, copies that pass the scan, copies out of the workspace and non-Rust copies stay allowed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::renames_clean_copies_copies_out_and_non_rust_copies_stay_allowed"
+          ]
+        },
+        {
+          "node": "Bash: cd, subshells and pushd/popd resolve the directory a rename runs in",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::cd_subshells_and_pushd_popd_resolve_the_directory_a_rename_runs_in"
+          ]
+        },
+        {
+          "node": "Bash: copies into the gate-excluded scratch directories (.temper/, target/) are not scanned",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::copies_into_the_scratch_directories_are_not_scanned"
+          ]
+        },
+        {
+          "node": "Bash: a heredoc patch is read from the command; a patch file made earlier in the command is named as such",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_heredoc_patch_is_read_and_a_patch_made_earlier_is_named"
+          ]
+        },
+        {
+          "node": "Bash: diff -u headers with timestamps and CRLF patches are recognised as touching .rs files",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::diff_u_headers_with_timestamps_and_crlf_patches_touch_rs_files"
+          ]
+        },
+        {
+          "node": "Bash: copies inside if/for/while/brace groups and wrapped commands are scanned; everyday wrapped commands are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::copies_inside_compound_commands_and_wrappers_are_scanned"
+          ]
+        },
+        {
+          "node": "Bash: a move that turns test or example code into production code is scanned, and so is a copy laundered through a temp path",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_move_into_production_code_and_a_laundered_copy_are_scanned"
+          ]
+        },
+        {
+          "node": "Bash: git-bash paths (/c/..., /tmp/...) are read as Windows paths on Windows",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::git_bash_paths_are_read_as_windows_paths_on_windows"
+          ]
+        },
+        {
+          "node": "Bash: a crate moved or copied whole keeps its layout, so its unit tests stay tests",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_crate_moved_or_copied_whole_keeps_its_layout"
+          ]
+        },
+        {
+          "node": "Bash: patch and git apply/am --help and --version apply nothing; git am and rsync are read like git apply and cp",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::patch_help_and_version_apply_nothing_and_git_am_and_rsync_are_read"
+          ]
+        },
+        {
+          "node": "Bash: a ~/ source is read from the home directory and scanned",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_home_source_is_read_from_the_home_directory_and_scanned"
+          ]
+        },
+        {
+          "node": "Bash: a .rs file backed up to a temp dir or a variable destination passes; unclean content to an unknown place is still refused",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_backup_to_a_temp_dir_or_variable_passes_and_unclean_content_is_refused"
+          ]
+        },
+        {
+          "node": "Bash: a command the shell reader cannot finish still gets the other Bash denies",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_command_the_shell_reader_cannot_finish_still_gets_the_other_bash_denies",
+            "hooks::pre_bash::tests::state_dir::a_command_the_reader_gives_up_on_is_not_a_state_dir_write"
+          ]
+        },
+        {
+          "node": "Bash: Rust copies spelled c\\p, run with -WhatIf:$false, linked with ln or laundered through an existing file are scanned",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::escaped_whatif_linked_and_laundered_rust_copies_are_scanned"
+          ]
+        },
+        {
+          "node": "Bash: a symlinked .rs file inside a recursively copied tree is scanned for what it points at",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_symlinked_rs_file_in_a_copied_tree_is_scanned_for_its_target"
+          ]
+        },
+        {
+          "node": "Bash: a patch whose git headers quote a path with spaces is still read as touching a .rs file",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_patch_quoting_a_path_with_spaces_touches_an_rs_file"
+          ]
+        },
+        {
+          "node": "Bash: a copy's H-08 advisory survives when another check in the command asks",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_copys_clone_advisory_survives_another_ask"
+          ]
+        },
+        {
+          "node": "Bash: a Rust copy whose source an earlier non-copy write in the command rewrites is refused; later or unrelated writes are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_copy_whose_source_an_earlier_write_rewrites_is_refused"
+          ]
+        },
+        {
+          "node": "Bash: ln -sr reads its target from the current directory, and a linked directory of .rs files is scanned",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::ln_sr_reads_its_target_from_the_current_directory"
+          ]
+        },
+        {
+          "node": "Bash: a shell write into a .rs file spelled with a backslash or split quotes, or by curl or dd, is denied like a redirect",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rust_writes::a_shell_write_into_rs_spelled_with_escapes_or_by_curl_or_dd_is_denied"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to Cargo.toml are refused so the manifest checks run",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_cargo_toml_are_refused_so_the_manifest_checks_run"
+          ]
+        },
+        {
+          "node": "Bash: cargo add/remove asks (H-16) unless every crate is pre-approved",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::cargo_add_remove_asks_h_16_unless_every_crate_is_pre_approved"
+          ]
+        },
+        {
           "node": "an exclude entry is compared by path components (./tools/gen/)",
           "crate": "temper-app",
           "rust": [
@@ -763,62 +1053,6 @@
           ]
         },
         {
-          "node": "Bash: --ignore-rust-version is denied (MOD-01)",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::ignore_rust_version_is_denied_mod_01"
-          ]
-        },
-        {
-          "node": "Bash: shell writes to Cargo.lock are denied; cargo and git are not",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::shell_writes_to_cargo_lock_are_denied_cargo_and_git_are_not"
-          ]
-        },
-        {
-          "node": "Bash: --no-verify and lint lowering in a message, here-document or search pattern are allowed (H-12, H-05)",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::no_verify_and_lint_lowering_in_a_message_here_document_or_search_pattern_are_allowed_h_12_h_05"
-          ]
-        },
-        {
-          "node": "Bash: skipping git hooks stays denied however it is quoted or handed on (H-12)",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::skipping_git_hooks_stays_denied_however_it_is_quoted_or_handed_on_h_12"
-          ]
-        },
-        {
-          "node": "Bash: lowering lint levels stays denied however it is quoted or handed on (H-05)",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::lowering_lint_levels_stays_denied_however_it_is_quoted_or_handed_on_h_05"
-          ]
-        },
-        {
-          "node": "Bash: --ignore-rust-version only counts as a cargo flag",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::ignore_rust_version_only_counts_as_a_cargo_flag"
-          ]
-        },
-        {
-          "node": "Bash: shell writes to Cargo.toml are refused so the manifest checks run",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::shell_writes_to_cargo_toml_are_refused_so_the_manifest_checks_run"
-          ]
-        },
-        {
-          "node": "Bash: cargo add/remove asks (H-16) unless every crate is pre-approved",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::cargo_add_remove_asks_h_16_unless_every_crate_is_pre_approved"
-          ]
-        },
-        {
           "node": "Bash: temper baseline --init/--update are refused unless TEMPER_ALLOW_RAISE asks the human (H-12); --tighten, --check and status run freely",
           "crate": "temper-app",
           "rust": [
@@ -831,36 +1065,6 @@
           "rust": [
             "hooks::pre_bash::tests::git_checkout_restore_stash_of_a_claude_path_and_git_show_into_claude_ask_h_12"
           ]
-        },
-        {
-          "node": "Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::shell_writes_to_the_baseline_file_are_denied_edit_write_to_it_asks_protected_claude"
-          ]
-        },
-        {
-          "node": "Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::shell_writes_to_the_vendored_cli_claude_temper_are_denied_reading_and_running_it_are_not"
-          ]
-        },
-        {
-          "node": "Bash: the flag checks stay fast on long commands",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::the_flag_checks_stay_fast_on_long_commands"
-          ],
-          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
-        },
-        {
-          "node": "blankProse: a megabyte of starts, assignments, paths or newlines is blanked in well under a second",
-          "crate": "temper-domain",
-          "rust": [
-            "hooks::bash::tests::blank_prose_leaves_a_megabyte_of_starts_assignments_paths_or_newlines_unchanged"
-          ],
-          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
         },
         {
           "node": "Bash: shell writes to protected configuration ask, like Edit/Write to the same file (H-05, H-12)",
@@ -961,14 +1165,6 @@
           ]
         },
         {
-          "node": "Bash: a command the shell reader cannot finish still gets the other Bash denies",
-          "crate": "temper-app",
-          "rust": [
-            "hooks::pre_bash::tests::protected::a_command_the_shell_reader_cannot_finish_still_gets_the_other_bash_denies",
-            "hooks::pre_bash::tests::state_dir::a_command_the_reader_gives_up_on_is_not_a_state_dir_write"
-          ]
-        },
-        {
           "node": "Bash: protected config written by a clustered curl/wget output option or by a recursive copy of protected files asks",
           "crate": "temper-app",
           "rust": [
@@ -988,6 +1184,13 @@
           "crate": "temper-cli",
           "rust": [
             "hooks::a_directory_restored_from_another_revision_asks_when_it_would_change_a_protected_file_in_it"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_the_baseline_file_are_denied_edit_write_to_it_asks_protected_claude"
           ]
         },
         {
@@ -1030,6 +1233,13 @@
           "crate": "temper-app",
           "rust": [
             "hooks::pre_bash::tests::state_dir::state_dir_writes_spelled_with_bash_backslash_escapes_or_a_python_mode_variable_are_denied_reads_stay_allowed"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_the_vendored_cli_claude_temper_are_denied_reading_and_running_it_are_not"
           ]
         }
       ]

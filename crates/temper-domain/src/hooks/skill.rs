@@ -50,11 +50,21 @@ pub fn skill_load_via(tool_name: Option<&str>, skill: &str, file_path: &str) -> 
 pub fn skill_preloaded(agent_type: &str) -> bool {
     ["rust-implementer", "rust-reviewer", "rust-architect"]
         .iter()
-        .any(|name| {
-            agent_type
-                .strip_suffix(name)
-                .is_some_and(|head| head.is_empty() || head.ends_with(':'))
-        })
+        .any(|name| agent_is(agent_type, name))
+}
+
+/// Is an agent of `agent_type` temper's read-only reviewer, bare or `<plugin>:`-prefixed (1.x
+/// `REVIEWER` on `input.agent_type ?? ''`)?
+#[must_use]
+pub fn is_reviewer(agent_type: &str) -> bool {
+    agent_is(agent_type, "rust-reviewer")
+}
+
+/// 1.x `/(^|:)<name>$/`.
+fn agent_is(agent_type: &str, name: &str) -> bool {
+    agent_type
+        .strip_suffix(name)
+        .is_some_and(|head| head.is_empty() || head.ends_with(':'))
 }
 
 fn is_skill_doc(path: &str) -> bool {

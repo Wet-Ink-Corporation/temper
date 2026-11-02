@@ -10,18 +10,22 @@
 
 mod code;
 mod config;
+mod copies;
 mod deps;
 mod flags;
 mod heredoc;
 mod next;
 mod prose;
 mod raise;
+mod reviewer;
 mod texts;
 mod writes;
 
 pub use self::code::InterpreterCode;
 pub use config::{ConfigAsk, ConfigChanges};
+pub use copies::{CopiedFile, RustWrites, Unread};
 pub use raise::RaiseFlag;
+pub use reviewer::OpaqueKind;
 
 use self::deps::DepPatterns;
 use self::flags::FlagPatterns;
@@ -29,7 +33,7 @@ use self::prose::ProsePatterns;
 use self::raise::RaisePatterns;
 use self::writes::{BASELINE, LOCKFILE, MANIFEST, RUST_SOURCE, ShellWrites, VENDORED};
 use super::setup::PolicySetupError;
-use super::telemetry::Redactor;
+use super::telemetry::{Redactor, ShellDenyVia};
 use super::{
     DependencyCheck, HookOutcome, PolicyDecision, ShellAskVia, ShellWriteFile, TelemetryEvent,
     lockfile_denial,
@@ -225,6 +229,33 @@ impl BashPolicy {
             .then(|| ask(texts::ACCEPTS_SNAPSHOTS.to_owned(), None))
     }
 
+    /// The answer to the copies, moves, links and patches onto `.rs` files that `found`
+    /// gathered from `cmd` (1.x `shellRustWrites`), or `None` when it writes no Rust source.
+    #[must_use]
+    pub fn rust_writes(&self, cmd: &str, found: RustWrites) -> Option<PolicyDecision> {
+        found.decide(|| self.redactor.redact(cmd))
+    }
+
+    /// The reviewer applies a patch: denied, with a `reviewer-patch` row (#140).
+    #[must_use]
+    pub fn reviewer_patch() -> PolicyDecision {
+        deny(
+            reviewer::PATCH.to_owned(),
+            telemetry_via(ShellDenyVia::ReviewerPatch, None),
+        )
+    }
+
+    /// The reviewer runs a command temper cannot rule out applies a patch (1.x
+    /// `opaquePatch`'s `kind`, `why` and `hint`): denied, with a `reviewer-patch-opaque` row
+    /// (#151).
+    #[must_use]
+    pub fn reviewer_opaque(kind: OpaqueKind, why: &str, hint: Option<&str>) -> PolicyDecision {
+        deny(
+            reviewer::opaque(kind, why, hint),
+            telemetry_via(ShellDenyVia::ReviewerOpaque, None),
+        )
+    }
+
     /// A `deny-shell-write` of `file` with the redacted command.
     fn shell_write(&self, cmd: &str, file: ShellWriteFile, reason: &str) -> PolicyDecision {
         let event = TelemetryEvent::DenyShellWrite {
@@ -233,6 +264,11 @@ impl BashPolicy {
         };
         deny(reason.to_owned(), event)
     }
+}
+
+/// A `deny-shell-write` row with a `via`.
+fn telemetry_via(via: ShellDenyVia, cmd: Option<String>) -> TelemetryEvent {
+    TelemetryEvent::DenyShellWriteVia { via, cmd }
 }
 
 /// A denial with its row.

@@ -56,6 +56,26 @@ pub enum TelemetryEvent {
         /// The command, redacted and clipped.
         cmd: String,
     },
+    /// `deny-shell-write` with a `via`: a copy or patch onto `.rs` files the scan refuses, or
+    /// the reviewer's patch denials.
+    DenyShellWriteVia {
+        /// Why.
+        via: ShellDenyVia,
+        /// The command, redacted and clipped; the reviewer's rows have none.
+        cmd: Option<String>,
+    },
+    /// `deny-scan` with `via: "shell-copy"`: a copy onto `.rs` files adds escape hatches.
+    DenyShellCopyScan {
+        /// The first word of each denial: its rule id.
+        rules: Vec<String>,
+        /// The command, redacted and clipped.
+        cmd: String,
+    },
+    /// `ask` with `via: "shell-copy"`: a copy onto `.rs` files needs approval.
+    ShellCopyAsk {
+        /// How many things need approval.
+        count: usize,
+    },
     /// `deny-lockfile` with `via: "shell"`: a shell write to `Cargo.lock`.
     DenyShellLockfile {
         /// The command, redacted and clipped.
@@ -124,6 +144,39 @@ impl ShellWriteFile {
     }
 }
 
+/// Why a `deny-shell-write` row with a `via` was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShellDenyVia {
+    /// `shell-reader`: a write into a `.rs` file the shell reader finds (`x.r\s`, `curl -o`).
+    ShellReader,
+    /// `patch-unread`: a patch temper cannot read.
+    PatchUnread,
+    /// `copy-unread`: a copy onto `.rs` files whose content temper cannot read.
+    CopyUnread,
+    /// `patch`: a patch that changes Rust sources, with how many (`files`).
+    Patch {
+        /// How many Rust sources it changes.
+        files: usize,
+    },
+    /// `reviewer-patch`: the reviewer applies a patch.
+    ReviewerPatch,
+    /// `reviewer-patch-opaque`: the reviewer runs a command temper cannot rule out applies one.
+    ReviewerOpaque,
+}
+
+impl ShellDenyVia {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::ShellReader => "shell-reader",
+            Self::PatchUnread => "patch-unread",
+            Self::CopyUnread => "copy-unread",
+            Self::Patch { .. } => "patch",
+            Self::ReviewerPatch => "reviewer-patch",
+            Self::ReviewerOpaque => "reviewer-patch-opaque",
+        }
+    }
+}
+
 /// Why `pre-bash` asked (an `ask` row's `via`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellAskVia {
@@ -152,9 +205,12 @@ impl TelemetryEvent {
             Self::DenyLockfile { .. } | Self::DenyShellLockfile { .. } => "deny-lockfile",
             Self::DenySkillGate { .. } => "deny-skill-gate",
             Self::DenyManifest { .. } => "deny-manifest",
-            Self::DenyScan { .. } => "deny-scan",
-            Self::Ask { .. } | Self::ShellAsk { .. } | Self::ProtectedAsk { .. } => "ask",
-            Self::DenyShellWrite { .. } => "deny-shell-write",
+            Self::DenyScan { .. } | Self::DenyShellCopyScan { .. } => "deny-scan",
+            Self::Ask { .. }
+            | Self::ShellAsk { .. }
+            | Self::ProtectedAsk { .. }
+            | Self::ShellCopyAsk { .. } => "ask",
+            Self::DenyShellWrite { .. } | Self::DenyShellWriteVia { .. } => "deny-shell-write",
             Self::DenyBaselineRaise { .. } => "deny-baseline-raise",
             Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
         }
@@ -169,8 +225,7 @@ impl TelemetryEvent {
             }
             Self::DenyManifest { file, rules } | Self::DenyScan { file, rules } => {
                 push_field(out, "file", &json_string(file));
-                let rules: Vec<String> = rules.iter().map(|rule| json_string(rule)).collect();
-                push_field(out, "rules", &format!("[{}]", rules.join(",")));
+                push_rules(out, rules);
             }
             Self::Ask { file, count } => {
                 push_field(out, "file", &json_string(file));
@@ -181,6 +236,16 @@ impl TelemetryEvent {
                     push_field(out, "file", &json_string(file));
                 }
                 push_field(out, "cmd", &json_string(cmd));
+            }
+            Self::DenyShellWriteVia { via, cmd } => push_via(out, *via, cmd.as_deref()),
+            Self::DenyShellCopyScan { rules, cmd } => {
+                push_field(out, "via", r#""shell-copy""#);
+                push_rules(out, rules);
+                push_field(out, "cmd", &json_string(cmd));
+            }
+            Self::ShellCopyAsk { count } => {
+                push_field(out, "via", r#""shell-copy""#);
+                push_field(out, "count", &count.to_string());
             }
             Self::DenyShellLockfile { cmd } => {
                 push_field(out, "via", r#""shell""#);
@@ -208,6 +273,23 @@ impl TelemetryEvent {
                 }
             }
         }
+    }
+}
+
+/// Appends `,"rules":[...]`.
+fn push_rules(out: &mut String, rules: &[String]) {
+    let rules: Vec<String> = rules.iter().map(|rule| json_string(rule)).collect();
+    push_field(out, "rules", &format!("[{}]", rules.join(",")));
+}
+
+/// Appends a `deny-shell-write` row's `via`, a patch's `files` and the command, if any.
+fn push_via(out: &mut String, via: ShellDenyVia, cmd: Option<&str>) {
+    push_field(out, "via", &json_string(via.name()));
+    if let ShellDenyVia::Patch { files } = via {
+        push_field(out, "files", &files.to_string());
+    }
+    if let Some(cmd) = cmd {
+        push_field(out, "cmd", &json_string(cmd));
     }
 }
 

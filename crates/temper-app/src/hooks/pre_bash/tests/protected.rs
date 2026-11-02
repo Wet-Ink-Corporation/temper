@@ -5,10 +5,6 @@
 //! The workspace holds what the 1.x test's holds at that point; git answers as outside a
 //! repository. The cases with git (nested checkouts, restores from a revision) are in
 //! `temper-cli`'s `tests/it/hooks.rs`.
-//!
-//! A row whose write is interpreter code (`python3 -c`, `node -e`, a Python here-document,
-//! `[IO.File]::WriteAllText`) or that 1.x's `.rs` rule denies first arrives with port Phase
-//! 2f: such a row carries `until_2f`, the answer this build gives, which 2f removes.
 
 use temper_domain::{HookEvent, HookOutcome, JsValue, PathStyle::Posix};
 
@@ -81,7 +77,7 @@ fn answer(outcome: &HookOutcome) -> (&'static str, &str) {
     }
 }
 
-/// Every captured call of 1.x's test `test` gets 1.x's answer, or its `until_2f` one.
+/// Every captured call of 1.x's test `test` gets 1.x's answer.
 fn replays(test: &str, ws: &Ws) {
     let groups = JsValue::from_json(CASES).expect("the cases are JSON");
     let JsValue::Array(groups) = groups else {
@@ -104,9 +100,8 @@ fn replays(test: &str, ws: &Ws) {
             JsValue::String(cmd.to_owned()).to_json()
         );
         let got = ws.run(HookEvent::PreBash, &json);
-        let want = case.get("until_2f").unwrap_or(case);
         let (decision, reason) = answer(&got);
-        if (decision, reason) != (text(want, "decision"), text(want, "reason")) {
+        if (decision, reason) != (text(case, "decision"), text(case, "reason")) {
             wrong.push(format!("{cmd:?} in {cwd}: {decision} {reason:?}"));
         }
     }
