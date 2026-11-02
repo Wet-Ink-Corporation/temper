@@ -7,12 +7,13 @@
 //! `tee`, `sed -i` and the other writers, inside `bash -c` and compound commands too.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 
 use temper_domain::{InterpreterCode, PathStyle};
 
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
-    Guard, ParseOpts, PathCx, Target, command_writes, msys_path, parse_commands,
+    Dir, Guard, ParseOpts, PathCx, Target, command_writes, msys_path, parse_commands,
 };
 use crate::paths::{self, PathEnv};
 use crate::ports::Ports;
@@ -26,6 +27,18 @@ pub(super) fn state_dir_write(
     cmd: &str,
     code: &InterpreterCode,
 ) -> bool {
+    state_dir_write_in(call, ws, (cmd, code), &Guard::default())
+}
+
+/// [`state_dir_write`] of `line` (the command and the interpreter-code matcher) within
+/// `guard`'s bounds, which a test may set lower.
+pub(super) fn state_dir_write_in(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    line: (&str, &InterpreterCode),
+    guard: &Guard,
+) -> bool {
+    let (cmd, code) = line;
     let env = call.env;
     let style = env.style;
     let cwd = env.cwd.to_string_lossy();
@@ -37,11 +50,10 @@ pub(super) fn state_dir_write(
     };
     let temp = env.temp_dir.to_string_lossy();
     let home = env.home.to_string_lossy();
-    let guard = Guard::default();
     let cx = PathCx {
         at: PathEnv { style, cwd: &cwd },
         os_tmp: &temp,
-        guard: Some(&guard),
+        guard: Some(guard),
     };
     let state = paths::resolve(style, &cwd, &ws.state_dir);
     // In a repository, `$(git rev-parse --git-common-dir)` is the state dir's parent.
@@ -69,7 +81,8 @@ pub(super) fn state_dir_write(
     };
     // 1.x lists every target with its path (`writeTargets`) before it checks one, so a path
     // past V8's longest string anywhere in the line throws, and `readerRule` falls back
-    // (#201 F2). Once one has, nothing after it is read.
+    // (#201 F2). Once one has, nothing after it is read. Past the budget of directory text,
+    // a target's check stops, and so does the rule.
     let targets: Vec<Target<'_>> = commands
         .iter()
         .take_while(|_| !guard.overflowed())
@@ -79,6 +92,27 @@ pub(super) fn state_dir_write(
         && targets
             .iter()
             .any(|t| probe.target(t, &start) && !guard.overflowed())
+}
+
+/// The directory a target's relative names are read from: its command's, else the start. A
+/// command's directory is built the first time a relative name needs it, and an absolute name
+/// never builds it, as 1.x's `path.resolve` never reads it then (#202 F1).
+struct Base<'d> {
+    dir: Option<&'d Dir>,
+    start: &'d str,
+    built: OnceCell<Option<Cow<'d, str>>>,
+}
+
+impl Base<'_> {
+    /// The directory's text; `None` once the line's budget is spent.
+    fn text(&self, cx: PathCx<'_>) -> Option<&str> {
+        self.built
+            .get_or_init(|| match self.dir {
+                Some(dir) => cx.dir_text(Some(dir)),
+                None => Some(Cow::Borrowed(self.start)),
+            })
+            .as_deref()
+    }
 }
 
 /// What a destination is compared with.
@@ -92,11 +126,12 @@ struct Probe<'a> {
 impl Probe<'_> {
     /// A target in the state dir, or a copy whose source lands there (`mv temper .git/`).
     fn target(&self, t: &Target<'_>, start: &str) -> bool {
-        let cwd = self.cx.dir_text(t.cwd.as_ref());
-        if self.cx.stopped() {
-            return false; // 1.x has thrown: the rule falls back
-        }
-        let base = cwd.as_deref().unwrap_or(start);
+        let base = Base {
+            dir: t.cwd.as_ref(),
+            start,
+            built: OnceCell::new(),
+        };
+        let base = &base;
         let text = t.word.text();
         let value = t.word.value().filter(|_| !t.word.glob());
         if self.names_state(text, value, base) {
@@ -116,7 +151,7 @@ impl Probe<'_> {
 
     /// 1.x `isState`: either reading of a backslash before a word char counts. PowerShell keeps
     /// it as a separator; bash drops it, and a bash function may carry a cmdlet's name.
-    fn names_state(&self, text: &str, value: Option<&str>, base: &str) -> bool {
+    fn names_state(&self, text: &str, value: Option<&str>, base: &Base<'_>) -> bool {
         if self.names_state_as(text, value, base) {
             return true;
         }
@@ -133,7 +168,7 @@ impl Probe<'_> {
     }
 
     /// 1.x `isStateAs(text, value, base)`.
-    fn names_state_as(&self, text: &str, value: Option<&str>, base: &str) -> bool {
+    fn names_state_as(&self, text: &str, value: Option<&str>, base: &Base<'_>) -> bool {
         if state_var_entry(&slash(text)) {
             return true;
         }
@@ -141,6 +176,10 @@ impl Probe<'_> {
         let named = msys_path(value.unwrap_or(text), style, self.cx.os_tmp);
         let mut p = slash(&named).into_owned();
         if !anchored(&p) {
+            // Past the line's budget, 1.x has thrown, and the rule falls back.
+            let Some(base) = base.text(self.cx) else {
+                return false;
+            };
             // 1.x's `${slash(base)}/${p}` throws past V8's longest string (#201 F2).
             if !self.cx.joins(base, &p, 1) {
                 return false;

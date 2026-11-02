@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use super::walk::Command;
-use super::words::{Dir, PathCx, Word, command_name, word_path};
+use super::words::{Dir, PathCx, Word, command_name, word_dir};
 
 /// 1.x `GIT_BUILTINS`: git's own commands (`git --list-cmds=main`, plus the newer `backfill`,
 /// `refs` and `replay`). An alias never overrides one; any other subcommand may be an alias.
@@ -275,8 +275,7 @@ pub(crate) fn git_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<Git<'c>>
             at = at.saturating_add(1);
             opts.dir = args
                 .get(at)
-                .and_then(|value| word_path(cx, value, opts.dir.as_ref()))
-                .map(Dir::resolved);
+                .and_then(|value| word_dir(cx, value, opts.dir.as_ref()));
         } else if opt == "-c" {
             at = at.saturating_add(1);
             opts.config(args.get(at));

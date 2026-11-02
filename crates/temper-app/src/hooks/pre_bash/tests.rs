@@ -107,6 +107,30 @@ impl Ws {
         self.run(HookEvent::PreEdit, &json)
     }
 
+    /// The state-dir rule's and the protected-config rule's answers to `cmd`, each within a
+    /// budget of `budget` bytes of directory text: whether it writes the state dir, and the
+    /// protected files it writes.
+    fn rules_within(&self, cmd: &str, budget: usize) -> (bool, Vec<String>) {
+        let json = format!(
+            r#"{{"tool_name":"Bash","cwd":"/ws","tool_input":{{"command":{}}}}}"#,
+            temper_domain::JsValue::String(cmd.to_owned()).to_json()
+        );
+        let input = HookInput::parse(&json).expect("the test's input is JSON");
+        let call = crate::hooks::HookCall {
+            ports: &self.ports,
+            env: &self.env,
+            input: &input,
+        };
+        let ws = call.workspace().expect("the fake workspace is found");
+        let code = temper_domain::InterpreterCode::new().expect("the built-in patterns compile");
+        let guard = crate::hooks::shell::Guard::with_budget(budget);
+        let state = super::state_dir::state_dir_write_in(&call, &ws, (cmd, &code), &guard);
+        let guard = crate::hooks::shell::Guard::with_budget(budget);
+        let line = (cmd, &code);
+        let changes = super::protected::protected_shell_writes_in(&call, &ws, line, &guard);
+        (state, changes.as_domain().written.to_vec())
+    }
+
     /// Each command of `table` gets 1.x's answer.
     fn answers(&self, table: &[(&str, Answer<'static>)]) {
         for &(cmd, want) in table {

@@ -368,7 +368,7 @@ fn a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands() {
         let style = cx.at.style;
         for base in bases {
             for value in values {
-                let stepped = walk::cd_step(style, &Dir::resolved(*base), value);
+                let stepped = Dir::resolved(*base).step(style, value);
                 let full = resolve_path(cx, Some(value), Some(base));
                 let stepped = stepped.as_ref().map(Dir::text);
                 assert_eq!(stepped.as_deref(), full.as_deref(), "{base:?} + {value:?}");
@@ -377,11 +377,71 @@ fn a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands() {
     }
     let base = Dir::resolved("/r");
     for value in ["/x", ""] {
-        assert_eq!(walk::cd_step(PathStyle::Posix, &base, value), None);
+        assert_eq!(base.step(PathStyle::Posix, value), None);
     }
     let base = Dir::resolved(r"C:\r");
     for value in [r"\x", "/c/x", "D:x", r"D:\x"] {
-        assert_eq!(walk::cd_step(PathStyle::Windows, &base, value), None);
+        assert_eq!(base.step(PathStyle::Windows, value), None);
+    }
+}
+
+/// Not in 1.x's tests (#202 F4): a chain of Windows `cd`s steps from the directories earlier
+/// steps made, through `..`s that cut a node short or climb past it, under a drive root and a
+/// UNC share, and lands at each step where Node's `path.win32.resolve` does (the expected
+/// values are Node 22's).
+#[test]
+fn a_chain_of_windows_cds_lands_where_path_win32_resolve_does_at_each_step() {
+    let cases: [(&str, &[&str], &[&str]); 8] = [
+        (r"C:\r", &[r"a\b", ".."], &[r"C:\r\a\b", r"C:\r\a"]),
+        (
+            r"C:\r",
+            &[r"a\b\c", "d", r"..\..", "..", "x"],
+            &[
+                r"C:\r\a\b\c",
+                r"C:\r\a\b\c\d",
+                r"C:\r\a\b",
+                r"C:\r\a",
+                r"C:\r\a\x",
+            ],
+        ),
+        (
+            r"C:\r",
+            &[r"a\b\c", r"..\..\..\..", "y"],
+            &[r"C:\r\a\b\c", r"C:\", r"C:\y"],
+        ),
+        (
+            r"C:\",
+            &["a", "..", "..", "b"],
+            &[r"C:\a", r"C:\", r"C:\", r"C:\b"],
+        ),
+        (r"C:\", &[r"a\b", r"..\c"], &[r"C:\a\b", r"C:\a\c"]),
+        (
+            r"\\h\s\x",
+            &["..", "..", "y"],
+            &[r"\\h\s\", r"\\h\s\", r"\\h\s\y"],
+        ),
+        (
+            r"\\h\s\",
+            &[r"a\b", "..", "c"],
+            &[r"\\h\s\a\b", r"\\h\s\a", r"\\h\s\a\c"],
+        ),
+        (
+            r"\\h\s\x",
+            &["a/b", "../../..", "z"],
+            &[r"\\h\s\x\a\b", r"\\h\s\", r"\\h\s\z"],
+        ),
+    ];
+    for (base, values, want) in cases {
+        let mut dir = Dir::resolved(base);
+        let mut landed = Vec::new();
+        for value in values {
+            let Some(next) = dir.step(PathStyle::Windows, value) else {
+                panic!("{base:?} + {value:?} did not step");
+            };
+            landed.push(next.text().into_owned());
+            dir = next;
+        }
+        assert_eq!(landed, want, "{base:?} + {values:?}");
     }
 }
 

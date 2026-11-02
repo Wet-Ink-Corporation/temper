@@ -9,7 +9,7 @@
 //! ([`Dir::text`]), which [`Guard`] holds to a budget per command line.
 
 use std::borrow::Cow;
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::rc::Rc;
 
@@ -18,13 +18,19 @@ use temper_domain::PathStyle;
 use super::words::{JS_MAX_STRING, js_len};
 use crate::paths;
 
-/// How many bytes of directory text one rule may build from a command line's directories to
-/// resolve its paths. Past it the rule stops as it does at V8's longest string, and gives its
-/// fallback. A path cannot exist past 4,096 bytes, so only a line that builds directories
-/// thousands of times that deep reaches it, and such a line (`cd $d; echo > x; ` x 2000 with
-/// an 8,000-byte `$d`) takes 1.x past the hook's 15 s timeout, which answers nothing either
-/// (port plan item 50).
-const DIR_TEXT_BUDGET: usize = 256 << 20;
+/// How many bytes of text one rule may build from a command line: the directory text it
+/// builds to resolve relative names, and the expansions copied into the words its commands
+/// hold. Past it the rule stops as it does at V8's longest string, and gives its fallback.
+/// Only a deeper directory's text is built and counted, once per name resolved from it: a
+/// root's is borrowed, and an absolute name reads none (#202 F1). A word that is one
+/// expansion shares the value, and costs nothing (#202 F2).
+///
+/// 1.x reads every byte of it several times in JavaScript: the state-dir rule takes about 20 s
+/// on 960 MiB of it, and the protected-config rule after it about 69 s, both past the hook's
+/// 15 s timeout, which answers nothing either. The budget is twice the 1 GiB where 1.x was
+/// measured to time out, so a line 1.x answers within its timeout on a machine up to twice as
+/// fast stays under it (port plan item 50).
+const DIR_TEXT_BUDGET: usize = 2 << 30;
 
 /// A directory: absolute, and in Node's normal form when [`Dir::is_normal`].
 #[derive(Clone)]
@@ -42,6 +48,9 @@ struct Node {
     units: usize,
     /// It is in Node's normal form, so a relative `cd` may step from it.
     normal: bool,
+    /// The whole path, once a word has expanded `$PWD` or `$OLDPWD` to it
+    /// ([`Dir::shared_text`]), so every word that does shares one copy.
+    shared: OnceCell<Rc<str>>,
 }
 
 impl Dir {
@@ -65,12 +74,18 @@ impl Dir {
             len: end,
             units,
             normal,
+            shared: OnceCell::new(),
         }))
     }
 
     /// The path's length in UTF-16 units, as JS counts it.
     pub(super) fn units(&self) -> usize {
         self.0.units
+    }
+
+    /// The path's length in bytes: what building it costs.
+    pub(super) fn len(&self) -> usize {
+        self.0.len
     }
 
     /// Whether a relative `cd` may step from it ([`Dir::step`]).
@@ -85,17 +100,41 @@ impl Dir {
         if node.parent.is_none() {
             return Cow::Borrowed(own);
         }
+        let mut text = String::with_capacity(node.len);
+        for piece in self.pieces().iter().rev() {
+            text.push_str(piece);
+        }
+        Cow::Owned(text)
+    }
+
+    /// The whole path as a shared string, for the words that expand to it: a whole root's
+    /// own text, or a deeper directory's built once and kept, charged to `guard` when it is
+    /// built. `None` once the budget is spent, which marks the overflow.
+    pub(super) fn shared_text(&self, guard: Option<&Guard>) -> Option<Rc<str>> {
+        let node = &*self.0;
+        if node.parent.is_none() && node.end == node.chunk.len() {
+            return Some(Rc::clone(&node.chunk));
+        }
+        if let Some(text) = node.shared.get() {
+            return Some(Rc::clone(text));
+        }
+        if guard.is_some_and(|guard| !guard.charge(node.len)) {
+            return None;
+        }
+        let text: Rc<str> = Rc::from(self.text());
+        // One handle is the node's, one the word's.
+        Some(Rc::clone(node.shared.get_or_init(|| text)))
+    }
+
+    /// The text of each node from this one up to its root, innermost first.
+    fn pieces(&self) -> Vec<&str> {
         let mut pieces = Vec::new();
         let mut at = Some(self);
         while let Some(dir) = at {
             pieces.push(dir.own());
             at = dir.0.parent.as_ref();
         }
-        let mut text = String::with_capacity(node.len);
-        for piece in pieces.iter().rev() {
-            text.push_str(piece);
-        }
-        Cow::Owned(text)
+        pieces
     }
 
     fn own(&self) -> &str {
@@ -135,6 +174,7 @@ impl Dir {
             len: node.len.saturating_sub(dropped.len()),
             units: node.units.saturating_sub(js_len(dropped)),
             normal: node.normal,
+            shared: OnceCell::new(),
         }))
     }
 
@@ -149,6 +189,7 @@ impl Dir {
             len: self.0.len.saturating_add(end),
             units,
             normal: self.0.normal,
+            shared: OnceCell::new(),
         }))
     }
 
@@ -237,9 +278,21 @@ impl Dir {
     pub(super) const BUDGET: usize = DIR_TEXT_BUDGET;
 }
 
+/// Two directories are equal when their paths are, compared piece by piece without building
+/// either path.
 impl PartialEq for Dir {
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0) || self.text() == other.text()
+        if Rc::ptr_eq(&self.0, &other.0) {
+            return true;
+        }
+        if self.0.len != other.0.len {
+            return false;
+        }
+        let (mine, theirs) = (self.pieces(), other.pieces());
+        mine.iter()
+            .rev()
+            .flat_map(|p| p.bytes())
+            .eq(theirs.iter().rev().flat_map(|p| p.bytes()))
     }
 }
 
@@ -252,15 +305,35 @@ impl fmt::Debug for Dir {
 }
 
 /// What stops the reader and the rules that read its paths, for one command line: a string
-/// past V8's longest, where 1.x throws and its rule falls back, or more directory text than
+/// past V8's longest, where 1.x throws and its rule falls back, or more text built than
 /// [`DIR_TEXT_BUDGET`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Guard {
     overflow: Cell<bool>,
     spent: Cell<usize>,
+    budget: usize,
+}
+
+impl Default for Guard {
+    fn default() -> Self {
+        Self {
+            overflow: Cell::new(false),
+            spent: Cell::new(0),
+            budget: DIR_TEXT_BUDGET,
+        }
+    }
 }
 
 impl Guard {
+    /// A guard whose budget is `bytes`, for a test to reach it with a short line.
+    #[cfg(test)]
+    pub(crate) fn with_budget(bytes: usize) -> Self {
+        Self {
+            budget: bytes,
+            ..Self::default()
+        }
+    }
+
     /// Whether the line went past a bound; the rule then gives its fallback, as 1.x's
     /// `readerRule` does when the reader throws.
     pub(crate) fn overflowed(&self) -> bool {
@@ -281,18 +354,22 @@ impl Guard {
         fits
     }
 
-    /// `dir`'s whole path, for a rule or a resolve to read, charged to the line's budget;
-    /// `None` once the budget is spent, which marks the overflow.
+    /// `dir`'s whole path, for a rule or a resolve to read. A root's is borrowed and costs
+    /// nothing; a deeper directory's is built, and charged to the line's budget. `None` once
+    /// the budget is spent, which marks the overflow.
     pub(crate) fn dir_text<'d>(&self, dir: &'d Dir) -> Option<Cow<'d, str>> {
-        self.charge(dir).then(|| dir.text())
+        if dir.0.parent.is_some() && !self.charge(dir.0.len) {
+            return None;
+        }
+        Some(dir.text())
     }
 
-    /// Charges a copy of `dir`'s whole path to the line's budget; `false` once it is spent,
-    /// which marks the overflow.
-    pub(super) fn charge(&self, dir: &Dir) -> bool {
-        let spent = self.spent.get().saturating_add(dir.0.len);
+    /// Charges `bytes` of directory text built to the line's budget; `false` once it is
+    /// spent, which marks the overflow.
+    pub(super) fn charge(&self, bytes: usize) -> bool {
+        let spent = self.spent.get().saturating_add(bytes);
         self.spent.set(spent);
-        if spent > DIR_TEXT_BUDGET {
+        if spent > self.budget {
             self.stop();
             return false;
         }

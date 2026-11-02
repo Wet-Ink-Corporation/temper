@@ -82,7 +82,7 @@ pub(super) fn interpreter_code(c: &Command) -> Vec<&str> {
     }
     stdin_body(c)
         .into_iter()
-        .chain(code_words(c, false).into_iter().map(|w| w.text.as_str()))
+        .chain(code_words(c, false).into_iter().map(Word::text))
         .collect()
 }
 
