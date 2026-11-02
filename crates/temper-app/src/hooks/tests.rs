@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use temper_domain::PathStyle::{Posix, Windows};
-use temper_domain::{ContextEvent, HookEvent, HookOutcome, SKILL_NOT_LOADED};
+use temper_domain::{ContextEvent, HookEvent, HookOutcome, SKILL_NOT_LOADED, Scanner};
 
 use super::HookInput;
 use super::input::{agent_key, session_segment};
@@ -98,8 +98,23 @@ fn env_with_data(data: Option<&str>) -> RunEnv {
     }
 }
 
+/// `hooks::run` with a freshly compiled scanner, which only `pre-edit` reads.
+fn run(
+    ports: &FakePorts,
+    env: &RunEnv,
+    event: HookEvent,
+    input: &HookInput,
+) -> Result<HookOutcome, HookError> {
+    let call = super::HookCall { ports, env, input };
+    super::run(&call, &scanner(), event)
+}
+
+fn scanner() -> Scanner {
+    Scanner::new().expect("every built-in pattern compiles")
+}
+
 fn post_tool(ports: &FakePorts, env: &RunEnv, json: &str) -> Result<HookOutcome, HookError> {
-    super::run(ports, env, HookEvent::PostTool, &input(json))
+    run(ports, env, HookEvent::PostTool, &input(json))
 }
 
 #[test]
@@ -232,7 +247,7 @@ fn user_prompt_nudges_only_in_a_project_with_the_gate_on_and_no_marker() {
     let answers: Vec<Option<HookOutcome>> = cases
         .into_iter()
         .map(|(files, _)| {
-            super::run(
+            run(
                 &FakePorts::new(files),
                 &env,
                 HookEvent::UserPrompt,
@@ -316,7 +331,7 @@ fn null_input_fails_as_v8_does_on_the_first_read() {
     let env = RunEnv::at("/ws", Posix);
 
     let messages = [HookEvent::PostTool, HookEvent::UserPrompt]
-        .map(|event| super::run(&ports, &env, event, &input("null")).map_err(|e| e.to_string()));
+        .map(|event| run(&ports, &env, event, &input("null")).map_err(|e| e.to_string()));
 
     assert_eq!(
         messages,
@@ -333,7 +348,7 @@ fn unported_events_say_so() {
     let ports = FakePorts::new(FakeFiles::new(Posix));
     let env = RunEnv::at("/ws", Posix);
 
-    let answer = super::run(&ports, &env, HookEvent::Stop, &input("{}"));
+    let answer = run(&ports, &env, HookEvent::Stop, &input("{}"));
 
     assert!(
         matches!(

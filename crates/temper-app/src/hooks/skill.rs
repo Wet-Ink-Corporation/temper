@@ -47,7 +47,7 @@ pub(crate) fn user_prompt(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome
     call.input.require_object("session_id")?;
     // 1.x looks for the marker again after `discover`; the marker path does not depend on the
     // project, so one look answers both.
-    if exists(call.ports.files(), &marker_path(call)) {
+    if skill_loaded(call) {
         return Ok(HookOutcome::Pass);
     }
     match call.workspace() {
@@ -57,6 +57,11 @@ pub(crate) fn user_prompt(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome
         }),
         Some(_) | None => Ok(HookOutcome::Pass),
     }
+}
+
+/// 1.x `skillLoaded(proj, input)`: has the skill been loaded in this session and agent context?
+pub(crate) fn skill_loaded<P: Ports>(call: &HookCall<'_, P>) -> bool {
+    exists(call.ports.files(), &marker_path(call))
 }
 
 /// 1.x `markSkillLoaded`: writes the marker, holding the time.

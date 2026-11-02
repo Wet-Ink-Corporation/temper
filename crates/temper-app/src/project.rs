@@ -192,16 +192,23 @@ pub(crate) fn crate_of(files: &impl Files, at: PathEnv<'_>, file: &str) -> Optio
 /// across blank lines, only by JS spaces. With `m`, `^` also matches after `\r`, U+2028 and
 /// U+2029, so the run of spaces before it must reach the text's start or hold a line end.
 pub(crate) fn declares_package(manifest: &str) -> bool {
-    manifest.match_indices("[package]").any(|(at, _)| {
-        let before = manifest.get(..at).unwrap_or("");
-        let text = before.trim_end_matches(is_js_space);
-        let spaces = before.get(text.len()..).unwrap_or("");
-        text.is_empty() || spaces.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
-    })
+    manifest
+        .match_indices("[package]")
+        .any(|(at, _)| after_line_start(manifest, at))
+}
+
+/// Would `/^\s*/m` reach byte `at` of `text`? Only when the JS spaces before it run back to the
+/// text's start or hold a line end, since `^` under `m` also matches after `\n`, `\r`, U+2028
+/// and U+2029.
+pub(crate) fn after_line_start(text: &str, at: usize) -> bool {
+    let before = text.get(..at).unwrap_or("");
+    let rest = before.trim_end_matches(is_js_space);
+    let spaces = before.get(rest.len()..).unwrap_or("");
+    rest.is_empty() || spaces.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
 }
 
 /// Is `c` in JS's `\s`? The set is defined once, by the domain's `js_trim`.
-fn is_js_space(c: char) -> bool {
+pub(crate) fn is_js_space(c: char) -> bool {
     js_trim(c.encode_utf8(&mut [0; 4])).is_empty()
 }
 

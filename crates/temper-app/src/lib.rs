@@ -12,6 +12,7 @@ mod engine;
 mod fakes;
 mod git;
 mod hooks;
+mod manifests;
 mod paths;
 mod ports;
 mod project;
