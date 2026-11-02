@@ -1,0 +1,227 @@
+[
+ {
+  "name": "hard",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"temper: this edit introduces 1 escape hatch(es), so it was not applied. Rewrite it without them:\\nH-02 src/lib.rs:3: unwrap/expect in production code. `v.unwrap()`\\n    fix: Propagate with `?`, convert with `ok_or_else`/`let ... else`, or make the invariant a type. See references/errors.md \\\"Eliminating unwrap/expect\\\".\\nIf one of these is a genuine exception, put `#[expect(<lint>, reason = \\\"...\\\")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.\"}}",
+  "telemetry": "\"event\":\"deny-scan\",\"file\":\"src/lib.rs\",\"rules\":[\"H-02\"]"
+ },
+ {
+  "name": "expect",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\n#[expect(clippy::unwrap_used, reason = \"checked above\")]\npub fn f(v: Option<u8>) -> u8 {\n    v.unwrap()\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- Lint exception requested at src/lib.rs:2 (clippy::unwrap_used): `#[expect(clippy::unwrap_used, reason = \\\"checked above\\\")]`. Approve only if the stated reason holds (H-05).\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/lib.rs\",\"count\":1"
+ },
+ {
+  "name": "expect two lints",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\n#[expect(clippy::unwrap_used, reason = \"checked above\")]\npub fn f(v: Option<u8>) -> u8 {\n    v.expect(\"set\")\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- Lint exception requested at src/lib.rs:2 (clippy::unwrap_used): `#[expect(clippy::unwrap_used, reason = \\\"checked above\\\")]`. Approve only if the stated reason holds (H-05).\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/lib.rs\",\"count\":1"
+ },
+ {
+  "name": "soft",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f(d: std::time::Duration) {\n    std::thread::sleep(d);\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"temper advisories for this edit (not blocking, but a reviewer will ask):\\nTST-10 src/lib.rs:3: `thread::sleep`. `std::thread::sleep(d);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\"}}",
+  "telemetry": null
+ },
+ {
+  "name": "clones",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f(v: Vec<u8>) -> (Vec<u8>, Vec<u8>) {\n    (v.clone(), v)\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"temper advisories for this edit (not blocking, but a reviewer will ask):\\nH-08 src/lib.rs: 1 new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).\"}}",
+  "telemetry": null
+ },
+ {
+  "name": "tests removed",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "after": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- src/lib.rs: this edit removes 1 test(s) (H-12). Approve only if the test is being moved or intentionally retired.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/lib.rs\",\"count\":1"
+ },
+ {
+  "name": "ignore added",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "after": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    #[ignore = \"flaky on CI\"]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- src/lib.rs: this edit adds `#[ignore]` to 1 existing test(s) (H-12). Approve only if you asked for the test to stop running.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/lib.rs\",\"count\":1"
+ },
+ {
+  "name": "miri ignore",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "after": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    #[cfg_attr(miri, ignore = \"needs a real clock\")]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "new mod.rs",
+  "rel": "src/foo/mod.rs",
+  "before": "",
+  "after": "//! Foo.\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"temper: this edit introduces 1 escape hatch(es), so it was not applied. Rewrite it without them:\\nARC-06 src/foo/mod.rs: new mod.rs file.\\n    fix: use `foo.rs` plus `foo/bar.rs`.\\nIf one of these is a genuine exception, put `#[expect(<lint>, reason = \\\"...\\\")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.\"}}",
+  "telemetry": "\"event\":\"deny-scan\",\"file\":\"src/foo/mod.rs\",\"rules\":[\"ARC-06\"]"
+ },
+ {
+  "name": "new test mod.rs",
+  "rel": "tests/foo/mod.rs",
+  "before": "",
+  "after": "//! Foo.\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "twelve denies",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f0() {\n    dbg!(0);\n}\npub fn f1() {\n    dbg!(1);\n}\npub fn f2() {\n    dbg!(2);\n}\npub fn f3() {\n    dbg!(3);\n}\npub fn f4() {\n    dbg!(4);\n}\npub fn f5() {\n    dbg!(5);\n}\npub fn f6() {\n    dbg!(6);\n}\npub fn f7() {\n    dbg!(7);\n}\npub fn f8() {\n    dbg!(8);\n}\npub fn f9() {\n    dbg!(9);\n}\npub fn f10() {\n    dbg!(10);\n}\npub fn f11() {\n    dbg!(11);\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"temper: this edit introduces 12 escape hatch(es), so it was not applied. Rewrite it without them:\\nH-06 src/lib.rs:3: `dbg!` left in code. `dbg!(0);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:6: `dbg!` left in code. `dbg!(1);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:9: `dbg!` left in code. `dbg!(2);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:12: `dbg!` left in code. `dbg!(3);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:15: `dbg!` left in code. `dbg!(4);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:18: `dbg!` left in code. `dbg!(5);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:21: `dbg!` left in code. `dbg!(6);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:24: `dbg!` left in code. `dbg!(7);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:27: `dbg!` left in code. `dbg!(8);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nH-06 src/lib.rs:30: `dbg!` left in code. `dbg!(9);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\n... and 2 more.\\nIf one of these is a genuine exception, put `#[expect(<lint>, reason = \\\"...\\\")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.\"}}",
+  "telemetry": "\"event\":\"deny-scan\",\"file\":\"src/lib.rs\",\"rules\":[\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\",\"H-06\"]"
+ },
+ {
+  "name": "nine advisories",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f0() {\n    std::thread::sleep(D);\n}\npub fn f1() {\n    std::thread::sleep(D);\n}\npub fn f2() {\n    std::thread::sleep(D);\n}\npub fn f3() {\n    std::thread::sleep(D);\n}\npub fn f4() {\n    std::thread::sleep(D);\n}\npub fn f5() {\n    std::thread::sleep(D);\n}\npub fn f6() {\n    std::thread::sleep(D);\n}\npub fn f7() {\n    std::thread::sleep(D);\n}\npub fn f8() {\n    std::thread::sleep(D);\n}\npub fn g(v: Vec<u8>) -> (Vec<u8>, Vec<u8>) {\n    (v.clone(), v)\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"temper advisories for this edit (not blocking, but a reviewer will ask):\\nTST-10 src/lib.rs:3: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:6: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:9: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:12: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:15: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:18: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:21: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\\nTST-10 src/lib.rs:24: `thread::sleep`. `std::thread::sleep(D);`\\n    fix: In async code this blocks the executor (ASY-06); use `tokio::time::sleep`. In tests, inject a clock or use paused time (TST-10).\"}}",
+  "telemetry": null
+ },
+ {
+  "name": "ask with advice",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "after": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\npub fn g(v: Vec<u8>) -> (Vec<u8>, Vec<u8>) {\n    (v.clone(), v)\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- src/lib.rs: this edit removes 1 test(s) (H-12). Approve only if the test is being moved or intentionally retired.\",\"additionalContext\":\"temper advisories for this edit:\\nH-08 src/lib.rs: 1 new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/lib.rs\",\"count\":1"
+ },
+ {
+  "name": "exempt",
+  "rel": "src/exempt/x.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f() {\n    dbg!(1);\n}\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "protected rust",
+  "rel": "src/guarded.rs",
+  "before": "//! A.\n",
+  "after": "//! A.\npub fn f(v: Vec<u8>) -> (Vec<u8>, Vec<u8>) {\n    (v.clone(), v)\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- src/guarded.rs is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.\",\"additionalContext\":\"temper advisories for this edit:\\nH-08 src/guarded.rs: 1 new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"src/guarded.rs\",\"count\":1"
+ },
+ {
+  "name": "protected other",
+  "rel": "protected.txt",
+  "before": "a",
+  "after": "b",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- protected.txt is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"protected.txt\",\"count\":1"
+ },
+ {
+  "name": "other",
+  "rel": "notes.md",
+  "before": "a",
+  "after": "b",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "deny and ask",
+  "rel": "src/lib.rs",
+  "before": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::one;\n\n    #[test]\n    fn is_one() {\n        assert_eq!(one(), 1);\n    }\n}\n",
+  "after": "//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n\npub fn g() {\n    dbg!(1);\n}\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"temper: this edit introduces 1 escape hatch(es), so it was not applied. Rewrite it without them:\\nH-06 src/lib.rs:9: `dbg!` left in code. `dbg!(1);`\\n    fix: Remove it. Use `tracing::debug!` with structured fields for diagnostics that should stay.\\nIf one of these is a genuine exception, put `#[expect(<lint>, reason = \\\"...\\\")]` on the item; the human will be asked to approve it. See rust-craft references/escape-hatches.md.\"}}",
+  "telemetry": "\"event\":\"deny-scan\",\"file\":\"src/lib.rs\",\"rules\":[\"H-06\"]"
+ },
+ {
+  "name": "manifest new dependency",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\nrand = \"0.8\"\nserde = \"1\"\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- Cargo.toml: new dependency rand (H-16, ARC-12). Approve if the addition is justified.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"Cargo.toml\",\"count\":1"
+ },
+ {
+  "name": "manifest new dependencies",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\nrand = \"0.8\"\nnix = \"0.29\"\n\n[dev-dependencies]\nproptest = \"1\"\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- Cargo.toml: new dependencies rand, nix, proptest (dev) (H-16, ARC-12). Approve if the addition is justified.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"Cargo.toml\",\"count\":1"
+ },
+ {
+  "name": "manifest lints change",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[workspace.lints.rust]\nunsafe_code = \"forbid\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"temper needs your approval:\\n- Cargo.toml: the [lints]/[profile] sections change (H-05). Approve only if intended.\"}}",
+  "telemetry": "\"event\":\"ask\",\"file\":\"Cargo.toml\",\"count\":1"
+ },
+ {
+  "name": "manifest loses inheritance",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "manifest from empty",
+  "rel": "Cargo.toml",
+  "before": "",
+  "after": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\nrand = \"0.8\"\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ },
+ {
+  "name": "manifest pin",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"=2.0.1\"\n",
+  "write": true,
+  "json": "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"temper advisories for this edit (not blocking, but a reviewer will ask):\\nARC-12 Cargo.toml: `thiserror = \\\"=2.0.1\\\"` is an exact `=` pin.\\n    fix: declare a caret floor at the oldest version whose API you use (`\\\"1.4\\\"`), never `=`, `~`, `*` or an upper bound.\"}}",
+  "telemetry": null
+ },
+ {
+  "name": "manifest invalid after",
+  "rel": "Cargo.toml",
+  "before": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n",
+  "after": "[package]\nname = \"a\"\n\n[lints]\nworkspace = true\n\n[workspace]\n\n[dependencies]\nthiserror = \"2\"\n[broken\n",
+  "write": true,
+  "json": null,
+  "telemetry": null
+ }
+]

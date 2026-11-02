@@ -1,4 +1,5 @@
-//! What a hook answers, and its JSON on stdout (1.x `hooks.mjs` `ctx`, `notice` and `none`).
+//! What a hook answers, and its JSON on stdout (1.x `hooks.mjs` `ctx`, `deny`, `ask`, `notice`
+//! and `none`).
 
 use super::HookEvent;
 use crate::js::json_string;
@@ -8,17 +9,20 @@ use crate::js::json_string;
 pub enum ContextEvent {
     /// `UserPromptSubmit`.
     UserPromptSubmit,
+    /// `PreToolUse`.
+    PreToolUse,
 }
 
 impl ContextEvent {
     const fn name(self) -> &'static str {
         match self {
             Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::PreToolUse => "PreToolUse",
         }
     }
 }
 
-/// A hook's answer. The deny, ask and block shapes arrive with the handlers that give them.
+/// A hook's answer. The block shape arrives with `stop` (port Phase 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookOutcome {
     /// No output: the action proceeds unremarked.
@@ -29,6 +33,20 @@ pub enum HookOutcome {
         event: ContextEvent,
         /// The text.
         text: String,
+    },
+    /// The tool call is refused (`PreToolUse`, `permissionDecision: "deny"`).
+    Deny {
+        /// Why, for the model.
+        reason: String,
+        /// More text for the model's context; `None` or empty leaves it out.
+        context: Option<String>,
+    },
+    /// The human is asked to approve the tool call (`permissionDecision: "ask"`).
+    Ask {
+        /// What needs approval.
+        reason: String,
+        /// More text for the model's context; `None` or empty leaves it out.
+        context: Option<String>,
     },
     /// A message for the human (`systemMessage`).
     Notice {
@@ -77,9 +95,24 @@ impl HookOutcome {
                 event.name(),
                 json_string(text)
             )),
+            Self::Deny { reason, context } => Some(decision("deny", reason, context.as_deref())),
+            Self::Ask { reason, context } => Some(decision("ask", reason, context.as_deref())),
             Self::Notice { message } => {
                 Some(format!(r#"{{"systemMessage":{}}}"#, json_string(message)))
             }
         }
     }
+}
+
+/// 1.x `deny` and `ask`: the decision, its reason, and the context only when it is not empty
+/// (`...(extraContext ? { additionalContext } : {})`).
+fn decision(kind: &str, reason: &str, context: Option<&str>) -> String {
+    let context = match context {
+        Some(text) if !text.is_empty() => format!(r#","additionalContext":{}"#, json_string(text)),
+        Some(_) | None => String::new(),
+    };
+    format!(
+        r#"{{"hookSpecificOutput":{{"hookEventName":"PreToolUse","permissionDecision":"{kind}","permissionDecisionReason":{}{context}}}}}"#,
+        json_string(reason)
+    )
 }

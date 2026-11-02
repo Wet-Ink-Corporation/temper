@@ -3,7 +3,7 @@
 
 use proptest::prelude::*;
 
-use super::{basename, dirname, is_absolute, join, norm, relative, resolve};
+use super::{basename, clean_rel, dirname, is_absolute, join, norm, relative, resolve};
 use temper_domain::PathStyle::{self, Posix, Windows};
 
 const WIN_CWD: &str = r"C:\ws\crates\core";
@@ -256,4 +256,34 @@ proptest! {
 
         prop_assert_eq!(relative(style, &from, &from, &to), rel);
     }
+}
+
+/// 1.x `cleanRel` (`manifest.mjs`), printed by Node 22: the four inputs of `toml.test.mjs`'s
+/// "major versions, path normalization, …" first (2-26), then the edges of `path.posix.normalize`.
+#[test]
+fn clean_rel_compares_paths_by_components_like_1x() {
+    let rows = [
+        ("./tools/gen/", "tools/gen"),
+        ("tools//gen", "tools/gen"),
+        ("crates/x/../y", "crates/y"),
+        ("a\\b", "a/b"),
+        ("", "."),
+        (".", "."),
+        ("./", ""),
+        ("../a", "../a"),
+        ("/abs/x/", "/abs/x"),
+        ("././x", "x"),
+        ("x/./", "x"),
+        ("a/..", "."),
+        ("a/../..", ".."),
+        ("//", ""),
+        ("./.././x/", "../x"),
+        ("tools/gen///", "tools/gen"),
+    ];
+
+    assert_eq!(
+        wrong(&rows, clean_rel),
+        [],
+        "path.posix.normalize, then the ./ and / trims"
+    );
 }

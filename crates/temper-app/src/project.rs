@@ -35,25 +35,30 @@ pub(crate) struct Workspace {
 /// has a `Cargo.toml`.
 pub(crate) fn discover(ports: &impl Ports, env: &RunEnv) -> Option<Project> {
     let cwd = env.cwd.to_string_lossy();
-    locate(ports, env, &cwd).map(|found| Project { root: found.root })
+    locate(ports, env, &cwd).map(|found| Project {
+        root: found.into_root(),
+    })
 }
 
 /// 1.x `discover(start)` in full: the root, the state dir and the config, for an absolute
 /// `start`.
 pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Option<Workspace> {
     let style = env.style;
-    let Located { root, git_root } = locate(ports, env, start)?;
-    let state_dir = match git_root {
-        Some(top) => {
-            let common = match git::common_dir(ports.process(), Path::new(&top)) {
-                Some(dir) => paths::resolve(style, &top, js_trim(&dir)),
+    let located = locate(ports, env, start)?;
+    let state_dir = match &located {
+        Located::Git(top) => {
+            let common = match git::common_dir(ports.process(), Path::new(top)) {
+                Some(dir) => paths::resolve(style, top, js_trim(&dir)),
                 // 1.x falls back to `<git root>/.git` when git cannot say.
-                None => paths::join(style, &top, ".git"),
+                None => paths::join(style, top, ".git"),
             };
             paths::join(style, &common, "temper")
         }
-        None => paths::join(style, &paths::join(style, &root, "target"), "temper"),
+        Located::Manifest(root) => {
+            paths::join(style, &paths::join(style, root, "target"), "temper")
+        }
     };
+    let root = located.into_root();
     let config = paths::join(style, &paths::join(style, &root, ".claude"), "temper.json");
     let config = match ports.files().read_text(Path::new(&config)) {
         Ok(Some(text)) => Config::load(Some(&text)).config,
@@ -67,10 +72,20 @@ pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Opti
     })
 }
 
-/// Where `discover` found the project.
-struct Located {
-    root: String,
-    git_root: Option<String>,
+/// Where `discover` found the project root, and so whether it is also the git root.
+enum Located {
+    /// Git's top level, which is the root.
+    Git(String),
+    /// The outermost directory with a `Cargo.toml`, outside any repository.
+    Manifest(String),
+}
+
+impl Located {
+    fn into_root(self) -> String {
+        match self {
+            Self::Git(root) | Self::Manifest(root) => root,
+        }
+    }
 }
 
 /// The root seen from `start`: git's top level when `start` is in a repository, otherwise the
@@ -90,16 +105,9 @@ fn locate(ports: &impl Ports, env: &RunEnv, start: &str) -> Option<Located> {
             // A git repository is a Rust project only with a manifest at its top or above the
             // start; one below it does not count.
             let rust = has_manifest(&root) || find_up(at, start, has_manifest).is_some();
-            // The root and the git root are one path, held twice as 1.x's object holds it.
-            rust.then(|| Located {
-                git_root: Some(root.clone()),
-                root,
-            })
+            rust.then_some(Located::Git(root))
         }
-        None => outermost_manifest_dir(at, start, has_manifest).map(|root| Located {
-            root,
-            git_root: None,
-        }),
+        None => outermost_manifest_dir(at, start, has_manifest).map(Located::Manifest),
     }
 }
 
@@ -184,16 +192,23 @@ pub(crate) fn crate_of(files: &impl Files, at: PathEnv<'_>, file: &str) -> Optio
 /// across blank lines, only by JS spaces. With `m`, `^` also matches after `\r`, U+2028 and
 /// U+2029, so the run of spaces before it must reach the text's start or hold a line end.
 pub(crate) fn declares_package(manifest: &str) -> bool {
-    manifest.match_indices("[package]").any(|(at, _)| {
-        let before = manifest.get(..at).unwrap_or("");
-        let text = before.trim_end_matches(is_js_space);
-        let spaces = before.get(text.len()..).unwrap_or("");
-        text.is_empty() || spaces.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
-    })
+    manifest
+        .match_indices("[package]")
+        .any(|(at, _)| after_line_start(manifest, at))
+}
+
+/// Would `/^\s*/m` reach byte `at` of `text`? Only when the JS spaces before it run back to the
+/// text's start or hold a line end, since `^` under `m` also matches after `\n`, `\r`, U+2028
+/// and U+2029.
+pub(crate) fn after_line_start(text: &str, at: usize) -> bool {
+    let before = text.get(..at).unwrap_or("");
+    let rest = before.trim_end_matches(is_js_space);
+    let spaces = before.get(rest.len()..).unwrap_or("");
+    rest.is_empty() || spaces.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
 }
 
 /// Is `c` in JS's `\s`? The set is defined once, by the domain's `js_trim`.
-fn is_js_space(c: char) -> bool {
+pub(crate) fn is_js_space(c: char) -> bool {
     js_trim(c.encode_utf8(&mut [0; 4])).is_empty()
 }
 

@@ -98,10 +98,11 @@ fn hook(event: Option<OsString>) -> Command {
         },
     );
     match name.parse::<HookEvent>() {
-        Ok(event @ (HookEvent::PostTool | HookEvent::UserPrompt)) => Command::Hook(Ok(event)),
+        Ok(event @ (HookEvent::PostTool | HookEvent::UserPrompt | HookEvent::PreEdit)) => {
+            Command::Hook(Ok(event))
+        }
         Ok(
             HookEvent::SessionStart
-            | HookEvent::PreEdit
             | HookEvent::PreBash
             | HookEvent::PreHandback
             | HookEvent::Stop
@@ -219,7 +220,8 @@ mod tests {
                 parse_strs(&["hook"]),
                 parse_strs(&["hook", ""]),
                 parse_strs(&["hook", "bogus"]),
-                parse_strs(&["hook", "pre-edit"]),
+                parse_strs(&["hook", "pre-edit", "extra"]),
+                parse_strs(&["hook", "pre-bash"]),
             ],
             [
                 hook("post-tool"),
@@ -227,6 +229,7 @@ mod tests {
                 hook("undefined"),
                 hook(""),
                 hook("bogus"),
+                hook("pre-edit"),
                 Command::Usage(UsageExit::Unknown),
             ],
             "the hook command"

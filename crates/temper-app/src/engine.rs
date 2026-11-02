@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use temper_domain::{HookEvent, HookOutcome, PathStyle, Scanner};
+use temper_domain::{GlobError, HookEvent, HookOutcome, PathStyle, Scanner};
 
-use crate::hooks::{self, HookInput};
+use crate::hooks::{self, HookCall, HookInput};
 use crate::ports::{FsError, Ports};
 use crate::scan;
 
@@ -53,15 +53,22 @@ impl<P: Ports> Engine<P> {
         scan::run(&self.ports, &self.env, &self.scanner, args)
     }
 
-    /// `temper hook <event>` with the parsed hook input: the handler's answer. So far only
-    /// `post-tool` and `user-prompt` are ported.
+    /// `temper hook <event>` with the parsed hook input: the handler's answer. So far
+    /// `post-tool`, `user-prompt` and `pre-edit` are ported.
     ///
     /// # Errors
     ///
     /// [`HookError::NotPorted`] for the other events; [`HookError::NullInput`] when the input
-    /// is JSON `null`; [`HookError::Files`] when a file the handler must write cannot be.
+    /// is JSON `null`; [`HookError::InputType`] for a field 1.x throws on; [`HookError::Glob`]
+    /// for a config glob that does not compile; [`HookError::Files`] when a file the handler
+    /// must write cannot be.
     pub fn hook(&self, event: HookEvent, input: &HookInput) -> Result<HookOutcome, HookError> {
-        hooks::run(&self.ports, &self.env, event, input)
+        let call = HookCall {
+            ports: &self.ports,
+            env: &self.env,
+            input,
+        };
+        hooks::run(&call, &self.scanner, event)
     }
 }
 
@@ -79,6 +86,14 @@ pub enum HookError {
         /// The first property the handler reads.
         field: &'static str,
     },
+    /// A field of the hook input has a type 1.x's handler throws on, such as a `file_path` that
+    /// is not a string. The message is V8's, without the value (port plan D16(p)).
+    #[error("{0}")]
+    InputType(&'static str),
+    /// A glob of `.claude/temper.json` does not compile; only one past `regex`'s size limit
+    /// can fail.
+    #[error(transparent)]
+    Glob(#[from] GlobError),
     /// The event's handler is not in this build yet (port plan 2-13).
     #[error("temper hook {} is not ported to this engine yet", event.name())]
     NotPorted {

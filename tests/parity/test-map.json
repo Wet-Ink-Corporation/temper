@@ -1,96 +1,110 @@
 {
-  "$comment": "The port plan's 1.x-to-Rust test map (§2.2), one entry per 1.x test file (1e-9, wi-a9dd30; multi-source since port Phase 2a, 2-18), checked by check_test_map.py. A source with a `pending` note names the phases that port its other tests; Phase 8 maps every engine test.",
+  "$comment": "The port plan's 1.x-to-Rust test map (§2.2), one entry per 1.x test file (1e-9, wi-a9dd30; multi-source since port Phase 2a, 2-18), checked by check_test_map.py. Each entry names the crate its Rust tests are in (since port Phase 2c, 2a review F9). A source with a `pending` note names the phases that port its other tests; Phase 8 maps every engine test.",
   "sources": [
     {
       "source": "tests/scan.test.mjs",
-      "crate": "temper-domain",
       "tests": [
         {
           "node": "masks strings, raw strings, chars and comments but keeps lifetimes",
+          "crate": "temper-domain",
           "rust": [
             "scan::lexer::tests::masks_strings_raw_strings_chars_and_comments_but_keeps_lifetimes"
           ]
         },
         {
           "node": "hard hits in production code",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::hard_hits_in_production_code"
           ]
         },
         {
           "node": "test regions allow unwrap/panic but not dbg or unsafe",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::test_regions_allow_unwrap_panic_but_not_dbg_or_unsafe"
           ]
         },
         {
           "node": "#[expect] with a reason converts a hard hit into an exception request",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::expect_with_reason_turns_hard_hit_into_exception_request"
           ]
         },
         {
           "node": "allow attribute, erased errors in pub signatures, .ok(); discard",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::allow_attribute_erased_errors_in_pub_signatures_ok_discard"
           ]
         },
         {
           "node": "newHits reports only introduced violations",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::new_hits_reports_only_introduced_violations"
           ]
         },
         {
           "node": "path classification",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::path_classification"
           ]
         },
         {
           "node": "no false positives on idiomatic code",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::core::no_false_positives_on_idiomatic_code"
           ]
         },
         {
           "node": "rule table: unique keys, rule ids, four contexts, fix text",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::engine::rule_table_unique_keys_rule_ids_four_contexts_fix_text"
           ]
         },
         {
           "node": "assert-in-prod: compile-time assertions are exempt",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::attributes::assert_in_prod_compile_time_assertions_are_exempt"
           ]
         },
         {
           "node": "ignore-no-reason: also catches cfg_attr(.., ignore)",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::attributes::ignore_no_reason_also_catches_cfg_attr_ignore"
           ]
         },
         {
           "node": "extern-crate: alloc and std in a no_std crate are exempt",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::attributes::extern_crate_alloc_and_std_are_exempt"
           ]
         },
         {
           "node": "print: build scripts get the writeln! fix text",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::attributes::print_build_scripts_get_the_writeln_fix_text"
           ]
         },
         {
           "node": "doc-unwrap: unwrap/expect/panic in doctest fences",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::docs::doc_unwrap_unwrap_expect_panic_in_doctest_fences"
           ]
         },
         {
           "node": "doc-unwrap: idiomatic doctests and non-Rust fences are clean",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::docs::doc_unwrap_idiomatic_doctests_and_non_rust_fences_are_clean",
             "scan::finders::doc_rules::tests::is_rust_fence_tokens"
@@ -98,12 +112,14 @@
         },
         {
           "node": "empty-if-let-err finds the body brace by depth; empty-err-arm allows keep-first-error",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::discards::empty_if_let_err_finds_the_body_brace_by_depth_empty_err_arm_allows_keep_first_error"
           ]
         },
         {
           "node": "lexer: escaped quote char literal; ignore counting",
+          "crate": "temper-domain",
           "rust": [
             "scan::lexer::tests::lexer_escaped_quote_char_literal",
             "scan::counts::tests::counts_reasoned_and_unreasoned_ignores_except_miri",
@@ -112,354 +128,413 @@
         },
         {
           "node": "empty-err-arm and empty-if-let-err: silent discards",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::discards::empty_err_arm_and_empty_if_let_err_silent_discards"
           ]
         },
         {
           "node": "thread-spawn: std::thread::spawn is refused outside tests",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::concurrency::thread_spawn_is_refused_outside_tests"
           ]
         },
         {
           "node": "compiler-fence and global-allocator",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::concurrency::compiler_fence_and_global_allocator"
           ]
         },
         {
           "node": "map-index: map[&key] is advisory; slices of references are not indexing",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::concurrency::map_index_is_advisory_slices_of_references_are_not"
           ]
         },
         {
           "node": "filter-map-ok and parse-unwrap-or: masked failures are advisory",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::concurrency::filter_map_ok_and_parse_unwrap_or_are_advisory"
           ]
         },
         {
           "node": "seqcst and fetch-update: atomics advisories",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::concurrency::seqcst_and_fetch_update_are_atomics_advisories"
           ]
         },
         {
           "node": "crate-lint-attr, pub-glob-reexport, prelude-mod",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::crate_lint_attr_pub_glob_reexport_prelude_mod"
           ]
         },
         {
           "node": "pub-smart-ptr: shared mutable state and dyn in public signatures",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::pub_smart_ptr_shared_mutable_state_and_dyn"
           ]
         },
         {
           "node": "struct-bounds: bounds belong on impls",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::struct_bounds_bounds_belong_on_impls"
           ]
         },
         {
           "node": "ops-impl: operators must not overflow silently",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::ops_impl_operators_must_not_overflow_silently"
           ]
         },
         {
           "node": "type-alias-primitive, get-prefix, mutex-unit",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::type_alias_primitive_get_prefix_mutex_unit"
           ]
         },
         {
           "node": "doc-arg-sections: no # Arguments / # Returns",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::doc_arg_sections_no_arguments_returns"
           ]
         },
         {
           "node": "detached-spawn: std threads and statement-level spawns",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::api::detached_spawn_std_threads_and_statement_level_spawns"
           ]
         },
         {
           "node": "no new-rule hits on an idiomatic ledger module",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::whole_file::no_new_rule_hits_on_an_idiomatic_ledger_module"
           ]
         },
         {
           "node": "commented-out code heuristic ignores prose",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::whole_file::commented_out_code_heuristic_ignores_prose"
           ]
         },
         {
           "node": "leak: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::leak_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "leak: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::leak_near_misses_do_not_fire"
           ]
         },
         {
           "node": "catch-unwind: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::catch_unwind_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "catch-unwind: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::catch_unwind_near_misses_do_not_fire"
           ]
         },
         {
           "node": "exit: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::exit_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "exit: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::exit_near_misses_do_not_fire"
           ]
         },
         {
           "node": "let-underscore: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::let_underscore_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "let-underscore: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::let_underscore_near_misses_do_not_fire"
           ]
         },
         {
           "node": "lazy-static: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::lazy_static_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "lazy-static: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::lazy_static_near_misses_do_not_fire"
           ]
         },
         {
           "node": "path-attr: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::path_attr_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "path-attr: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::path_attr_near_misses_do_not_fire"
           ]
         },
         {
           "node": "async-trait: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::async_trait_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "async-trait: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::escape_hatches::async_trait_near_misses_do_not_fire"
           ]
         },
         {
           "node": "shared-mut: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::shared_mut_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "shared-mut: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::shared_mut_near_misses_do_not_fire"
           ]
         },
         {
           "node": "global-mut: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::global_mut_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "global-mut: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::global_mut_near_misses_do_not_fire"
           ]
         },
         {
           "node": "deref-inherit: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::deref_inherit_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "deref-inherit: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::deref_inherit_near_misses_do_not_fire"
           ]
         },
         {
           "node": "sleep: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::sleep_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "sleep: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::sleep_near_misses_do_not_fire"
           ]
         },
         {
           "node": "unbounded: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::unbounded_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "unbounded: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::unbounded_near_misses_do_not_fire"
           ]
         },
         {
           "node": "downcast: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::downcast_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "downcast: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::downcast_near_misses_do_not_fire"
           ]
         },
         {
           "node": "env-var: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::env_var_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "env-var: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::state_and_time::env_var_near_misses_do_not_fire"
           ]
         },
         {
           "node": "should-panic: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::should_panic_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "should-panic: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::should_panic_near_misses_do_not_fire"
           ]
         },
         {
           "node": "weak-assert: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::weak_assert_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "weak-assert: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::weak_assert_near_misses_do_not_fire"
           ]
         },
         {
           "node": "test-branch: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::test_branch_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "test-branch: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::test_branch_near_misses_do_not_fire"
           ]
         },
         {
           "node": "serde-hashmap: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::serde_hashmap_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "serde-hashmap: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::serde_hashmap_near_misses_do_not_fire"
           ]
         },
         {
           "node": "ambient-now: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::ambient_now_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "ambient-now: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::tests_and_finders::ambient_now_near_misses_do_not_fire"
           ]
         },
         {
           "node": "spin-lock: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::locks_and_todos::spin_lock_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "spin-lock: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::locks_and_todos::spin_lock_near_misses_do_not_fire"
           ]
         },
         {
           "node": "todo-comment: positive cases pin the current id, severity and line",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::locks_and_todos::todo_comment_positive_cases_pin_id_severity_and_line"
           ]
         },
         {
           "node": "todo-comment: near-miss cases do not fire",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::key_cases::locks_and_todos::todo_comment_near_misses_do_not_fire"
           ]
         },
         {
           "node": "forbid-override: fires only for a lint the crate forbids",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::whole_file::forbid_override_fires_only_for_a_lint_the_crate_forbids"
           ]
         },
         {
           "node": "large file: a seeded hit near the end of ~5000 lines is reported in bounded time",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::whole_file::large_file_seeded_hit_near_the_end_is_reported"
           ],
@@ -467,6 +542,7 @@
         },
         {
           "node": "every RULES key is reported by at least one scan in this file",
+          "crate": "temper-domain",
           "rust": [
             "scan::tests::every_key::every_rules_key_is_reported_by_its_1x_witness"
           ]
@@ -475,73 +551,281 @@
     },
     {
       "source": "tests/toml.test.mjs",
-      "crate": "temper-domain",
-      "pending": "port Phase 2c (workspace root discovery, in temper-app) and Phase 4 (membersFromToml, 2-6)",
+      "pending": "port Phase 4 (membersFromToml, 2-6)",
       "tests": [
         {
           "node": "parses the Cargo manifest shapes temper reads",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::parse::parses_the_cargo_manifest_shapes_temper_reads"
           ]
         },
         {
           "node": "CRLF, escapes and invalid input",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::parse::crlf_escapes_and_invalid_input"
           ]
         },
         {
           "node": "the template and example manifests parse",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::parse::the_template_and_example_manifests_parse"
           ]
         },
         {
           "node": "non-caret requirements (ARC-12)",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::deps::non_caret_requirements"
           ]
         },
         {
           "node": "watched manifest switches carry their rule id",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::watched::watched_manifest_switches_carry_their_rule_id"
           ]
         },
         {
           "node": "a mocking crate in [dependencies] is a member problem (TST-09); dev-dependencies, optional and workspace tables are not",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::problems::a_mocking_crate_in_dependencies_is_a_member_problem"
+          ]
+        },
+        {
+          "node": "workspace root discovery follows Cargo: self, package.workspace, nearest ancestor, exclude",
+          "crate": "temper-app",
+          "rust": [
+            "manifests::tests::workspace_root_discovery_follows_cargo_self_package_workspace_nearest_ancestor_exclude"
           ]
         }
       ]
     },
     {
       "source": "tests/hooks.test.mjs",
-      "crate": "temper-domain",
-      "pending": "port Phases 2c to 2f (the hook handlers) and Phase 4 (the gate tests)",
+      "pending": "port Phases 2d to 2f (the Bash handler) and Phase 4 (the gate tests)",
       "tests": [
         {
           "node": "lintConfigChanged ignores plain inheritance and comments",
+          "crate": "temper-domain",
           "rust": [
             "manifest::tests::sections::lint_config_changed_ignores_plain_inheritance_and_comments"
+          ]
+        },
+        {
+          "node": "the throwaway workspace is discovered without git",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::the_throwaway_workspace_is_discovered_without_git"
+          ]
+        },
+        {
+          "node": "new member crate without [lints] workspace = true is denied (MOD-09)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::new_member_crate_without_lints_workspace_true_is_denied"
+          ]
+        },
+        {
+          "node": "new member crate with lint inheritance asks as a crate boundary (H-16), not as a lint change",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::new_member_crate_with_lint_inheritance_asks_as_a_crate_boundary_not_as_a_lint_change"
+          ]
+        },
+        {
+          "node": "an excluded crate is not a member",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::an_excluded_crate_is_not_a_member"
+          ]
+        },
+        {
+          "node": "a member gaining [lints] workspace = true is allowed without a prompt",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::a_member_gaining_lints_workspace_true_is_allowed_without_a_prompt"
+          ]
+        },
+        {
+          "node": "ratchet: a legacy member without inheritance or with a profile only advises",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::ratchet_a_legacy_member_without_inheritance_or_with_a_profile_only_advises"
+          ]
+        },
+        {
+          "node": "manifests.ownLints: a listed member may carry its own [lints] table, and changing it asks (H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::manifests_own_lints_a_listed_member_may_carry_its_own_lints_table_and_changing_it_asks"
+          ]
+        },
+        {
+          "node": "a member that overrides lints is a lint-config change (H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::a_member_that_overrides_lints_is_a_lint_config_change"
+          ]
+        },
+        {
+          "node": "[profile] in a member manifest is denied (PERF-09); in the root it asks",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::profile_in_a_member_manifest_is_denied_in_the_root_it_asks"
+          ]
+        },
+        {
+          "node": "test = false on a target asks (H-12)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::test_false_on_a_target_asks"
+          ]
+        },
+        {
+          "node": "[patch.crates-io] asks (H-16)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::patch_crates_io_asks"
+          ]
+        },
+        {
+          "node": "a rust-version bump asks (H-16); unrelated root edits do not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::a_rust_version_bump_asks_unrelated_root_edits_do_not"
+          ]
+        },
+        {
+          "node": "non-caret requirements get an ARC-12 advisory",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::non_caret_requirements_get_an_arc_12_advisory"
+          ]
+        },
+        {
+          "node": "Cargo.lock is never edited by hand (PROC-13)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::cargo_lock_is_never_edited_by_hand"
+          ]
+        },
+        {
+          "node": "CRLF manifests are handled",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::crlf_manifests_are_handled"
+          ]
+        },
+        {
+          "node": "an exclude entry is compared by path components (./tools/gen/)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::an_exclude_entry_is_compared_by_path_components_tools_gen"
+          ]
+        },
+        {
+          "node": "new dependencies: a [[bench]] after [dev-dependencies] is not a dependency; dotted keys are",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::new_dependencies_a_bench_after_dev_dependencies_is_not_a_dependency_dotted_keys_are"
+          ]
+        },
+        {
+          "node": "a dependency major-version bump asks (H-16); a minor bump does not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::a_dependency_major_version_bump_asks_a_minor_bump_does_not"
+          ]
+        },
+        {
+          "node": "a mocking crate added to [dependencies] is denied (TST-09); in [dev-dependencies] it only asks as a new dependency",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::a_mocking_crate_added_to_dependencies_is_denied_in_dev_dependencies_it_only_asks_as_a_new_dependency"
+          ]
+        },
+        {
+          "node": "[lib] bench = false does not ask; package.build has its own reason",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::lib_bench_false_does_not_ask_package_build_has_its_own_reason"
+          ]
+        },
+        {
+          "node": "#[ignore] added to an existing test asks (H-12); a new ignored test and the Miri form do not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::ignore_added_to_an_existing_test_asks_a_new_ignored_test_and_the_miri_form_do_not"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/handlers.test.mjs",
+      "pending": "port Phase 3 (SessionStart, change detection, SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript) and Phase 4 (Stop, the implementer branch of SubagentStop)",
+      "tests": [
+        {
+          "node": "skill gate: a Rust edit is refused until rust-craft is loaded through the Skill tool",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::gate::skill_gate_a_rust_edit_is_refused_until_rust_craft_is_loaded_through_the_skill_tool",
+            "hooks::pre_edit::tests::gate::skill_gate_only_rust_craft_loads_it_for_one_agent_context_in_one_session"
+          ]
+        },
+        {
+          "node": "skill gate: reading the rust-craft SKILL.md also loads it, with either path separator",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::gate::skill_gate_reading_the_rust_craft_skill_md_also_loads_it_with_either_path_separator"
+          ]
+        },
+        {
+          "node": "skill gate: \"skillGate\": false in .claude/temper.json turns it off",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_edit::tests::gate::skill_gate_skill_gate_false_in_temper_json_turns_it_off"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/messages.test.mjs",
+      "pending": "port Phase 3 (the SessionStart runtime warnings), Phase 4 (the fmt summary), Phase 7 (setup and vendor) and Phase 8 (the Node-minimum cases, which go to the launcher tests, §5.1)",
+      "tests": [
+        {
+          "node": "the skill-gate denial lists every Iron rule, H-01 to H-16",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::the_skill_gate_denial_lists_every_iron_rule_h_01_to_h_16"
+          ]
+        },
+        {
+          "node": "a hook given malformed input says nothing was checked, and still exits 0 with no decision",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::a_hook_given_malformed_input_says_nothing_was_checked_and_still_exits_0_with_no_decision"
           ]
         }
       ]
     },
     {
       "source": "tests/hooks-registry.test.mjs",
-      "crate": "temper-cli",
       "pending": "port Phase 4 (\"every registered hook names a handler the CLI knows\": the binary answers the unported events as unported subcommands until they are ported, 2b-1)",
       "tests": [
         {
           "node": "the PreToolUse SubagentHandback hook is registered: cloud subagents deliver their report through it (#97)",
+          "crate": "temper-cli",
           "rust": [
             "hooks::the_pre_tool_use_subagent_handback_hook_is_registered_cloud_subagents_deliver_their_report_through_it"
           ]
         },
         {
           "node": "SubagentStart and SubagentStop run for every agent type, so telemetry sees types the handlers skip",
+          "crate": "temper-cli",
           "rust": [
             "hooks::subagent_start_and_subagent_stop_run_for_every_agent_type_so_telemetry_sees_types_the_handlers_skip"
           ]
@@ -550,11 +834,11 @@
     },
     {
       "source": "tests/state-retention.test.mjs",
-      "crate": "temper-app",
       "pending": "port Phase 3 (prune, SessionStart) and Phase 7 (temper stats)",
       "tests": [
         {
           "node": "telemetry: below the cap it appends; at the cap it rotates to telemetry.1.jsonl, keeping one old file",
+          "crate": "temper-app",
           "rust": [
             "telemetry::tests::telemetry_below_the_cap_appends_and_at_the_cap_rotates_keeping_one_old_file"
           ]

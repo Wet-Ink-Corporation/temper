@@ -7,6 +7,7 @@ use super::Manifest;
 
 mod checks;
 mod deps;
+mod getters;
 mod parse;
 mod problems;
 mod sections;

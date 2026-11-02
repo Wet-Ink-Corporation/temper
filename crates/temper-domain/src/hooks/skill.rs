@@ -42,6 +42,21 @@ pub fn skill_load_via(tool_name: Option<&str>, skill: &str, file_path: &str) -> 
     }
 }
 
+/// Does an agent of `agent_type` carry the skill preloaded?
+///
+/// temper's own agents do: `rust-implementer`, `rust-reviewer` and `rust-architect`, bare or
+/// `<plugin>:`-prefixed (1.x `PRELOADED` on `String(agent_type ?? '')`).
+#[must_use]
+pub fn skill_preloaded(agent_type: &str) -> bool {
+    ["rust-implementer", "rust-reviewer", "rust-architect"]
+        .iter()
+        .any(|name| {
+            agent_type
+                .strip_suffix(name)
+                .is_some_and(|head| head.is_empty() || head.ends_with(':'))
+        })
+}
+
 fn is_skill_doc(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes

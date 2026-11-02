@@ -1,9 +1,10 @@
 //! The hook handlers behind `temper hook <event>` (1.x `hooks.mjs`), one module per family.
 
 mod input;
+mod pre_edit;
 mod skill;
 
-use temper_domain::{HookEvent, HookOutcome};
+use temper_domain::{HookEvent, HookOutcome, Scanner};
 
 pub use input::{HookInput, HookInputError};
 
@@ -20,19 +21,18 @@ pub(crate) struct HookCall<'a, P> {
     pub(crate) input: &'a HookInput,
 }
 
-/// The body of [`Engine::hook`](crate::Engine::hook).
+/// The body of [`Engine::hook`](crate::Engine::hook): `event`'s handler on `call`, with the
+/// compiled `scanner`, which `pre-edit` reads.
 pub(crate) fn run<P: Ports>(
-    ports: &P,
-    env: &RunEnv,
+    call: &HookCall<'_, P>,
+    scanner: &Scanner,
     event: HookEvent,
-    input: &HookInput,
 ) -> Result<HookOutcome, HookError> {
-    let call = HookCall { ports, env, input };
     match event {
-        HookEvent::UserPrompt => skill::user_prompt(&call),
-        HookEvent::PostTool => skill::post_tool(&call),
+        HookEvent::UserPrompt => skill::user_prompt(call),
+        HookEvent::PostTool => skill::post_tool(call),
+        HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
         HookEvent::SessionStart
-        | HookEvent::PreEdit
         | HookEvent::PreBash
         | HookEvent::PreHandback
         | HookEvent::Stop
@@ -57,6 +57,25 @@ impl<P: Ports> HookCall<'_, P> {
             Some(dir) => discover_at(self.ports, self.env, &dir),
             None => discover_at(self.ports, self.env, &cwd),
         }
+    }
+
+    /// 1.x `discoverFor(input, file)`: the project of the nearest existing directory above
+    /// `file`, else of the input's `cwd` as [`Self::workspace`] finds it.
+    fn workspace_for_file(&self, file: &str) -> Option<Workspace> {
+        let (style, files) = (self.env.style, self.ports.files());
+        let cwd = self.env.cwd.to_string_lossy();
+        let abs = paths::resolve(style, &cwd, file);
+        let mut dir = paths::dirname(style, &abs);
+        while !exists(files, dir) {
+            let parent = paths::dirname(style, dir);
+            if parent == dir {
+                break;
+            }
+            dir = parent;
+        }
+        // 1.x's `discover(dir)` starts from the working directory when `dir` does not exist.
+        let start = if exists(files, dir) { dir } else { &cwd };
+        discover_at(self.ports, self.env, start).or_else(|| self.workspace())
     }
 }
 

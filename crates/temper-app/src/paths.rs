@@ -85,6 +85,43 @@ pub(crate) fn norm(path: &str) -> Cow<'_, str> {
     }
 }
 
+/// 1.x `cleanRel(p)` (`manifest.mjs`): a relative path compared the way Cargo compares them, by
+/// components. `path.posix.normalize` of `p` with `\` read as `/`, then without leading `./`s
+/// and trailing `/`s, so `./x/` is `x` (port plan 2-26).
+pub(crate) fn clean_rel(path: &str) -> String {
+    let normal = posix_normalize(&norm(path));
+    let mut rest = normal.as_str();
+    while let Some(after) = rest.strip_prefix("./") {
+        rest = after;
+    }
+    rest.trim_end_matches('/').to_owned()
+}
+
+/// Node's `path.posix.normalize`.
+fn posix_normalize(path: &str) -> String {
+    if path.is_empty() {
+        return ".".to_owned();
+    }
+    let absolute = path.starts_with('/');
+    let trailing = path.ends_with('/');
+    let mut normal = normalize_string(path, !absolute, '/', |b| b == b'/');
+    if normal.is_empty() {
+        return match (absolute, trailing) {
+            (true, _) => "/",
+            (false, true) => "./",
+            (false, false) => ".",
+        }
+        .to_owned();
+    }
+    if trailing {
+        normal.push('/');
+    }
+    if absolute {
+        normal.insert(0, '/');
+    }
+    normal
+}
+
 /// The style's own separator, which `resolve` and `join` write.
 fn separator(style: PathStyle) -> &'static str {
     match style {

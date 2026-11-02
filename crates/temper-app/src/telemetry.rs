@@ -50,7 +50,8 @@ pub(crate) fn log(
     };
     let appended = files.append_line(Path::new(&log), &row.to_json());
     match rotation {
-        // A failed rotation means another hook rotated first; 1.x appends to the new file.
+        // A failed rotation (another hook rotated first, or the rename is refused) still
+        // appends, as 1.x does.
         Ok(()) | Err(_) => appended,
     }
 }
