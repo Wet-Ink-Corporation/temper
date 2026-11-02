@@ -34,7 +34,7 @@ pub(super) fn push_js(
 }
 
 /// A string's length in UTF-16 units, as JS counts it.
-pub(super) fn js_len(s: &str) -> usize {
+pub(crate) fn js_len(s: &str) -> usize {
     if s.is_ascii() {
         s.len()
     } else {
@@ -536,12 +536,7 @@ fn mktemp(src: &str, env: &WordEnv<'_>) -> Option<String> {
 
 /// 1.x `msysPath(t)`: a git-bash path (`/c/Users/...`, `/tmp/...`) as the Windows path it
 /// names; other paths, and every path on other platforms, unchanged.
-pub(crate) fn msys_path<'t>(
-    t: &'t str,
-    style: PathStyle,
-    os_tmp: &str,
-) -> std::borrow::Cow<'t, str> {
-    use std::borrow::Cow;
+pub(crate) fn msys_path<'t>(t: &'t str, style: PathStyle, os_tmp: &str) -> Cow<'t, str> {
     if style != PathStyle::Windows {
         return Cow::Borrowed(t);
     }

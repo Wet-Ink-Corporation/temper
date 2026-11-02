@@ -5,6 +5,7 @@
 //! stay fast on long commands" is retired into the hook parity harness's per-step budget
 //! (OC-4 A, wi-3ea323); its decisions are kept.
 
+mod protected;
 mod rows;
 mod state_dir;
 

@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use temper_app::{FileMeta, Files, FsOp};
+use temper_app::{EntryKind, FileMeta, Files, FsOp};
 
 use super::TestResult;
 use crate::StdFiles;
@@ -75,7 +75,19 @@ fn create_dir_all_rename_and_stat() -> TestResult {
     let before = StdFiles.stat(&log)?;
     StdFiles.rename(&log, &old)?;
 
-    assert_eq!(before, Some(FileMeta { len: 5 }), "the size");
+    assert_eq!(
+        before,
+        Some(FileMeta {
+            kind: EntryKind::File,
+            len: 5
+        }),
+        "the size"
+    );
+    assert_eq!(
+        StdFiles.stat(&state)?.map(|meta| meta.kind),
+        Some(EntryKind::Dir),
+        "a directory"
+    );
     assert_eq!(StdFiles.stat(&log)?, None, "moved away");
     assert_eq!(fs::read_to_string(&old)?, "12345", "replaced");
     assert_eq!(

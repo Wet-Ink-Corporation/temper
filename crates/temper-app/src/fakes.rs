@@ -236,12 +236,13 @@ impl Files for FakeFiles {
 
     fn stat(&self, path: &Path) -> Result<Option<FileMeta>, FsError> {
         let real = self.unlinked(&text_of(path));
-        let len = match self.files.borrow().get(&real) {
-            Some(text) => text.as_ref().map_or(0, String::len),
-            None if self.is_dir(&real) => 0,
+        let (kind, len) = match self.files.borrow().get(&real) {
+            Some(text) => (EntryKind::File, text.as_ref().map_or(0, String::len)),
+            None if self.is_dir(&real) => (EntryKind::Dir, 0),
             None => return Ok(None),
         };
         Ok(Some(FileMeta {
+            kind,
             len: u64::try_from(len).unwrap_or(u64::MAX),
         }))
     }
@@ -311,15 +312,23 @@ pub(crate) enum Reply {
 }
 
 /// Child processes that answer from a table: each entry matches a program, its arguments and
-/// its directory. Anything else fails to start, as on a machine without the program.
+/// its directory. Anything else gets the `otherwise` reply, by default a failure to start, as
+/// on a machine without the program.
 #[derive(Debug, Default)]
 pub(crate) struct FakeProcess {
     replies: Vec<(String, Vec<OsString>, PathBuf, Reply)>,
+    otherwise: Option<Reply>,
 }
 
 impl FakeProcess {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Every command the table does not name answers `reply`.
+    pub(crate) fn otherwise(mut self, reply: Reply) -> Self {
+        self.otherwise = Some(reply);
+        self
     }
 
     /// `command` (the program, then its arguments) run in `cwd` answers `reply`.
@@ -335,9 +344,14 @@ impl FakeProcess {
 impl ProcessRunner for FakeProcess {
     fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
         let program = request.program.to_owned();
-        let reply = self.replies.iter().find_map(|(name, args, cwd, reply)| {
-            (name == request.program && args == request.args && cwd == request.cwd).then_some(reply)
-        });
+        let reply = self
+            .replies
+            .iter()
+            .find_map(|(name, args, cwd, reply)| {
+                (name == request.program && args == request.args && cwd == request.cwd)
+                    .then_some(reply)
+            })
+            .or(self.otherwise.as_ref());
         match reply {
             Some(Reply::Exit { status, stdout }) => Ok(ProcessOutput {
                 status: *status,

@@ -58,6 +58,20 @@ fn logged(
     }
 }
 
+/// The outcome `then` gives, after a telemetry row for `event`: `then` may log rows of its own,
+/// which follow this one.
+fn logged_then(
+    call: &HookCall<'_, impl Ports>,
+    workspace: &Workspace,
+    event: &TelemetryEvent,
+    then: impl FnOnce() -> HookOutcome,
+) -> HookOutcome {
+    match telemetry::log(call, workspace, event) {
+        // Best effort, as in `logged`.
+        Ok(()) | Err(_) => then(),
+    }
+}
+
 /// A policy's answer, after its telemetry row if it has one (2-14 A: written where 1.x writes
 /// it).
 fn answered(

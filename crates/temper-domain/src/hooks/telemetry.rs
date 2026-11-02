@@ -78,6 +78,22 @@ pub enum TelemetryEvent {
         /// Why.
         via: ShellAskVia,
     },
+    /// `ask` from `pre-bash` for protected configuration a shell command changes.
+    ProtectedAsk {
+        /// The first change.
+        change: ProtectedChange,
+    },
+}
+
+/// The change a protected-configuration `ask` row names (its `via` and `file`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtectedChange {
+    /// `shell-write-protected`, with the first file written.
+    Written(String),
+    /// `shell-delete-protected`, with the first file deleted.
+    Deleted(String),
+    /// `shell-patch-unread`: a patch temper cannot read.
+    UnreadPatch,
 }
 
 /// What a `deny-shell-write` row says was written (its `file`).
@@ -137,7 +153,7 @@ impl TelemetryEvent {
             Self::DenySkillGate { .. } => "deny-skill-gate",
             Self::DenyManifest { .. } => "deny-manifest",
             Self::DenyScan { .. } => "deny-scan",
-            Self::Ask { .. } | Self::ShellAsk { .. } => "ask",
+            Self::Ask { .. } | Self::ShellAsk { .. } | Self::ProtectedAsk { .. } => "ask",
             Self::DenyShellWrite { .. } => "deny-shell-write",
             Self::DenyBaselineRaise { .. } => "deny-baseline-raise",
             Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
@@ -180,6 +196,17 @@ impl TelemetryEvent {
             }
             Self::DenyIgnoreRustVersion { cmd } => push_field(out, "cmd", &json_string(cmd)),
             Self::ShellAsk { via } => push_field(out, "via", &json_string(via.name())),
+            Self::ProtectedAsk { change } => {
+                let (via, file) = match change {
+                    ProtectedChange::Written(file) => ("shell-write-protected", Some(file)),
+                    ProtectedChange::Deleted(file) => ("shell-delete-protected", Some(file)),
+                    ProtectedChange::UnreadPatch => ("shell-patch-unread", None),
+                };
+                push_field(out, "via", &json_string(via));
+                if let Some(file) = file {
+                    push_field(out, "file", &json_string(file));
+                }
+            }
         }
     }
 }

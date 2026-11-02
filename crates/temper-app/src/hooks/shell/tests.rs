@@ -9,10 +9,11 @@ mod long_inputs;
 
 use temper_domain::PathStyle;
 
+use super::words::word_path;
 use super::{
     Command, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
     command_writes, landing, parse_commands, patch_command, patch_files, pathspec_pattern,
-    resolve_path, word_path,
+    resolve_path,
 };
 use crate::paths::PathEnv;
 

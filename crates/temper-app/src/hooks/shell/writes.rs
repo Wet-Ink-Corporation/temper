@@ -13,7 +13,6 @@ use super::git::git_command;
 use super::walk::Command;
 use super::words::{Dir, PathCx, Word};
 use super::wrappers::cluster_reaches;
-use crate::paths;
 
 /// How a target is written.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -206,21 +206,174 @@ fn a_linked_worktree_logs_to_the_shared_git_dir() -> TestResult {
 
 /// The decision `temper hook pre-bash` gives `cmd` in `dir`: `deny`, `ask`, or `""` for none.
 fn bash_decision(dir: &Path, cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(bash_answer(dir, cmd)?.0)
+}
+
+/// The decision and the reason `temper hook pre-bash` gives `cmd` in `dir`, each `""` when it
+/// answers nothing.
+fn bash_answer(dir: &Path, cmd: &str) -> Result<(String, String), Box<dyn std::error::Error>> {
     let stdin = format!(
         r#"{{"tool_name":"Bash","session_id":"s1","tool_input":{{"command":{}}}}}"#,
         JsValue::String(cmd.to_owned()).to_json()
     );
     let run = hook_in(dir, "pre-bash", &stdin, &[])?;
     if run.stdout.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), String::new()));
     }
     let out = JsValue::from_json(&run.stdout)?;
-    let decision = out
-        .get("hookSpecificOutput")
-        .and_then(|o| o.get("permissionDecision"))
-        .and_then(JsValue::as_str)
-        .ok_or_else(|| format!("no decision in {}", run.stdout))?;
-    Ok(decision.to_owned())
+    let field = |key: &str| {
+        out.get("hookSpecificOutput")
+            .and_then(|o| o.get(key))
+            .and_then(JsValue::as_str)
+            .map(str::to_owned)
+    };
+    let decision =
+        field("permissionDecision").ok_or_else(|| format!("no decision in {}", run.stdout))?;
+    Ok((
+        decision,
+        field("permissionDecisionReason").unwrap_or_default(),
+    ))
+}
+
+/// A committed repository at `repo` with `files`, tagged `v1`.
+fn tagged_repo(repo: &Path, files: &[(&str, &str)]) -> TestResult {
+    write_tree(repo, files)?;
+    git_init(repo)?;
+    git(repo, &["add", "."])?;
+    git(repo, &["commit", "-qm", "init"])?;
+    git(repo, &["tag", "v1"])
+}
+
+/// 1.x "Bash: a write into a nested git checkout (.claude/worktrees/<name>) is judged by that
+/// checkout": the outer project's `.claude/**` does not cover the checkout's files, and the
+/// checkout's own protected files still ask.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_write_into_a_nested_git_checkout_is_judged_by_that_checkout() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let repo = root.path();
+    tagged_repo(repo, &[("Cargo.toml", WORKSPACE), ("README.md", "x\n")])?;
+    git(
+        repo,
+        &["worktree", "add", "-q", "--detach", ".claude/worktrees/w1"],
+    )?;
+    let w1 = repo.join(".claude").join("worktrees").join("w1");
+    let w1f = w1.to_string_lossy().replace('\\', "/");
+
+    for cmd in [
+        "cd .claude/worktrees/w1 && cargo test 2>&1 | tee target/log.txt".to_owned(),
+        "cd .claude/worktrees/w1 && echo x > README.md".to_owned(),
+        format!(r#"cargo test --manifest-path "{w1f}/Cargo.toml" > "{w1f}/target/log.txt""#),
+    ] {
+        assert_eq!(bash_answer(repo, &cmd)?.0, "", "{cmd}");
+    }
+    let (decision, reason) = bash_answer(repo, "cd .claude/worktrees/w1 && echo x > clippy.toml")?;
+    assert_eq!(decision, "ask");
+    assert!(
+        reason.contains(".claude/worktrees/w1/clippy.toml is verification"),
+        "{reason}"
+    );
+    for cmd in [
+        "echo {} > .claude/temper.json",
+        "echo {} > .claude/worktrees/w1/.claude/temper.json",
+    ] {
+        assert_eq!(bash_answer(repo, cmd)?.0, "ask", "{cmd}");
+    }
+    Ok(())
+}
+
+/// 1.x "Bash: git checkout/restore of a wildcard pathspec from another revision asks when it
+/// would change protected configuration": git lists the files.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_wildcard_pathspec_restored_from_another_revision_asks_when_git_lists_protected_files()
+-> TestResult {
+    let root = tempfile::tempdir()?;
+    let repo = root.path();
+    let files = [
+        ("Cargo.toml", WORKSPACE),
+        ("clippy.toml", "a = 1\n"),
+        ("docs/x.toml", "a = 1\n"),
+        ("README.md", "x\n"),
+    ];
+    tagged_repo(repo, &files)?;
+    write_tree(
+        repo,
+        &[
+            ("clippy.toml", "a = 2\n"),
+            ("docs/x.toml", "a = 2\n"),
+            ("README.md", "y\n"),
+        ],
+    )?;
+
+    for cmd in [
+        "git checkout v1 -- '*.toml'",
+        "git restore -s v1 -- '*.toml'",
+        r"git checkout v1 -- \*.toml",
+        "git restore --source=v1 ':(glob)**/*.toml'",
+    ] {
+        let (decision, reason) = bash_answer(repo, cmd)?;
+        assert_eq!(decision, "ask", "{cmd}");
+        assert!(reason.contains("writes clippy.toml"), "{cmd}: {reason}");
+    }
+    for cmd in [
+        "git checkout v1 -- '*.md'",
+        "git restore -s v1 -- 'docs/*.toml'",
+        "git checkout -- '*.toml'",
+        "git restore '*.toml'",
+        "git checkout HEAD -- '*.toml'",
+        "cd docs && git checkout v1 -- '*.toml'",
+    ] {
+        assert_eq!(
+            bash_answer(repo, cmd)?,
+            (String::new(), String::new()),
+            "{cmd}"
+        );
+    }
+    Ok(())
+}
+
+/// 1.x "Bash: git checkout/restore of a directory from another revision asks when it would
+/// change a protected file inside it".
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_directory_restored_from_another_revision_asks_when_it_would_change_a_protected_file_in_it()
+-> TestResult {
+    let root = tempfile::tempdir()?;
+    let repo = root.path();
+    let files = [
+        ("Cargo.toml", WORKSPACE),
+        ("docs/clippy.toml", "a = 1\n"),
+        ("notes/a.md", "x\n"),
+    ];
+    tagged_repo(repo, &files)?;
+    write_tree(
+        repo,
+        &[("docs/clippy.toml", "a = 2\n"), ("notes/a.md", "y\n")],
+    )?;
+
+    for cmd in [
+        "git checkout v1 -- docs",
+        "git restore -s v1 docs",
+        "cd docs && git checkout v1 -- .",
+    ] {
+        let (decision, reason) = bash_answer(repo, cmd)?;
+        assert_eq!(decision, "ask", "{cmd}");
+        assert!(reason.contains("docs/clippy.toml"), "{cmd}: {reason}");
+    }
+    for cmd in [
+        "git checkout v1 -- notes",
+        "git checkout -- docs",
+        "git restore docs",
+        "git checkout HEAD -- docs",
+    ] {
+        assert_eq!(
+            bash_answer(repo, cmd)?,
+            (String::new(), String::new()),
+            "{cmd}"
+        );
+    }
+    Ok(())
 }
 
 /// 1.x "Bash: shell writes into the absolute state dir of a git worktree are denied": a linked

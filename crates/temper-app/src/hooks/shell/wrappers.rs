@@ -297,7 +297,7 @@ impl Walker<'_> {
                         .as_ref()
                         .and_then(|s| s.body())
                         .map(str::to_owned),
-                    Script::File(_) | Script::None => None,
+                    Script::File | Script::None => None,
                 };
                 script
                     .filter(|s| !s.is_empty())
@@ -370,8 +370,8 @@ fn env_split_spaces(v: &str) -> String {
 pub(super) enum Script<'w> {
     /// `-c`: the first operand after the options, if any.
     Arg(Option<&'w Word>),
-    /// A script operand.
-    File(&'w Word),
+    /// A script operand, which temper does not read.
+    File,
     /// `-s` or no operand.
     Stdin,
     /// `--version` and `--help`.
@@ -414,7 +414,7 @@ pub(super) fn shell_script(args: &[Word]) -> Script<'_> {
 fn operand(w: Option<&Word>, cmd: bool, stdin: bool) -> Script<'_> {
     match w {
         _ if cmd => Script::Arg(w),
-        Some(w) if !stdin => Script::File(w),
+        Some(_) if !stdin => Script::File,
         _ => Script::Stdin,
     }
 }
