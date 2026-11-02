@@ -23,6 +23,7 @@ mod deletes;
 mod dir;
 mod git;
 mod lex;
+mod opaque;
 mod patch;
 mod text;
 mod walk;
@@ -31,6 +32,7 @@ mod wrappers;
 mod writes;
 
 pub(crate) use deletes::command_deletes;
+pub(crate) use opaque::{OpaqueKind, OpaquePatch, opaque_patch};
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
 pub(crate) use words::{Dir, Guard, PathCx, Word, js_len, msys_path, names_absolute, resolve_path};

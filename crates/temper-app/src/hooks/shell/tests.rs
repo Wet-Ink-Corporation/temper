@@ -1,11 +1,11 @@
-//! Ports of `tests/shell.test.mjs`, in its order. Tests of the readers that arrive in port
-//! Phase 2f (`opaquePatch`, `codeWriteTargets`, the PowerShell expressions) are ported then;
-//! a test that also asserts them keeps its other assertions here, marked. The wall-clock
+//! Ports of `tests/shell.test.mjs`, in its order; the tests that are `opaquePatch`'s alone are
+//! in `opaque`, and `codeWriteTargets`' are temper-domain's (`hooks::bash::code`). The wall-clock
 //! bound of "a long chain of wrappers or reserved words parses in linear time" is retired
 //! into the hook parity harness's per-step budget (OC-4 A, wi-3ea323); its decisions are
 //! kept, and `long_inputs` adds 2^15 to 2^17 repeats of each start shape the reader sees.
 
 mod long_inputs;
+mod opaque;
 
 use std::sync::LazyLock;
 
@@ -13,9 +13,9 @@ use temper_domain::{InterpreterCode, PathStyle};
 
 use super::words::{Dir, word_path};
 use super::{
-    Command, CopyDest, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
-    command_writes, landing, parse_commands, patch_command, patch_files, pathspec_pattern,
-    resolve_path, walk,
+    Command, CopyDest, OpaqueKind, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb,
+    command_deletes, command_writes, landing, opaque_patch, parse_commands, patch_command,
+    patch_files, pathspec_pattern, resolve_path, walk,
 };
 use crate::paths::PathEnv;
 
@@ -112,6 +112,54 @@ fn target(verb: &str, rel: &str) -> (String, Option<String>) {
 /// The paths alone.
 fn paths(cmd: &str) -> Vec<Option<String>> {
     targets(cmd).into_iter().map(|(_, p)| p).collect()
+}
+
+/// 1.x's `kind` names.
+fn kind_name(kind: OpaqueKind) -> &'static str {
+    match kind {
+        OpaqueKind::Git => "git",
+        OpaqueKind::Name => "name",
+        OpaqueKind::Code => "code",
+        OpaqueKind::Script => "script",
+        OpaqueKind::Alias => "alias",
+    }
+}
+
+/// 1.x `parseCommands(cmd, opts).map(opaquePatch).find(Boolean)?.kind`: every command is
+/// checked, as 1.x's `map` checks each before `find` picks the first.
+fn opaque_with(cmd: &str, opts: ParseOpts<'_>) -> Option<&'static str> {
+    let commands = parse_with(cmd, opts);
+    let found: Vec<_> = commands
+        .iter()
+        .map(|c| opaque_patch(c, opts.paths, &CODE))
+        .collect::<Result<_, _>>()
+        .expect("1.x's opaquePatch does not throw on the test commands");
+    found
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|o| kind_name(o.kind))
+}
+
+/// 1.x's `o(cmd)` with `{ cwd: root }`.
+fn opaque(cmd: &str) -> Option<&'static str> {
+    opaque_with(cmd, opts())
+}
+
+/// 1.x's `{ cwd: root, top: root }`.
+fn topped() -> ParseOpts<'static> {
+    ParseOpts {
+        top: Some(ROOT),
+        ..opts()
+    }
+}
+
+/// 1.x's `{ cwd: root, top: root, untracked: true }`: the reviewer's fail-closed reading.
+fn untracked() -> ParseOpts<'static> {
+    ParseOpts {
+        untracked: true,
+        ..topped()
+    }
 }
 
 #[test]
@@ -732,8 +780,8 @@ fn the_dashed_forms_git_apply_and_git_am_at_any_path_read_as_git_apply_and_git_a
 
 #[test]
 fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them() {
-    // 1.x "echo or printf piped into a shell is not read as the script": its `patchCommand`
-    // half. The `opaquePatch` half arrives in port Phase 2f.
+    // 1.x "echo or printf piped into a shell is not read as the script, and opaquePatch flags
+    // it".
     for cmd in [
         "echo 'git apply x.diff' | bash",
         "printf 'git apply x.diff\\n' | sh",
@@ -746,8 +794,10 @@ fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them()
         "echo 'git apply x.diff' > out.txt | bash",
     ] {
         assert_eq!(patch_of(cmd), None, "{cmd:?}");
+        assert_eq!(opaque(cmd), Some("script"), "{cmd:?}");
     }
     assert_eq!(patch_of("echo 'git apply x.diff' | grep apply"), None);
+    assert_eq!(opaque("echo 'git apply x.diff' | grep apply"), None);
     for cmd in [
         "bash <<'EOF'\ngit apply x.diff\nEOF",
         "bash <<< 'git apply x.diff'",
@@ -759,21 +809,96 @@ fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them()
             "{cmd:?}"
         );
     }
+    for cmd in [
+        "bash <<'EOF'\nls\nEOF",
+        "sh <<< 'cargo test'",
+        "cat <<'EOF' | bash\nls\nEOF",
+        "cat - <<< ls | sh",
+    ] {
+        assert_eq!(opaque(cmd), None, "{cmd:?}");
+    }
+    // A body another command transforms is not the script the shell runs.
+    assert_eq!(opaque("tr a-z A-Z <<'EOF' | bash\nls\nEOF"), Some("script"));
 }
 
 #[test]
-fn a_command_name_built_from_an_expansion_reads_as_its_last_segment_here() {
-    // 1.x "a command name built from an expansion is not read, whatever its last segment":
-    // the halves without `untracked` and `opaquePatch` (port Phase 2f).
+fn a_command_name_built_from_an_expansion_is_not_read_whatever_its_last_segment() {
+    let untracked_tool = |cmd: &str| {
+        parse_with(cmd, untracked())
+            .iter()
+            .find_map(|c| patch_command(c, cx()).map(|p| Patched::of(p).tool))
+    };
     for cmd in ["\"$X/git-apply\" x.diff", "\"$X\"/../git-apply x.diff"] {
+        assert_eq!(untracked_tool(cmd), Some(PatchTool::GitApply), "{cmd:?}");
         assert_eq!(
             patch_of(cmd).map(|p| p.tool),
             Some(PatchTool::GitApply),
             "{cmd:?}"
         );
     }
+    for cmd in [
+        "\"$X/git\" apply x.diff",
+        "\"$X/patch\" -p1 < x.diff",
+        "\"$X\"/../git am x.mbox",
+        "\"$X/bin/sudo\" git apply x.diff",
+        "timeout 5 \"$X/git\" apply x.diff",
+        "\"$HOME/.cargo/bin/cargo\" test",
+        "source \"$HOME/.cargo/env\"; \"$HOME/.cargo/bin/cargo\" test",
+        "\"$CARGO_HOME/bin/cargo\" test",
+        "cd crates/a && \"$PWD/../../target/debug/a\"",
+        "HOME=/x; \"$HOME/cargo\" test",
+        "read X; \"$X/cargo\" test",
+        "\"${X:-/usr}/bin/cargo\" test",
+        "\"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
+        "\"$X\"/cargo test",
+        "\"$X\"/'cargo' test",
+        "timeout 60 \"$X/cargo\" test",
+        "$HOME/.cargo/bin/cargo test",
+        "$PWD/target/debug/a",
+        "${HOME}/.cargo/bin/cargo test",
+        "\"$X\"",
+        "\"$X$Y\"",
+        "\"$(which cargo)\"",
+        "\"$X/\"",
+        "\"$X/c$Y\"",
+        "\"$X\"/{a,b}",
+        "\"$X\"/c*",
+        "\"$@/cargo\"",
+        "\"${A[@]}/cargo\"",
+        "\"$X\"/$Y",
+        "env \"$X/cargo\" test",
+        "nice \"$X/cargo\" test",
+        "xargs \"$X/cargo\" test",
+        "\"$HOME/bin/timeout\" 5 cargo test",
+        "nohup \"$HOME/bin/timeout\" 5 cargo test",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), Some("name"), "{cmd:?}");
+    }
+    // Other agents' commands keep main's reading: a name temper cannot read is not git apply
+    // or patch.
     for cmd in ["\"$X/git\" apply x.diff", "\"$X/patch\" -p1 < x.diff"] {
         assert_eq!(patch_of(cmd), None, "{cmd:?}");
+    }
+    for cmd in [
+        "bash \"$HOME/x.sh\"",
+        "bash \"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
+        "source \"$HOME/.cargo/env\"",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), None, "{cmd:?}");
+    }
+    // A script operand whose value temper does not know, or whose last segment names a
+    // standard stream, may be the shell's stdin; a glob or brace list in it is an expansion.
+    for cmd in [
+        "bash \"$X/stdin\" < cmd.sh",
+        "bash \"$X/fd/0\" < cmd.sh",
+        "read HOME <<< /dev; bash \"$HOME/stdin\" < cmd.sh",
+        "source \"$X/env\"",
+        "bash /dev/std* < cmd.sh",
+        "bash /dev/st?in < cmd.sh",
+        "source {/dev/stdin,x}",
+        "bash \"$HOME\"/x* < cmd.sh",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), Some("script"), "{cmd:?}");
     }
 }
 
@@ -803,7 +928,6 @@ fn a_command_name_with_a_slash_in_it_is_never_a_builtin() {
 
 #[test]
 fn env_split_string_in_every_spelling() {
-    // The `patchCommand` half; the `untracked` `opaquePatch` half arrives in port Phase 2f.
     for cmd in [
         "env -S 'git apply x.diff'",
         "env -iS 'git apply x.diff'",
@@ -833,6 +957,26 @@ fn env_split_string_in_every_spelling() {
             Some(PatchTool::GitApply),
             "{cmd:?}"
         );
+    }
+    for cmd in [
+        "env -S 'cargo test'",
+        "env -S'cargo test'",
+        "env -iS 'cargo test'",
+        "env --split=cargo",
+        "env --sp 'cargo test'",
+        "env -S\"$X\"",
+        "env -u X -S 'cargo test'",
+        "env -S 'X=1 cargo test'",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), Some("script"), "{cmd:?}");
+    }
+    for cmd in [
+        "env cargo test",
+        "env -i PATH=/usr/bin cargo test",
+        "env -u X cargo test",
+        "env A=\"$X\" cargo test",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), None, "{cmd:?}");
     }
 }
 
@@ -891,7 +1035,7 @@ fn ansi_c_quoting_is_decoded_exactly_or_its_word_is_unknown() {
         patch_of(r"bash -c $'git\x20apply x.diff'").map(|p| p.tool),
         Some(PatchTool::GitApply)
     );
-    // Port Phase 2f: `opaquePatch` of `bash -c $'git\cAapply x.diff'`.
+    assert_eq!(opaque(r"bash -c $'git\cAapply x.diff'"), Some("script"));
 }
 
 #[test]
@@ -920,7 +1064,7 @@ fn the_c_script_is_the_first_operand_after_the_options() {
     );
     // Without -c, the first operand is a script file, which temper does not read.
     assert_eq!(patch_of("bash -o pipefail 'git apply x.diff'"), None);
-    // Port Phase 2f: `opaquePatch` of `bash -c -- 'ls'`.
+    assert_eq!(opaque("bash -c -- 'ls'"), None);
 }
 
 #[test]

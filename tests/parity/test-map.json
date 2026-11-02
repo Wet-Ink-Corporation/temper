@@ -1036,7 +1036,6 @@
     },
     {
       "source": "tests/shell.test.mjs",
-      "pending": "port Phase 2f (opaquePatch, codeWriteTargets, the interpreter-code patterns and PowerShell expressions, and the opaquePatch, untracked and interpreter halves of the tests mapped here)",
       "tests": [
         {
           "node": "shell: quotes, escapes, comments and heredoc bodies never make a write",
@@ -1104,10 +1103,24 @@
           ]
         },
         {
+          "node": "shell: opaquePatch flags git subcommands and interpreter code temper cannot resolve",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_flags_git_subcommands_and_interpreter_code_temper_cannot_resolve"
+          ]
+        },
+        {
           "node": "shell: a subcommand git does not have, under configuration temper cannot read, reads as a guessed git apply",
           "crate": "temper-app",
           "rust": [
             "hooks::shell::tests::a_subcommand_git_does_not_have_under_unread_configuration_reads_as_a_guessed_git_apply"
+          ]
+        },
+        {
+          "node": "shell: opaquePatch: subcommands git does not have, alias writes, multi-line code and unread stdin scripts",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_subcommands_git_does_not_have_alias_writes_multi_line_code_and_unread_stdin_scripts"
           ]
         },
         {
@@ -1125,10 +1138,38 @@
           ]
         },
         {
+          "node": "shell: opaquePatch flags a shell or source reading /dev/stdin, a process substitution, xargs input or a subshell pipe",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_flags_a_shell_or_source_reading_dev_stdin_a_process_substitution_xargs_input_or_a_subshell_pipe"
+          ]
+        },
+        {
+          "node": "shell: opaquePatch flags a -c script, here-string, heredoc, eval argument or command name that is not literal",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_flags_a_c_script_here_string_heredoc_eval_argument_or_command_name_that_is_not_literal"
+          ]
+        },
+        {
+          "node": "shell: opaquePatch: brace and glob words, command names temper reads, and interpreter code from an expansion",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_brace_and_glob_words_command_names_temper_reads_and_interpreter_code_from_an_expansion"
+          ]
+        },
+        {
+          "node": "shell: opaquePatch never reads a command name from a variable",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_never_reads_a_command_name_from_a_variable"
+          ]
+        },
+        {
           "node": "shell: a command name built from an expansion is not read, whatever its last segment",
           "crate": "temper-app",
           "rust": [
-            "hooks::shell::tests::a_command_name_built_from_an_expansion_reads_as_its_last_segment_here"
+            "hooks::shell::tests::a_command_name_built_from_an_expansion_is_not_read_whatever_its_last_segment"
           ]
         },
         {
@@ -1136,6 +1177,13 @@
           "crate": "temper-app",
           "rust": [
             "hooks::shell::tests::a_command_name_with_a_slash_in_it_is_never_a_builtin"
+          ]
+        },
+        {
+          "node": "shell: interpreter code options and a code word built from an expansion",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::interpreter_code_options_and_a_code_word_built_from_an_expansion"
           ]
         },
         {
@@ -1167,6 +1215,13 @@
           ]
         },
         {
+          "node": "shell: commands nested deeper than temper reads leave an opaque marker",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::commands_nested_deeper_than_temper_reads_leave_an_opaque_marker"
+          ]
+        },
+        {
           "node": "shell: options at the start of a git alias are read as git options",
           "crate": "temper-app",
           "rust": [
@@ -1181,6 +1236,20 @@
           ]
         },
         {
+          "node": "shell: opaquePatch: a script on stdin a shell reads that temper cannot, and patch next to < | > or at a string end",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::opaque_patch_a_script_on_stdin_a_shell_reads_that_temper_cannot_and_patch_next_to_redirects_pipes_or_a_string_end"
+          ]
+        },
+        {
+          "node": "shell: the interpreter-code patterns stay linear on long input",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::opaque::the_interpreter_code_patterns_stay_linear_on_long_input"
+          ]
+        },
+        {
           "node": "shell: a long chain of wrappers or reserved words parses in linear time",
           "crate": "temper-app",
           "rust": [
@@ -1188,6 +1257,13 @@
             "hooks::shell::tests::long_inputs::wrappers_and_inner_scripts_repeated_read_as_1x_reads_them"
           ],
           "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "shell: codeWriteTargets finds literals in write positions only",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::bash::code::tests::code_write_targets_finds_literals_in_write_positions_only"
+          ]
         },
         {
           "node": "shell: resolvePath reads git-bash paths on Windows only",
@@ -1259,6 +1335,13 @@
           "crate": "temper-app",
           "rust": [
             "hooks::shell::tests::a_powershell_command_keeps_its_backslashes_as_path_separators"
+          ]
+        },
+        {
+          "node": "shell: an interpreter write whose mode is a variable assigned a literal counts",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::bash::code::tests::an_interpreter_write_whose_mode_is_a_variable_assigned_a_literal_counts"
           ]
         },
         {

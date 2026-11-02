@@ -91,7 +91,10 @@ pub(crate) fn opaque_patch(
             .iter()
             .any(|x| matches!(x.value(), Some("apply" | "am")));
     if git.is_none() && c.name.is_none() && names_patch {
-        return Ok(OpaquePatch::new(OpaqueKind::Name, "an unresolved command name"));
+        return Ok(OpaquePatch::new(
+            OpaqueKind::Name,
+            "an unresolved command name",
+        ));
     }
     // A command name that is not a literal word, or an eval argument built from an
     // expansion, runs text temper cannot read exactly (wi-0e226b).
@@ -153,7 +156,10 @@ fn named_opaque(c: &Command, name: &str) -> Option<OpaquePatch> {
         );
     }
     if name == "eval" && c.args.iter().any(|x| !x.is_literal()) {
-        return OpaquePatch::new(OpaqueKind::Script, "an eval argument built from an expansion");
+        return OpaquePatch::new(
+            OpaqueKind::Script,
+            "an eval argument built from an expansion",
+        );
     }
     if name == "trap" && trap_action(&c.args).is_some_and(|a| !a.is_literal()) {
         return OpaquePatch::new(OpaqueKind::Script, "a trap action built from an expansion");
@@ -181,7 +187,7 @@ fn interpreter_opaque(
     }
     let mut texts = stdin_body(c)
         .into_iter()
-        .chain(code_words(c, true).into_iter().map(|w| w.text.as_str()));
+        .chain(code_words(c, true).into_iter().map(Word::text));
     if texts.any(|text| code.runs_patch(text)) {
         return Ok(OpaquePatch::new(
             OpaqueKind::Code,
@@ -196,10 +202,10 @@ fn interpreter_opaque(
             format!("a {name} script from a process substitution"),
         ));
     }
-    let stdin_arg = c
-        .args
-        .iter()
-        .any(|x| x.value().is_some_and(|v| stdin_path(&paths::posix_normalize(v))));
+    let stdin_arg = c.args.iter().any(|x| {
+        x.value()
+            .is_some_and(|v| stdin_path(&paths::posix_normalize(v)))
+    });
     let script_arg =
         c.args.iter().any(|x| !x.raw.starts_with('-')) || !code_words(c, false).is_empty();
     if c.stdin.as_ref().is_some_and(|s| !read_stdin(s)) && (!script_arg || stdin_arg) {
@@ -320,9 +326,7 @@ fn unread_script(c: &Command, name: &str) -> Option<String> {
         Script::Arg(Some(_)) => Some("built from an expansion".to_owned()),
         Script::Arg(None) => Some("after -c".to_owned()),
         Script::File(word) => unread_file(word, xargs),
-        Script::Stdin => {
-            (!c.stdin.as_ref().is_some_and(read_stdin)).then(|| "on stdin".to_owned())
-        }
+        Script::Stdin => (!c.stdin.as_ref().is_some_and(read_stdin)).then(|| "on stdin".to_owned()),
     }
 }
 
@@ -418,7 +422,10 @@ fn calls_system(code: &str) -> bool {
             .and_then(|b| bytes.get(b))
             .is_some_and(|&b| b.is_ascii_alphanumeric() || b == b'_');
         let rest = code.get(at.saturating_add(6)..).unwrap_or("");
-        !before && rest.trim_start_matches(crate::project::is_js_space).starts_with('(')
+        !before
+            && rest
+                .trim_start_matches(crate::project::is_js_space)
+                .starts_with('(')
     })
 }
 
