@@ -80,9 +80,12 @@ impl DepPatterns {
     }
 
     /// 1.x `cargoDependencyCommands(cmd)` over its `segments(cmd)`.
-    pub(super) fn commands<'s>(&self, segments: &'s [String]) -> Vec<DepCommand<'s>> {
+    pub(super) fn commands<'s>(
+        &self,
+        segments: impl IntoIterator<Item = &'s str>,
+    ) -> Vec<DepCommand<'s>> {
         segments
-            .iter()
+            .into_iter()
             .filter_map(|seg| {
                 let m = self.command.captures(js_trim(seg))?;
                 let op = match m.get(1)?.as_str() {

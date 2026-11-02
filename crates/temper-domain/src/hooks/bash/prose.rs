@@ -6,6 +6,7 @@
 
 use regex::{NoExpand, Regex};
 
+use super::heredoc::{HeredocScan, is_tag_char};
 use crate::hooks::setup::{PolicySetupError, compile};
 use crate::js::{JsFlags, Replacement, is_js_space, replace_all};
 
@@ -68,18 +69,19 @@ impl ProsePatterns {
     pub(super) fn blank(&self, cmd: &str) -> String {
         // A backslash-newline continues the line.
         let s = self.continuation.replace_all(cmd, NoExpand(" "));
-        let s = replace_all(&s, |from| self.heredoc(&s, from));
+        let mut docs = HeredocScan::new(&s);
+        let s = replace_all(&s, |from| self.heredoc(&s, &mut docs, from));
         let s = replace_all(&s, |from| self.message_value(&s, from));
         replace_all(&s, |from| self.search(&s, from))
     }
 
-    /// The next here-document at or after `from`: its body is text, unless a shell reads it or
-    /// an unquoted body runs `$(...)`.
-    fn heredoc(&self, s: &str, from: usize) -> Option<Replacement> {
+    /// The next here-document of `s` at or after `from`, found through `docs`: its body is
+    /// text, unless a shell reads it or an unquoted body runs `$(...)`.
+    fn heredoc(&self, s: &str, docs: &mut HeredocScan<'_>, from: usize) -> Option<Replacement> {
         let mut at = from;
         loop {
             let start = at.saturating_add(s.get(at..)?.find("<<")?);
-            if let Some(doc) = heredoc_at(s, start) {
+            if let Some(doc) = docs.at(start) {
                 let line_start = s
                     .get(..start)
                     .and_then(|h| h.rfind('\n'))
@@ -152,93 +154,6 @@ impl ProsePatterns {
                 .into_owned()
         };
         Some(Replacement { start, end, with })
-    }
-}
-
-/// A here-document 1.x's `HEREDOC` matches.
-#[derive(Debug)]
-struct Heredoc<'s> {
-    /// Where the match ends: after the closing tag.
-    end: usize,
-    /// Group 1: the quote around the tag, or empty.
-    quote: &'s str,
-    /// Group 2: the tag.
-    tag: &'s str,
-    /// Group 3: the rest of the opening line.
-    rest: &'s str,
-}
-
-/// 1.x `(?<!<)<<-?[ \t]*(['"]?)([\w.-]+)\1([^\n]*)\n[\s\S]*?\n\t*\2(?=\n|$)` at byte `at`, in
-/// JS's backtracking order: the `-` taken, then not; for an unquoted tag, the longest tag that
-/// has a closing line, and the first such line.
-fn heredoc_at(s: &str, at: usize) -> Option<Heredoc<'_>> {
-    let bytes = s.as_bytes();
-    if !s.get(at..)?.starts_with("<<")
-        || at.checked_sub(1).and_then(|b| bytes.get(b)) == Some(&b'<')
-    {
-        return None;
-    }
-    let after = at.saturating_add(2);
-    let dashes: &[usize] = if bytes.get(after) == Some(&b'-') {
-        &[1, 0]
-    } else {
-        &[0]
-    };
-    dashes.iter().find_map(|&dash| {
-        let mut p = after.saturating_add(dash);
-        while matches!(bytes.get(p), Some(b' ' | b'\t')) {
-            p = p.saturating_add(1);
-        }
-        let quote = match bytes.get(p) {
-            Some(b'\'' | b'"') => s.get(p..p.saturating_add(1))?,
-            _ => "",
-        };
-        let tag_start = p.saturating_add(quote.len());
-        let run = s.get(tag_start..)?;
-        let run = run.get(..run.find(|c: char| !is_tag_char(c)).unwrap_or(run.len()))?;
-        if run.is_empty() {
-            return None;
-        }
-        let shortest = if quote.is_empty() { 1 } else { run.len() };
-        (shortest..=run.len()).rev().find_map(|len| {
-            let tag = run.get(..len)?;
-            let rest_start = tag_start.saturating_add(len);
-            let rest_start = if quote.is_empty() {
-                rest_start
-            } else {
-                s.get(rest_start..)?.strip_prefix(quote)?;
-                rest_start.saturating_add(quote.len())
-            };
-            let line_end = rest_start.saturating_add(s.get(rest_start..)?.find('\n')?);
-            let end = closing_line(s, line_end.saturating_add(1), tag)?;
-            Some(Heredoc {
-                end,
-                quote,
-                tag,
-                rest: s.get(rest_start..line_end)?,
-            })
-        })
-    })
-}
-
-/// JS `[\w.-]`.
-fn is_tag_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')
-}
-
-/// The end of the first `\n\t*<tag>` at or after `from` that a newline or the end follows.
-fn closing_line(s: &str, from: usize, tag: &str) -> Option<usize> {
-    let mut at = from;
-    loop {
-        let nl = at.saturating_add(s.get(at..)?.find('\n')?);
-        let line = s.get(nl.saturating_add(1)..)?;
-        let body = line.trim_start_matches('\t');
-        if let Some(after) = body.strip_prefix(tag)
-            && (after.is_empty() || after.starts_with('\n'))
-        {
-            return Some(s.len().saturating_sub(after.len()));
-        }
-        at = nl.saturating_add(1);
     }
 }
 

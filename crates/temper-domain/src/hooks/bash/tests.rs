@@ -460,12 +460,62 @@ fn cargo_dependency_commands_name_their_crates() {
         ("echo cargo add x", "add:x"),
         ("cargo add --dev proptest && cargo test", "add:proptest"),
     ] {
-        let segments = flags.segments(cmd);
+        let blanked = flags.blanked(cmd);
         let got: Vec<String> = deps
-            .commands(&segments)
+            .commands(flags.segments(&blanked))
             .iter()
             .map(|c| format!("{}:{}", c.op.name(), c.crates.join(",")))
             .collect();
         assert_eq!(got.join(";"), want, "{cmd:?}");
+    }
+}
+
+/// Long runs of the starts each hand-written matcher resumes from: `git` words for
+/// `GIT_COMMIT_N`, `git commit` for its tail, CLI spellings for `baselineCall`, and
+/// here-document openers with long tags or many lines. Each decision is 1.x's; a matcher that
+/// rescans from every start makes this test hang instead of fail (review of #200, F1 to F3).
+#[test]
+fn long_runs_of_matcher_starts_are_decided() {
+    let flags = FlagPatterns::new().expect("the patterns compile");
+    let raise = RaisePatterns::new().expect("the patterns compile");
+    let prose = ProsePatterns::new().expect("the patterns compile");
+
+    assert!(!flags.skips_git_hooks(&format!("git{}", " -git".repeat(1 << 16))));
+    assert!(!flags.skips_git_hooks(&"git commit ".repeat(1 << 15)));
+    assert_eq!(raise.baseline_raise(&"x=temper ".repeat(1 << 17)), None);
+    for cmd in [
+        format!("<<{}{}", "a".repeat(1 << 15), "\n".repeat((1 << 15) + 1)),
+        "<<a\n".repeat(1 << 15),
+        "<<a\nb\n".repeat(1 << 14),
+    ] {
+        assert!(prose.blank(&cmd) == cmd, "{:?}", cmd.get(..8));
+    }
+}
+
+/// Rows that a naive translation of a rewritten look-around or back-reference answers
+/// differently (2-16), each with 1.x's answer: the here-document's quote back-reference, and
+/// `--ignore-rust-version`'s `(?![\w-])`.
+#[test]
+fn the_rewritten_look_arounds_answer_as_1x() {
+    let prose = ProsePatterns::new().expect("the patterns compile");
+    let flags = FlagPatterns::new().expect("the patterns compile");
+    for cmd in [
+        "cat <<'EOF\nx\nEOF",
+        "cat <<\"EOF\nx\nEOF",
+        "cat <<'EOF\"\nx\nEOF",
+        // `SEARCH`'s `(?=\s|$)`: `rg` inside a longer word is no search command.
+        "rgx 'a' -- --no-verify",
+        "ager 'x' -- y",
+    ] {
+        assert_eq!(prose.blank(cmd), cmd, "{cmd:?}");
+    }
+    for (cmd, want) in [
+        ("cargo test --ignore-rust-version", true),
+        ("cargo test --ignore-rust-version=1", true),
+        ("cargo test --ignore-rust-version.x", true),
+        ("cargo test --ignore-rust-version-x", false),
+        ("cargo test --ignore-rust-version_x", false),
+    ] {
+        assert_eq!(flags.ignores_rust_version(cmd), want, "{cmd:?}");
     }
 }

@@ -51,8 +51,8 @@ impl RaisePatterns {
                 "raise:cli",
                 r"(?:^|[\s=])(?:[^\s=]*temper\.mjs|\$\{?\w+\}?|(?:\/|[A-Za-z]:[\\/]|\\\\)[^\s=]*[\\/]temper(?:\.exe)?|temper(?:\.exe)?)\s+(?:-\S+\s+)*",
             )?,
-            // 1.x `BASELINE_REST`, sticky: tried only where `cli` ended.
-            rest: plain("raise:rest", r"baseline\b(.*)$")?,
+            // 1.x `BASELINE_REST`, sticky: anchored, and matched on the text where `cli` ended.
+            rest: plain("raise:rest", r"^baseline\b(.*)$")?,
             // 1.x `(?![\w-])`, consumed: only the group is read.
             raise_flag: plain("raise:flag", r"(?:^|\s)--?(init|update)(?:[^\w-]|$)")?,
             restore: plain(
@@ -92,10 +92,10 @@ impl RaisePatterns {
     fn baseline_call<'s>(&self, seg: &'s str) -> Option<&'s str> {
         let mut from = 0;
         while let Some(cli) = self.cli.find_at(seg, from) {
-            if let Some(call) = self
-                .rest
-                .captures_at(seg, cli.end())
-                .filter(|call| call.get(0).is_some_and(|m| m.start() == cli.end()))
+            // The sticky match reads only from `cli`'s end, so a miss costs a few bytes.
+            let after = seg.get(cli.end()..).unwrap_or("");
+            if after.starts_with("baseline")
+                && let Some(call) = self.rest.captures(after)
             {
                 return call.get(1).map(|rest| rest.as_str());
             }

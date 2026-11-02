@@ -10,6 +10,8 @@
 
 mod deps;
 mod flags;
+mod heredoc;
+mod next;
 mod prose;
 mod raise;
 mod texts;
@@ -169,10 +171,10 @@ impl BashPolicy {
         dependencies: &DependencyCheck<'_>,
     ) -> Option<PolicyDecision> {
         if let DependencyCheck::Ask { preapproved } = dependencies {
-            let segments = self.flags.segments(cmd);
+            let blanked = self.flags.blanked(cmd);
             let changes: Vec<String> = self
                 .deps
-                .commands(&segments)
+                .commands(self.flags.segments(&blanked))
                 .into_iter()
                 .filter(|c| {
                     c.crates.is_empty()

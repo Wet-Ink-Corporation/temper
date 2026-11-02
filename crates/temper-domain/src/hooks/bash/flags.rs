@@ -1,8 +1,13 @@
 //! Flags that weaken verification on a command line (1.x `hooks.mjs` `segments`, `isCargo`,
 //! `skipsGitHooks` with `GIT_COMMIT_N`, and `lowersLints`).
 
+use std::borrow::Cow;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
 use regex::{NoExpand, Regex};
 
+use super::next::Next;
 use crate::hooks::setup::{PolicySetupError, compile};
 use crate::js::{JsFlags, is_js_space};
 
@@ -54,17 +59,21 @@ impl FlagPatterns {
         })
     }
 
-    /// 1.x `segments(cmd)`: the command split into simple commands, quoted strings blanked to
-    /// `''` first so flags inside messages do not count.
-    pub(super) fn segments(&self, cmd: &str) -> Vec<String> {
-        let blanked = self.quoted.replace_all(cmd, NoExpand("''"));
-        self.separators.split(&blanked).map(str::to_owned).collect()
+    /// The first half of 1.x `segments(cmd)`: quoted strings blanked to `''`, so flags inside
+    /// messages do not count.
+    pub(super) fn blanked<'c>(&self, cmd: &'c str) -> Cow<'c, str> {
+        self.quoted.replace_all(cmd, NoExpand("''"))
+    }
+
+    /// The second half of 1.x `segments(cmd)`: the [`blanked`](Self::blanked) command split
+    /// into simple commands.
+    pub(super) fn segments<'b>(&self, blanked: &'b str) -> impl Iterator<Item = &'b str> {
+        self.separators.split(blanked)
     }
 
     /// `--ignore-rust-version` in a cargo segment.
     pub(super) fn ignores_rust_version(&self, cmd: &str) -> bool {
-        self.segments(cmd)
-            .iter()
+        self.segments(&self.blanked(cmd))
             .any(|seg| self.cargo.is_match(seg) && self.ignore_rust_version.is_match(seg))
     }
 
@@ -77,42 +86,34 @@ impl FlagPatterns {
     /// 1.x `GIT_COMMIT_N.test(text)`:
     /// `\bgit\s+(?:-[cC]\s+(?:${QUOTED}|\S+)\s+|--?(?![cC]\s)\w[\w-]*(?:=(?:${QUOTED}|\S*))?\s+)*commit(?=\s|$)(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n`.
     /// The option loop is walked by hand over every position it can reach, since a quoted
-    /// value can also be read as `\S+`; the tempered tail is a search bounded by the first
-    /// separator or ` -- `.
+    /// value can also be read as `\S+`. Whether the rest matches from a position does not
+    /// depend on which `git` reached it, so every `git` shares one walk, in increasing
+    /// position order, and each position is read once; the tempered tail is a search bounded
+    /// by the first separator or ` -- `, both found through cursors that only move forward.
     fn git_commit_n(&self, text: &str) -> bool {
-        self.git.find_iter(text).any(|git| {
-            let mut seen = vec![git.end()];
-            let mut todo = vec![git.end()];
-            while let Some(at) = todo.pop() {
-                let rest = text.get(at..).unwrap_or("");
-                if let Some(after) = rest.strip_prefix("commit")
-                    && after.starts_with(is_js_space)
-                    && self.commit_tail(text, text.len().saturating_sub(after.len()))
-                {
-                    return true;
-                }
-                for next in option_ends(text, at) {
-                    if !seen.contains(&next) {
-                        seen.push(next);
-                        todo.push(next);
-                    }
-                }
+        let mut todo: BinaryHeap<Reverse<usize>> = self
+            .git
+            .find_iter(text)
+            .map(|git| Reverse(git.end()))
+            .collect();
+        let mut tail = CommitTail::new(&self.commit_n_tail, text);
+        let mut last = None;
+        while let Some(Reverse(at)) = todo.pop() {
+            if last == Some(at) {
+                continue;
             }
-            false
-        })
-    }
-
-    /// 1.x `(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n` from byte `at`: the cluster may
-    /// start anywhere up to the first `|`, `;`, `&`, newline or ` -- `.
-    fn commit_tail(&self, text: &str, at: usize) -> bool {
-        let rest = text.get(at..).unwrap_or("");
-        let stop = rest
-            .char_indices()
-            .find(|&(i, c)| matches!(c, '|' | ';' | '&' | '\n') || starts_dashes(rest, i))
-            .map_or(rest.len(), |(i, _)| i);
-        self.commit_n_tail
-            .find_at(text, at)
-            .is_some_and(|m| m.start() <= at.saturating_add(stop))
+            last = Some(at);
+            let rest = text.get(at..).unwrap_or("");
+            if let Some(after) = rest.strip_prefix("commit")
+                && after.starts_with(is_js_space)
+                && tail.reaches(text.len().saturating_sub(after.len()))
+            {
+                return true;
+            }
+            // Every option ends after `at`, so the heap's order is the walk's.
+            todo.extend(option_ends(text, at).into_iter().map(Reverse));
+        }
+        false
     }
 
     /// 1.x `lowersLints(text)`: `cargo clippy` or `rustc` with `-A`, `--allow` or
@@ -128,6 +129,47 @@ impl FlagPatterns {
                     .is_match(from_cargo.get(tool.start()..).unwrap_or(""))
             })
         }) || self.rustflags.is_match(text)
+    }
+}
+
+/// 1.x `(?:(?!\s--\s)[^|;&\n])*\s["']?-[aehiopqsvz]*n` from a byte offset: the cluster may
+/// start anywhere up to the first `|`, `;`, `&`, newline or ` -- `.
+#[derive(Debug)]
+struct CommitTail<'p, 't> {
+    cluster: &'p Regex,
+    text: &'t str,
+    /// The first stop at or after a position.
+    stop: Next,
+    /// The first cluster start at or after a position.
+    start: Next,
+}
+
+impl<'p, 't> CommitTail<'p, 't> {
+    const fn new(cluster: &'p Regex, text: &'t str) -> Self {
+        Self {
+            cluster,
+            text,
+            stop: Next::Unknown,
+            start: Next::Unknown,
+        }
+    }
+
+    /// Does the tail match from byte `at`?
+    fn reaches(&mut self, at: usize) -> bool {
+        let text = self.text;
+        let stop = self
+            .stop
+            .at_or_after(at, |from| {
+                let rest = text.get(from..).unwrap_or("");
+                rest.char_indices()
+                    .find(|&(i, c)| matches!(c, '|' | ';' | '&' | '\n') || starts_dashes(rest, i))
+                    .map(|(i, _)| from.saturating_add(i))
+            })
+            .unwrap_or(text.len());
+        let cluster = self.cluster;
+        self.start
+            .at_or_after(at, |from| cluster.find_at(text, from).map(|m| m.start()))
+            .is_some_and(|start| start <= stop)
     }
 }
 
