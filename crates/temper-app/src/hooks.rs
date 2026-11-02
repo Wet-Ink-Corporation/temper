@@ -1,10 +1,11 @@
 //! The hook handlers behind `temper hook <event>` (1.x `hooks.mjs`), one module per family.
 
 mod input;
+mod pre_bash;
 mod pre_edit;
 mod skill;
 
-use temper_domain::{HookEvent, HookOutcome, Scanner};
+use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
 pub use input::{HookInput, HookInputError};
 
@@ -12,6 +13,7 @@ use crate::engine::{HookError, RunEnv};
 use crate::paths;
 use crate::ports::Ports;
 use crate::project::{Workspace, discover_at, exists};
+use crate::telemetry;
 
 /// One hook call: the ports, the run environment and the input, as every handler reads them.
 #[derive(Debug)]
@@ -32,12 +34,39 @@ pub(crate) fn run<P: Ports>(
         HookEvent::UserPrompt => skill::user_prompt(call),
         HookEvent::PostTool => skill::post_tool(call),
         HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
+        HookEvent::PreBash => pre_bash::pre_bash(call),
         HookEvent::SessionStart
-        | HookEvent::PreBash
         | HookEvent::PreHandback
         | HookEvent::Stop
         | HookEvent::SubagentStop
         | HookEvent::SubagentStart => Err(HookError::NotPorted { event }),
+    }
+}
+
+/// `outcome`, after a telemetry row for `event`.
+fn logged(
+    call: &HookCall<'_, impl Ports>,
+    workspace: &Workspace,
+    event: &TelemetryEvent,
+    outcome: HookOutcome,
+) -> HookOutcome {
+    match telemetry::log(call, workspace, event) {
+        // Telemetry is best effort (1.x): a row that cannot be written does not change the
+        // answer.
+        Ok(()) | Err(_) => outcome,
+    }
+}
+
+/// A policy's answer, after its telemetry row if it has one (2-14 A: written where 1.x writes
+/// it).
+fn answered(
+    call: &HookCall<'_, impl Ports>,
+    workspace: &Workspace,
+    decision: PolicyDecision,
+) -> HookOutcome {
+    match &decision.telemetry {
+        Some(event) => logged(call, workspace, event, decision.outcome),
+        None => decision.outcome,
     }
 }
 

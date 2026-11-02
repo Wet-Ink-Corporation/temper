@@ -606,7 +606,7 @@
     },
     {
       "source": "tests/hooks.test.mjs",
-      "pending": "port Phases 2d to 2f (the Bash handler) and Phase 4 (the gate tests)",
+      "pending": "port Phases 2e and 2f (the rest of the Bash handler) and Phase 4 (the gate tests)",
       "tests": [
         {
           "node": "lintConfigChanged ignores plain inheritance and comments",
@@ -760,6 +760,162 @@
           "crate": "temper-app",
           "rust": [
             "hooks::pre_edit::tests::ignore_added_to_an_existing_test_asks_a_new_ignored_test_and_the_miri_form_do_not"
+          ]
+        },
+        {
+          "node": "Bash: --ignore-rust-version is denied (MOD-01)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::ignore_rust_version_is_denied_mod_01"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to Cargo.lock are denied; cargo and git are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_cargo_lock_are_denied_cargo_and_git_are_not"
+          ]
+        },
+        {
+          "node": "Bash: --no-verify and lint lowering in a message, here-document or search pattern are allowed (H-12, H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::no_verify_and_lint_lowering_in_a_message_here_document_or_search_pattern_are_allowed_h_12_h_05"
+          ]
+        },
+        {
+          "node": "Bash: skipping git hooks stays denied however it is quoted or handed on (H-12)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::skipping_git_hooks_stays_denied_however_it_is_quoted_or_handed_on_h_12"
+          ]
+        },
+        {
+          "node": "Bash: lowering lint levels stays denied however it is quoted or handed on (H-05)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::lowering_lint_levels_stays_denied_however_it_is_quoted_or_handed_on_h_05"
+          ]
+        },
+        {
+          "node": "Bash: --ignore-rust-version only counts as a cargo flag",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::ignore_rust_version_only_counts_as_a_cargo_flag"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to Cargo.toml are refused so the manifest checks run",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_cargo_toml_are_refused_so_the_manifest_checks_run"
+          ]
+        },
+        {
+          "node": "Bash: cargo add/remove asks (H-16) unless every crate is pre-approved",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::cargo_add_remove_asks_h_16_unless_every_crate_is_pre_approved"
+          ]
+        },
+        {
+          "node": "Bash: temper baseline --init/--update are refused unless TEMPER_ALLOW_RAISE asks the human (H-12); --tighten, --check and status run freely",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::temper_baseline_init_update_are_refused_unless_temper_allow_raise_asks_the_human_h_12_tighten_check_and_status_run_freely"
+          ]
+        },
+        {
+          "node": "Bash: git checkout/restore/stash of a .claude path, and git show into .claude/, ask (H-12)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::git_checkout_restore_stash_of_a_claude_path_and_git_show_into_claude_ask_h_12"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to the baseline file are denied; Edit/Write to it asks (protected .claude/**)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_the_baseline_file_are_denied_edit_write_to_it_asks_protected_claude"
+          ]
+        },
+        {
+          "node": "Bash: shell writes to the vendored CLI (.claude/temper/) are denied; reading and running it are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::shell_writes_to_the_vendored_cli_claude_temper_are_denied_reading_and_running_it_are_not"
+          ]
+        },
+        {
+          "node": "Bash: the flag checks stay fast on long commands",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::the_flag_checks_stay_fast_on_long_commands"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "blankProse: a megabyte of starts, assignments, paths or newlines is blanked in well under a second",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::bash::tests::blank_prose_leaves_a_megabyte_of_starts_assignments_paths_or_newlines_unchanged"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        }
+      ]
+    },
+    {
+      "source": "tests/telemetry.test.mjs",
+      "pending": "port Phase 3 (verdictProblems, the verdict rows and SessionStart's gate-lost rows), Phase 4 (the gate heartbeat, step times and hookTimeoutMs) and Phase 7 (temper stats)",
+      "tests": [
+        {
+          "node": "redactCommand: likely secrets become ***, and the rest of the command stays readable",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::likely_secrets_become_stars_and_the_rest_of_the_command_stays_readable"
+          ]
+        },
+        {
+          "node": "redactCommand: only the first line, up to any heredoc or here-string, is kept",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::only_the_first_line_up_to_any_heredoc_or_here_string_is_kept"
+          ]
+        },
+        {
+          "node": "redactCommand: the forms a secret takes on a command line",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::the_forms_a_secret_takes_on_a_command_line"
+          ]
+        },
+        {
+          "node": "redactCommand: the contents of quoted strings are dropped, so file content written by a shell never reaches telemetry",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::the_contents_of_quoted_strings_are_dropped_so_file_content_written_by_a_shell_never_reaches_telemetry"
+          ]
+        },
+        {
+          "node": "redactCommand: time does not grow with the command, even on a 1 MB hyphenated line",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::a_megabyte_hyphenated_line_is_cut_and_a_cut_long_token_leaves_no_part"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs); the decisions are ported"
+        },
+        {
+          "node": "redactCommand: clipped to 200 characters after redaction, so a cut secret is still removed",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::telemetry::redact::tests::clipped_to_200_characters_after_redaction_so_a_cut_secret_is_still_removed"
+          ]
+        },
+        {
+          "node": "shell deny rows carry the command, redacted and clipped",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::rows::shell_deny_rows_carry_the_command_redacted_and_clipped"
           ]
         }
       ]
