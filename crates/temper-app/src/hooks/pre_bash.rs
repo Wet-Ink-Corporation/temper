@@ -1,10 +1,10 @@
 //! `pre-bash`: `Bash` calls are checked before they run (1.x `hooks.mjs` `preBash`).
 //!
-//! Port Phase 2d brings the checks that read only the command's text, in 1.x's order. The
-//! ones that read its words with 1.x's shell reader (`scripts/lib/shell.mjs`) and the file
-//! system arrive with that reader: the reviewer's patch denials and copies onto `.rs` files in
-//! Phase 2f, state-dir writes and protected configuration in Phase 2e. Each is marked where it
-//! goes. `pre-bash` graduates in 2f.
+//! Port Phase 2d brought the checks that read only the command's text, in 1.x's order, and
+//! 2e the shell reader (`hooks::shell`) with the state-dir writes it finds. The other checks
+//! that read the command's words and the file system follow: protected configuration in the
+//! second part of 2e, the reviewer's patch denials and copies onto `.rs` files in 2f. Each is
+//! marked where it goes. `pre-bash` graduates in 2f.
 
 use temper_domain::{BashPolicy, DependencyCheck, HookOutcome};
 
@@ -37,7 +37,9 @@ pub(crate) fn pre_bash(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, H
     if let Some(decision) = policy.cargo_or_baseline_write(&cmd) {
         return Ok(answered(call, &workspace, decision));
     }
-    // Phase 2e: shell writes into the state dir.
+    if state_dir::state_dir_write(call, &workspace, &cmd) {
+        return Ok(answered(call, &workspace, policy.state_dir_write(&cmd)));
+    }
     if let Some(decision) = policy.verification_bypass(&cmd) {
         return Ok(answered(call, &workspace, decision));
     }
@@ -56,6 +58,8 @@ pub(crate) fn pre_bash(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, H
         None => HookOutcome::Pass,
     })
 }
+
+mod state_dir;
 
 #[cfg(test)]
 mod tests;

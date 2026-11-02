@@ -204,6 +204,76 @@ fn a_linked_worktree_logs_to_the_shared_git_dir() -> TestResult {
     Ok(())
 }
 
+/// The decision `temper hook pre-bash` gives `cmd` in `dir`: `deny`, `ask`, or `""` for none.
+fn bash_decision(dir: &Path, cmd: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let stdin = format!(
+        r#"{{"tool_name":"Bash","session_id":"s1","tool_input":{{"command":{}}}}}"#,
+        JsValue::String(cmd.to_owned()).to_json()
+    );
+    let run = hook_in(dir, "pre-bash", &stdin, &[])?;
+    if run.stdout.is_empty() {
+        return Ok(String::new());
+    }
+    let out = JsValue::from_json(&run.stdout)?;
+    let decision = out
+        .get("hookSpecificOutput")
+        .and_then(|o| o.get("permissionDecision"))
+        .and_then(JsValue::as_str)
+        .ok_or_else(|| format!("no decision in {}", run.stdout))?;
+    Ok(decision.to_owned())
+}
+
+/// 1.x "Bash: shell writes into the absolute state dir of a git worktree are denied": a linked
+/// worktree's state dir is in the main repository's git dir, outside the worktree. Its
+/// `python3 -c "open(...)"` row arrives with interpreter code in port Phase 2f.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn shell_writes_into_the_absolute_state_dir_of_a_git_worktree_are_denied() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let main = root.path().join("main");
+    write_tree(&main, &[("Cargo.toml", WORKSPACE)])?;
+    git_init(&main)?;
+    git(&main, &["add", "-A"])?;
+    git(&main, &["commit", "-qm", "init"])?;
+    git(&main, &["worktree", "add", "-q", "../wt"])?;
+    let wt = root.path().join("wt");
+    let common = std::process::Command::new("git")
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .current_dir(&wt)
+        .output()?;
+    // git prints `/` separators on every OS.
+    let slashed = format!("{}/temper", String::from_utf8(common.stdout)?.trim_end());
+    let native = slashed.replace('/', std::path::MAIN_SEPARATOR_STR);
+    assert!(
+        !slashed.contains("/wt/"),
+        "the state dir {slashed} is in the main repository"
+    );
+
+    for cmd in [
+        format!(
+            r#"echo {{}} > "{native}{}verdicts{}a.json""#,
+            std::path::MAIN_SEPARATOR,
+            std::path::MAIN_SEPARATOR
+        ),
+        format!("cp /tmp/v.json {slashed}/gate/a.json"),
+        r#"echo {} > "$(git rev-parse --git-common-dir)/temper/verdicts/a.json""#.to_owned(),
+    ] {
+        assert_eq!(bash_decision(&wt, &cmd)?, "deny", "{cmd}");
+    }
+    for cmd in [
+        format!(
+            r#"cat "{native}{}telemetry.jsonl""#,
+            std::path::MAIN_SEPARATOR
+        ),
+        format!("cp {slashed}/logs/a.log /tmp/"),
+        format!("rm {slashed}/telemetry.jsonl"),
+        "git worktree list".to_owned(),
+    ] {
+        assert_eq!(bash_decision(&wt, &cmd)?, "", "{cmd}");
+    }
+    Ok(())
+}
+
 #[test]
 #[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
 fn a_marker_that_cannot_be_written_is_reported_and_exits_0() -> TestResult {

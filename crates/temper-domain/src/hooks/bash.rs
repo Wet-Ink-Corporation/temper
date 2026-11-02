@@ -109,6 +109,13 @@ impl BashPolicy {
             .then(|| self.shell_write(cmd, ShellWriteFile::Baseline, texts::BASELINE))
     }
 
+    /// The denial of a shell write into temper's state dir, which the app's shell reader
+    /// finds (1.x `stateDirWrite`).
+    #[must_use]
+    pub fn state_dir_write(&self, cmd: &str) -> PolicyDecision {
+        self.shell_write(cmd, ShellWriteFile::StateDir, texts::STATE_DIR)
+    }
+
     /// The checks between the state-dir write and the protected configuration, in 1.x's
     /// order: `TEMPER_ALLOW_RAISE` asks; a shell write into the vendored CLI and a baseline
     /// raise are denied; a restore of older `.claude/` configuration asks;

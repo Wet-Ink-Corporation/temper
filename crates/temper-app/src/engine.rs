@@ -19,6 +19,8 @@ pub struct RunEnv {
     pub plugin_data: Option<PathBuf>,
     /// Node's `os.tmpdir()`, where the skill markers live without `plugin_data`.
     pub temp_dir: PathBuf,
+    /// Node's `os.homedir()`: what `~` and `$HOME` name in a shell command.
+    pub home: PathBuf,
     /// `CLAUDE_CODE_REMOTE_SESSION_ID` when it is set and not empty: the cloud session that
     /// telemetry rows name.
     pub remote_session: Option<String>,

@@ -8,6 +8,8 @@ pub(super) const RUST_SOURCE: &str = "temper: write Rust sources with the Edit o
 pub(super) const MANIFEST: &str = "temper: edit Cargo.toml with the Edit or Write tools, not the shell, so the manifest checks run on it (MOD-09, PERF-09, H-12, H-16). Use the Edit tool for this change.";
 /// A shell write to the lint baseline.
 pub(super) const BASELINE: &str = "temper: .claude/temper-baseline.json records the accepted lint debt and is written only by `temper baseline` (H-12). After fixing findings, lower it with `node \"$TEMPER_CLI\" baseline --tighten`. Raising it (`baseline --update`) is a human decision: ask the human.";
+/// A shell write into temper's state dir.
+pub(super) const STATE_DIR: &str = "temper: temper's state dir (.git/temper/, or target/temper/ without git) holds the gate results and review verdicts, and the shell does not write into it: verdicts come only from the temper:rust-reviewer subagent; gate results come only from the gate command (`node \"$TEMPER_CLI\" gate`). Reading the files, copying them elsewhere and deleting telemetry.jsonl stay allowed.";
 /// A shell write into the vendored CLI.
 pub(super) const VENDORED: &str = "temper: .claude/temper/ is the vendored temper CLI that CI and the pre-commit hook run (the lint ratchet and the baseline-raise check live in it). It is written only by `temper setup`, never by hand (H-12). Leave it unchanged, or ask the human to re-vendor it.";
 /// A command that sets `TEMPER_ALLOW_RAISE`.

@@ -417,17 +417,19 @@ impl Ports for FakePorts {
 }
 
 impl RunEnv {
-    /// A run in `cwd` with `style`'s rules, no plugin data dir, no cloud session, and the
-    /// system temporary directory `/tmp` (or `C:\Temp`).
+    /// A run in `cwd` with `style`'s rules, no plugin data dir, no cloud session, the system
+    /// temporary directory `/tmp` (or `C:\Temp`) and the home `/home/u` (or `C:\Users\u`).
     pub(crate) fn at(cwd: &str, style: PathStyle) -> Self {
+        let (temp, home) = match style {
+            PathStyle::Posix => ("/tmp", "/home/u"),
+            PathStyle::Windows => (r"C:\Temp", r"C:\Users\u"),
+        };
         Self {
             cwd: PathBuf::from(cwd),
             style,
             plugin_data: None,
-            temp_dir: PathBuf::from(match style {
-                PathStyle::Posix => "/tmp",
-                PathStyle::Windows => r"C:\Temp",
-            }),
+            temp_dir: PathBuf::from(temp),
+            home: PathBuf::from(home),
             remote_session: None,
         }
     }

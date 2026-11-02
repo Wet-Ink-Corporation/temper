@@ -1,0 +1,458 @@
+//! Patch commands and the files a patch names (1.x `shell.mjs` `patchCommand`, `patchFiles`).
+//!
+//! The protected-config ask reads them in port Phase 2e; the reviewer's patch denials and the
+//! scan of patches onto `.rs` files read them from 2f.
+
+use std::borrow::Cow;
+
+use super::git::git_command;
+use super::walk::Command;
+use super::words::{Dir, PathCx, Word};
+
+/// Which tool applies a patch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PatchTool {
+    /// `patch` (and `gpatch`).
+    Patch,
+    /// `git apply`, or a subcommand read as one (see [`Patch::guessed`]).
+    GitApply,
+    /// `git am`.
+    GitAm,
+}
+
+/// What a patch command does (1.x `patchCommand(c)`'s answer with `apply: true`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Patch<'c> {
+    pub(crate) tool: PatchTool,
+    /// The patch files named on the command line; with none, the patch comes from stdin.
+    pub(crate) inputs: Vec<Cow<'c, Word>>,
+    /// `-o` files, which it writes.
+    pub(crate) outputs: Vec<Cow<'c, Word>>,
+    /// `patch`'s file operand, which it writes.
+    pub(crate) target: Option<Cow<'c, Word>>,
+    /// Where it runs, after `git -C` and `patch -d`.
+    pub(crate) cwd: Option<Dir>,
+    /// `git am --continue` and the like, which apply patches temper cannot see.
+    pub(crate) stored: bool,
+    /// A subcommand git does not have, under configuration temper cannot read, read as
+    /// `git apply`: only a patch file temper can read counts.
+    pub(crate) guessed: bool,
+}
+
+/// A patch command: one that applies, or an inspecting form that changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PatchCommand<'c> {
+    Applies(Patch<'c>),
+    /// `--check`, `--stat` without `--apply`, `--dry-run`, `--help`, `--version`,
+    /// `git am --abort`.
+    Inspects(PatchTool),
+}
+
+/// 1.x `PATCH_VALUES`: patch's options that take a value.
+const PATCH_VALUES: [&str; 24] = [
+    "-p",
+    "-i",
+    "-o",
+    "-d",
+    "-D",
+    "-F",
+    "-B",
+    "-Y",
+    "-z",
+    "-V",
+    "-r",
+    "-g",
+    "--strip",
+    "--input",
+    "--output",
+    "--directory",
+    "--ifdef",
+    "--fuzz",
+    "--prefix",
+    "--basename-prefix",
+    "--suffix",
+    "--version-control",
+    "--reject-file",
+    "--get",
+];
+/// 1.x `GIT_APPLY_VALUES`.
+const GIT_APPLY_VALUES: [&str; 7] = [
+    "-p",
+    "-C",
+    "--exclude",
+    "--include",
+    "--directory",
+    "--whitespace",
+    "--build-fake-ancestor",
+];
+
+fn patch_value(key: &str) -> bool {
+    PATCH_VALUES.contains(&key) || key == "--quoting-style"
+}
+
+/// 1.x `patchCommand(c)`: git apply, git am and patch, or `None` for any other command.
+pub(crate) fn patch_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<PatchCommand<'c>> {
+    if c.name.as_deref() == Some("patch") {
+        return Some(read_patch(
+            PatchTool::Patch,
+            &c.args,
+            c.cwd.clone(),
+            false,
+            cx,
+        ));
+    }
+    let g = git_command(c, cx)?;
+    let tool = if g.hidden_alias {
+        PatchTool::GitApply
+    } else {
+        match g.sub.as_str() {
+            "apply" => PatchTool::GitApply,
+            "am" => PatchTool::GitAm,
+            _ => return None,
+        }
+    };
+    Some(match g.args {
+        Cow::Borrowed(args) => read_patch(tool, args, g.cwd, g.hidden_alias, cx),
+        // An alias expansion's words live in `g`, so the patch owns its.
+        Cow::Owned(args) => match read_patch(tool, &args, g.cwd, g.hidden_alias, cx) {
+            PatchCommand::Applies(p) => PatchCommand::Applies(p.into_owned()),
+            PatchCommand::Inspects(tool) => PatchCommand::Inspects(tool),
+        },
+    })
+}
+
+impl Patch<'_> {
+    fn into_owned<'x>(self) -> Patch<'x> {
+        let own = |w: Cow<'_, Word>| Cow::Owned(w.into_owned());
+        Patch {
+            tool: self.tool,
+            inputs: self.inputs.into_iter().map(own).collect(),
+            outputs: self.outputs.into_iter().map(own).collect(),
+            target: self.target.map(own),
+            cwd: self.cwd,
+            stored: self.stored,
+            guessed: self.guessed,
+        }
+    }
+}
+
+/// The options and operands of a patch command.
+fn read_patch<'a>(
+    tool: PatchTool,
+    args: &'a [Word],
+    mut cwd: Option<Dir>,
+    guessed: bool,
+    cx: PathCx<'_>,
+) -> PatchCommand<'a> {
+    let (mut read_only, mut report_only, mut apply_too, mut stored) = (false, false, false, false);
+    let mut inputs: Vec<Cow<'a, Word>> = Vec::new();
+    let mut outputs: Vec<Cow<'a, Word>> = Vec::new();
+    let mut pos: Vec<&'a Word> = Vec::new();
+    let mut i = 0;
+    while let Some(a) = args.get(i) {
+        i = i.saturating_add(1);
+        let r = a.raw.as_str();
+        if a.value().is_none() || !r.starts_with('-') || r == "-" {
+            pos.push(a);
+            continue;
+        }
+        let eq = r.find('=');
+        let k = eq.and_then(|e| r.get(..e)).unwrap_or(r);
+        if ["-h", "--help", "--version"].contains(&k) || (tool == PatchTool::Patch && k == "-v") {
+            return PatchCommand::Inspects(tool);
+        }
+        if tool != PatchTool::Patch {
+            match k {
+                "--check" => read_only = true,
+                "--stat" | "--numstat" | "--summary" => report_only = true,
+                "--apply" => apply_too = true,
+                "--abort" | "--quit" | "--show-current-patch" => {
+                    return PatchCommand::Inspects(tool);
+                }
+                "--continue" | "--skip" | "--resolved" | "-r" if tool == PatchTool::GitAm => {
+                    stored = true
+                }
+                _ if eq.is_none() && GIT_APPLY_VALUES.contains(&k) => i = i.saturating_add(1),
+                _ => {}
+            }
+            continue;
+        }
+        if k == "--dry-run" {
+            read_only = true;
+            continue;
+        }
+        let short = !k.starts_with("--")
+            && k.strip_prefix('-')
+                .is_some_and(|f| f.starts_with(|c: char| "pioDdFBYzVrg".contains(c)));
+        let mut v: Option<Cow<'a, Word>> = eq.map(|_| Cow::Owned(a.after_eq()));
+        if short && k.len() > 2 {
+            v = k.get(2..).map(|s| Cow::Owned(Word::plain(s)));
+        }
+        let key = if short { k.get(..2).unwrap_or(k) } else { k };
+        if !patch_value(key) {
+            continue;
+        }
+        if v.is_none() {
+            v = args.get(i).map(Cow::Borrowed);
+            i = i.saturating_add(1);
+        }
+        let Some(v) = v else {
+            continue;
+        };
+        match key {
+            "-i" | "--input" => inputs.push(v),
+            "-o" | "--output" => outputs.push(v),
+            "-d" | "--directory" => {
+                cwd = super::words::word_path(cx, &v, cwd.as_deref()).map(Dir::from);
+            }
+            _ => {}
+        }
+    }
+    if (read_only || report_only) && !apply_too {
+        return PatchCommand::Inspects(tool);
+    }
+    let mut target = None;
+    if tool == PatchTool::Patch {
+        target = pos.first().map(|w| Cow::Borrowed(*w));
+        if let Some(second) = pos.get(1) {
+            inputs.push(Cow::Borrowed(*second));
+        }
+    } else {
+        inputs.extend(pos.into_iter().filter(|w| w.raw != "-").map(Cow::Borrowed));
+    }
+    PatchCommand::Applies(Patch {
+        tool,
+        inputs,
+        outputs,
+        target,
+        cwd,
+        stored,
+        guessed,
+    })
+}
+
+/// A JS line terminator, where `^` and `$` match under the `m` flag and `.` stops.
+fn line_end(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// `$` under `m` at byte `at`: the end, or a line terminator next.
+fn at_line_end(text: &str, at: usize) -> bool {
+    text.get(at..)
+        .and_then(|r| r.chars().next())
+        .is_none_or(line_end)
+}
+
+/// `\r?$` at `at`: the byte offset where it matches, or `None`.
+fn cr_then_end(text: &str, at: usize) -> Option<usize> {
+    if at_line_end(text, at) {
+        return Some(at);
+    }
+    let after = at.saturating_add(1);
+    (text.get(at..).is_some_and(|r| r.starts_with('\r')) && at_line_end(text, after))
+        .then_some(after)
+}
+
+/// A `"[^"]*"` at `at` (which may run over lines): its end.
+fn quoted_at(text: &str, at: usize) -> Option<usize> {
+    let rest = text.get(at..)?.strip_prefix('"')?;
+    rest.find('"')
+        .map(|e| at.saturating_add(e).saturating_add(2))
+}
+
+/// One alternative's captures at a line start, and where the match ends.
+type LineMatch<'t> = (Vec<&'t str>, usize);
+
+/// 1.x `patchFiles`' first alternative: `(?:\+\+\+|---|\*\*\*)[ \t]+("[^"]*"|[^\t\r\n]*?)(?:\t[^\r\n]*)?\r?$`.
+fn header_line(text: &str, at: usize) -> Option<LineMatch<'_>> {
+    let rest = text.get(at..)?;
+    let head = ["+++", "---", "***"]
+        .iter()
+        .find(|h| rest.starts_with(**h))?;
+    let after = rest.get(head.len()..)?;
+    let spaces = after
+        .len()
+        .saturating_sub(after.trim_start_matches([' ', '\t']).len());
+    if spaces == 0 {
+        return None;
+    }
+    let start = at.saturating_add(head.len()).saturating_add(spaces);
+    // The tail: an optional tab and the rest of the line, then `\r?$`.
+    let tail = |from: usize| -> Option<usize> {
+        let r = text.get(from..)?;
+        if let Some(tabbed) = r.strip_prefix('\t') {
+            let line = tabbed.find(['\r', '\n']).unwrap_or(tabbed.len());
+            let end = from.saturating_add(1).saturating_add(line);
+            return cr_then_end(text, end);
+        }
+        cr_then_end(text, from)
+    };
+    if let Some(close) = quoted_at(text, start)
+        && let Some(end) = tail(close)
+    {
+        return Some((vec![text.get(start..close)?], end));
+    }
+    // The lazy capture stops at the first place the tail matches: a tab, or the line's end.
+    let mut at = start;
+    loop {
+        if let Some(end) = tail(at) {
+            return Some((vec![text.get(start..at)?], end));
+        }
+        let c = text.get(at..)?.chars().next()?;
+        if matches!(c, '\t' | '\r' | '\n') {
+            return None;
+        }
+        at = at.saturating_add(c.len_utf8());
+    }
+}
+
+/// `("[^"]*"|\S+)` at `at`: its end.
+fn git_name_at(
+    text: &str,
+    at: usize,
+    then: impl Fn(usize) -> Option<usize>,
+) -> Option<(usize, usize)> {
+    use crate::project::is_js_space;
+    if let Some(close) = quoted_at(text, at)
+        && let Some(end) = then(close)
+    {
+        return Some((close, end));
+    }
+    let rest = text.get(at..)?;
+    let run = rest.find(is_js_space).unwrap_or(rest.len());
+    if run == 0 {
+        return None;
+    }
+    let close = at.saturating_add(run);
+    then(close).map(|end| (close, end))
+}
+
+/// 1.x `patchFiles`' second alternative: `diff --git ("[^"]*"|\S+) ("[^"]*"|\S+)\r?$`.
+fn diff_git_line(text: &str, at: usize) -> Option<LineMatch<'_>> {
+    let start = at.saturating_add("diff --git ".len());
+    text.get(at..)?.starts_with("diff --git ").then_some(())?;
+    let second = |from: usize| -> Option<usize> {
+        let b = from.saturating_add(1);
+        text.get(from..)?.starts_with(' ').then_some(())?;
+        git_name_at(text, b, |close| cr_then_end(text, close)).map(|(_, end)| end)
+    };
+    let (close_a, _) = git_name_at(text, start, second)?;
+    let b = close_a.saturating_add(1);
+    let (close_b, end) = git_name_at(text, b, |close| cr_then_end(text, close))?;
+    Some((vec![text.get(start..close_a)?, text.get(b..close_b)?], end))
+}
+
+/// 1.x `patchFiles`' last alternatives: `(?:rename|copy) (?:from|to) (.+?)\r?$` and
+/// `Index: (.+?)\r?$`.
+fn named_line(text: &str, at: usize) -> Option<LineMatch<'_>> {
+    let rest = text.get(at..)?;
+    let lead = [
+        "rename from ",
+        "rename to ",
+        "copy from ",
+        "copy to ",
+        "Index: ",
+    ]
+    .iter()
+    .find(|l| rest.starts_with(**l))?;
+    let start = at.saturating_add(lead.len());
+    let line = text
+        .get(start..)?
+        .find(line_end)
+        .unwrap_or(text.len().saturating_sub(start));
+    if line == 0 {
+        return None;
+    }
+    // `.` stops at every line end, so the lazy capture is the rest of the line.
+    let close = start.saturating_add(line);
+    let end = cr_then_end(text, close)?;
+    Some((vec![text.get(start..close)?], end))
+}
+
+/// The first line start at or after `from`: `from` itself when a line ends just before it,
+/// else the char after the next line end.
+fn line_start_from(text: &str, from: usize) -> Option<usize> {
+    let before = text.get(..from)?;
+    if from == 0 || before.chars().next_back().is_some_and(line_end) {
+        return Some(from);
+    }
+    let rest = text.get(from..)?;
+    let (at, c) = rest.char_indices().find(|(_, c)| line_end(*c))?;
+    Some(from.saturating_add(at).saturating_add(c.len_utf8()))
+}
+
+/// 1.x `patchFiles(text)`: the files a unified, context or git diff names, with prefixes left
+/// on. A `---`/`+++`/`***` header may end in a tab or space and a timestamp, and lines may
+/// end in CR. As the global regex does, each search starts where the last match ended, and
+/// only a line start can begin a match, so each line is tried once.
+pub(crate) fn patch_files(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cursor = 0;
+    while let Some(at) = line_start_from(text, cursor).filter(|&at| at < text.len()) {
+        let found = header_line(text, at)
+            .or_else(|| diff_git_line(text, at))
+            .or_else(|| named_line(text, at));
+        cursor = match found {
+            Some((captures, end)) => {
+                out.extend(
+                    captures
+                        .into_iter()
+                        .filter(|c| !c.is_empty())
+                        .map(clean_name),
+                );
+                end.max(at.saturating_add(1))
+            }
+            // The next start is after the next line end.
+            None => {
+                let c_len = text
+                    .get(at..)
+                    .and_then(|r| r.chars().next())
+                    .map_or(1, char::len_utf8);
+                at.saturating_add(c_len)
+            }
+        };
+        if !text.is_char_boundary(cursor) {
+            break;
+        }
+    }
+    out
+}
+
+/// 1.x's `.replace(/^"|"$/g, '').replace(/\s+\d{4}-\d\d-\d\d[ \t].*$/, '').trim()`.
+fn clean_name(name: &str) -> String {
+    use crate::project::is_js_space;
+    let name = name.strip_prefix('"').unwrap_or(name);
+    let name = name.strip_suffix('"').unwrap_or(name);
+    let mut cut = name.len();
+    let mut i = 0;
+    while let Some(c) = name.get(i..).and_then(|r| r.chars().next()) {
+        if !is_js_space(c) {
+            i = i.saturating_add(c.len_utf8());
+            continue;
+        }
+        let run_start = i;
+        let rest = name.get(i..).unwrap_or("");
+        let run_end = i.saturating_add(
+            rest.len()
+                .saturating_sub(rest.trim_start_matches(is_js_space).len()),
+        );
+        let after = name.get(run_end..).unwrap_or("");
+        let b = after.as_bytes();
+        let digit = |k: usize| b.get(k).is_some_and(u8::is_ascii_digit);
+        let date = (0..4).all(digit)
+            && b.get(4) == Some(&b'-')
+            && digit(5)
+            && digit(6)
+            && b.get(7) == Some(&b'-')
+            && digit(8)
+            && digit(9)
+            && matches!(b.get(10), Some(b' ' | b'\t'))
+            && !after.get(11..).unwrap_or("").contains(line_end);
+        if date {
+            cut = run_start;
+            break;
+        }
+        i = run_end.max(i.saturating_add(c.len_utf8()));
+    }
+    temper_domain::js_trim(name.get(..cut).unwrap_or(name)).to_owned()
+}

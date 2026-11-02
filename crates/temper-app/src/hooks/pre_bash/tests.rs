@@ -6,6 +6,7 @@
 //! (OC-4 A, wi-3ea323); its decisions are kept.
 
 mod rows;
+mod state_dir;
 
 use temper_domain::{HookEvent, HookOutcome, PathStyle::Posix, Scanner};
 

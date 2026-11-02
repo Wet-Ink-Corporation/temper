@@ -3,6 +3,7 @@
 mod input;
 mod pre_bash;
 mod pre_edit;
+mod shell;
 mod skill;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};

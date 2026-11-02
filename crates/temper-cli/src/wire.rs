@@ -26,6 +26,8 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
         style,
         plugin_data: non_empty("CLAUDE_PLUGIN_DATA").map(PathBuf::from),
         temp_dir: PathBuf::from(node_tmpdir(windows, var)),
+        // With the variable unset, `home_dir` asks the OS (passwd, or the user profile).
+        home: node_homedir(windows, |name| std::env::var_os(name), std::env::home_dir),
         remote_session: var("CLAUDE_CODE_REMOTE_SESSION_ID"),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
@@ -71,6 +73,18 @@ pub(crate) fn node_tmpdir(windows: bool, var: impl Fn(&str) -> Option<String>) -
     }
 }
 
+/// Node 22's `os.homedir()` (libuv's `uv_os_homedir`): `HOME` on Unix and `USERPROFILE` on
+/// Windows when the variable is set, even to the empty string (`set` gives its value, `None`
+/// when unset), else the OS's answer (`os`). With neither, Node throws; temper reads `""`.
+pub(crate) fn node_homedir(
+    windows: bool,
+    set: impl Fn(&str) -> Option<OsString>,
+    os: impl FnOnce() -> Option<PathBuf>,
+) -> PathBuf {
+    let name = if windows { "USERPROFILE" } else { "HOME" };
+    set(name).map(PathBuf::from).or_else(os).unwrap_or_default()
+}
+
 /// The engine could not be built.
 #[derive(Debug)]
 pub(crate) enum WireError {
@@ -100,7 +114,40 @@ impl Error for WireError {
 
 #[cfg(test)]
 mod tests {
-    use super::node_tmpdir;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{node_homedir, node_tmpdir};
+
+    fn homedir(windows: bool, vars: &[(&str, &str)]) -> PathBuf {
+        let set = |name: &str| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        };
+        node_homedir(windows, set, || Some(PathBuf::from("/from/os")))
+    }
+
+    /// Node 22.22.0 on Linux: `HOME=` gives `""`, `HOME=/x/` gives `/x/`, and with `HOME`
+    /// unset the passwd entry; Windows reads `USERPROFILE` the same way (libuv).
+    #[test]
+    fn homedir_reads_the_variable_when_set_even_empty_else_asks_the_os() {
+        assert_eq!(
+            [
+                homedir(false, &[("HOME", "/x/")]),
+                homedir(false, &[("HOME", "")]),
+                homedir(false, &[("USERPROFILE", "/u")]),
+                homedir(true, &[("USERPROFILE", r"C:\Users\me"), ("HOME", "/h")]),
+                homedir(true, &[("HOME", "/h")]),
+            ],
+            ["/x/", "", "/from/os", r"C:\Users\me", "/from/os"].map(PathBuf::from)
+        );
+        assert_eq!(
+            node_homedir(false, |_| None, || None),
+            PathBuf::new(),
+            "Node throws here"
+        );
+    }
 
     fn tmpdir(windows: bool, vars: &[(&str, &str)]) -> String {
         node_tmpdir(windows, |name| {

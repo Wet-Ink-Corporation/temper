@@ -91,6 +91,8 @@ pub enum ShellWriteFile {
     Baseline,
     /// `.claude/temper/`, the vendored CLI.
     Vendored,
+    /// temper's state dir.
+    StateDir,
 }
 
 impl ShellWriteFile {
@@ -101,6 +103,7 @@ impl ShellWriteFile {
             Self::Manifest => Some("Cargo.toml"),
             Self::Baseline => Some("temper-baseline.json"),
             Self::Vendored => Some(".claude/temper/"),
+            Self::StateDir => Some("state-dir"),
         }
     }
 }
