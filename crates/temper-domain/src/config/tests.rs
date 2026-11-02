@@ -253,11 +253,15 @@ fn only_the_wrongly_typed_key_falls_back() {
 
 #[test]
 fn problems_say_why_in_the_d16d_line() {
-    let not_json = loaded("{").problem.expect("not JSON");
-    assert!(
-        not_json.to_string().starts_with("not valid JSON: "),
-        "{not_json}"
-    );
+    // V8 reads `1e400` as Infinity; serde_json rejects it, so the file is unreadable but not
+    // invalid JSON, and the text must not say it is.
+    for text in ["{", r#"{"gate":{"stepTimeoutSec":1e400}}"#] {
+        let problem = loaded(text).problem.expect("unreadable");
+        assert!(
+            problem.to_string().starts_with("unreadable JSON: "),
+            "{text}: {problem}"
+        );
+    }
     assert_eq!(ConfigProblem::NotAnObject.to_string(), "not a JSON object");
     assert_eq!(
         wrong("gate.doc", "a boolean").to_string(),

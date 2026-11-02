@@ -2,7 +2,7 @@
 //! can stop tests, doctests or targets from running, and H-16 build, source-override, MSRV,
 //! edition, resolver and default-feature settings.
 
-use crate::js::{Value, js_json, truthy};
+use crate::js::{JsMap, Value, js_json, truthy};
 
 use super::Manifest;
 
@@ -44,17 +44,17 @@ const TARGET_KEYS: [&str; 5] = ["test", "doctest", "harness", "bench", "required
 /// ```
 #[must_use]
 pub fn watched_keys(m: &Manifest) -> Vec<(String, WatchedKey)> {
-    let mut out = Watched(Vec::new());
+    let mut out = Watched(JsMap::new());
     out.package_keys(m);
     out.target_keys(m);
-    out.0
+    out.0.into_vec()
 }
 
 /// A rule id and why its switches are watched.
 type Why = (&'static str, &'static str);
 
 /// 1.x's `out` Map, in insertion order.
-struct Watched(Vec<(String, WatchedKey)>);
+struct Watched(JsMap<String, WatchedKey>);
 
 impl Watched {
     /// 1.x's `put`: a value that is set is recorded; JS `map.set` keeps a repeated label's place
@@ -66,10 +66,7 @@ impl Watched {
             why,
             value: js_json(v),
         };
-        match self.0.iter_mut().find(|(l, _)| *l == label) {
-            Some(slot) => slot.1 = entry,
-            None => self.0.push((label, entry)),
-        }
+        self.0.set(label, entry);
     }
 
     fn package_keys(&mut self, m: &Manifest) {

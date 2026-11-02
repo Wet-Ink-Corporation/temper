@@ -75,9 +75,14 @@ impl Manifest {
     }
 }
 
+/// One TOML table as `toml.mjs` returns it. Its `obj[k] = v` never makes an own `__proto__`
+/// key: a table value becomes the prototype instead, which the port does not emulate (its keys
+/// are not inherited here), and any other value is ignored. Either way 1.x never sees the key,
+/// so it is dropped.
 fn object(source: &str, table: &DeTable<'_>) -> Object {
     table
         .iter()
+        .filter(|(k, _)| k.get_ref() != "__proto__")
         .map(|(k, v)| (k.get_ref().to_string(), value(source, v)))
         .collect()
 }

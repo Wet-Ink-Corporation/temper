@@ -1,9 +1,11 @@
 //! JavaScript semantics the port must reproduce: the `String.prototype.trim` whitespace set,
 //! UTF-16 length limits, and the translation of 1.x regex sources to `regex` syntax.
 
+mod map;
 mod translate;
 mod value;
 
+pub(crate) use map::JsMap;
 pub(crate) use translate::{JsFlags, UnsupportedJs, translate};
 pub(crate) use value::{
     Object, Value, entries, integer_from_radix, js_json, js_string, number_from_text, truthy,

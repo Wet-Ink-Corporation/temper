@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::js::{Value, entries, is_js_space, js_trim};
+use crate::js::{JsMap, Value, entries, is_js_space, js_trim};
 
 use super::Manifest;
 use super::sections::{header, lines};
@@ -51,14 +51,12 @@ impl fmt::Display for DepName {
     }
 }
 
-/// An insertion-ordered set, as a JS `Set` iterates.
-fn push_new(names: &mut Vec<DepName>, kind: DepKind, name: &str) {
-    if !names.iter().any(|n| n.kind == kind && n.name == name) {
-        names.push(DepName {
-            kind,
-            name: name.to_owned(),
-        });
-    }
+/// 1.x's `names.add(...)` of a `kind:name` key on a JS `Set`: a repeat keeps its first place.
+fn add(names: &mut JsMap<DepName, ()>, kind: DepKind, name: &str) {
+    names.add(DepName {
+        kind,
+        name: name.to_owned(),
+    });
 }
 
 /// Every declared dependency, each once, in 1.x's `dependencyNames` order: the three tables,
@@ -76,10 +74,10 @@ fn push_new(names: &mut Vec<DepName>, kind: DepKind, name: &str) {
 /// ```
 #[must_use]
 pub fn dependency_names(m: &Manifest) -> Vec<DepName> {
-    let mut names = Vec::new();
+    let mut names = JsMap::new();
     let mut visit = |kind, deps: Option<&Value>| {
         for (name, _) in deps.into_iter().flat_map(entries) {
-            push_new(&mut names, kind, &name);
+            add(&mut names, kind, &name);
         }
     };
     for kind in DepKind::ALL {
@@ -94,7 +92,7 @@ pub fn dependency_names(m: &Manifest) -> Vec<DepName> {
             visit(kind, target.get(kind.table()));
         }
     }
-    names
+    names.into_keys()
 }
 
 /// The dependency names in a manifest's text, as 1.x's `depNames`: from the parse, or, when the
@@ -111,14 +109,14 @@ pub fn dep_names(text: &str) -> Vec<DepName> {
 /// 1.x's `depNamesByLine`: `[..dependencies.name]` headers, and `name =` lines under a
 /// `[..dependencies]` header.
 fn dep_names_by_line(text: &str) -> Vec<DepName> {
-    let mut names = Vec::new();
+    let mut names = JsMap::new();
     let mut table = None;
     for line in lines(text) {
         if let Some(name) = header(line) {
             let name = js_trim(name);
             table = None;
             match inline_dependency(name) {
-                Some((kind, dep)) => push_new(&mut names, kind, dep),
+                Some((kind, dep)) => add(&mut names, kind, dep),
                 None => table = name.rsplit('.').next().and_then(DepKind::of_table),
             }
             continue;
@@ -126,10 +124,10 @@ fn dep_names_by_line(text: &str) -> Vec<DepName> {
         if let Some(kind) = table
             && let Some(key) = key_of(line)
         {
-            push_new(&mut names, kind, key);
+            add(&mut names, kind, key);
         }
     }
-    names
+    names.into_keys()
 }
 
 /// 1.x `/(?:^|\.)((?:dev-|build-)?dependencies)\.([\w-]+)$/`: a header naming one dependency.
@@ -169,14 +167,15 @@ const fn is_key_char(c: char) -> bool {
 /// ```
 #[must_use]
 pub fn dep_requirements(m: &Manifest) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::new();
+    // 1.x's `out` Map: a key seen twice keeps its first place and takes its last requirement.
+    let mut out = JsMap::new();
     let mut visit = |label: &str, deps: Option<&Value>| {
         for (name, spec) in deps.into_iter().flat_map(entries) {
             let req = spec
                 .as_str()
                 .or_else(|| spec.get("version").and_then(Value::as_str));
             if let Some(req) = req {
-                set(&mut out, format!("{label}:{name}"), req);
+                out.set(format!("{label}:{name}"), req.to_owned());
             }
         }
     };
@@ -195,13 +194,5 @@ pub fn dep_requirements(m: &Manifest) -> Vec<(String, String)> {
             );
         }
     }
-    out
-}
-
-/// JS `map.set(key, value)`: an existing key keeps its place.
-fn set(map: &mut Vec<(String, String)>, key: String, value: &str) {
-    match map.iter_mut().find(|(k, _)| *k == key) {
-        Some(slot) => value.clone_into(&mut slot.1),
-        None => map.push((key, value.to_owned())),
-    }
+    out.into_vec()
 }

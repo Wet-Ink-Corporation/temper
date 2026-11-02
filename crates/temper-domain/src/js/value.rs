@@ -209,13 +209,20 @@ pub(crate) fn js_number(x: f64) -> String {
     let sign = if x < 0.0 { "-" } else { "" };
     // `{:e}` gives the fewest digits that round-trip, as JS needs. Among those, JS takes the
     // decimal nearest `x`, and the even one on a tie; `{:e}` breaks a tie upwards, so the digits
-    // come from formatting at that precision, which rounds exactly with ties to even.
+    // come from formatting at that precision, which rounds exactly with ties to even. At a power
+    // of two the gap below `x` is half the gap above, so that nearest decimal may fall outside
+    // the round-trip interval; then the shortest digits are the only candidate and are kept.
     let shortest = format!("{:e}", x.abs());
     let precision = shortest
         .find('e')
         .unwrap_or(shortest.len())
         .saturating_sub(2);
-    let sci = format!("{:.precision$e}", x.abs());
+    let nearest = format!("{:.precision$e}", x.abs());
+    let sci = if nearest.parse::<f64>() == Ok(x.abs()) {
+        nearest
+    } else {
+        shortest
+    };
     let Some((mantissa, exp)) = sci.split_once('e') else {
         return format!("{sign}{sci}");
     };

@@ -2,8 +2,9 @@
 //! `manifestChecks`), with 1.x's message texts.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
-use crate::js::{js_string, truncate_utf16, truthy};
+use crate::js::{JsMap, js_string, truncate_utf16, truthy};
 
 use super::{
     GoverningRoot, Manifest, OwnLints, RootRelation, WatchedKey, benign_when_new, dep_requirements,
@@ -113,15 +114,14 @@ fn watched_changes(rel: &str, before: &Manifest, after: &Manifest, is_new: bool)
     let mut asks = Vec::new();
     let wa = watched_keys(after);
     let wb = watched_keys(before);
-    let mut labels: Vec<&str> = Vec::new();
+    let (now, was) = (index(&wa), index(&wb));
+    let mut labels = JsMap::new();
     for (label, _) in wb.iter().chain(&wa) {
-        if !labels.contains(&label.as_str()) {
-            labels.push(label);
-        }
+        labels.add(label.as_str());
     }
-    for label in labels {
-        let x = lookup(&wa, label);
-        let y = lookup(&wb, label);
+    for label in labels.into_keys() {
+        let x = now.get(label).copied();
+        let y = was.get(label).copied();
         if x.map(|w| &w.value) == y.map(|w| &w.value) {
             continue;
         }
@@ -140,9 +140,9 @@ fn watched_changes(rel: &str, before: &Manifest, after: &Manifest, is_new: bool)
     asks
 }
 
-/// JS `map.get(label)` on a [`watched_keys`] list.
-fn lookup<'w>(list: &'w [(String, WatchedKey)], label: &str) -> Option<&'w WatchedKey> {
-    list.iter().find(|(l, _)| l == label).map(|(_, w)| w)
+/// A lookup by key over an ordered list with unique keys (JS `map.get(key)`).
+fn index<V>(list: &[(String, V)]) -> HashMap<&str, &V> {
+    list.iter().map(|(k, v)| (k.as_str(), v)).collect()
 }
 
 /// 1.x's `short`: `unset`, or the value, cut to 77 UTF-16 units and `...` past 80. The cut
@@ -167,11 +167,9 @@ fn requirement_changes(
     after: &Manifest,
 ) {
     let old_reqs = before.map_or_else(Vec::new, dep_requirements);
+    let old_index = index(&old_reqs);
     for (key, req) in dep_requirements(after) {
-        let old = old_reqs
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, r)| r.as_str());
+        let old = old_index.get(key.as_str()).map(|r| r.as_str());
         if old == Some(req.as_str()) {
             continue;
         }

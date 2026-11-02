@@ -67,6 +67,29 @@ fn numbers_print_as_node_22_number_to_string() {
 }
 
 #[test]
+fn powers_of_two_print_as_node_22_number_to_string() {
+    // At a power of two the gap below is half the gap above, so the nearest decimal at the
+    // shortest length may not round-trip. Each string was printed by Node 22.22.0.
+    let vectors: &[(u64, &str)] = &[
+        (0x3E70_0000_0000_0000, "5.960464477539063e-8"), // 2^-24
+        (0x3D30_0000_0000_0000, "5.684341886080802e-14"), // 2^-44
+        (0x4580_0000_0000_0000, "6.189700196426902e+26"), // 2^89
+        (0x0000_0000_0000_0001, "5e-324"),               // 2^-1074
+        (0x0000_0000_0000_0002, "1e-323"),               // 2^-1073
+        (0x0008_0000_0000_0000, "1.1125369292536007e-308"), // 2^-1023
+        (0x0010_0000_0000_0000, "2.2250738585072014e-308"), // 2^-1022
+        (0x7FD0_0000_0000_0000, "4.49423283715579e+307"), // 2^1022
+        (0x7FE0_0000_0000_0000, "8.98846567431158e+307"), // 2^1023
+        (0x7FEF_FFFF_FFFF_FFFF, "1.7976931348623157e+308"), // f64::MAX
+    ];
+    for &(bits, string) in vectors {
+        let x = f64::from_bits(bits);
+        assert_eq!(js_number(x), string, "String({x:e})");
+        assert_eq!(js_number(-x), format!("-{string}"), "String(-{x:e})");
+    }
+}
+
+#[test]
 fn integer_text_converts_as_js_number_does() {
     // Node 22: Number("9007199254740993"), Number("0x1FFFFFFFFFFFFF1"), Number("0x" + 40 Fs),
     // Number("12345678901234567890123"), Number("0o17"), Number("0b101").
@@ -190,31 +213,151 @@ fn entries_of_an_array_are_its_indices_and_of_a_scalar_none() {
     assert_eq!(entries(&Value::Number(1.0)).count(), 0);
 }
 
-/// `JSON.stringify(String.fromCharCode(c))` for every `c` below U+0080, as Node 22 prints it.
-fn node_escape(c: char) -> String {
-    match c {
-        '"' => r#""\"""#.to_owned(),
-        '\\' => r#""\\""#.to_owned(),
-        '\u{8}' => r#""\b""#.to_owned(),
-        '\t' => r#""\t""#.to_owned(),
-        '\n' => r#""\n""#.to_owned(),
-        '\u{C}' => r#""\f""#.to_owned(),
-        '\r' => r#""\r""#.to_owned(),
-        c if u32::from(c) < 0x20 => format!("\"\\u{:04x}\"", u32::from(c)),
-        c => format!("\"{c}\""),
-    }
-}
+/// `JSON.stringify(String.fromCharCode(c))` as Node 22.22.0 printed it, for U+0000 to U+007F
+/// in order, then U+2028, U+2029 and U+FEFF (which it leaves unescaped, as it does U+007F).
+const NODE_ESCAPES: [&str; 131] = [
+    "\"\\u0000\"",
+    "\"\\u0001\"",
+    "\"\\u0002\"",
+    "\"\\u0003\"",
+    "\"\\u0004\"",
+    "\"\\u0005\"",
+    "\"\\u0006\"",
+    "\"\\u0007\"",
+    "\"\\b\"",
+    "\"\\t\"",
+    "\"\\n\"",
+    "\"\\u000b\"",
+    "\"\\f\"",
+    "\"\\r\"",
+    "\"\\u000e\"",
+    "\"\\u000f\"",
+    "\"\\u0010\"",
+    "\"\\u0011\"",
+    "\"\\u0012\"",
+    "\"\\u0013\"",
+    "\"\\u0014\"",
+    "\"\\u0015\"",
+    "\"\\u0016\"",
+    "\"\\u0017\"",
+    "\"\\u0018\"",
+    "\"\\u0019\"",
+    "\"\\u001a\"",
+    "\"\\u001b\"",
+    "\"\\u001c\"",
+    "\"\\u001d\"",
+    "\"\\u001e\"",
+    "\"\\u001f\"",
+    "\" \"",
+    "\"!\"",
+    "\"\\\"\"",
+    "\"#\"",
+    "\"$\"",
+    "\"%\"",
+    "\"&\"",
+    "\"'\"",
+    "\"(\"",
+    "\")\"",
+    "\"*\"",
+    "\"+\"",
+    "\",\"",
+    "\"-\"",
+    "\".\"",
+    "\"/\"",
+    "\"0\"",
+    "\"1\"",
+    "\"2\"",
+    "\"3\"",
+    "\"4\"",
+    "\"5\"",
+    "\"6\"",
+    "\"7\"",
+    "\"8\"",
+    "\"9\"",
+    "\":\"",
+    "\";\"",
+    "\"<\"",
+    "\"=\"",
+    "\">\"",
+    "\"?\"",
+    "\"@\"",
+    "\"A\"",
+    "\"B\"",
+    "\"C\"",
+    "\"D\"",
+    "\"E\"",
+    "\"F\"",
+    "\"G\"",
+    "\"H\"",
+    "\"I\"",
+    "\"J\"",
+    "\"K\"",
+    "\"L\"",
+    "\"M\"",
+    "\"N\"",
+    "\"O\"",
+    "\"P\"",
+    "\"Q\"",
+    "\"R\"",
+    "\"S\"",
+    "\"T\"",
+    "\"U\"",
+    "\"V\"",
+    "\"W\"",
+    "\"X\"",
+    "\"Y\"",
+    "\"Z\"",
+    "\"[\"",
+    "\"\\\\\"",
+    "\"]\"",
+    "\"^\"",
+    "\"_\"",
+    "\"`\"",
+    "\"a\"",
+    "\"b\"",
+    "\"c\"",
+    "\"d\"",
+    "\"e\"",
+    "\"f\"",
+    "\"g\"",
+    "\"h\"",
+    "\"i\"",
+    "\"j\"",
+    "\"k\"",
+    "\"l\"",
+    "\"m\"",
+    "\"n\"",
+    "\"o\"",
+    "\"p\"",
+    "\"q\"",
+    "\"r\"",
+    "\"s\"",
+    "\"t\"",
+    "\"u\"",
+    "\"v\"",
+    "\"w\"",
+    "\"x\"",
+    "\"y\"",
+    "\"z\"",
+    "\"{\"",
+    "\"|\"",
+    "\"}\"",
+    "\"~\"",
+    "\"\u{7F}\"",
+    "\"\u{2028}\"",
+    "\"\u{2029}\"",
+    "\"\u{FEFF}\"",
+];
 
 #[test]
 fn string_escapes_match_node_for_ascii_and_the_separators() {
-    // Node 22: JSON.stringify leaves U+2028, U+2029, U+FEFF and U+007F unescaped.
-    for c in (0_u8..0x80)
+    let chars = (0_u8..0x80)
         .map(char::from)
-        .chain(['\u{2028}', '\u{2029}', '\u{FEFF}'])
-    {
+        .chain(['\u{2028}', '\u{2029}', '\u{FEFF}']);
+    for (c, node) in chars.zip(NODE_ESCAPES) {
         assert_eq!(
             js_json(&Value::String(c.to_string())),
-            node_escape(c),
+            node,
             "U+{:04X}",
             u32::from(c)
         );

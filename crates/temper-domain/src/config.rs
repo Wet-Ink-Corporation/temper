@@ -130,7 +130,9 @@ pub struct ConfigLoad {
 /// "config unreadable (`<why>`): defaults in use".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigProblem {
-    /// The file is not JSON; the detail is `serde_json`'s (D16(a)).
+    /// `serde_json` cannot read the file; the detail is its message (D16(a)). That covers text
+    /// that is not JSON and numbers out of `f64` range such as `1e400`, which V8 reads as
+    /// `Infinity` (D16(d)).
     NotJson {
         /// The parser's message.
         detail: String,
@@ -149,7 +151,7 @@ pub enum ConfigProblem {
 impl fmt::Display for ConfigProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotJson { detail } => write!(f, "not valid JSON: {detail}"),
+            Self::NotJson { detail } => write!(f, "unreadable JSON: {detail}"),
             Self::NotAnObject => f.write_str("not a JSON object"),
             Self::WrongType { key, expected } => write!(f, "`{key}` is not {expected}"),
         }

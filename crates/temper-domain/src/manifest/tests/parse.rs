@@ -142,6 +142,15 @@ fn values_keep_the_js_model_of_toml_mjs() {
             r#"{"t":{"1":4,"2":2,"b":1,"a":3}}"#,
         ),
         ("\u{FEFF}a = 1", r#"{"a":1}"#),
+        // `toml.mjs` assigns `obj["__proto__"] = v`, which never makes an own key.
+        (
+            "[package]\nbuild = { __proto__ = 1 }",
+            r#"{"package":{"build":{}}}"#,
+        ),
+        (
+            "[package.build]\n__proto__ = { x = 1 }",
+            r#"{"package":{"build":{}}}"#,
+        ),
     ];
     for (source, json) in cases {
         assert_eq!(js_json(&Value::Object(toml(source).0)), json, "{source:?}");

@@ -13,13 +13,18 @@ fn non_caret_requirements() {
     for ok in ["1", "1.4", "^1.4.2", "0.3", "1.4.2"] {
         assert_eq!(non_caret_requirement(ok), None, "{ok}");
     }
-    let why = |req| non_caret_requirement(req).expect("not a caret floor");
-    assert!(why("=1.4.2").contains("exact"), "=1.4.2");
-    assert!(why("~1.4").contains("tilde"), "~1.4");
-    assert!(why("*").contains("wildcard"), "*");
-    assert!(why("1.*").contains("wildcard"), "1.*");
-    assert!(why(">=1.2, <1.5").contains("upper bound"), ">=1.2, <1.5");
-    assert!(why(">=1.2").contains("open-ended"), ">=1.2");
+    // The texts of 1.x's `nonCaretRequirement`.
+    let cases = [
+        ("=1.4.2", "an exact `=` pin"),
+        ("~1.4", "a tilde `~` requirement"),
+        ("*", "a wildcard `*`"),
+        ("1.*", "a wildcard `*`"),
+        (">=1.2, <1.5", "an upper bound `<`"),
+        (">=1.2", "an open-ended `>=`"),
+    ];
+    for (req, why) in cases {
+        assert_eq!(non_caret_requirement(req), Some(why), "{req}");
+    }
     let reqs = dep_requirements(&toml(
         "[workspace.dependencies]\na = \"1\"\nb = { version = \"=2\" }\nc = { path = \"../c\" }\n[target.x.dev-dependencies]\nd = \"~3\"\n",
     ));
@@ -122,6 +127,15 @@ fn dependency_names_read_arrays_as_index_keyed_objects() {
         [],
         "a string is not a table"
     );
+}
+
+#[test]
+fn a_proto_dependency_is_not_seen_as_in_1x() {
+    // 1.x's `obj["__proto__"] = v` sets the prototype, so the key never becomes a dependency.
+    let m = toml("[dependencies]\n__proto__ = \"1\"\nserde = \"1\"\n");
+    assert_eq!(names(&dependency_names(&m)), ["dependencies:serde"]);
+    let reqs: Vec<_> = dep_requirements(&m).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(reqs, ["dependencies:serde"]);
 }
 
 #[test]

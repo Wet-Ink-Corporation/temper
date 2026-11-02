@@ -22,7 +22,7 @@ Re-exported from `lib.rs`, one path each (API-14):
 - `Config` (`load`, `defaults` and a getter per key), `ConfigLoad`, `ConfigProblem` (`NotJson`, `NotAnObject`, `WrongType`), `ReviewMode`, `GateConfig` with `CargoFeatures` and `Switch`, `ExemptRule`.
 - `Glob`, `Globs` and `GlobError` (`pattern`).
 
-Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`, `utf16_window_start`, `translate`, and the JS value model `js::Value` with `js_json`, `js_number`, `js_string`, `truthy` and `entries`), the lexer, regions, counts, rule table, predicates and finders under `scan`, and `hit::Exception`. Phase 4 adds `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest. Node's lexical path algebra lives in `temper-app`, beside its readers (OC-1 B).
+Everything else is `pub(crate)`: the other JS helpers in `js` (`truncate_utf16`, `utf16_window_start`, `translate`, and the JS value model `Object` and `Value` with `entries`, `integer_from_radix`, `js_json`, `js_string`, `number_from_text` and `truthy`, and `JsMap`, JS `Map` and `Set` order with hashed lookups), the lexer, regions, counts, rule table, predicates and finders under `scan`, and `hit::Exception`. Phase 4 adds `Scanner::rules()` with `RuleInfo` (wi-ca74b3); §1.3 of the port plan lists the rest. Node's lexical path algebra lives in `temper-app`, beside its readers (OC-1 B).
 
 ## Invariants
 - No `std::fs`, `std::process`, `std::env`, `SystemTime::now` or threads: every input arrives as a value (ARC-02).

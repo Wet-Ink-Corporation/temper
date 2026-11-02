@@ -241,3 +241,4 @@ Decisions the owner made directly while working through [`docs/plans/v1-readines
 | port 2a | When does `gate.steps` land (2a)? | With its Phase 4 reader, not in 2a (no dead code). Two-way default, 2026-11-02 (wi-3c8044). |
 | port 2a | When do `Manifest`'s getters and `workspace_excludes` land (2a)? | In 2c, with their first reader. Two-way default, 2026-11-02 (wi-d6d807). |
 | port 2a | How does the test map track 1.x tests that later PRs port (2a)? | A `pending` note per source, checked by `check_test_map.py`. Two-way default, 2026-11-02 (wi-43b503). |
+| port 2a | __proto__ keys: how does the port read a TOML key named `__proto__` (2a review, F2)? | It drops the key when a table is read, matching 1.x's visible result: `toml.mjs`'s `obj[k] = v` never makes an own `__proto__` key. A table value there becomes 1.x's prototype and its keys are inherited; the port does not emulate that. Two-way default, 2026-11-02 (wi-4cce51). |
