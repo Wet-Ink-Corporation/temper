@@ -606,7 +606,7 @@
     },
     {
       "source": "tests/hooks.test.mjs",
-      "pending": "port Phases 2e and 2f (the rest of the Bash handler) and Phase 4 (the gate tests)",
+      "pending": "port Phase 2f (the patch, copy-onto-.rs and reviewer branches of the Bash handler; the interpreter-code, PowerShell-expression and .rs-patch rows of the protected-config tests mapped here, which carry until_2f) and Phase 4 (the gate tests)",
       "tests": [
         {
           "node": "lintConfigChanged ignores plain inheritance and comments",
@@ -861,6 +861,430 @@
             "hooks::bash::tests::blank_prose_leaves_a_megabyte_of_starts_assignments_paths_or_newlines_unchanged"
           ],
           "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "Bash: shell writes to protected configuration ask, like Edit/Write to the same file (H-05, H-12)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::shell_writes_to_protected_configuration_ask_like_edit_write_to_the_same_file_h_05_h_12"
+          ]
+        },
+        {
+          "node": "Bash: reading, copying out of and running protected configuration stays allowed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::reading_copying_out_of_and_running_protected_configuration_stays_allowed"
+          ]
+        },
+        {
+          "node": "Bash: every existing deny still wins over the protected-config ask",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::every_existing_deny_still_wins_over_the_protected_config_ask"
+          ]
+        },
+        {
+          "node": "Bash: the shell check uses the project's own protected list",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::the_shell_check_uses_the_projects_own_protected_list"
+          ]
+        },
+        {
+          "node": "Bash: text that only mentions a write, read-only one-liners and writes outside the project stay allowed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::text_that_only_mentions_a_write_read_only_one_liners_and_writes_outside_the_project_stay_allowed"
+          ]
+        },
+        {
+          "node": "Bash: protected-config writes behind cd, subshells, wrappers, interpreters and other write verbs ask",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::protected_config_writes_behind_cd_subshells_wrappers_interpreters_and_other_write_verbs_ask"
+          ]
+        },
+        {
+          "node": "Bash: a write into a nested git checkout (.claude/worktrees/<name>) is judged by that checkout",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::a_write_into_a_nested_git_checkout_is_judged_by_that_checkout"
+          ]
+        },
+        {
+          "node": "Bash: protected-config writes inside if/for/while/brace groups ask, and a cd inside them is followed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::protected_config_writes_inside_if_for_while_brace_groups_ask_and_a_cd_inside_them_is_followed"
+          ]
+        },
+        {
+          "node": "Bash: a whole directory written over protected configuration asks; restoring from HEAD or the index does not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_whole_directory_written_over_protected_configuration_asks_restoring_from_head_or_the_index_does_not"
+          ]
+        },
+        {
+          "node": "Bash: deleting protected configuration from the shell asks, like a write to it (wi-2000a3)",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::deleting_protected_configuration_from_the_shell_asks_like_a_write_to_it_wi_2000a3"
+          ]
+        },
+        {
+          "node": "Bash: a heredoc printed after a [ test is not code; PowerShell expressions still are",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_heredoc_printed_after_a_test_is_not_code_powershell_expressions_still_are"
+          ]
+        },
+        {
+          "node": "Bash: a patch that changes protected configuration asks, like an Edit of the same file; other patches and inspecting forms do not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_patch_that_changes_protected_configuration_asks_other_patches_and_inspecting_forms_do_not"
+          ]
+        },
+        {
+          "node": "Bash: a patch temper cannot read asks, since it may change protected configuration; inspecting forms do not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_patch_temper_cannot_read_asks_inspecting_forms_do_not"
+          ]
+        },
+        {
+          "node": "Bash: git checkout/restore of a wildcard pathspec from another revision asks when it would change protected configuration",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::a_wildcard_pathspec_restored_from_another_revision_asks_when_git_lists_protected_files"
+          ]
+        },
+        {
+          "node": "Bash: a command the shell reader cannot finish still gets the other Bash denies",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_command_the_shell_reader_cannot_finish_still_gets_the_other_bash_denies",
+            "hooks::pre_bash::tests::state_dir::a_command_the_reader_gives_up_on_is_not_a_state_dir_write"
+          ]
+        },
+        {
+          "node": "Bash: protected config written by a clustered curl/wget output option or by a recursive copy of protected files asks",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::protected_config_written_by_a_clustered_curl_wget_output_option_or_by_a_recursive_copy_of_protected_files_asks"
+          ]
+        },
+        {
+          "node": "Bash: a protected-config ask does not hide the dependency or snapshot ask in the same command",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::protected::a_protected_config_ask_does_not_hide_the_dependency_or_snapshot_ask_in_the_same_command",
+            "hooks::pre_bash::tests::protected::the_protected_ask_logs_its_row_before_the_dependency_ask_row"
+          ]
+        },
+        {
+          "node": "Bash: git checkout/restore of a directory from another revision asks when it would change a protected file inside it",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::a_directory_restored_from_another_revision_asks_when_it_would_change_a_protected_file_in_it"
+          ]
+        },
+        {
+          "node": "Bash: shell writes into the temper state dir (.git/temper/) are denied; reading, copying out and deleting are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::state_dir::shell_writes_into_the_temper_state_dir_are_denied_reading_copying_out_and_deleting_are_not"
+          ]
+        },
+        {
+          "node": "Bash: shell writes into the absolute state dir of a git worktree are denied",
+          "crate": "temper-cli",
+          "rust": [
+            "hooks::shell_writes_into_the_absolute_state_dir_of_a_git_worktree_are_denied"
+          ]
+        },
+        {
+          "node": "Bash: state-dir writes hidden by trailing redirects, variables, quoting, cd or other writers are denied; reads stay allowed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::state_dir::state_dir_writes_hidden_by_trailing_redirects_variables_quoting_cd_or_other_writers_are_denied_reads_stay_allowed"
+          ]
+        },
+        {
+          "node": "Bash: state-dir writes inside compound commands, command substitutions and moves into .git/ are denied",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::state_dir::state_dir_writes_inside_compound_commands_command_substitutions_and_moves_into_git_are_denied"
+          ]
+        },
+        {
+          "node": "Bash: git rev-parse --path-format=absolute does not hide the state dir",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::state_dir::git_rev_parse_path_format_absolute_does_not_hide_the_state_dir"
+          ]
+        },
+        {
+          "node": "Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::pre_bash::tests::state_dir::state_dir_writes_spelled_with_bash_backslash_escapes_are_denied_reads_stay_allowed"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/shell.test.mjs",
+      "pending": "port Phase 2f (opaquePatch, codeWriteTargets, the interpreter-code patterns and PowerShell expressions, and the opaquePatch, untracked and interpreter halves of the tests mapped here)",
+      "tests": [
+        {
+          "node": "shell: quotes, escapes, comments and heredoc bodies never make a write",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::quotes_escapes_comments_and_heredoc_bodies_never_make_a_write"
+          ]
+        },
+        {
+          "node": "shell: redirects, write verbs and interpreter code are reported with absolute paths",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::redirects_and_write_verbs_are_reported_with_absolute_paths"
+          ]
+        },
+        {
+          "node": "shell: compound keywords, wrappers, bash -c, eval, find -exec and $(...) all reach the command inside",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::compound_keywords_wrappers_bash_c_eval_find_exec_and_substitutions_reach_the_command_inside"
+          ]
+        },
+        {
+          "node": "shell: $\"...\", eval --, trap and awk system() reach the command inside",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::locale_quoting_eval_dashdash_trap_and_awk_system_reach_the_command_inside"
+          ]
+        },
+        {
+          "node": "shell: cd, pushd/popd, subshells and pipelines set the directory each command runs in",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::cd_pushd_popd_subshells_and_pipelines_set_the_directory_each_command_runs_in",
+            "hooks::shell::tests::a_cd_of_one_segment_lands_where_the_full_resolve_does"
+          ]
+        },
+        {
+          "node": "shell: variables, ~, $HOME and git rev-parse expand; unknown values stay null",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::variables_tilde_home_and_git_rev_parse_expand_and_unknown_values_stay_none"
+          ]
+        },
+        {
+          "node": "shell: copies report sources, and landing places each one",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::copies_report_sources_and_landing_places_each_one"
+          ]
+        },
+        {
+          "node": "shell: patchCommand reads git apply, git am and patch; inspecting forms apply nothing",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::patch_command_reads_git_apply_git_am_and_patch_and_inspecting_forms_apply_nothing"
+          ]
+        },
+        {
+          "node": "shell: patchCommand reads gpatch, busybox patch, watch and git -c aliases",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::patch_command_reads_gpatch_busybox_patch_watch_and_git_c_aliases"
+          ]
+        },
+        {
+          "node": "shell: a subcommand git does not have, under configuration temper cannot read, reads as a guessed git apply",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_subcommand_git_does_not_have_under_unread_configuration_reads_as_a_guessed_git_apply"
+          ]
+        },
+        {
+          "node": "shell: the dashed forms git-apply and git-am, at any path, read as git apply and git am",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::the_dashed_forms_git_apply_and_git_am_at_any_path_read_as_git_apply_and_git_am"
+          ]
+        },
+        {
+          "node": "shell: echo or printf piped into a shell is not read as the script, and opaquePatch flags it",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them"
+          ]
+        },
+        {
+          "node": "shell: a command name built from an expansion is not read, whatever its last segment",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_command_name_built_from_an_expansion_reads_as_its_last_segment_here"
+          ]
+        },
+        {
+          "node": "shell: a command name with a slash in it is never a builtin",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_command_name_with_a_slash_in_it_is_never_a_builtin"
+          ]
+        },
+        {
+          "node": "shell: env -S and --split-string in every spelling",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::env_split_string_in_every_spelling"
+          ]
+        },
+        {
+          "node": "shell: an unquoted empty expansion is dropped from the command",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::an_unquoted_empty_expansion_is_dropped_from_the_command"
+          ]
+        },
+        {
+          "node": "shell: ANSI-C quoting is decoded exactly, or its word is unknown",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::ansi_c_quoting_is_decoded_exactly_or_its_word_is_unknown"
+          ]
+        },
+        {
+          "node": "shell: the -c script is the first operand after the options",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::the_c_script_is_the_first_operand_after_the_options"
+          ]
+        },
+        {
+          "node": "shell: options at the start of a git alias are read as git options",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::options_at_the_start_of_a_git_alias_are_read_as_git_options"
+          ]
+        },
+        {
+          "node": "shell: an alias chain longer than temper follows reads as a guessed git apply",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::an_alias_chain_longer_than_temper_follows_reads_as_a_guessed_git_apply"
+          ]
+        },
+        {
+          "node": "shell: a long chain of wrappers or reserved words parses in linear time",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_long_chain_of_wrappers_or_reserved_words_parses_to_one_command",
+            "hooks::shell::tests::long_inputs::wrappers_and_inner_scripts_repeated_read_as_1x_reads_them"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the decisions are ported"
+        },
+        {
+          "node": "shell: resolvePath reads git-bash paths on Windows only",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::resolve_path_reads_git_bash_paths_on_windows_only"
+          ]
+        },
+        {
+          "node": "shell: temp directories ($TMPDIR, $TEMP, $env:TEMP, $(mktemp)) resolve under the temp dir; a mktemp in the current directory does not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::temp_directories_resolve_under_the_temp_dir_and_a_mktemp_in_the_current_directory_does_not"
+          ]
+        },
+        {
+          "node": "shell: git rev-parse --path-format names the git dir too",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::git_rev_parse_path_format_names_the_git_dir_too"
+          ]
+        },
+        {
+          "node": "shell: deeply nested find -exec stops at the depth limit instead of overflowing the stack",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::deeply_nested_find_exec_stops_at_the_depth_limit"
+          ]
+        },
+        {
+          "node": "shell: a test command ([ or [[) is not read as a PowerShell expression; heredoc bodies are not code of the line",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_test_command_is_not_powershell_and_heredoc_bodies_are_not_code_of_the_line"
+          ]
+        },
+        {
+          "node": "shell: code and word scans stay roughly linear on pathological input",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::long_inputs::closed_words_and_substitutions_repeated_read_as_1x_reads_them",
+            "hooks::shell::tests::long_inputs::unclosed_quotes_and_expansions_repeated_read_as_1x_reads_them",
+            "hooks::shell::tests::long_inputs::variables_and_git_paths_repeated_read_as_1x_reads_them",
+            "hooks::shell::tests::long_inputs::cd_and_pushd_repeated_land_the_write_under_every_directory",
+            "hooks::shell::tests::long_inputs::a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws"
+          ],
+          "retired": "D16(k), extended by OC-4 A (wi-3ea323): the wall-clock bound is retired into the hook parity harness's 2 s per-step budget (tests/parity/hooks.test.mjs, cases/hooks/pre-bash.json); the word-scan decisions are ported at 2^15 to 2^17 repeats; the code-scan half arrives in port Phase 2f"
+        },
+        {
+          "node": "shell: pathspecPattern spots wildcards and magic in git checkout/restore paths",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::pathspec_pattern_spots_wildcards_and_magic_in_git_checkout_and_restore_paths"
+          ]
+        },
+        {
+          "node": "shell: bash drops a backslash before any character outside quotes, in arguments and in the command name",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::bash_drops_a_backslash_before_any_char_outside_quotes"
+          ]
+        },
+        {
+          "node": "shell: a PowerShell command keeps its backslashes as path separators, at the top level and inside pwsh -Command",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::a_powershell_command_keeps_its_backslashes_as_path_separators"
+          ]
+        },
+        {
+          "node": "shell: curl and wget output files attached to a short-option cluster are writes; other clustered values are not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::curl_and_wget_outputs_attached_to_a_cluster_are_writes_and_other_clustered_values_are_not"
+          ]
+        },
+        {
+          "node": "shell: -WhatIf:$false runs the PowerShell command; -WhatIf and -WhatIf:$true do not",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::whatif_false_runs_the_powershell_command_and_whatif_and_whatif_true_do_not"
+          ]
+        },
+        {
+          "node": "shell: only a bare -WhatIf or -WhatIf:$true is a PowerShell dry run; any other value runs the command",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::only_a_bare_whatif_or_whatif_true_is_a_powershell_dry_run"
+          ]
+        },
+        {
+          "node": "shell: commandDeletes reads rm, unlink, Remove-Item and its aliases, and git rm; dry runs and mentions delete nothing",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::shell::tests::command_deletes_reads_rm_unlink_remove_item_and_its_aliases_and_git_rm",
+            "hooks::shell::tests::command_deletes_reads_git_rm_and_inner_commands_and_dry_runs_and_mentions_delete_nothing",
+            "hooks::shell::tests::long_inputs::long_rm_operand_lists_are_each_a_delete"
+          ]
         }
       ]
     },

@@ -302,58 +302,23 @@ impl Lexer<'_> {
     }
 
     fn run(&mut self) {
-        let n = self.s.len();
         while let Some(c) = self.byte(self.i) {
+            let next = self.byte(self.i.saturating_add(1));
             match c {
                 b'\\' => self.backslash(),
-                b'\'' => {
-                    let from = self.i.saturating_add(1);
-                    let end = self
-                        .rest(from)
-                        .find('\'')
-                        .map_or(n, |e| from.saturating_add(e));
-                    let text = self.slice(from, end).to_owned();
-                    self.lit(&text, true);
-                    self.i = end.saturating_add(1);
-                }
+                b'\'' => self.single_quoted(),
                 b'"' => self.double_quoted(),
-                b'$' if self.byte(self.i.saturating_add(1)) == Some(b'"') => {
+                b'$' if next == Some(b'"') => {
                     // Locale quoting is a double-quoted string to bash (#155).
                     self.i = self.i.saturating_add(1);
                 }
-                b'$' if self.byte(self.i.saturating_add(1)) == Some(b'\'') => {
-                    let (text, j) = ansi_c(self.s, self.i.saturating_add(2));
-                    let part = match text {
-                        Some(text) => {
-                            self.lit(&text, true);
-                            None
-                        }
-                        None => Some(Part {
-                            kind: PartKind::Param,
-                            text: self.slice(self.i, j.saturating_add(1)).to_owned(),
-                            quoted: true,
-                        }),
-                    };
-                    if let Some(part) = part {
-                        self.start_word().parts.push(part);
-                    }
-                    self.i = j.saturating_add(1);
-                }
-                b'$' | b'`' => match expansion(self.s, self.i, false) {
-                    Some((part, next)) => {
-                        self.start_word().parts.push(part);
-                        self.i = next;
-                    }
-                    None => {
-                        self.lit("$", false);
-                        self.i = self.i.saturating_add(1);
-                    }
-                },
+                b'$' if next == Some(b'\'') => self.ansi_c_quoted(),
+                b'$' | b'`' => self.unquoted_expansion(),
                 b'#' if self.word.is_none() => {
                     self.i = self
                         .rest(self.i)
                         .find('\n')
-                        .map_or(n, |e| self.i.saturating_add(e));
+                        .map_or(self.s.len(), |e| self.i.saturating_add(e));
                 }
                 b'\n' => {
                     self.end_cmd("\n");
@@ -364,16 +329,7 @@ impl Lexer<'_> {
                     self.end_word();
                     self.i = self.i.saturating_add(1);
                 }
-                b'<' | b'>' if self.byte(self.i.saturating_add(1)) == Some(b'(') => {
-                    let e = balanced(self.s, self.i.saturating_add(1), b'(', b')');
-                    let part = Part {
-                        kind: PartKind::Proc(self.slice(self.i.saturating_add(2), e).to_owned()),
-                        text: self.slice(self.i, e.saturating_add(1)).to_owned(),
-                        quoted: false,
-                    };
-                    self.start_word().parts.push(part);
-                    self.i = e.saturating_add(1);
-                }
+                b'<' | b'>' if next == Some(b'(') => self.process_substitution(),
                 _ => {
                     if !self.redirect() && !self.operator() {
                         self.plain();
@@ -382,6 +338,57 @@ impl Lexer<'_> {
             }
         }
         self.end_cmd("");
+    }
+
+    /// `'...'`: literal text up to the next quote.
+    fn single_quoted(&mut self) {
+        let from = self.i.saturating_add(1);
+        let end = self
+            .rest(from)
+            .find('\'')
+            .map_or(self.s.len(), |e| from.saturating_add(e));
+        let text = self.slice(from, end).to_owned();
+        self.lit(&text, true);
+        self.i = end.saturating_add(1);
+    }
+
+    /// `$'...'`: the decoded text, or a parameter part when temper cannot decode it.
+    fn ansi_c_quoted(&mut self) {
+        let (text, j) = ansi_c(self.s, self.i.saturating_add(2));
+        if let Some(text) = text {
+            self.lit(&text, true);
+        } else {
+            let part = Part {
+                kind: PartKind::Param,
+                text: self.slice(self.i, j.saturating_add(1)).to_owned(),
+                quoted: true,
+            };
+            self.start_word().parts.push(part);
+        }
+        self.i = j.saturating_add(1);
+    }
+
+    /// `$...` or a backquote outside quotes: the expansion, or a literal `$`.
+    fn unquoted_expansion(&mut self) {
+        if let Some((part, next)) = expansion(self.s, self.i, false) {
+            self.start_word().parts.push(part);
+            self.i = next;
+        } else {
+            self.lit("$", false);
+            self.i = self.i.saturating_add(1);
+        }
+    }
+
+    /// `<(...)` or `>(...)`.
+    fn process_substitution(&mut self) {
+        let e = balanced(self.s, self.i.saturating_add(1), b'(', b')');
+        let part = Part {
+            kind: PartKind::Proc(self.slice(self.i.saturating_add(2), e).to_owned()),
+            text: self.slice(self.i, e.saturating_add(1)).to_owned(),
+            quoted: false,
+        };
+        self.start_word().parts.push(part);
+        self.i = e.saturating_add(1);
     }
 
     /// One char outside quotes that starts nothing: literal text.
@@ -452,7 +459,7 @@ impl Lexer<'_> {
             let run = self
                 .rest(from)
                 .find(['"', '\\', '$', '`'])
-                .unwrap_or(n.saturating_sub(from));
+                .unwrap_or_else(|| n.saturating_sub(from));
             let end = from.saturating_add(run);
             let text = self.slice(j, end).to_owned();
             self.lit(&text, true);
@@ -631,6 +638,36 @@ pub(super) fn balanced(s: &str, open: usize, open_ch: u8, close_ch: u8) -> usize
     n
 }
 
+/// The backquoted substitution at `s[i]`, with `` \` ``, `\$` and `\\` unescaped in its
+/// script, and the index after it.
+fn backquoted(s: &str, i: usize, quoted: bool) -> (Part, usize) {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    let slice = |from: usize, to: usize| s.get(from..to.min(n)).unwrap_or("");
+    let mut j = i.saturating_add(1);
+    let mut src = String::new();
+    while let Some(&c) = bytes.get(j).filter(|&&c| c != b'`') {
+        let next = bytes.get(j.saturating_add(1));
+        if c == b'\\' && next.is_some_and(|d| b"`$\\".contains(d)) {
+            src.push_str(slice(j.saturating_add(1), j.saturating_add(2)));
+            j = j.saturating_add(2);
+            continue;
+        }
+        let len = s
+            .get(j..)
+            .and_then(|r| r.chars().next())
+            .map_or(1, char::len_utf8);
+        src.push_str(slice(j, j.saturating_add(len)));
+        j = j.saturating_add(len);
+    }
+    let part = Part {
+        kind: PartKind::Sub(src),
+        text: slice(i, j.saturating_add(1)).to_owned(),
+        quoted,
+    };
+    (part, j.saturating_add(1).min(n))
+}
+
 /// 1.x `expansion(s, i, quoted)`: the expansion at `s[i]` (`$` or a backquote) and the index
 /// after it, or `None` for a lone `$`.
 fn expansion(s: &str, i: usize, quoted: bool) -> Option<(Part, usize)> {
@@ -638,28 +675,7 @@ fn expansion(s: &str, i: usize, quoted: bool) -> Option<(Part, usize)> {
     let n = bytes.len();
     let slice = |from: usize, to: usize| s.get(from..to.min(n)).unwrap_or("").to_owned();
     if bytes.get(i) == Some(&b'`') {
-        let mut j = i.saturating_add(1);
-        let mut src = String::new();
-        while let Some(&c) = bytes.get(j).filter(|&&c| c != b'`') {
-            let next = bytes.get(j.saturating_add(1));
-            if c == b'\\' && next.is_some_and(|d| b"`$\\".contains(d)) {
-                src.push_str(&slice(j.saturating_add(1), j.saturating_add(2)));
-                j = j.saturating_add(2);
-                continue;
-            }
-            let len = s
-                .get(j..)
-                .and_then(|r| r.chars().next())
-                .map_or(1, char::len_utf8);
-            src.push_str(&slice(j, j.saturating_add(len)));
-            j = j.saturating_add(len);
-        }
-        let part = Part {
-            kind: PartKind::Sub(src),
-            text: slice(i, j.saturating_add(1)),
-            quoted,
-        };
-        return Some((part, j.saturating_add(1).min(n)));
+        return Some(backquoted(s, i, quoted));
     }
     let part = |kind: PartKind, end: usize| Part {
         kind,

@@ -7,13 +7,31 @@ use std::borrow::Cow;
 use super::walk::{Inner, Meta, Walker};
 use super::words::{Dir, Word, name_of, resolve_path};
 
-/// What the wrappers leave: the index of the command word, its directory, and xargs.
+/// What the wrappers leave: the words, the index of the command word in them, its directory,
+/// and xargs.
 pub(super) struct Run {
+    pub(super) words: Vec<Word>,
     pub(super) at: usize,
     pub(super) cwd: Option<Dir>,
-    /// Run under xargs: `Some(Some(r))` with `-I r`, `Some(None)` reading its input.
-    pub(super) xargs: Option<Option<String>>,
+    /// Run under xargs.
+    pub(super) xargs: Option<Xargs>,
+    /// A `GIT_CONFIG*` variable is set for the command.
     pub(super) git_config: bool,
+}
+
+/// How xargs hands its input to the command.
+pub(super) enum Xargs {
+    /// After its words.
+    Input,
+    /// `-I r`: in place of `r`.
+    Replace(String),
+}
+
+/// A wrapper: its name, and its options that take a separate value.
+#[derive(Clone, Copy)]
+struct Wrapper<'n> {
+    name: &'n str,
+    valued: &'static [&'static str],
 }
 
 /// 1.x `WRAPPERS`: the wrappers that run the command after them, with their options that
@@ -135,207 +153,231 @@ impl Walker<'_> {
     /// 1.x's wrapper loop: `sudo`, `env`, `timeout 5`, `xargs`, ... before the command,
     /// walked with an index so a long chain stays linear. `None` when the wrappers end the
     /// command: `command -v`, `watch` and `env -S` (whose script is walked here).
-    pub(super) fn wrappers(
-        &mut self,
-        w: &[Word],
-        k: usize,
-        mut git_config: bool,
-        depth: usize,
-    ) -> Option<Run> {
-        let mut cwd = self.env.cwd.clone();
-        let mut i = k;
-        let mut xargs: Option<Option<String>> = None;
-        while let Some(word) = w.get(i) {
+    pub(super) fn wrappers(&mut self, words: Vec<Word>, k: usize) -> Option<Run> {
+        let git_config = words
+            .iter()
+            .take(k)
+            .any(|a| a.assign().is_some_and(|n| n.starts_with("GIT_CONFIG")));
+        let mut run = Run {
+            words: Vec::new(),
+            at: k,
+            cwd: self.env.cwd.clone(), // a shared `Rc` handle
+            xargs: None,
+            git_config,
+        };
+        while let Some(word) = words.get(run.at) {
             let Some(name) = name_of(word) else {
                 break;
             };
             let Some(valued) = wrapper_values(&name) else {
                 break;
             };
-            i = i.saturating_add(1);
-            let next = |i: usize| w.get(i);
-            if name == "command"
-                && next(i).is_some_and(|x| {
-                    x.raw
-                        .strip_prefix('-')
-                        .is_some_and(|f| !f.is_empty() && f.bytes().all(|b| b == b'v' || b == b'V'))
-                })
-            {
+            run.at = run.at.saturating_add(1);
+            if name == "command" && is_lookup(words.get(run.at)) {
                 // A lookup, not a run.
                 return None;
             }
             if name == "xargs" {
-                xargs = Some(None);
+                run.xargs = Some(Xargs::Input);
             }
-            let env = name == "env";
-            let mut watch_exec = false;
-            while let Some(x) = next(i) {
-                let option = x.raw.starts_with('-') && (x.raw != "-" || env);
-                if !(option || (env && x.assign > 0)) {
-                    break;
-                }
-                let a = x.raw.as_str();
-                i = i.saturating_add(1);
-                if env && x.assign > 0 {
-                    git_config |= x.assign().is_some_and(|n| n.starts_with("GIT_CONFIG"));
-                    continue;
-                }
-                if env {
-                    let Some(o) = env_option(a) else {
-                        continue;
-                    };
-                    if o.opt == 'S' {
-                        // env -S splits its string into the command and runs it; env reads
-                        // `\_`, `\t`, `\n`, `\v`, `\f` and `\r` in it as whitespace.
-                        let v = match o.value {
-                            Some(v) => v,
-                            None => {
-                                let v = next(i).map_or("", |x| x.text.as_str());
-                                i = i.saturating_add(1);
-                                v
-                            }
-                        };
-                        let mut script = env_split_spaces(v);
-                        for x in w.get(i..).unwrap_or(&[]) {
-                            script.push(' ');
-                            script.push_str(&x.text);
-                        }
-                        self.sub_in(&script, cwd, false, depth.saturating_add(1));
-                        return None;
-                    }
-                    let v: Option<Cow<'_, str>> = match o.value {
-                        Some(v) => Some(Cow::Borrowed(v)),
-                        None => {
-                            let v = next(i).and_then(Word::value).map(Cow::Borrowed);
-                            i = i.saturating_add(1);
-                            v
-                        }
-                    };
-                    if o.opt == 'C' {
-                        cwd = resolve_path(self.opts.paths, v.as_deref(), cwd.as_deref())
-                            .map(Dir::from);
-                    }
-                    continue;
-                }
-                if name == "xargs"
-                    && let Some(rest) = xargs_replace(a)
-                {
-                    let replace = if !rest.is_empty() {
-                        rest.to_owned()
-                    } else if a == "-I" || a == "--replace" {
-                        let replace = next(i).map_or("{}", |x| x.raw.as_str()).to_owned();
-                        i = i.saturating_add(1);
-                        replace
-                    } else {
-                        "{}".to_owned()
-                    };
-                    xargs = Some(Some(replace));
-                    continue;
-                }
-                if name == "sudo" && (a == "-C" || a == "--chdir") {
-                    let value = next(i).and_then(Word::value);
-                    cwd = resolve_path(self.opts.paths, value, cwd.as_deref()).map(Dir::from);
-                    i = i.saturating_add(1);
-                    continue;
-                }
-                if name == "watch" {
-                    if a == "--exec" || cluster_reaches(a, "x") {
-                        watch_exec = true;
-                    }
-                    // -n 2, -dn 2
-                    let ends_nq = a.strip_prefix('-').is_some_and(|f| {
-                        f.ends_with(['n', 'q']) && f.bytes().all(|b| b.is_ascii_alphabetic())
-                    });
-                    if ends_nq {
-                        i = i.saturating_add(1);
-                        continue;
-                    }
-                }
-                if valued.contains(&a) {
-                    i = i.saturating_add(1);
-                }
-            }
+            let wrapper = Wrapper {
+                name: &name,
+                valued,
+            };
+            let watch_exec = self.options(wrapper, &words, &mut run)?;
             if name == "watch" && !watch_exec {
-                if let Some(rest) = w.get(i..).filter(|r| !r.is_empty()) {
+                if let Some(rest) = words.get(run.at..).filter(|r| !r.is_empty()) {
                     let script = join_texts(rest);
-                    self.sub_in(&script, cwd, false, depth.saturating_add(1));
+                    let cwd = run.cwd.take();
+                    self.deeper(|walker| walker.sub_in(&script, cwd, false));
                 }
                 return None;
             }
             // timeout reads no option after its duration.
-            if name == "timeout" && i < w.len() {
-                i = i.saturating_add(1);
-            }
-            if name == "nice"
-                && next(i).is_some_and(|x| {
-                    x.raw
-                        .strip_prefix('-')
-                        .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
-                })
+            if (name == "timeout" && run.at < words.len())
+                || (name == "nice" && is_niceness(words.get(run.at)))
             {
-                i = i.saturating_add(1);
+                run.at = run.at.saturating_add(1);
             }
         }
         // A `GIT_CONFIG*` assignment is a cheap flag; `xargs` holds at most its replace string.
-        Some(Run {
-            at: i,
-            cwd,
-            xargs,
-            git_config,
-        })
+        run.words = words;
+        Some(run)
     }
 
-    /// What `name` runs inside it, from its arguments and stdin.
-    pub(super) fn inner_script(&self, name: &str, args: &[Word], meta: &Meta) -> Option<Inner> {
-        match name {
-            "bash" | "sh" | "zsh" | "dash" | "ksh" => {
-                // The script is walked after the command is pushed, which takes its words.
-                let script = match shell_script(args) {
-                    Script::Arg(word) => word.map(|w| w.text.clone()),
-                    Script::Stdin => meta
-                        .stdin
-                        .as_ref()
-                        .and_then(|s| s.body())
-                        .map(str::to_owned),
-                    Script::File | Script::None => None,
-                };
-                script
-                    .filter(|s| !s.is_empty())
-                    .map(|src| Inner::Sub { src, ps: false })
+    /// The options after `wrapper`: whether they include watch's `--exec`, or `None` when
+    /// they end the command (`env -S`, whose script is walked here).
+    fn options(&mut self, wrapper: Wrapper<'_>, words: &[Word], run: &mut Run) -> Option<bool> {
+        let (name, env) = (wrapper.name, wrapper.name == "env");
+        let mut watch_exec = false;
+        while let Some(word) = words.get(run.at) {
+            let option = word.raw.starts_with('-') && (word.raw != "-" || env);
+            if !(option || (env && word.assign > 0)) {
+                break;
             }
-            "eval" => {
-                let args = match args.first() {
-                    Some(first) if first.value() == Some("--") => args.get(1..).unwrap_or(&[]),
-                    _ => args,
-                };
-                Some(Inner::Run(join_texts(args)))
+            let opt = word.raw.as_str();
+            run.at = run.at.saturating_add(1);
+            if env {
+                self.env_flag(word, words, run)?;
+                continue;
             }
-            "trap" => trap_action(args)
-                .filter(|a| !a.text.is_empty())
-                .map(|a| Inner::Run(a.text.clone())),
-            "awk" | "gawk" | "mawk" | "nawk" => {
-                let systems: Vec<String> = awk_programs(args)
-                    .into_iter()
-                    .filter(|p| p.literal)
-                    .flat_map(|p| awk_systems(&p.text))
-                    .map(|s| awk_string(&s))
-                    .collect();
-                (!systems.is_empty()).then_some(Inner::Awk(systems))
+            if name == "xargs"
+                && let Some(rest) = xargs_replace(opt)
+            {
+                run.xargs = Some(Xargs::Replace(replace_string(
+                    opt,
+                    rest,
+                    words,
+                    &mut run.at,
+                )));
+                continue;
             }
-            "pwsh" | "powershell" => {
-                let flag = args.iter().position(|a| {
-                    a.raw.eq_ignore_ascii_case("-c") || a.raw.eq_ignore_ascii_case("-command")
-                })?;
-                let rest = args
-                    .get(flag.saturating_add(1)..)
-                    .filter(|r| !r.is_empty())?;
-                Some(Inner::Sub {
-                    src: join_texts(rest),
-                    ps: true,
-                })
+            if name == "sudo" && (opt == "-C" || opt == "--chdir") {
+                let value = words.get(run.at).and_then(Word::value);
+                run.cwd = resolve_path(self.opts.paths, value, run.cwd.as_deref()).map(Dir::from);
+                run.at = run.at.saturating_add(1);
+                continue;
             }
-            _ => None,
+            if name == "watch" {
+                watch_exec |= opt == "--exec" || cluster_reaches(opt, "x");
+                // -n 2, -dn 2
+                let ends_nq = opt.strip_prefix('-').is_some_and(|f| {
+                    f.ends_with(['n', 'q']) && f.bytes().all(|b| b.is_ascii_alphabetic())
+                });
+                if ends_nq {
+                    run.at = run.at.saturating_add(1);
+                    continue;
+                }
+            }
+            if wrapper.valued.contains(&opt) {
+                run.at = run.at.saturating_add(1);
+            }
         }
+        Some(watch_exec)
+    }
+
+    /// One word of env's options, `word`: an assignment, `-C dir`, or `-S string`, which
+    /// ends the command (`None`).
+    fn env_flag(&mut self, word: &Word, words: &[Word], run: &mut Run) -> Option<()> {
+        if word.assign > 0 {
+            run.git_config |= word.assign().is_some_and(|n| n.starts_with("GIT_CONFIG"));
+            return Some(());
+        }
+        let Some(flag) = env_option(&word.raw) else {
+            return Some(());
+        };
+        // Each of env's valued options takes the next word when nothing is attached.
+        if flag.opt == 'S' {
+            // env -S splits its string into the command and runs it; env reads `\_`, `\t`,
+            // `\n`, `\v`, `\f` and `\r` in it as whitespace.
+            let text = flag.value.unwrap_or_else(|| {
+                run.at = run.at.saturating_add(1);
+                words
+                    .get(run.at.saturating_sub(1))
+                    .map_or("", |next| next.text.as_str())
+            });
+            let mut script = env_split_spaces(text);
+            for rest in words.get(run.at..).unwrap_or(&[]) {
+                script.push(' ');
+                script.push_str(&rest.text);
+            }
+            let cwd = run.cwd.take();
+            self.deeper(|walker| walker.sub_in(&script, cwd, false));
+            return None;
+        }
+        let value = flag.value.or_else(|| {
+            run.at = run.at.saturating_add(1);
+            words.get(run.at.saturating_sub(1)).and_then(Word::value)
+        });
+        if flag.opt == 'C' {
+            run.cwd = resolve_path(self.opts.paths, value, run.cwd.as_deref()).map(Dir::from);
+        }
+        Some(())
+    }
+}
+
+/// `command -v` and `-V`: a lookup.
+fn is_lookup(word: Option<&Word>) -> bool {
+    word.is_some_and(|x| {
+        x.raw
+            .strip_prefix('-')
+            .is_some_and(|f| !f.is_empty() && f.bytes().all(|b| b == b'v' || b == b'V'))
+    })
+}
+
+/// `nice -5`: a niceness.
+fn is_niceness(word: Option<&Word>) -> bool {
+    word.is_some_and(|x| {
+        x.raw
+            .strip_prefix('-')
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+/// xargs's replace string for the option `opt`, with `rest` attached to it: the next word
+/// after a bare `-I` or `--replace` (at `at`, which moves past it), else `{}`.
+fn replace_string(opt: &str, rest: &str, words: &[Word], at: &mut usize) -> String {
+    if !rest.is_empty() {
+        rest.to_owned()
+    } else if opt == "-I" || opt == "--replace" {
+        let replace = words.get(*at).map_or("{}", |x| x.raw.as_str()).to_owned();
+        *at = at.saturating_add(1);
+        replace
+    } else {
+        "{}".to_owned()
+    }
+}
+
+/// What `name` runs inside it, from its arguments and stdin.
+pub(super) fn inner_script(name: &str, args: &[Word], meta: &Meta) -> Option<Inner> {
+    match name {
+        "bash" | "sh" | "zsh" | "dash" | "ksh" => {
+            // The script is walked after the command is pushed, which takes its words.
+            let script = match shell_script(args) {
+                Script::Arg(word) => word.map(|w| w.text.clone()),
+                Script::Stdin => meta
+                    .stdin
+                    .as_ref()
+                    .and_then(|s| s.body())
+                    .map(str::to_owned),
+                Script::File | Script::None => None,
+            };
+            script
+                .filter(|s| !s.is_empty())
+                .map(|src| Inner::Sub { src, ps: false })
+        }
+        "eval" => {
+            let args = match args.first() {
+                Some(first) if first.value() == Some("--") => args.get(1..).unwrap_or(&[]),
+                _ => args,
+            };
+            Some(Inner::Run(join_texts(args)))
+        }
+        "trap" => trap_action(args)
+            .filter(|a| !a.text.is_empty())
+            .map(|a| Inner::Run(a.text.clone())),
+        "awk" | "gawk" | "mawk" | "nawk" => {
+            let systems: Vec<String> = awk_programs(args)
+                .into_iter()
+                .filter(|p| p.literal)
+                .flat_map(|p| awk_systems(&p.text))
+                .map(|s| awk_string(&s))
+                .collect();
+            (!systems.is_empty()).then_some(Inner::Awk(systems))
+        }
+        "pwsh" | "powershell" => {
+            let flag = args.iter().position(|a| {
+                a.raw.eq_ignore_ascii_case("-c") || a.raw.eq_ignore_ascii_case("-command")
+            })?;
+            let rest = args
+                .get(flag.saturating_add(1)..)
+                .filter(|r| !r.is_empty())?;
+            Some(Inner::Sub {
+                src: join_texts(rest),
+                ps: true,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -381,41 +423,50 @@ pub(super) enum Script<'w> {
 /// 1.x `shellScript(args)`. `--` or `-` ends the options, and `-o` or `-O`, alone or at the
 /// end of a cluster, takes the next word.
 pub(super) fn shell_script(args: &[Word]) -> Script<'_> {
-    let (mut stdin, mut cmd) = (false, false);
+    let mut flags = ShellFlags::default();
     let mut i = 0;
     while let Some(a) = args.get(i) {
         match a.value() {
             Some("--version" | "--help") => return Script::None,
-            Some("--" | "-") => return operand(args.get(i.saturating_add(1)), cmd, stdin),
+            Some("--" | "-") => return flags.operand(args.get(i.saturating_add(1))),
             Some(v) if a.raw.starts_with(['-', '+']) => {
                 if ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].contains(&v) {
                     i = i.saturating_add(2);
                     continue;
                 }
                 if !v.starts_with("--") {
-                    cmd |= cluster_reaches(v, "c");
-                    stdin |= cluster_reaches(v, "s");
+                    flags.cmd |= cluster_reaches(v, "c");
+                    flags.stdin |= cluster_reaches(v, "s");
                     let values = v.get(1..).unwrap_or("").matches(['o', 'O']).count();
                     i = i.saturating_add(values);
                 }
             }
-            _ => return operand(Some(a), cmd, stdin),
+            _ => return flags.operand(Some(a)),
         }
         i = i.saturating_add(1);
     }
-    if cmd {
+    if flags.cmd {
         Script::Arg(None)
     } else {
         Script::Stdin
     }
 }
 
-/// 1.x `operand(w)` of `shellScript`.
-fn operand(w: Option<&Word>, cmd: bool, stdin: bool) -> Script<'_> {
-    match w {
-        _ if cmd => Script::Arg(w),
-        Some(_) if !stdin => Script::File,
-        _ => Script::Stdin,
+/// The `-c` and `-s` a shell's options set.
+#[derive(Debug, Default, Clone, Copy)]
+struct ShellFlags {
+    cmd: bool,
+    stdin: bool,
+}
+
+impl ShellFlags {
+    /// 1.x `operand(w)` of `shellScript`.
+    fn operand(self, w: Option<&Word>) -> Script<'_> {
+        match w {
+            _ if self.cmd => Script::Arg(w),
+            Some(_) if !self.stdin => Script::File,
+            _ => Script::Stdin,
+        }
     }
 }
 
@@ -443,104 +494,122 @@ struct AwkProgram<'w> {
 /// 1.x `awkPrograms(args).progs`: each `-e`/`--source` value, else the first operand when no
 /// `-f` or `-E` names a program file.
 fn awk_programs(args: &[Word]) -> Vec<AwkProgram<'_>> {
-    let mut progs = Vec::new();
-    let mut main = false;
+    let mut found = AwkArgs {
+        progs: Vec::new(),
+        main: false,
+    };
     let mut k = 0;
-    fn prog<'w>(w: &'w Word, text: Cow<'w, str>) -> AwkProgram<'w> {
-        AwkProgram {
-            literal: w.literal,
-            text,
+    let operand = loop {
+        match found.option(args, k) {
+            AwkStep::Next(next) => k = next,
+            AwkStep::Stop(at) => break at,
+        }
+    };
+    if found.progs.is_empty()
+        && !found.main
+        && let Some(a) = args.get(operand)
+    {
+        found.progs.push(AwkProgram::of(a, a.text.as_str()));
+    }
+    found.progs
+}
+
+/// awk's long options that take a value.
+const AWK_LONG: [&str; 7] = [
+    "source",
+    "file",
+    "exec",
+    "include",
+    "load",
+    "field-separator",
+    "assign",
+];
+
+impl<'w> AwkProgram<'w> {
+    fn of(word: &'w Word, text: &'w str) -> Self {
+        Self {
+            literal: word.is_literal(),
+            text: Cow::Borrowed(text),
         }
     }
-    while let Some(a) = args.get(k) {
+}
+
+/// What awk's options name: its `-e` programs, and whether a program file stands in for the
+/// operand.
+struct AwkArgs<'w> {
+    progs: Vec<AwkProgram<'w>>,
+    main: bool,
+}
+
+/// Where awk's option scan goes on.
+enum AwkStep {
+    /// The next option is at this index.
+    Next(usize),
+    /// The options end, and the program operand is at this index.
+    Stop(usize),
+}
+
+impl<'w> AwkArgs<'w> {
+    /// The option at `k`, if it is one.
+    fn option(&mut self, args: &'w [Word], k: usize) -> AwkStep {
+        let Some(a) = args.get(k) else {
+            return AwkStep::Stop(k);
+        };
         // awk sees the word's value: `'-f/dev/stdin'` is still `-f`.
-        let r = if a.literal {
+        let r = if a.is_literal() {
             a.text.as_str()
         } else {
             a.raw.as_str()
         };
+        let next = k.saturating_add(1);
+        let stop_if = |stop: bool, at: usize| {
+            if stop {
+                AwkStep::Stop(at)
+            } else {
+                AwkStep::Next(at)
+            }
+        };
         if r == "--" {
-            k = k.saturating_add(1);
-            break;
+            return AwkStep::Stop(next);
         }
         if let Some((key, value)) = r.strip_prefix("--").and_then(|l| l.split_once('='))
-            && [
-                "source",
-                "file",
-                "exec",
-                "include",
-                "load",
-                "field-separator",
-                "assign",
-            ]
-            .contains(&key)
+            && AWK_LONG.contains(&key)
         {
             match key {
-                "source" => progs.push(prog(a, Cow::Borrowed(value))),
-                "file" | "exec" => main = true,
+                "source" => self.progs.push(AwkProgram::of(a, value)),
+                "file" | "exec" => self.main = true,
                 _ => {}
             }
-            k = k.saturating_add(1);
-            if key == "exec" {
-                break;
-            }
-            continue;
+            return stop_if(key == "exec", next);
         }
-        let long = r.strip_prefix("--").is_some_and(|l| {
-            [
-                "source",
-                "file",
-                "exec",
-                "include",
-                "load",
-                "field-separator",
-                "assign",
-            ]
-            .contains(&l)
-        });
+        let long = r.strip_prefix("--").is_some_and(|l| AWK_LONG.contains(&l));
         let short = r.len() == 2 && r.strip_prefix('-').is_some_and(|f| "evfFEil".contains(f));
         if long || short {
-            k = k.saturating_add(1);
-            if let Some(v) = args.get(k)
+            if let Some(v) = args.get(next)
                 && (r == "-e" || r == "--source")
             {
-                progs.push(prog(v, Cow::Borrowed(v.text.as_str())));
+                self.progs.push(AwkProgram::of(v, v.text.as_str()));
             }
-            main |= ["-f", "-E", "--file", "--exec"].contains(&r);
-            k = k.saturating_add(1);
-            if r == "-E" || r == "--exec" {
-                break;
-            }
-            continue;
+            self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
+            return stop_if(r == "-E" || r == "--exec", next.saturating_add(1));
         }
         let mut chars = r.chars();
         if let (Some('-'), Some(letter)) = (chars.next(), chars.next())
             && "evfFEil".contains(letter)
             && !chars.as_str().is_empty()
         {
-            main |= letter == 'f' || letter == 'E';
+            self.main |= letter == 'f' || letter == 'E';
             if letter == 'e' {
-                progs.push(prog(a, Cow::Borrowed(chars.as_str())));
+                self.progs.push(AwkProgram::of(a, chars.as_str()));
             }
-            k = k.saturating_add(1);
-            if letter == 'E' {
-                break;
-            }
-            continue;
+            return stop_if(letter == 'E', next);
         }
         if r.starts_with('-') && r != "-" {
-            k = k.saturating_add(1);
-            continue;
+            AwkStep::Next(next)
+        } else {
+            AwkStep::Stop(k)
         }
-        break;
     }
-    if progs.is_empty()
-        && !main
-        && let Some(a) = args.get(k)
-    {
-        progs.push(prog(a, Cow::Borrowed(a.text.as_str())));
-    }
-    progs
 }
 
 /// 1.x `AWK_SYSTEM`, `/\bsystem\s*\(\s*"((?:[^"\\]|\\.)*)"\s*\)/g`: the string of each

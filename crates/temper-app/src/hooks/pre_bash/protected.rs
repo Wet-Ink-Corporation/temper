@@ -19,9 +19,9 @@ use temper_domain::{ConfigChanges, Glob, GlobError, Globs};
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
-    Command, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target, Verb, Word,
-    command_deletes, command_writes, js_len, landing, parse_commands, patch_command, patch_files,
-    pathspec_pattern, resolve_path,
+    Command, CopyDest, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target, Verb,
+    Word, command_deletes, command_writes, js_len, landing, parse_commands, patch_command,
+    patch_files, pathspec_pattern, resolve_path,
 };
 use crate::paths::{self, PathEnv};
 use crate::ports::{EntryKind, FileMeta, Files, Ports};
@@ -34,6 +34,20 @@ const PATH_MAX: usize = 4096;
 const TREE_LIMIT: usize = 10_000;
 /// The largest patch file temper reads (1.x's 32 MiB).
 const PATCH_CAP: u64 = 32 * 1024 * 1024;
+
+/// The list a protected hit goes into.
+#[derive(Debug, Clone, Copy)]
+enum List {
+    Written,
+    Deleted,
+}
+
+/// A `git checkout` or `git restore` from another revision: the revision and the pathspec.
+#[derive(Debug, Clone, Copy)]
+struct Restore<'a> {
+    source: &'a str,
+    pathspec: &'a str,
+}
 
 /// What a command changes of the protected configuration (1.x's `{ files, deleted,
 /// unreadPatch }`).
@@ -198,11 +212,12 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                 let Some(abs) = self.word_abs(&d.word, Some(base)) else {
                     continue;
                 };
-                self.check(&abs, d.recursive, true)?;
+                self.check(&abs, d.recursive, List::Deleted)?;
                 if d.recursive && self.is(&abs, EntryKind::Dir) {
-                    // Past the walk limit, the directory's own globs stand for its files.
+                    // Past the walk limit the list is `None`, read as no files: the directory's
+                    // own globs, checked above as a tree, stand for them.
                     for f in self.config_files_under(&abs).unwrap_or_default() {
-                        self.check(&paths::join(style, &abs, &f), false, true)?;
+                        self.check(&paths::join(style, &abs, &f), false, List::Deleted)?;
                     }
                 }
             }
@@ -225,7 +240,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             .chain(&p.target)
             .map(|w| w.value())
             .collect();
-        // An unread patch names no files.
+        // An unread patch (`None`) names no files; it asks as unread above.
         let listed: Vec<String> = touched
             .unwrap_or_default()
             .into_iter()
@@ -236,7 +251,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         for base in bases(p.cwd.as_deref(), start, &ws.root) {
             for v in &named {
                 if let Some(abs) = resolve_path(self.cx, *v, Some(base)) {
-                    self.check(&abs, false, false)?;
+                    self.check(&abs, false, List::Written)?;
                 }
             }
             // `patch` reads names from its directory; git also from the repository's top.
@@ -247,7 +262,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             };
             for f in &listed {
                 for b in roots {
-                    self.check(&paths::resolve(style, b, f), false, false)?;
+                    self.check(&paths::resolve(style, b, f), false, List::Written)?;
                 }
             }
         }
@@ -264,48 +279,53 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             },
             _ => None,
         };
+        let restore = source.map(|source| Restore {
+            source,
+            pathspec: t.word.raw(),
+        });
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
         for base in bases(t.cwd.as_deref(), start, &ws.root) {
-            if let Some(source) = source
+            if let Some(restore) = restore
                 && pathspec_pattern(t.word.raw())
             {
-                self.pathspec(source, t.word.raw(), base, true)?;
+                self.pathspec(restore, base, true)?;
                 continue;
             }
             let Some(dest) = self.word_abs(&t.word, Some(base)) else {
                 continue;
             };
             let Some(copy) = &t.copy else {
-                self.check(&dest, source.is_some(), false)?;
+                self.check(&dest, restore.is_some(), List::Written)?;
                 // A directory from another revision brings back the protected files git lists
                 // in it (`docs/clippy.toml`).
-                if let Some(source) = source
+                if let Some(restore) = restore
                     && !self.is(&dest, EntryKind::File)
                 {
-                    self.pathspec(source, t.word.raw(), base, false)?;
+                    self.pathspec(restore, base, false)?;
                 }
                 continue;
             };
-            let dest_is_dir = self.is(&dest, EntryKind::Dir);
+            let dest_at = CopyDest {
+                path: &dest,
+                is_dir: self.is(&dest, EntryKind::Dir),
+            };
             for s in &copy.sources {
-                let Some(land) = landing(self.cx, t, &dest, s, dest_is_dir) else {
+                let Some(land) = landing(self.cx, t, dest_at, s) else {
                     continue;
                 };
                 // A recursive copy or a move of anything but a known file may bring a whole
                 // tree, and with it the protected files inside it (`cfg/sub/clippy.toml`).
                 let from = resolve_path(self.cx, s.value(), Some(base));
                 let kind = from.as_deref().and_then(|p| self.stat(p)).map(|m| m.kind);
-                self.check(
-                    &land,
-                    copy.recursive && kind != Some(EntryKind::File),
-                    false,
-                )?;
+                let tree = copy.recursive && kind != Some(EntryKind::File);
+                self.check(&land, tree, List::Written)?;
                 if let Some(from) = from.filter(|_| copy.recursive && kind == Some(EntryKind::Dir))
                 {
-                    // Past the walk limit, the landing's own globs stand for its files.
+                    // Past the walk limit the list is `None`, read as no files: the landing's own
+                    // globs, checked above as a tree, stand for them.
                     for f in self.config_files_under(&from).unwrap_or_default() {
-                        self.check(&paths::join(style, &land, &f), false, false)?;
+                        self.check(&paths::join(style, &land, &f), false, List::Written)?;
                     }
                 }
             }
@@ -317,8 +337,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// says it would change. When git cannot say, every protected glob (with `fallback`).
     fn pathspec(
         &mut self,
-        source: &str,
-        raw: &str,
+        restore: Restore<'_>,
         base: &str,
         fallback: bool,
     ) -> Result<(), GlobError> {
@@ -330,23 +349,27 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             "--name-only",
             "--no-renames",
             "-z",
-            source,
+            restore.source,
             "--",
-            raw,
+            restore.pathspec,
         ];
         let diff = git::short(process, dir, &names);
         match (top, diff) {
             (Short::Ran(top), Short::Ran(names)) => {
                 let top = temper_domain::js_trim(&top);
                 for f in names.split('\0').filter(|f| !f.is_empty()) {
-                    self.check(&paths::resolve(self.cx.at.style, top, f), false, false)?;
+                    self.check(
+                        &paths::resolve(self.cx.at.style, top, f),
+                        false,
+                        List::Written,
+                    )?;
                 }
                 Ok(())
             }
             (Short::Unknown, _) | (_, Short::Unknown) => {
                 let ws = self.ws;
                 if fallback {
-                    self.check(&ws.root, true, false)?;
+                    self.check(&ws.root, true, List::Written)?;
                 }
                 Ok(())
             }
@@ -358,7 +381,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// 1.x `check(abs, tree, into)`: `abs` when it is protected, and with `tree` (a whole
     /// directory written or deleted) the protected globs under it, into the deleted list or
     /// the written one.
-    fn check(&mut self, abs: &str, tree: bool, deleted: bool) -> Result<(), GlobError> {
+    fn check(&mut self, abs: &str, tree: bool, into: List) -> Result<(), GlobError> {
         let (files, at, ws) = (self.files(), self.cx.at, self.ws);
         let rel = rel_to(files, at, &ws.root, abs);
         if rel.starts_with("..") || paths::is_absolute(at.style, &rel) || (rel.is_empty() && !tree)
@@ -392,10 +415,9 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                 }
             }
         }
-        let found = if deleted {
-            &mut self.changes.deleted
-        } else {
-            &mut self.changes.written
+        let found = match into {
+            List::Written => &mut self.changes.written,
+            List::Deleted => &mut self.changes.deleted,
         };
         for hit in hits {
             found.add(hit);
@@ -419,13 +441,12 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                 continue;
             }
             let dir = paths::join(style, &ws.root, rel.get(..end).unwrap_or(""));
-            let owner = match self.owners.get(&dir) {
-                Some(owner) => owner.clone(), // an `Rc` handle
-                None => {
-                    let owner = self.checkout_at(&dir)?;
-                    self.owners.insert(dir, owner.clone()); // an `Rc` handle for the cache
-                    owner
-                }
+            let owner = if let Some(owner) = self.owners.get(&dir) {
+                owner.clone() // an `Rc` handle
+            } else {
+                let owner = self.checkout_at(&dir)?;
+                self.owners.insert(dir, owner.clone()); // an `Rc` handle for the cache
+                owner
             };
             if let Some(owner) = owner {
                 return Ok(owner);

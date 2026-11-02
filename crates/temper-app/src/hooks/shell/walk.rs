@@ -15,6 +15,7 @@ use super::words::{
     Dir, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len, make_word, name_of,
     push_js, word_path,
 };
+use super::wrappers::{Run, Xargs, inner_script};
 
 /// How deep temper follows commands inside commands (1.x `MAX_DEPTH`).
 pub(super) const MAX_DEPTH: usize = 4;
@@ -126,8 +127,9 @@ pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Comma
             ..Env::default()
         },
         out: Vec::new(),
+        depth: 0,
     };
-    walker.run(cmd, 0);
+    walker.run(cmd);
     if walker.overflow.get() {
         return Err(TooLong);
     }
@@ -168,6 +170,8 @@ pub(super) struct Walker<'o> {
     overflow: Cell<bool>,
     pub(super) env: Env,
     pub(super) out: Vec<Command>,
+    /// How deep in subshells, substitutions and inner scripts the walk is (1.x's `depth`).
+    depth: usize,
 }
 
 /// What a `(` saves.
@@ -215,9 +219,16 @@ impl Walker<'_> {
         word_path(self.opts.paths, word, cwd)
     }
 
+    /// Runs `walk` one level deeper (1.x's `depth + 1`).
+    pub(super) fn deeper(&mut self, walk: impl FnOnce(&mut Self)) {
+        self.depth = self.depth.saturating_add(1);
+        walk(self);
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     /// 1.x `run(src, env, out, depth)`.
-    pub(super) fn run(&mut self, src: &str, depth: usize) {
-        if depth > MAX_DEPTH {
+    pub(super) fn run(&mut self, src: &str) {
+        if self.depth > MAX_DEPTH {
             self.out.push(Command::depth_marker());
             return;
         }
@@ -240,19 +251,14 @@ impl Walker<'_> {
                         self.env.vars.rollback(scope.vars);
                     }
                 }
-                Item::Command(raw) => prev_body = self.item(&raw, prev_body.take(), depth),
+                Item::Command(raw) => prev_body = self.item(&raw, prev_body.take()),
             }
         }
     }
 
     /// One simple command of a line: its substitutions first, then the command. Returns the
     /// heredoc or here-string body it read, which a pipe passes on.
-    fn item(
-        &mut self,
-        raw: &RawCommand,
-        prev_body: Option<Rc<str>>,
-        depth: usize,
-    ) -> Option<Rc<str>> {
+    fn item(&mut self, raw: &RawCommand, prev_body: Option<Rc<str>>) -> Option<Rc<str>> {
         // Command substitutions run first, in a subshell.
         let words = raw
             .words
@@ -268,7 +274,7 @@ impl Walker<'_> {
                     _ => continue,
                 };
                 if !js_trim(src).is_empty() {
-                    self.sub(src, depth.saturating_add(1));
+                    self.deeper(|walker| walker.sub(src));
                 }
             }
         }
@@ -282,7 +288,6 @@ impl Walker<'_> {
                 word: make_word(&r.word.parts, &wenv),
             })
             .collect();
-        drop(wenv);
         let piped = raw.sep.is_pipe();
         let isolated = piped || raw.after.is_pipe() || raw.after == lex::Joint::Background;
         let mut stdin = piped.then_some(Stdin::Pipe { body: prev_body });
@@ -297,7 +302,7 @@ impl Walker<'_> {
                 }
                 (RedirectOp::HereString, _) => Some(Stdin::Str {
                     body: Rc::from(redirect.word.text.as_str()),
-                    literal: redirect.word.literal,
+                    literal: redirect.word.is_literal(),
                 }),
                 _ => stdin,
             };
@@ -313,7 +318,7 @@ impl Walker<'_> {
             piped,
             isolated,
         };
-        self.simple(words.words, meta, depth);
+        self.simple(words.words, meta);
         passed
     }
 
@@ -339,16 +344,16 @@ impl Walker<'_> {
         };
         let words = words
             .into_iter()
-            .filter(|w| !(w.value() == Some("") && !w.quoted && w.expanded))
+            .filter(|w| !(w.value() == Some("") && !w.quoted && w.expanded()))
             .collect();
         CommandWords { words, ps }
     }
 
     /// 1.x `sub(src, env, out, depth)`: a subshell, whose changes end with it.
-    pub(super) fn sub(&mut self, src: &str, depth: usize) {
+    pub(super) fn sub(&mut self, src: &str) {
         let (cwd, prev) = (self.env.cwd.clone(), self.env.prev.clone());
         let (dirs, vars) = (self.env.dirs.len(), self.env.vars.mark());
-        self.run(src, depth);
+        self.run(src);
         self.env.cwd = cwd;
         self.env.prev = prev;
         let keep = self.env.dirs.len().min(dirs);
@@ -357,11 +362,11 @@ impl Walker<'_> {
     }
 
     /// 1.x `sub(src, { ...env, cwd, ps }, ...)`: a subshell in `cwd`, read as `ps` says.
-    pub(super) fn sub_in(&mut self, src: &str, cwd: Option<Dir>, ps: bool, depth: usize) {
+    pub(super) fn sub_in(&mut self, src: &str, cwd: Option<Dir>, ps: bool) {
         let saved_cwd = std::mem::replace(&mut self.env.cwd, cwd);
         let saved_ps = std::mem::replace(&mut self.env.ps, ps);
         let saved_prev = self.env.prev.clone();
-        self.sub(src, depth);
+        self.sub(src);
         self.env.cwd = saved_cwd;
         self.env.ps = saved_ps;
         self.env.prev = saved_prev;
@@ -369,20 +374,14 @@ impl Walker<'_> {
 
     /// 1.x `simple(words, meta, { ...env, cwd, vars: new Map(env.vars), dirs: [] })`, as
     /// `find -exec` runs one: nothing it sets outlives it.
-    pub(super) fn simple_apart(
-        &mut self,
-        words: Vec<Word>,
-        meta: Meta,
-        cwd: Option<Dir>,
-        depth: usize,
-    ) {
+    pub(super) fn simple_apart(&mut self, words: Vec<Word>, meta: Meta, cwd: Option<Dir>) {
         let saved_cwd = std::mem::replace(&mut self.env.cwd, cwd);
         let saved_prev = self.env.prev.clone();
         let saved_ps = self.env.ps;
         let vars = self.env.vars.mark();
         let dirs = self.env.dirs.len();
         let floor = std::mem::replace(&mut self.env.floor, dirs);
-        self.simple(words, meta, depth);
+        self.simple(words, meta);
         self.env.cwd = saved_cwd;
         self.env.prev = saved_prev;
         self.env.ps = saved_ps;
@@ -410,15 +409,9 @@ impl Walker<'_> {
         self.env.vars.set(&name, value);
     }
 
-    /// Pushes one command.
-    pub(super) fn emit(
-        &mut self,
-        name: Option<String>,
-        mut words: Vec<Word>,
-        meta: &mut Meta,
-        cwd: Option<Dir>,
-        git_config: bool,
-    ) {
+    /// Pushes the command `run` leaves, named `name`.
+    fn emit(&mut self, name: Option<String>, run: Run, meta: &mut Meta) {
+        let mut words = run.words;
         let argv0 = if words.is_empty() {
             Word::literal("")
         } else {
@@ -431,21 +424,33 @@ impl Walker<'_> {
             redirects: std::mem::take(&mut meta.redirects),
             stdin: meta.stdin.clone(),
             piped: meta.piped,
-            cwd,
-            git_config: git_config || self.env.vars.has_git_config(),
+            cwd: run.cwd,
+            git_config: run.git_config || self.env.vars.has_git_config(),
         });
+    }
+
+    /// Pushes a line of redirections alone (`> file`, `exec > file`), when it has any.
+    fn emit_redirects(&mut self, meta: &mut Meta, git_config: bool) {
+        if meta.redirects.is_empty() {
+            return;
+        }
+        let run = Run {
+            at: 0,
+            words: Vec::new(),
+            cwd: self.env.cwd.clone(), // a shared `Rc` handle
+            xargs: None,
+            git_config,
+        };
+        self.emit(Some(String::new()), run, meta);
     }
 
     /// 1.x `simple(words, meta, env, out, depth)`: keywords, assignments and wrappers, then
     /// the command and what it runs.
-    pub(super) fn simple(&mut self, words: Vec<Word>, mut meta: Meta, depth: usize) {
+    pub(super) fn simple(&mut self, words: Vec<Word>, mut meta: Meta) {
         let mut w = words;
         w.drain(..skip_keywords(&w, 0).min(w.len()));
         let Some(first) = w.first() else {
-            if !meta.redirects.is_empty() {
-                let cwd = self.env.cwd.clone();
-                self.emit(Some(String::new()), Vec::new(), &mut meta, cwd, false);
-            }
+            self.emit_redirects(&mut meta, false);
             return;
         };
         if first.raw == "function" && !first.quoted {
@@ -476,10 +481,7 @@ impl Walker<'_> {
                     self.assign(a);
                 }
             }
-            if !meta.redirects.is_empty() {
-                let cwd = self.env.cwd.clone();
-                self.emit(Some(String::new()), Vec::new(), &mut meta, cwd, false);
-            }
+            self.emit_redirects(&mut meta, false);
             return;
         }
         // PowerShell: `$x = 'value'`.
@@ -492,52 +494,34 @@ impl Walker<'_> {
             self.env.vars.set(&name, value);
             return;
         }
-        let git_config = w
-            .iter()
-            .take(k)
-            .any(|a| a.assign().is_some_and(|n| n.starts_with("GIT_CONFIG")));
-        let Some(run) = self.wrappers(&w, k, git_config, depth) else {
+        let Some(run) = self.wrappers(w, k) else {
             return;
         };
-        self.command(w, run, meta, depth);
+        self.command(run, meta);
     }
 
     /// The command after its wrappers.
-    fn command(
-        &mut self,
-        mut w: Vec<Word>,
-        run: super::wrappers::Run,
-        mut meta: Meta,
-        depth: usize,
-    ) {
+    fn command(&mut self, mut run: Run, mut meta: Meta) {
+        let w = &mut run.words;
         w.drain(..run.at.min(w.len()));
         if w.is_empty() {
             // `exec > file`.
-            if !meta.redirects.is_empty() {
-                let cwd = self.env.cwd.clone();
-                self.emit(
-                    Some(String::new()),
-                    Vec::new(),
-                    &mut meta,
-                    cwd,
-                    run.git_config,
-                );
-            }
+            self.emit_redirects(&mut meta, run.git_config);
             return;
         }
-        match run.xargs {
-            Some(Some(replace)) => {
-                for x in &mut w {
+        match &run.xargs {
+            Some(Xargs::Replace(replace)) => {
+                for x in w.iter_mut() {
                     if x.raw.contains(replace.as_str()) {
                         *x = Word::unknown(&x.raw);
                     }
                 }
             }
-            Some(None) => w.push(Word::unknown("(xargs input)")),
+            Some(Xargs::Input) => w.push(Word::unknown("(xargs input)")),
             None => {}
         }
         let Some(mut name) = w.first().and_then(name_of) else {
-            self.emit(None, w, &mut meta, run.cwd, run.git_config);
+            self.emit(None, run, &mut meta);
             return;
         };
         // A name with a slash in it runs that file, never a builtin.
@@ -546,58 +530,59 @@ impl Walker<'_> {
         {
             name = value.to_lowercase();
         }
+        let args = w.get(1..).unwrap_or(&[]);
         if CD.contains(&name.as_str()) {
             if !meta.isolated {
-                self.cd(&name, w.get(1..).unwrap_or(&[]));
+                self.cd(&name, args);
             }
             return;
         }
         if DECLARE.contains(&name.as_str()) {
             if !meta.isolated {
-                for a in w.get(1..).unwrap_or(&[]) {
+                for a in args {
                     self.assign(a);
                 }
             }
             return;
         }
-        let args = w.get(1..).unwrap_or(&[]);
         let inner = if name == "find" {
-            find_execs(args, run.cwd.as_ref(), depth)
+            find_execs(args, run.cwd.as_ref(), self.depth)
         } else {
-            self.inner_script(&name, args, &meta)
+            inner_script(&name, args, &meta)
         };
         // The inner commands run in the command's directory; `Dir` is a shared handle.
         let cwd = run.cwd.clone();
-        self.emit(Some(name), w, &mut meta, run.cwd, run.git_config);
-        let depth = depth.saturating_add(1);
+        self.emit(Some(name), run, &mut meta);
+        if let Some(inner) = inner {
+            self.deeper(|walker| walker.inner(inner, cwd, &meta));
+        }
+    }
+
+    /// What a command runs inside it, in `cwd`, one level deeper.
+    fn inner(&mut self, inner: Inner, cwd: Option<Dir>, meta: &Meta) {
         match inner {
-            Some(Inner::Sub { src, ps }) => self.sub_in(&src, cwd, ps, depth),
-            Some(Inner::Run(src)) => self.run(&src, depth),
-            Some(Inner::Awk(srcs)) => {
+            Inner::Sub { src, ps } => self.sub_in(&src, cwd, ps),
+            Inner::Run(src) => self.run(&src),
+            Inner::Awk(srcs) => {
                 for src in srcs {
-                    self.sub_in(&src, cwd.clone(), false, depth);
+                    self.sub_in(&src, cwd.clone(), false); // a shared `Rc` handle
                 }
             }
-            Some(Inner::Find(execs)) => {
+            Inner::Find(execs) => {
                 for exec in execs {
-                    match exec {
-                        FindExec::Run { words, cwd } => {
-                            let inner = Meta {
-                                redirects: Vec::new(),
-                                stdin: None,
-                                piped: meta.piped,
-                                isolated: meta.isolated,
-                            };
-                            self.simple_apart(words, inner, cwd, depth);
-                        }
-                        FindExec::TooDeep => {
-                            self.out.push(Command::depth_marker());
-                            break;
-                        }
-                    }
+                    let FindExec::Run { words, cwd } = exec else {
+                        self.out.push(Command::depth_marker());
+                        break;
+                    };
+                    let inner = Meta {
+                        redirects: Vec::new(),
+                        stdin: None,
+                        piped: meta.piped,
+                        isolated: meta.isolated,
+                    };
+                    self.simple_apart(words, inner, cwd);
                 }
             }
-            None => {}
         }
     }
 
@@ -642,7 +627,7 @@ impl Walker<'_> {
                 .as_ref()
                 .is_some_and(|normal| Rc::ptr_eq(normal, cwd))
         });
-        let step = normal.zip(word.value().filter(|_| !word.glob));
+        let step = normal.zip(word.value().filter(|_| !word.glob()));
         if let Some((base, value)) = step
             && let Some(dir) = cd_step(self.opts.paths.at.style, base, value)
         {

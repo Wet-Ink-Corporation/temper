@@ -75,7 +75,8 @@ pub(crate) fn node_tmpdir(windows: bool, var: impl Fn(&str) -> Option<String>) -
 
 /// Node 22's `os.homedir()` (libuv's `uv_os_homedir`): `HOME` on Unix and `USERPROFILE` on
 /// Windows when the variable is set, even to the empty string (`set` gives its value, `None`
-/// when unset), else the OS's answer (`os`). With neither, Node throws; temper reads `""`.
+/// when unset), else the OS's answer (`os`). With neither, Node throws; temper reads `""`, an
+/// empty home: `~` is then unknown and `$HOME` empty.
 pub(crate) fn node_homedir(
     windows: bool,
     set: impl Fn(&str) -> Option<OsString>,

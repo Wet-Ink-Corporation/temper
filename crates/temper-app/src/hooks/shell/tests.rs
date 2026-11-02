@@ -11,7 +11,7 @@ use temper_domain::PathStyle;
 
 use super::words::word_path;
 use super::{
-    Command, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
+    Command, CopyDest, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
     command_writes, landing, parse_commands, patch_command, patch_files, pathspec_pattern,
     resolve_path,
 };
@@ -357,7 +357,17 @@ fn copies_report_sources_and_landing_places_each_one() {
         let op = t.copy.as_ref().expect("a copy");
         op.sources
             .iter()
-            .map(|s| landing(cx(), t, &dest, s, dest_is_dir))
+            .map(|s| {
+                landing(
+                    cx(),
+                    t,
+                    CopyDest {
+                        path: &dest,
+                        is_dir: dest_is_dir,
+                    },
+                    s,
+                )
+            })
             .collect()
     };
     let (commands, _) = first("cp -r a/x b/y c/");
@@ -395,10 +405,18 @@ fn patch_of(cmd: &str) -> Option<Patched> {
         .find_map(|c| patch_command(c, cx()).map(Patched::of))
 }
 
+/// What a patch command does with its patch.
+#[derive(Debug, PartialEq, Eq)]
+enum Does {
+    Apply,
+    Inspect,
+}
+
 /// What the tests read of a patch command.
 #[derive(Debug, PartialEq, Eq)]
 struct Patched {
-    apply: bool,
+    /// Whether it applies a patch or only inspects.
+    does: Does,
     tool: PatchTool,
     inputs: Vec<Option<String>>,
     cwd: Option<String>,
@@ -407,10 +425,15 @@ struct Patched {
 }
 
 impl Patched {
+    /// It applies a patch.
+    fn apply(&self) -> bool {
+        self.does == Does::Apply
+    }
+
     fn of(p: PatchCommand<'_>) -> Self {
         match p {
             PatchCommand::Applies(p) => Self {
-                apply: true,
+                does: Does::Apply,
                 tool: p.tool,
                 inputs: p
                     .inputs
@@ -422,7 +445,7 @@ impl Patched {
                 guessed: p.guessed,
             },
             PatchCommand::Inspects(tool) => Self {
-                apply: false,
+                does: Does::Inspect,
                 tool,
                 inputs: Vec::new(),
                 cwd: None,
@@ -455,7 +478,7 @@ fn patch_command_reads_git_apply_git_am_and_patch_and_inspecting_forms_apply_not
         "patch -v",
         "git am --abort",
     ] {
-        assert_eq!(first(cmd).map(|p| p.apply), Some(false), "{cmd:?}");
+        assert_eq!(first(cmd).map(|p| p.apply()), Some(false), "{cmd:?}");
     }
     assert_eq!(
         first("git apply -p1 a.diff").map(|p| p.inputs),
@@ -488,7 +511,7 @@ fn patch_command_reads_gpatch_busybox_patch_watch_and_git_c_aliases() {
         "git -c alias.AP=apply ap x.diff",
     ] {
         let p = patch_of(cmd).expect(cmd);
-        assert!(p.apply, "{cmd:?}");
+        assert!(p.apply(), "{cmd:?}");
         assert_eq!(p.inputs, inputs(&["x.diff"]), "{cmd:?}");
     }
     assert_eq!(
@@ -501,7 +524,7 @@ fn patch_command_reads_gpatch_busybox_patch_watch_and_git_c_aliases() {
         "watch git apply --check x.diff",
         "git -c 'alias.ck=apply --check' ck x.diff",
     ] {
-        assert_eq!(patch_of(cmd).map(|p| p.apply), Some(false), "{cmd:?}");
+        assert_eq!(patch_of(cmd).map(|p| p.apply()), Some(false), "{cmd:?}");
     }
     for cmd in [
         "git -c alias.st=status st",
@@ -526,7 +549,7 @@ fn a_subcommand_git_does_not_have_under_unread_configuration_reads_as_a_guessed_
         "git -c includeIf.onbranch:main.path=/tmp/c ap x.diff",
     ] {
         let p = patch_of(cmd).expect(cmd);
-        assert!(p.apply && p.guessed, "{cmd:?}");
+        assert!(p.apply() && p.guessed, "{cmd:?}");
         assert_eq!(p.inputs, inputs(&["x.diff"]), "{cmd:?}");
     }
     for cmd in [
@@ -552,7 +575,7 @@ fn the_dashed_forms_git_apply_and_git_am_at_any_path_read_as_git_apply_and_git_a
         "sudo git-apply -p1 x.diff",
     ] {
         let p = patch_of(cmd).expect(cmd);
-        assert_eq!((p.tool, p.apply), (PatchTool::GitApply, true), "{cmd:?}");
+        assert_eq!((p.tool, p.apply()), (PatchTool::GitApply, true), "{cmd:?}");
         assert_eq!(p.inputs, inputs(&["x.diff"]), "{cmd:?}");
     }
     assert_eq!(
@@ -560,7 +583,7 @@ fn the_dashed_forms_git_apply_and_git_am_at_any_path_read_as_git_apply_and_git_a
         Some(PatchTool::GitAm)
     );
     assert_eq!(
-        patch_of("/usr/lib/git-core/git-apply --check x.diff").map(|p| p.apply),
+        patch_of("/usr/lib/git-core/git-apply --check x.diff").map(|p| p.apply()),
         Some(false)
     );
     assert_eq!(patch_of("git-diff HEAD"), None);
@@ -744,7 +767,7 @@ fn the_c_script_is_the_first_operand_after_the_options() {
         "bash -xc 'git apply x.diff'",
         "dash -c -e 'git apply x.diff'",
     ] {
-        assert_eq!(patch_of(cmd).map(|p| p.apply), Some(true), "{cmd:?}");
+        assert_eq!(patch_of(cmd).map(|p| p.apply()), Some(true), "{cmd:?}");
     }
     assert_eq!(
         targets("bash -c -- 'cp /tmp/x crates/a/src/lib.rs'"),
@@ -769,12 +792,12 @@ fn options_at_the_start_of_a_git_alias_are_read_as_git_options() {
         "git -c alias.ap='-p' -c alias.b='ap apply' b x.diff",
     ] {
         let p = patch_of(cmd).expect(cmd);
-        assert_eq!((p.apply, p.tool), (true, PatchTool::GitApply), "{cmd:?}");
+        assert_eq!((p.apply(), p.tool), (true, PatchTool::GitApply), "{cmd:?}");
         assert_eq!(p.inputs, inputs(&["x.diff"]), "{cmd:?}");
     }
     assert_eq!(patch_of("git -c alias.st='-p status' st"), None);
     assert_eq!(
-        patch_of("git -c alias.ck='-p apply --check' ck x.diff").map(|p| p.apply),
+        patch_of("git -c alias.ck='-p apply --check' ck x.diff").map(|p| p.apply()),
         Some(false)
     );
 }
@@ -787,7 +810,7 @@ fn an_alias_chain_longer_than_temper_follows_reads_as_a_guessed_git_apply() {
     let cmd = format!("git {} -c alias.a10=apply a0 x.diff", chain.join(" "));
     let p = patch_of(&cmd).expect("a guessed git apply");
     assert_eq!(
-        (p.apply, p.guessed, p.tool),
+        (p.apply(), p.guessed, p.tool),
         (true, true, PatchTool::GitApply)
     );
     assert_eq!(p.inputs, inputs(&["x.diff"]));
@@ -1137,6 +1160,12 @@ fn command_deletes_reads_rm_unlink_remove_item_and_its_aliases_and_git_rm() {
         })
         .collect::<Vec<_>>();
     assert_eq!(text, [".claude\\settings.json"]);
+}
+
+/// The rest of 1.x "commandDeletes reads rm, unlink, Remove-Item and its aliases, and git rm;
+/// dry runs and mentions delete nothing".
+#[test]
+fn command_deletes_reads_git_rm_and_inner_commands_and_dry_runs_and_mentions_delete_nothing() {
     assert_eq!(
         deletes("git rm n && git rm --cached -r o && git -C sub rm -- p"),
         [

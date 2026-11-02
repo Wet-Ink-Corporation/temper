@@ -51,16 +51,27 @@ pub(crate) struct Word {
     pub(super) raw: String,
     pub(super) text: String,
     pub(super) known: bool,
-    /// No expansion, brace list or glob at all: the text is exactly what the shell passes.
-    pub(super) literal: bool,
-    /// An unquoted `*`, `?`, `[...]` or brace list.
-    pub(super) glob: bool,
     pub(super) quoted: bool,
     /// The length of the name a `NAME=` or `NAME+=` word assigns, or 0.
     pub(super) assign: usize,
-    /// Some part is an expansion.
-    pub(super) expanded: bool,
+    pub(super) form: Form,
 }
+
+/// What the shell does to a word before it passes it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Form {
+    /// No expansion, brace list or glob at all: the text is exactly what the shell passes.
+    Literal,
+    /// Anything else: whether it is an unquoted `*`, `?`, `[...]` or brace list (`glob`), and
+    /// whether some part is an expansion (`expanded`).
+    Made { glob: bool, expanded: bool },
+}
+
+/// [`Form::Made`] with neither a glob nor an expansion.
+const MADE: Form = Form::Made {
+    glob: false,
+    expanded: false,
+};
 
 impl Word {
     /// 1.x `literalWord(s)`.
@@ -69,25 +80,18 @@ impl Word {
             raw: s.to_owned(),
             text: s.to_owned(),
             known: true,
-            literal: true,
-            glob: false,
             quoted: false,
             assign: 0,
-            expanded: false,
+            form: Form::Literal,
         }
     }
 
     /// 1.x `unknownWord(raw)`: xargs input, find's `{}`.
     pub(super) fn unknown(raw: &str) -> Self {
         Self {
-            raw: raw.to_owned(),
-            text: raw.to_owned(),
             known: false,
-            literal: false,
-            glob: false,
-            quoted: false,
-            assign: 0,
-            expanded: false,
+            form: MADE,
+            ..Self::literal(raw)
         }
     }
 
@@ -95,14 +99,10 @@ impl Word {
     /// text: s, value: w.value === null ? null : s }`).
     pub(super) fn derived(&self, s: &str) -> Self {
         Self {
-            raw: s.to_owned(),
-            text: s.to_owned(),
             known: self.known,
-            literal: self.literal,
-            glob: self.glob,
             quoted: self.quoted,
-            assign: 0,
-            expanded: self.expanded,
+            form: self.form,
+            ..Self::literal(s)
         }
     }
 
@@ -110,9 +110,19 @@ impl Word {
     /// values cut from a cluster).
     pub(super) fn plain(s: &str) -> Self {
         Self {
-            literal: false,
+            form: MADE,
             ..Self::literal(s)
         }
+    }
+
+    /// No expansion, brace list or glob at all: the text is exactly what the shell passes.
+    pub(super) fn is_literal(&self) -> bool {
+        self.form == Form::Literal
+    }
+
+    /// Some part is an expansion.
+    pub(super) fn expanded(&self) -> bool {
+        matches!(self.form, Form::Made { expanded: true, .. })
     }
 
     pub(crate) fn raw(&self) -> &str {
@@ -128,8 +138,9 @@ impl Word {
         self.known.then_some(self.text.as_str())
     }
 
+    /// An unquoted `*`, `?`, `[...]` or brace list.
     pub(crate) fn glob(&self) -> bool {
-        self.glob
+        matches!(self.form, Form::Made { glob: true, .. })
     }
 
     /// 1.x `w.assign`: the name a `NAME=value` word assigns.
@@ -141,11 +152,16 @@ impl Word {
 }
 
 /// Shell variables, with a journal so a subshell's or a substitution's changes are undone in
-/// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`).
+/// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). A change made
+/// while no scope is open is never undone, so it is not journaled: `a=$a/b` repeated at the
+/// top level keeps one value, not every earlier one.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
     map: HashMap<String, String>,
     journal: Vec<(String, Option<String>)>,
+    /// How many marks are open. A scope the line leaves unclosed is never rolled back, so its
+    /// mark stays open and only costs journaling.
+    open: usize,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
 }
@@ -158,7 +174,9 @@ impl Vars {
     /// 1.x `setVar`: `None` deletes.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
         let old = self.put(name, value);
-        self.journal.push((name.to_owned(), old));
+        if self.open > 0 {
+            self.journal.push((name.to_owned(), old));
+        }
     }
 
     fn put(&mut self, name: &str, value: Option<String>) -> Option<String> {
@@ -177,18 +195,20 @@ impl Vars {
         old
     }
 
-    /// Where the journal is now, for [`Self::rollback`].
-    pub(super) fn mark(&self) -> usize {
+    /// Opens a scope: where the journal is now, for [`Self::rollback`], which closes it.
+    pub(super) fn mark(&mut self) -> usize {
+        self.open = self.open.saturating_add(1);
         self.journal.len()
     }
 
-    /// Undoes every change since `mark`.
+    /// Undoes every change since `mark` and closes its scope.
     pub(super) fn rollback(&mut self, mark: usize) {
         while self.journal.len() > mark {
             if let Some((name, old)) = self.journal.pop() {
                 self.put(&name, old);
             }
         }
+        self.open = self.open.saturating_sub(1);
     }
 
     /// Some variable set earlier is a `GIT_CONFIG*` one.
@@ -228,41 +248,28 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
             continue;
         }
         raw.push_str(&part.text);
-        if part.is_lit() {
-            let s = part.text.as_str();
-            let mut shown = Cow::Borrowed(s);
-            if !part.quoted && k == 0 {
-                let home_tilde = s
-                    .strip_prefix('~')
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
-                if home_tilde && !env.home.is_empty() {
-                    shown = Cow::Owned([env.home, s.get(1..).unwrap_or("")].concat());
-                } else if s.starts_with('~') {
-                    known = false;
-                }
-            }
-            if !part.quoted && (shown.contains(['*', '?']) || brace_list(&shown)) {
-                glob = true;
-            }
-            if !part.quoted
-                && bracket.is_none()
+        let s = part.text.as_str();
+        let shown = if !part.is_lit() {
+            part_value(part, env).unwrap_or_else(|| {
+                known = false;
+                Cow::Borrowed(s)
+            })
+        } else if !part.quoted && k == 0 {
+            tilde(s, env.home).unwrap_or_else(|| {
+                known = false;
+                Cow::Borrowed(s)
+            })
+        } else {
+            Cow::Borrowed(s)
+        };
+        if part.is_lit() && !part.quoted {
+            glob |= shown.contains(['*', '?']) || brace_list(&shown);
+            if bracket.is_none()
                 && let Some(at) = s.find('[')
             {
                 bracket = Some(raw.len().saturating_sub(s.len()).saturating_add(at));
             }
-            if !push_js(&mut text, &mut units, &shown, env.overflow) {
-                known = false;
-                break;
-            }
-            continue;
         }
-        let shown = match part_value(part, env) {
-            Some(value) => value,
-            None => {
-                known = false;
-                Cow::Borrowed(part.text.as_str())
-            }
-        };
         if !push_js(&mut text, &mut units, &shown, env.overflow) {
             known = false;
             break;
@@ -275,31 +282,52 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     {
         glob = true;
     }
-    let assign = match parts.first() {
-        Some(first) if first.kind == PartKind::Lit && !first.quoted => {
-            let len = name_len(&first.text);
-            let after = first.text.get(len..).unwrap_or("");
-            if len > 0 && (after.starts_with('=') || after.starts_with("+=")) {
-                len
-            } else {
-                0
-            }
-        }
-        _ => 0,
-    };
     // An unquoted `{` may open a brace list, one that spans a quoted part too.
-    let literal = parts.iter().all(Part::is_lit)
-        && !glob
-        && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
+    let expanded = parts.iter().any(|p| !p.is_lit());
+    let literal = !expanded && !glob && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
     Word {
         raw,
         text,
         known,
-        literal,
-        glob,
         quoted: parts.iter().any(|p| p.quoted),
-        assign,
-        expanded: parts.iter().any(|p| !p.is_lit()),
+        assign: assign_len(parts),
+        form: if literal {
+            Form::Literal
+        } else {
+            Form::Made { glob, expanded }
+        },
+    }
+}
+
+/// The unquoted first part `s` with a leading `~` or `~/` read as the home directory; `None`
+/// for `~user`, or `~` without a home, which temper does not know.
+fn tilde<'s>(s: &'s str, home: &str) -> Option<Cow<'s, str>> {
+    let home_tilde = s
+        .strip_prefix('~')
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '\\']));
+    if home_tilde && !home.is_empty() {
+        Some(Cow::Owned([home, s.get(1..).unwrap_or("")].concat()))
+    } else if s.starts_with('~') {
+        None
+    } else {
+        Some(Cow::Borrowed(s))
+    }
+}
+
+/// The length of the name a `NAME=` or `NAME+=` word assigns, or 0.
+fn assign_len(parts: &[Part]) -> usize {
+    let Some(first) = parts
+        .first()
+        .filter(|first| first.kind == PartKind::Lit && !first.quoted)
+    else {
+        return 0;
+    };
+    let len = name_len(&first.text);
+    let after = first.text.get(len..).unwrap_or("");
+    if len > 0 && (after.starts_with('=') || after.starts_with("+=")) {
+        len
+    } else {
+        0
     }
 }
 
@@ -463,7 +491,7 @@ fn without_path_format(s: &str) -> String {
     out
 }
 
-/// 1.x `/--git-path\s+["']?([^\s"'`)]+)["']?\s*$/`: the name after the first `--git-path`
+/// 1.x ``/--git-path\s+["']?([^\s"'`)]+)["']?\s*$/``: the name after the first `--git-path`
 /// whose value ends the text. A value starts after a space or a quote, both of which end a
 /// value, so the values read are disjoint and each is read once.
 fn git_path(args: &str) -> Option<&str> {
@@ -610,7 +638,7 @@ pub(crate) fn resolve_from(at: PathEnv<'_>, base: &str, t: &str) -> String {
 /// 1.x `wordPath(w, cwd)`: the absolute path a word names when the command runs in `cwd`;
 /// `None` for a glob or an unknown word.
 pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&str>) -> Option<String> {
-    if word.glob {
+    if word.glob() {
         return None;
     }
     resolve_path(cx, word.value(), cwd)
@@ -645,7 +673,30 @@ pub(super) fn is_ps_var(raw: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{brace_list, git_path, without_path_format};
+    use super::{Vars, brace_list, git_path, without_path_format};
+
+    /// A top-level assignment keeps no undo record; a scope's are undone, nested or not.
+    #[test]
+    fn variables_journal_only_inside_a_scope_and_roll_back_to_its_mark() {
+        let mut vars = Vars::default();
+        for value in ["x", "x/b", "x/b/b"] {
+            vars.set("a", Some(value.to_owned()));
+        }
+        assert_eq!(vars.journal.len(), 0);
+        let outer = vars.mark();
+        vars.set("a", Some("y".to_owned()));
+        let inner = vars.mark();
+        vars.set("a", None);
+        vars.set("GIT_CONFIG_GLOBAL", Some("/x".to_owned()));
+        assert!(vars.has_git_config());
+        vars.rollback(inner);
+        assert_eq!(vars.get("a"), Some("y"));
+        assert!(!vars.has_git_config());
+        vars.rollback(outer);
+        assert_eq!(vars.get("a"), Some("x/b/b"));
+        vars.set("a", Some("z".to_owned()));
+        assert_eq!(vars.journal.len(), 0);
+    }
 
     #[test]
     fn helpers_read_as_1x_regexes_do() {

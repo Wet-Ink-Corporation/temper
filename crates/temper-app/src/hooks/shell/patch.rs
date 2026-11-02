@@ -93,13 +93,12 @@ fn patch_value(key: &str) -> bool {
 /// 1.x `patchCommand(c)`: git apply, git am and patch, or `None` for any other command.
 pub(crate) fn patch_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<PatchCommand<'c>> {
     if c.name.as_deref() == Some("patch") {
-        return Some(read_patch(
-            PatchTool::Patch,
-            &c.args,
-            c.cwd.clone(),
-            false,
-            cx,
-        ));
+        let at = PatchAt {
+            tool: PatchTool::Patch,
+            cwd: c.cwd.clone(), // a shared `Rc` handle
+            guessed: false,
+        };
+        return Some(read_patch(&c.args, at, cx));
     }
     let g = git_command(c, cx)?;
     let tool = if g.hidden_alias {
@@ -111,10 +110,15 @@ pub(crate) fn patch_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<PatchC
             _ => return None,
         }
     };
+    let at = PatchAt {
+        tool,
+        cwd: g.cwd,
+        guessed: g.hidden_alias,
+    };
     Some(match g.args {
-        Cow::Borrowed(args) => read_patch(tool, args, g.cwd, g.hidden_alias, cx),
+        Cow::Borrowed(args) => read_patch(args, at, cx),
         // An alias expansion's words live in `g`, so the patch owns its.
-        Cow::Owned(args) => match read_patch(tool, &args, g.cwd, g.hidden_alias, cx) {
+        Cow::Owned(args) => match read_patch(&args, at, cx) {
             PatchCommand::Applies(p) => PatchCommand::Applies(p.into_owned()),
             PatchCommand::Inspects(tool) => PatchCommand::Inspects(tool),
         },
@@ -136,17 +140,79 @@ impl Patch<'_> {
     }
 }
 
-/// The options and operands of a patch command.
-fn read_patch<'a>(
+/// A patch command's tool, where it runs, and whether it is a guessed alias.
+struct PatchAt {
     tool: PatchTool,
-    args: &'a [Word],
-    mut cwd: Option<Dir>,
+    cwd: Option<Dir>,
     guessed: bool,
-    cx: PathCx<'_>,
-) -> PatchCommand<'a> {
-    let (mut read_only, mut report_only, mut apply_too, mut stored) = (false, false, false, false);
+}
+
+/// What one option of `git apply` or `git am` does.
+enum GitOption {
+    /// `--abort` and the like: nothing is applied.
+    Inspects,
+    /// `--check`, `--stat`, `--numstat`, `--summary`: the patch is read, unless `--apply`.
+    Reads,
+    /// `--apply`.
+    Applies,
+    /// `git am --continue` and the like: applies the patch git stored.
+    Stored,
+    /// An option whose value is the next word.
+    Valued,
+    Other,
+}
+
+fn git_option(tool: PatchTool, key: &str, attached: bool) -> GitOption {
+    match key {
+        "--check" | "--stat" | "--numstat" | "--summary" => GitOption::Reads,
+        "--apply" => GitOption::Applies,
+        "--abort" | "--quit" | "--show-current-patch" => GitOption::Inspects,
+        "--continue" | "--skip" | "--resolved" | "-r" if tool == PatchTool::GitAm => {
+            GitOption::Stored
+        }
+        _ if !attached && GIT_APPLY_VALUES.contains(&key) => GitOption::Valued,
+        _ => GitOption::Other,
+    }
+}
+
+/// A `patch` option `k` (the word `a` up to any `=`) that takes a value: its key, and the
+/// value attached to it (`-ofile`, `--output=file`), if any.
+fn patch_option<'a>(a: &'a Word, k: &'a str, eq: bool) -> Option<(&'a str, Option<Cow<'a, Word>>)> {
+    let short = !k.starts_with("--")
+        && k.strip_prefix('-')
+            .is_some_and(|f| f.starts_with(|c: char| "pioDdFBYzVrg".contains(c)));
+    let mut value: Option<Cow<'a, Word>> = eq.then(|| Cow::Owned(a.after_eq()));
+    if short && k.len() > 2 {
+        value = k.get(2..).map(|s| Cow::Owned(Word::plain(s)));
+    }
+    let key = if short { k.get(..2).unwrap_or(k) } else { k };
+    patch_value(key).then_some((key, value))
+}
+
+/// `patch`'s first operand is its target and its second the patch; git's operands are
+/// patches, `-` being stdin. Returns the target.
+fn operands<'a>(
+    tool: PatchTool,
+    pos: Vec<&'a Word>,
+    inputs: &mut Vec<Cow<'a, Word>>,
+) -> Option<Cow<'a, Word>> {
+    if tool != PatchTool::Patch {
+        inputs.extend(pos.into_iter().filter(|w| w.raw != "-").map(Cow::Borrowed));
+        return None;
+    }
+    if let Some(second) = pos.get(1) {
+        inputs.push(Cow::Borrowed(*second));
+    }
+    pos.first().map(|w| Cow::Borrowed(*w))
+}
+
+/// The options and operands of a patch command.
+fn read_patch<'a>(args: &'a [Word], mut at: PatchAt, cx: PathCx<'_>) -> PatchCommand<'a> {
+    let tool = at.tool;
+    // `--check`, `--stat` and the like, or `patch --dry-run`: the patch is only read.
+    let (mut inspects, mut apply_too, mut stored) = (false, false, false);
     let mut inputs: Vec<Cow<'a, Word>> = Vec::new();
-    let mut outputs: Vec<Cow<'a, Word>> = Vec::new();
+    let mut outputs = Vec::new();
     let mut pos: Vec<&'a Word> = Vec::new();
     let mut i = 0;
     while let Some(a) = args.get(i) {
@@ -162,72 +228,48 @@ fn read_patch<'a>(
             return PatchCommand::Inspects(tool);
         }
         if tool != PatchTool::Patch {
-            match k {
-                "--check" => read_only = true,
-                "--stat" | "--numstat" | "--summary" => report_only = true,
-                "--apply" => apply_too = true,
-                "--abort" | "--quit" | "--show-current-patch" => {
-                    return PatchCommand::Inspects(tool);
-                }
-                "--continue" | "--skip" | "--resolved" | "-r" if tool == PatchTool::GitAm => {
-                    stored = true
-                }
-                _ if eq.is_none() && GIT_APPLY_VALUES.contains(&k) => i = i.saturating_add(1),
-                _ => {}
+            match git_option(tool, k, eq.is_some()) {
+                GitOption::Inspects => return PatchCommand::Inspects(tool),
+                GitOption::Reads => inspects = true,
+                GitOption::Applies => apply_too = true,
+                GitOption::Stored => stored = true,
+                GitOption::Valued => i = i.saturating_add(1),
+                GitOption::Other => {}
             }
             continue;
         }
-        if k == "--dry-run" {
-            read_only = true;
+        // `--dry-run` takes no value, so it ends here.
+        inspects |= k == "--dry-run";
+        let Some((key, attached)) = patch_option(a, k, eq.is_some()) else {
             continue;
-        }
-        let short = !k.starts_with("--")
-            && k.strip_prefix('-')
-                .is_some_and(|f| f.starts_with(|c: char| "pioDdFBYzVrg".contains(c)));
-        let mut v: Option<Cow<'a, Word>> = eq.map(|_| Cow::Owned(a.after_eq()));
-        if short && k.len() > 2 {
-            v = k.get(2..).map(|s| Cow::Owned(Word::plain(s)));
-        }
-        let key = if short { k.get(..2).unwrap_or(k) } else { k };
-        if !patch_value(key) {
-            continue;
-        }
-        if v.is_none() {
-            v = args.get(i).map(Cow::Borrowed);
+        };
+        let Some(value) = attached.or_else(|| {
             i = i.saturating_add(1);
-        }
-        let Some(v) = v else {
+            args.get(i.saturating_sub(1)).map(Cow::Borrowed)
+        }) else {
             continue;
         };
         match key {
-            "-i" | "--input" => inputs.push(v),
-            "-o" | "--output" => outputs.push(v),
+            "-i" | "--input" => inputs.push(value),
+            "-o" | "--output" => outputs.push(value),
             "-d" | "--directory" => {
-                cwd = super::words::word_path(cx, &v, cwd.as_deref()).map(Dir::from);
+                at.cwd = super::words::word_path(cx, &value, at.cwd.as_deref()).map(Dir::from);
             }
             _ => {}
         }
     }
-    if (read_only || report_only) && !apply_too {
+    if inspects && !apply_too {
         return PatchCommand::Inspects(tool);
-    }
-    let mut target = None;
-    if tool == PatchTool::Patch {
-        target = pos.first().map(|w| Cow::Borrowed(*w));
-        if let Some(second) = pos.get(1) {
-            inputs.push(Cow::Borrowed(*second));
-        }
-    } else {
-        inputs.extend(pos.into_iter().filter(|w| w.raw != "-").map(Cow::Borrowed));
     }
     PatchCommand::Applies(Patch {
         tool,
+        // Before `inputs`, which the operands add to.
+        target: operands(tool, pos, &mut inputs),
         inputs,
         outputs,
-        target,
-        cwd,
+        cwd: at.cwd,
         stored,
-        guessed,
+        guessed: at.guessed,
     })
 }
 
@@ -359,7 +401,7 @@ fn named_line(text: &str, at: usize) -> Option<LineMatch<'_>> {
     let line = text
         .get(start..)?
         .find(line_end)
-        .unwrap_or(text.len().saturating_sub(start));
+        .unwrap_or_else(|| text.len().saturating_sub(start));
     if line == 0 {
         return None;
     }
@@ -392,24 +434,21 @@ pub(crate) fn patch_files(text: &str) -> Vec<String> {
         let found = header_line(text, at)
             .or_else(|| diff_git_line(text, at))
             .or_else(|| named_line(text, at));
-        cursor = match found {
-            Some((captures, end)) => {
-                out.extend(
-                    captures
-                        .into_iter()
-                        .filter(|c| !c.is_empty())
-                        .map(clean_name),
-                );
-                end.max(at.saturating_add(1))
-            }
+        cursor = if let Some((captures, end)) = found {
+            out.extend(
+                captures
+                    .into_iter()
+                    .filter(|c| !c.is_empty())
+                    .map(clean_name),
+            );
+            end.max(at.saturating_add(1))
+        } else {
             // The next start is after the next line end.
-            None => {
-                let c_len = text
-                    .get(at..)
-                    .and_then(|r| r.chars().next())
-                    .map_or(1, char::len_utf8);
-                at.saturating_add(c_len)
-            }
+            let c_len = text
+                .get(at..)
+                .and_then(|r| r.chars().next())
+                .map_or(1, char::len_utf8);
+            at.saturating_add(c_len)
         };
         if !text.is_char_boundary(cursor) {
             break;

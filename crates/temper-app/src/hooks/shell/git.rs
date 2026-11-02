@@ -246,104 +246,145 @@ pub(crate) fn git_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<Git<'c>>
     if c.name.as_deref() != Some("git") {
         return None;
     }
-    let mut dir = c.cwd.clone();
-    let mut a: Cow<'c, [Word]> = Cow::Borrowed(&c.args);
-    let mut aliases: HashMap<String, String> = HashMap::new();
-    let mut hidden = c.git_config;
-    let mut expansions = 0;
-    let mut i = 0;
-    let ends = |sub: String, args: Cow<'c, [Word]>, dir: Option<Dir>, hidden_alias: bool| Git {
-        sub,
-        args,
-        cwd: dir,
-        hidden_alias,
+    let mut opts = GitOptions {
+        dir: c.cwd.clone(),
+        aliases: HashMap::new(),
+        hidden: c.git_config,
     };
-    while let Some(word) = a.get(i) {
-        let t = word.raw.as_str();
-        if t == "-C" {
-            i = i.saturating_add(1);
-            dir = a
-                .get(i)
-                .and_then(|w| word_path(cx, w, dir.as_deref()))
+    let mut args: Cow<'c, [Word]> = Cow::Borrowed(&c.args);
+    let mut expansions = 0;
+    let mut at = 0;
+    while let Some(word) = args.get(at) {
+        let opt = word.raw.as_str();
+        if opt == "-C" {
+            at = at.saturating_add(1);
+            opts.dir = args
+                .get(at)
+                .and_then(|value| word_path(cx, value, opts.dir.as_deref()))
                 .map(Dir::from);
-        } else if t == "-c" {
-            i = i.saturating_add(1);
-            let w = a.get(i);
-            let text = w.map_or("", |w| w.value().unwrap_or(&w.raw));
-            let alias = text
-                .get(..6)
-                .filter(|head| head.eq_ignore_ascii_case("alias."))
-                .and_then(|_| text.get(6..))
-                .and_then(|rest| rest.split_once('='))
-                .filter(|(name, _)| !name.is_empty());
-            if let Some((name, def)) = alias {
-                let def = match w.and_then(Word::value) {
-                    Some(_) => temper_domain::js_trim(def).to_owned(),
-                    None => "!".to_owned(),
-                };
-                aliases.insert(name.to_lowercase(), def);
-            } else if includes_config(text) {
-                hidden = true;
-            }
-        } else if t == "--config-env" || t.starts_with("--config-env=") {
-            // Its value comes from the environment, so an alias it sets is never readable.
-            let v = if t == "--config-env" {
-                i = i.saturating_add(1);
-                a.get(i).map_or("", |w| w.raw.as_str())
-            } else {
-                t.get(13..).unwrap_or("")
-            };
-            let alias = v.get(..6).is_some_and(|h| h.eq_ignore_ascii_case("alias."));
-            if alias || !plain_setting(v) || includes_config(v) {
-                hidden = true;
-            }
-        } else if t == "--git-dir" || t == "--work-tree" || t == "--namespace" {
-            i = i.saturating_add(1);
-        } else if !t.starts_with('-') {
-            let rest = |a: &Cow<'c, [Word]>| -> Cow<'c, [Word]> {
-                match a {
-                    Cow::Borrowed(words) => {
-                        Cow::Borrowed(words.get(i.saturating_add(1)..).unwrap_or(&[]))
-                    }
-                    Cow::Owned(words) => {
-                        Cow::Owned(words.get(i.saturating_add(1)..).unwrap_or(&[]).to_vec())
-                    }
+        } else if opt == "-c" {
+            at = at.saturating_add(1);
+            opts.config(args.get(at));
+        } else if opt == "--config-env" {
+            at = at.saturating_add(1);
+            opts.config_env(args.get(at).map_or("", |value| value.raw.as_str()));
+        } else if let Some(setting) = opt.strip_prefix("--config-env=") {
+            opts.config_env(setting);
+        } else if opt == "--git-dir" || opt == "--work-tree" || opt == "--namespace" {
+            at = at.saturating_add(1);
+        } else if !opt.starts_with('-') {
+            match opts.subcommand(word, after(&args, at), expansions) {
+                Next::Git(git) => return Some(git),
+                Next::Expand(words) => {
+                    // git reads options at the start of an alias as its own: the expansion
+                    // goes back through this loop.
+                    expansions += 1;
+                    args = Cow::Owned(words);
+                    at = 0;
+                    continue;
                 }
-            };
-            let Some(sub) = word.value() else {
-                return Some(ends(String::new(), rest(&a), dir, false));
-            };
-            let lower = sub.to_lowercase();
-            let alias = (!is_builtin(sub)).then(|| aliases.get(&lower)).flatten();
-            if let Some(def) = alias {
-                // A chain longer than temper follows may end on git apply.
-                if expansions == 8 {
-                    return Some(ends(String::new(), rest(&a), dir, true));
-                }
-                if def.is_empty() || def.starts_with('!') {
-                    return Some(ends(String::new(), rest(&a), dir, false));
-                }
-                // git reads options at the start of an alias as its own: the expansion goes
-                // back through this loop.
-                expansions += 1;
-                let mut words: Vec<Word> = def
-                    .split(crate::project::is_js_space)
-                    .filter(|w| !w.is_empty())
-                    .map(Word::literal)
-                    .collect();
-                words.extend(rest(&a).iter().cloned());
-                a = Cow::Owned(words);
-                i = 0;
-                continue;
             }
-            let hidden_alias = hidden && !is_builtin(sub);
-            let sub = sub.to_owned();
-            let args = rest(&a);
-            return Some(ends(sub, args, dir, hidden_alias));
         }
-        i = i.saturating_add(1);
+        at = at.saturating_add(1);
     }
-    Some(ends(String::new(), Cow::Borrowed(&[]), dir, false))
+    Some(opts.ends(String::new(), Cow::Borrowed(&[]), false))
+}
+
+/// What a subcommand word leads to: the git command, or an alias's expansion to read again.
+enum Next<'c> {
+    Git(Git<'c>),
+    Expand(Vec<Word>),
+}
+
+/// The words after the one at `at`, borrowed while the command's own words are read.
+fn after<'c>(args: &Cow<'c, [Word]>, at: usize) -> Cow<'c, [Word]> {
+    let from = at.saturating_add(1);
+    match args {
+        Cow::Borrowed(words) => Cow::Borrowed(words.get(from..).unwrap_or(&[])),
+        Cow::Owned(words) => Cow::Owned(words.get(from..).unwrap_or(&[]).to_vec()),
+    }
+}
+
+/// What git's options before the subcommand set.
+struct GitOptions {
+    dir: Option<Dir>,
+    /// `-c alias.<name>=<definition>`, by lowercased name; `!` for one temper cannot read.
+    aliases: HashMap<String, String>,
+    /// Configuration temper cannot read is set, which may define any alias.
+    hidden: bool,
+}
+
+impl GitOptions {
+    /// `-c <setting>`: an alias it defines, or an include temper cannot read.
+    fn config(&mut self, word: Option<&Word>) {
+        let text = word.map_or("", |word| word.value().unwrap_or(&word.raw));
+        let alias = text
+            .get(..6)
+            .filter(|head| head.eq_ignore_ascii_case("alias."))
+            .and_then(|_| text.get(6..))
+            .and_then(|rest| rest.split_once('='))
+            .filter(|(name, _)| !name.is_empty());
+        if let Some((name, def)) = alias {
+            let def = if word.and_then(Word::value).is_some() {
+                temper_domain::js_trim(def).to_owned()
+            } else {
+                "!".to_owned()
+            };
+            self.aliases.insert(name.to_lowercase(), def);
+        } else if includes_config(text) {
+            self.hidden = true;
+        }
+    }
+
+    /// `--config-env <name>=<ENV>`: its value comes from the environment, so an alias it sets
+    /// is never readable.
+    fn config_env(&mut self, setting: &str) {
+        let alias = setting
+            .get(..6)
+            .is_some_and(|head| head.eq_ignore_ascii_case("alias."));
+        if alias || !plain_setting(setting) || includes_config(setting) {
+            self.hidden = true;
+        }
+    }
+
+    /// The subcommand `word`, with the words after it: the git command it names, or the
+    /// expansion of the alias it is, after `expansions` earlier ones.
+    fn subcommand<'c>(&self, word: &Word, rest: Cow<'c, [Word]>, expansions: usize) -> Next<'c> {
+        let Some(sub) = word.value() else {
+            return Next::Git(self.ends(String::new(), rest, false));
+        };
+        let alias = (!is_builtin(sub))
+            .then(|| self.aliases.get(&sub.to_lowercase()))
+            .flatten();
+        let Some(def) = alias else {
+            let hidden_alias = self.hidden && !is_builtin(sub);
+            return Next::Git(self.ends(sub.to_owned(), rest, hidden_alias));
+        };
+        // A chain longer than temper follows may end on git apply.
+        if expansions == 8 {
+            return Next::Git(self.ends(String::new(), rest, true));
+        }
+        if def.is_empty() || def.starts_with('!') {
+            return Next::Git(self.ends(String::new(), rest, false));
+        }
+        let mut words: Vec<Word> = def
+            .split(crate::project::is_js_space)
+            .filter(|part| !part.is_empty())
+            .map(Word::literal)
+            .collect();
+        words.extend(rest.iter().cloned());
+        Next::Expand(words)
+    }
+
+    /// The git command these options run `sub` with.
+    fn ends<'c>(&self, sub: String, args: Cow<'c, [Word]>, hidden_alias: bool) -> Git<'c> {
+        Git {
+            sub,
+            args,
+            cwd: self.dir.clone(), // a shared `Rc` handle
+            hidden_alias,
+        }
+    }
 }
 
 #[cfg(test)]

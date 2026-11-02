@@ -40,7 +40,9 @@ fn decide(cmd: &str) -> Decision {
     }
 }
 
-fn expect(shape: &str, n: usize, tail: &str, commands: usize, writes: usize, first: Option<&str>) {
+/// `shape` `n` times, then `tail`, reads as `(commands, writes, first)`.
+fn expect(shape: &str, n: usize, tail: &str, want: (usize, usize, Option<&str>)) {
+    let (commands, writes, first) = want;
     let got = decide(&[shape.repeat(n).as_str(), tail].concat());
     let want = Decision {
         commands,
@@ -55,52 +57,57 @@ const O: Option<&str> = Some("/r/o");
 
 #[test]
 fn unclosed_quotes_and_expansions_repeated_read_as_1x_reads_them() {
-    expect("'", N17, " > o", 1, 1, O);
-    expect("\"", N17, " > o", 1, 1, O);
-    expect("$(", N17, "> o", 6, 0, None);
-    expect("${", N17, "> o", 1, 0, None);
-    expect("`", N17, "> o", 1, 1, O);
-    expect("<<", N17, "> o", 1, 1, O);
-    expect(">&", N17, " o", 1, 1, O);
-    expect("(", N17, "> o", 0, 0, None);
-    expect("\\", N17, "> o", 1, 1, O);
-    expect("$'\\x41", N17, "' > o", 1, 0, None);
-    expect("$\"", N17, "\" > o", 1, 0, None);
-    expect("<(", N17, "> o", 6, 0, None);
-    expect("$((", N17, "> o", 1, 0, None);
-    expect("&", N17, "> o", 1, 1, O);
-    expect(";", N17, "> o", 1, 1, O);
+    expect("'", N17, " > o", (1, 1, O));
+    expect("\"", N17, " > o", (1, 1, O));
+    expect("$(", N17, "> o", (6, 0, None));
+    expect("${", N17, "> o", (1, 0, None));
+    expect("`", N17, "> o", (1, 1, O));
+    expect("<<", N17, "> o", (1, 1, O));
+    expect(">&", N17, " o", (1, 1, O));
+    expect("(", N17, "> o", (0, 0, None));
+    expect("\\", N17, "> o", (1, 1, O));
+    expect("$'\\x41", N17, "' > o", (1, 0, None));
+    expect("$\"", N17, "\" > o", (1, 0, None));
+    expect("<(", N17, "> o", (6, 0, None));
+    expect("$((", N17, "> o", (1, 0, None));
+    expect("&", N17, "> o", (1, 1, O));
+    expect(";", N17, "> o", (1, 1, O));
 }
 
 #[test]
 fn closed_words_and_substitutions_repeated_read_as_1x_reads_them() {
-    expect("'a' ", N17, "> o", 1, 1, O);
-    expect("\"a\" ", N17, "> o", 1, 1, O);
-    expect("$(x) ", N17, "> o", N17 + 1, 1, O);
-    expect("${x} ", N17, "> o", 1, 1, O);
-    expect("`x` ", N17, "> o", N17 + 1, 1, O);
-    expect("cat <<E\n", N17, "E\n> o", 2, 1, O);
-    expect("echo >&2 ", N17, "> o", 1, 1, O);
-    expect("( ", N17, ") > o", 1, 1, O);
-    expect("\\a ", N17, "> o", 1, 1, O);
-    expect("# x\n", N17, "> o", 1, 1, O);
-    expect("{ ", N17, "> o; }", 1, 1, O);
-    expect("if true; then ", N17, "> o; fi", N17 + 1, 1, O);
-    expect("a | ", N17, "tee o", N17 + 1, 1, O);
-    expect("cp a ", N17, "o", 1, 1, O);
+    expect("'a' ", N17, "> o", (1, 1, O));
+    expect("\"a\" ", N17, "> o", (1, 1, O));
+    expect("$(x) ", N17, "> o", (N17 + 1, 1, O));
+    expect("${x} ", N17, "> o", (1, 1, O));
+    expect("`x` ", N17, "> o", (N17 + 1, 1, O));
+    expect("cat <<E\n", N17, "E\n> o", (2, 1, O));
+    expect("echo >&2 ", N17, "> o", (1, 1, O));
+    expect("( ", N17, ") > o", (1, 1, O));
+    expect("\\a ", N17, "> o", (1, 1, O));
+    expect("# x\n", N17, "> o", (1, 1, O));
+    expect("{ ", N17, "> o; }", (1, 1, O));
+    expect("if true; then ", N17, "> o; fi", (N17 + 1, 1, O));
+    expect("a | ", N17, "tee o", (N17 + 1, 1, O));
+    expect("cp a ", N17, "o", (1, 1, O));
 }
 
 #[test]
 fn wrappers_and_inner_scripts_repeated_read_as_1x_reads_them() {
-    expect("sudo ", N17, "cp a o", 1, 1, O);
-    expect("env -u x ", N17, "cp a o", 1, 1, O);
-    expect("xargs ", N17, "cp a o", 1, 1, None);
-    expect("git -c alias.x=y ", N17, "apply o.diff", 1, 0, None);
-    expect("find . -exec ", N17, "cp a o \\;", 6, 0, None);
-    expect("awk 'BEGIN{system(\"", N17, "cp a o\")}'", 43_693, 0, None);
-    expect("system(\"", N17, "", 65_537, 0, None);
-    expect("bash -c '", N17, "cp a o'", 3, 0, None);
-    expect("eval ", N17, "cp a o", 6, 0, None);
+    expect("sudo ", N17, "cp a o", (1, 1, O));
+    expect("env -u x ", N17, "cp a o", (1, 1, O));
+    expect("xargs ", N17, "cp a o", (1, 1, None));
+    expect("git -c alias.x=y ", N17, "apply o.diff", (1, 0, None));
+    expect("find . -exec ", N17, "cp a o \\;", (6, 0, None));
+    expect(
+        "awk 'BEGIN{system(\"",
+        N17,
+        "cp a o\")}'",
+        (43_693, 0, None),
+    );
+    expect("system(\"", N17, "", (65_537, 0, None));
+    expect("bash -c '", N17, "cp a o'", (3, 0, None));
+    expect("eval ", N17, "cp a o", (6, 0, None));
 }
 
 #[test]
@@ -109,14 +116,12 @@ fn variables_and_git_paths_repeated_read_as_1x_reads_them() {
         "echo $(git rev-parse --git-path ",
         N17,
         "x) > o",
-        6,
-        0,
-        None,
+        (6, 0, None),
     );
-    expect("--git-path ", N17, "> o", 1, 1, O);
-    expect("X=$X$X; ", N17, "echo > o", 1, 1, O);
-    expect("X=a; ", N17, "echo > $X", 1, 1, Some("/r/a"));
-    expect("popd; ", N17, "> o", 1, 1, None);
+    expect("--git-path ", N17, "> o", (1, 1, O));
+    expect("X=$X$X; ", N17, "echo > o", (1, 1, O));
+    expect("X=a; ", N17, "echo > $X", (1, 1, Some("/r/a")));
+    expect("popd; ", N17, "> o", (1, 1, None));
 }
 
 #[test]
@@ -157,7 +162,7 @@ fn a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws() {
 #[test]
 fn cd_and_pushd_repeated_land_the_write_under_every_directory() {
     let deep = ["/r", &"/a".repeat(N15), "/o"].concat();
-    expect("cd a; ", N15, "cp a o", 1, 1, Some(&deep));
-    expect("cd a && ", N15, "> o", 1, 1, Some(&deep));
-    expect("pushd a; ", N15, "> o", 1, 1, Some(&deep));
+    expect("cd a; ", N15, "cp a o", (1, 1, Some(&deep)));
+    expect("cd a && ", N15, "> o", (1, 1, Some(&deep)));
+    expect("pushd a; ", N15, "> o", (1, 1, Some(&deep)));
 }

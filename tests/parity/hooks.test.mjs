@@ -67,11 +67,11 @@ function run(engine, c, steps) {
   return { out, files: r.files, failures, ms: r.steps.map((s) => s.ms) };
 }
 
-test('the hook cases: unique names, known fixtures, and the 2d floor of 97 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 35)', () => {
+test('the hook cases: unique names, known fixtures, and the 2e floor of 110 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 48)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 97, `${cases.length} cases`);
+  assert.ok(cases.length >= 110, `${cases.length} cases`);
 });
 
 for (const c of cases) {

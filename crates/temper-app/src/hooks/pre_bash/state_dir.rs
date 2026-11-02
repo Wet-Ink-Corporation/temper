@@ -274,6 +274,11 @@ mod tests {
             state_var_entry("$XDG_/temper/verdicts") && !state_var_entry("$XDG_X/temper/verdicts")
         );
         assert!(!state_var_entry("${}/temper/verdicts"));
+    }
+
+    /// As above, for the anchors, the state-dir entries and the source names.
+    #[test]
+    fn the_path_patterns_read_as_1x_regexes_do() {
         assert!(anchored("/x") && anchored("C:/x") && anchored("$X") && anchored("~u"));
         assert!(!anchored("C:x") && !anchored("x"));
         assert!(

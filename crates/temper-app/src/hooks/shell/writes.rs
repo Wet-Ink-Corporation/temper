@@ -69,7 +69,6 @@ pub(crate) struct Target<'c> {
 /// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would.
 pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'c>> {
     let mut out = Vec::new();
-    let cwd = || c.cwd.clone();
     let mut add =
         |verb: Verb<'c>, word: Cow<'c, Word>, copy: Option<CopyOp<'c>>, cwd: Option<Dir>| {
             out.push(Target {
@@ -79,111 +78,117 @@ pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'
                 copy,
             });
         };
-    for r in &c.redirects {
-        if r.op.writes() {
-            add(Verb::Redirect, Cow::Borrowed(&r.word), None, cwd());
-        }
+    // Each target runs in the command's directory; `Dir` is a shared handle.
+    let cwd = || c.cwd.clone();
+    for r in c.redirects.iter().filter(|r| r.op.writes()) {
+        add(Verb::Redirect, Cow::Borrowed(&r.word), None, cwd());
     }
     let Some(name) = c.name.as_deref().filter(|n| !n.is_empty()) else {
         return out;
     };
     let args = c.args.as_slice();
-    let named = |w: Cow<'c, Word>| (Verb::Named(name), w);
-    match name {
-        "tee" | "sponge" => {
-            for a in args.iter().filter(|a| !a.raw.starts_with('-')) {
-                let (verb, word) = named(Cow::Borrowed(a));
-                add(verb, word, None, cwd());
-            }
-        }
-        "truncate" => {
-            let mut k = 0;
-            while let Some(a) = args.get(k) {
-                if ["-s", "--size", "-r", "--reference"].contains(&a.raw.as_str()) {
-                    k = k.saturating_add(1);
-                } else if !a.raw.starts_with('-') {
-                    let (verb, word) = named(Cow::Borrowed(a));
-                    add(verb, word, None, cwd());
-                }
-                k = k.saturating_add(1);
-            }
-        }
+    let copy = match name {
         "sed" | "perl" if in_place(name == "sed", args) => {
             for a in in_place_targets(args, name == "sed") {
                 add(Verb::InPlace(name), Cow::Borrowed(a), None, cwd());
             }
+            None
         }
-        "curl" => {
-            for a in option_values(args, Some('o'), &["--output"], CURL_VALUES) {
-                if a.raw != "-" {
-                    add(Verb::Named(name), a, None, cwd());
-                }
-            }
-            for a in option_values(args, None, &["--output-dir"], "") {
-                add(Verb::Named(name), a, None, cwd());
-            }
+        "cp" | "mv" | "install" | "ln" | "rsync" | "scp" => copy_args(name, args),
+        _ if is_ps_copy(name) => ps_copy_args(matches!(name, "move-item" | "mi" | "move"), args),
+        "git" => {
+            git_writes(c, cx, &mut add);
+            None
         }
-        "wget" => {
-            for a in option_values(args, Some('O'), &["--output-document"], WGET_VALUES) {
-                if a.raw != "-" {
-                    add(Verb::Named(name), a, None, cwd());
-                }
+        _ => {
+            for word in named_writes(name, args) {
+                add(Verb::Named(name), word, None, cwd());
             }
-            for a in option_values(args, Some('P'), &["--directory-prefix"], WGET_VALUES) {
-                add(Verb::Named(name), a, None, cwd());
-            }
+            None
         }
-        "dd" => {
-            for a in args.iter().filter(|a| a.raw.starts_with("of=")) {
-                add(Verb::Named(name), Cow::Owned(a.sliced(3, 3)), None, cwd());
-            }
-        }
-        "tar" => {
-            let extract = args.iter().enumerate().any(|(j, a)| {
-                let r = a.raw.as_str();
-                r == "--extract"
-                    || r == "--get"
-                    || r.strip_prefix('-').is_some_and(letters_with_x)
-                    || (j == 0 && letters_with_x(r))
-            });
-            if extract {
-                for a in option_values(args, Some('C'), &["--directory"], "") {
-                    add(Verb::Named(name), a, None, cwd());
-                }
-            }
-        }
-        "unzip" => {
-            for a in option_values(args, Some('d'), &[], "") {
-                add(Verb::Named(name), a, None, cwd());
-            }
-        }
-        "cp" | "mv" | "install" | "ln" | "rsync" | "scp" => {
-            if let Some((dest, op)) = copy_args(name, args) {
-                add(Verb::Named(name), dest, Some(op), cwd());
-            }
-        }
-        _ if is_ps_copy(name) => {
-            let moves = matches!(name, "move-item" | "mi" | "move");
-            if let Some((dest, op)) = ps_copy_args(moves, args) {
-                add(Verb::Named(name), dest, Some(op), cwd());
-            }
-        }
-        _ if is_ps_content(name) => {
-            let params = PsParams::new(args, ps_switch);
-            if !params.dry_run() {
-                let word = match params.get(&["path", "literalpath", "filepath"]) {
-                    Some(Param::Word(w)) => Some(w.clone()),
-                    Some(Param::Switch | Param::Missing) | None => params.pos.first().cloned(),
-                };
-                if let Some(word) = word {
-                    add(Verb::Named(name), word, None, cwd());
-                }
-            }
-        }
-        "git" => git_writes(c, cx, &mut add),
-        _ => {}
+    };
+    if let Some((dest, op)) = copy {
+        add(Verb::Named(name), dest, Some(op), cwd());
     }
     out
+}
+
+/// The files a command named for what it does writes: `tee`, `truncate`, `curl -o`,
+/// `wget -O`, `dd of=`, `tar -x -C`, `unzip -d`, `Set-Content` and its kin.
+fn named_writes<'c>(name: &str, args: &'c [Word]) -> Vec<Cow<'c, Word>> {
+    let file = |a: &Cow<'c, Word>| a.raw != "-";
+    match name {
+        "tee" | "sponge" => args
+            .iter()
+            .filter(|a| !a.raw.starts_with('-'))
+            .map(Cow::Borrowed)
+            .collect(),
+        "truncate" => truncate_files(args),
+        "curl" => {
+            let mut out = option_values(args, Some('o'), &["--output"], CURL_VALUES);
+            out.retain(file);
+            out.extend(option_values(args, None, &["--output-dir"], ""));
+            out
+        }
+        "wget" => {
+            let mut out = option_values(args, Some('O'), &["--output-document"], WGET_VALUES);
+            out.retain(file);
+            out.extend(option_values(
+                args,
+                Some('P'),
+                &["--directory-prefix"],
+                WGET_VALUES,
+            ));
+            out
+        }
+        "dd" => args
+            .iter()
+            .filter(|a| a.raw.starts_with("of="))
+            .map(|a| Cow::Owned(a.sliced(3, 3)))
+            .collect(),
+        "tar" if tar_extracts(args) => option_values(args, Some('C'), &["--directory"], ""),
+        "unzip" => option_values(args, Some('d'), &[], ""),
+        _ if is_ps_content(name) => ps_content_path(args).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `truncate`'s operands.
+fn truncate_files(args: &[Word]) -> Vec<Cow<'_, Word>> {
+    let mut out = Vec::new();
+    let mut k = 0;
+    while let Some(a) = args.get(k) {
+        if ["-s", "--size", "-r", "--reference"].contains(&a.raw.as_str()) {
+            k = k.saturating_add(1);
+        } else if !a.raw.starts_with('-') {
+            out.push(Cow::Borrowed(a));
+        }
+        k = k.saturating_add(1);
+    }
+    out
+}
+
+/// `tar` extracts: `--extract`, `--get`, or an `x` in its options.
+fn tar_extracts(args: &[Word]) -> bool {
+    args.iter().enumerate().any(|(j, a)| {
+        let r = a.raw.as_str();
+        r == "--extract"
+            || r == "--get"
+            || r.strip_prefix('-').is_some_and(letters_with_x)
+            || (j == 0 && letters_with_x(r))
+    })
+}
+
+/// The file `Set-Content` and its kin write, unless they only say what they would do.
+fn ps_content_path(args: &[Word]) -> Option<Cow<'_, Word>> {
+    let params = PsParams::new(args, ps_switch);
+    if params.dry_run() {
+        return None;
+    }
+    match params.get(&["path", "literalpath", "filepath"]) {
+        Some(Param::Word(w)) => Some(w.clone()), // the parameter list keeps its own
+        Some(Param::Switch | Param::Missing) | None => params.pos.first().cloned(),
+    }
 }
 
 /// The `git mv`, `git checkout` and `git restore` targets of a git command.
@@ -544,121 +549,169 @@ fn remote(w: &Word) -> bool {
 /// remote destination).
 fn copy_args<'c>(name: &str, args: &'c [Word]) -> Option<(Cow<'c, Word>, CopyOp<'c>)> {
     let rsync = name == "rsync" || name == "scp";
-    let value_letters = match name {
-        "install" => "tSmogZ",
-        _ if rsync => "",
-        _ => "tS",
+    let mut reader = CopyReader {
+        name,
+        rsync,
+        args,
+        i: 0,
+        dest: DestFrom::Last,
+        recursive: name == "mv" || name == "git",
     };
-    let mut target: Option<Cow<'c, Word>> = None;
-    let mut no_target = false;
-    let mut recursive = name == "mv" || name == "git";
     let mut pos: Vec<Cow<'c, Word>> = Vec::new();
     let mut opts = true;
-    let mut i = 0;
-    while let Some(a) = args.get(i) {
+    while let Some(a) = args.get(reader.i) {
         let r = a.raw.as_str();
         if opts && r == "--" {
             opts = false;
         } else if opts && r.starts_with("--") {
-            let (k, v) = match r.find('=') {
-                Some(eq) => (r.get(..eq).unwrap_or(r), Some(a.after_eq())),
-                None => (r, None),
-            };
-            if k == "--target-directory" && !rsync {
-                target = match v {
-                    Some(v) => Some(Cow::Owned(v)),
-                    None => {
-                        i = i.saturating_add(1);
-                        args.get(i).map(Cow::Borrowed)
-                    }
-                };
-                target.as_ref()?;
-            } else if k == "--no-target-directory" {
-                no_target = true;
-            } else if k == "--recursive" || k == "--archive" {
-                recursive = true;
-            } else if k == "--directory" || k == "--dry-run" || k == "--list-only" {
-                return None;
-            } else if v.is_none() && (INSTALL_VALUES.contains(&k) || (rsync && rsync_value(k))) {
-                i = i.saturating_add(1);
-            }
-        } else if opts && r.len() > 1 && r.starts_with('-') && !r.starts_with("--") {
-            if rsync {
-                if rsync_value(r) {
-                    i = i.saturating_add(1);
-                }
-                recursive |= cluster_reaches(r, "ra");
-                if cluster_reaches(r, "n") {
-                    // --dry-run
-                    return None;
-                }
-            } else {
-                let cluster = r.get(1..).unwrap_or("");
-                for (j, ch) in cluster.char_indices() {
-                    if value_letters.contains(ch) {
-                        let rest = cluster.get(j.saturating_add(ch.len_utf8())..).unwrap_or("");
-                        let v = if rest.is_empty() {
-                            i = i.saturating_add(1);
-                            args.get(i).map(Cow::Borrowed)
-                        } else {
-                            Some(Cow::Owned(Word::plain(rest)))
-                        };
-                        if ch == 't' {
-                            target = v;
-                            target.as_ref()?;
-                        }
-                        break;
-                    }
-                    match ch {
-                        'T' => no_target = true,
-                        'r' | 'R' | 'a' => recursive = true,
-                        'd' if name == "install" => return None,
-                        // git mv -n is a dry run.
-                        'n' if name == "git" => return None,
-                        _ => {}
-                    }
-                }
-            }
+            reader.long(a)?;
+        } else if opts && r.len() > 1 && r.starts_with('-') {
+            reader.short(r)?;
         } else {
             pos.push(Cow::Borrowed(a));
         }
-        i = i.saturating_add(1);
+        reader.i = reader.i.saturating_add(1);
     }
-    let (mut sources, dest, into_dir) = match target {
-        Some(target) => (pos, target, Some(true)),
-        None => {
-            if pos.len() < 2 {
-                return None;
-            }
-            let into = if no_target {
-                Some(false)
-            } else if pos.len() > 2 {
-                Some(true)
-            } else {
-                None
-            };
-            let dest = pos.pop()?;
-            (pos, dest, into)
-        }
-    };
+    let (dest, mut op) = reader.dest.place(pos, reader.recursive)?;
     if rsync {
         if remote(&dest) {
             return None;
         }
-        for s in &mut sources {
+        for s in &mut op.sources {
             if remote(s) {
                 *s = Cow::Owned(Word::unknown(&s.raw));
             }
         }
     }
-    Some((
-        dest,
-        CopyOp {
+    Some((dest, op))
+}
+
+/// Where a copy's destination comes from.
+enum DestFrom<'c> {
+    /// The last operand, a directory or a file as it turns out.
+    Last,
+    /// `-t dir`: the directory.
+    Into(Cow<'c, Word>),
+    /// `-T`: the last operand, never a directory to copy into.
+    Exactly,
+}
+
+impl<'c> DestFrom<'c> {
+    /// The destination and the copy, from the operands `pos`; `None` without a source.
+    fn place(
+        self,
+        mut pos: Vec<Cow<'c, Word>>,
+        recursive: bool,
+    ) -> Option<(Cow<'c, Word>, CopyOp<'c>)> {
+        let copy = |sources, into_dir| CopyOp {
             sources,
             into_dir,
             recursive,
-        },
-    ))
+        };
+        if let DestFrom::Into(target) = self {
+            return Some((target, copy(pos, Some(true))));
+        }
+        if pos.len() < 2 {
+            return None;
+        }
+        let into = if matches!(self, DestFrom::Exactly) {
+            Some(false)
+        } else if pos.len() > 2 {
+            Some(true)
+        } else {
+            None
+        };
+        let dest = pos.pop()?;
+        Some((dest, copy(pos, into)))
+    }
+}
+
+/// 1.x `copyArgs`' option loop: the command, its words and the word it is at, and what the
+/// options read so far set.
+struct CopyReader<'n, 'c> {
+    name: &'n str,
+    rsync: bool,
+    args: &'c [Word],
+    i: usize,
+    dest: DestFrom<'c>,
+    recursive: bool,
+}
+
+impl<'c> CopyReader<'_, 'c> {
+    /// The word after the current one, which becomes the current one.
+    fn next_word(&mut self) -> Option<Cow<'c, Word>> {
+        self.i = self.i.saturating_add(1);
+        self.args.get(self.i).map(Cow::Borrowed)
+    }
+
+    /// `-T`, unless a `-t` names the directory.
+    fn no_target(&mut self) {
+        if !matches!(self.dest, DestFrom::Into(_)) {
+            self.dest = DestFrom::Exactly;
+        }
+    }
+
+    /// A long option `a`; `None` when nothing is copied.
+    fn long(&mut self, a: &'c Word) -> Option<()> {
+        let r = a.raw.as_str();
+        let (k, v) = r.find('=').map_or((r, None), |eq| {
+            (r.get(..eq).unwrap_or(r), Some(a.after_eq()))
+        });
+        if k == "--target-directory" && !self.rsync {
+            let target = v.map(Cow::Owned).or_else(|| self.next_word());
+            self.dest = DestFrom::Into(target?);
+        } else if k == "--no-target-directory" {
+            self.no_target();
+        } else if k == "--recursive" || k == "--archive" {
+            self.recursive = true;
+        } else if k == "--directory" || k == "--dry-run" || k == "--list-only" {
+            return None;
+        } else if v.is_none() && (INSTALL_VALUES.contains(&k) || (self.rsync && rsync_value(k))) {
+            self.i = self.i.saturating_add(1);
+        }
+        Some(())
+    }
+
+    /// A short-option cluster `r`; `None` when nothing is copied.
+    fn short(&mut self, r: &'c str) -> Option<()> {
+        if self.rsync {
+            if rsync_value(r) {
+                self.i = self.i.saturating_add(1);
+            }
+            self.recursive |= cluster_reaches(r, "ra");
+            // -n is --dry-run.
+            return (!cluster_reaches(r, "n")).then_some(());
+        }
+        let value_letters = if self.name == "install" {
+            "tSmogZ"
+        } else {
+            "tS"
+        };
+        let cluster = r.get(1..).unwrap_or("");
+        for (j, ch) in cluster.char_indices() {
+            if value_letters.contains(ch) {
+                let rest = cluster.get(j.saturating_add(ch.len_utf8())..).unwrap_or("");
+                let v = if rest.is_empty() {
+                    self.next_word()
+                } else {
+                    Some(Cow::Owned(Word::plain(rest)))
+                };
+                if ch == 't' {
+                    self.dest = DestFrom::Into(v?);
+                }
+                break;
+            }
+            match ch {
+                'T' => self.no_target(),
+                'r' | 'R' | 'a' => self.recursive = true,
+                'd' if self.name == "install" => return None,
+                // git mv -n is a dry run.
+                'n' if self.name == "git" => return None,
+                _ => {}
+            }
+        }
+        Some(())
+    }
 }
 
 /// A PowerShell parameter's value.
@@ -730,16 +783,13 @@ impl<'c> PsParams<'c> {
                         .map_or(Param::Missing, |w| Param::Word(Cow::Borrowed(w)))
                 }
             };
-            match index.get(&key) {
-                Some(&at) => {
-                    if let Some(slot) = named.get_mut(at) {
-                        slot.1 = param;
-                    }
+            if let Some(&at) = index.get(&key) {
+                if let Some(slot) = named.get_mut(at) {
+                    slot.1 = param;
                 }
-                None => {
-                    index.insert(key.clone(), named.len());
-                    named.push((key, param));
-                }
+            } else {
+                index.insert(key.clone(), named.len());
+                named.push((key, param));
             }
             j = j.saturating_add(1);
         }
@@ -850,33 +900,39 @@ fn ps_copy_args<'c>(moves: bool, args: &'c [Word]) -> Option<(Cow<'c, Word>, Cop
 
 /// 1.x `landing(t, src, destIsDir)`: where one source of a copy lands, given the destination's
 /// absolute path: the destination, or the source's name inside it when the copy goes into a
-/// directory (`-t`, several sources, a trailing `/`, or `dest_is_dir`). rsync's `src/` copies
-/// the contents. `None` when the source's name is unknown.
+/// directory (`-t`, several sources, a trailing `/`, or a destination that is a directory).
+/// rsync's `src/` copies the contents. `None` when the source's name is unknown.
 pub(crate) fn landing(
     cx: PathCx<'_>,
     t: &Target<'_>,
-    dest: &str,
+    dest: CopyDest<'_>,
     src: &Word,
-    dest_is_dir: bool,
 ) -> Option<String> {
     let slash_end = |s: &str| s.ends_with(['/', '\\']);
     if t.verb == Verb::Named("rsync") && slash_end(&src.raw) {
-        return Some(dest.to_owned());
+        return Some(dest.path.to_owned());
     }
     let into = t
         .copy
         .as_ref()
         .and_then(|op| op.into_dir)
-        .unwrap_or_else(|| dest_is_dir || slash_end(&t.word.raw));
+        .unwrap_or_else(|| dest.is_dir || slash_end(&t.word.raw));
     if !into {
-        return Some(dest.to_owned());
+        return Some(dest.path.to_owned());
     }
-    if src.glob {
+    if src.glob() {
         return None;
     }
     let value = src.value()?;
     let name = node_basename(cx.at.style, value.trim_end_matches(['/', '\\']));
-    Some(super::words::resolve_from(cx.at, dest, name))
+    Some(super::words::resolve_from(cx.at, dest.path, name))
+}
+
+/// A copy's destination: its absolute path, and whether it is a directory now.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CopyDest<'d> {
+    pub(crate) path: &'d str,
+    pub(crate) is_dir: bool,
 }
 
 /// Node's `path.basename(p)` of any path: the last name, after a Windows drive.

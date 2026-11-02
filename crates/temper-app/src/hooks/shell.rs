@@ -25,7 +25,7 @@ pub(crate) use deletes::command_deletes;
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
 pub(crate) use words::{PathCx, Word, js_len, msys_path, resolve_path};
-pub(crate) use writes::{Target, Verb, command_writes, landing, pathspec_pattern};
+pub(crate) use writes::{CopyDest, Target, Verb, command_writes, landing, pathspec_pattern};
 
 #[cfg(test)]
 mod tests;

@@ -141,6 +141,10 @@ impl<'s> ClosingLines<'s> {
 
     /// The longest prefix of `run`, at least `shortest` bytes, with a closing line starting
     /// at or after `from`, and the end of its first such line.
+    ///
+    /// Cost: one map lookup per distinct closing-line length, so a scan costs O(candidates x
+    /// distinct line lengths). Distinct lengths that sum to at most n number at most about
+    /// sqrt(2n), so the bound is about n^1.5: 387 ms on a 1 MB adversarial command (#200 N2).
     fn closing<'r>(&self, run: &'r str, shortest: usize, from: usize) -> Option<(&'r str, usize)> {
         self.lens
             .iter()
