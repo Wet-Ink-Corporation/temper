@@ -8,7 +8,7 @@
 
 use std::borrow::Cow;
 
-use temper_domain::PathStyle;
+use temper_domain::{InterpreterCode, PathStyle};
 
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
@@ -20,7 +20,12 @@ use crate::project::Workspace;
 
 /// 1.x `stateDirWrite(proj, cmd, input.cwd ?? proj.root)` under `readerRule`: whether `cmd`
 /// writes into `ws`'s state dir. Where 1.x's reader throws, the answer is its fallback, no.
-pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, cmd: &str) -> bool {
+pub(super) fn state_dir_write(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    cmd: &str,
+    code: &InterpreterCode,
+) -> bool {
     let env = call.env;
     let style = env.style;
     let cwd = env.cwd.to_string_lossy();
@@ -52,6 +57,7 @@ pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, c
         top: Some(&ws.root),
         git_dir,
         tmp: Some(&temp),
+        untracked: false,
     };
     let Ok(commands) = parse_commands(cmd, opts) else {
         return false;
@@ -67,7 +73,7 @@ pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, c
     let targets: Vec<Target<'_>> = commands
         .iter()
         .take_while(|_| !guard.overflowed())
-        .flat_map(|c| command_writes(c, cx))
+        .flat_map(|c| command_writes(c, cx, code))
         .collect();
     !guard.overflowed()
         && targets

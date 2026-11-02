@@ -62,15 +62,32 @@ pub(crate) struct Word {
 pub(super) enum Form {
     /// No expansion, brace list or glob at all: the text is exactly what the shell passes.
     Literal,
-    /// Anything else: whether it is an unquoted `*`, `?`, `[...]` or brace list (`glob`), and
-    /// whether some part is an expansion (`expanded`).
-    Made { glob: bool, expanded: bool },
+    /// Anything else: whether it is an unquoted `*`, `?`, `[...]` or brace list (`glob`),
+    /// which expansions it holds, and 1.x `fixedWord(w)`: made from parts, it starts with
+    /// literal text and its expansions are quoted (`A="$X"`), with no glob or brace list, so
+    /// its role and split are known (`fixed`).
+    Made {
+        glob: bool,
+        expanded: Expansions,
+        fixed: bool,
+    },
 }
 
-/// [`Form::Made`] with neither a glob nor an expansion.
+/// Which expansions a word holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Expansions {
+    Absent,
+    /// Some, none a process substitution.
+    Present,
+    /// A process substitution (`<(...)`, `>(...)`) among them.
+    Process,
+}
+
+/// [`Form::Made`] with neither a glob nor an expansion, and no parts.
 const MADE: Form = Form::Made {
     glob: false,
-    expanded: false,
+    expanded: Expansions::Absent,
+    fixed: false,
 };
 
 impl Word {
@@ -120,9 +137,32 @@ impl Word {
         self.form == Form::Literal
     }
 
+    /// A word that is not literal whose role and split temper still reads (see
+    /// [`Form::Made`]'s `fixed`).
+    pub(super) fn fixed(&self) -> bool {
+        matches!(self.form, Form::Made { fixed: true, .. })
+    }
+
     /// Some part is an expansion.
     pub(super) fn expanded(&self) -> bool {
-        matches!(self.form, Form::Made { expanded: true, .. })
+        matches!(
+            self.form,
+            Form::Made {
+                expanded: Expansions::Present | Expansions::Process,
+                ..
+            }
+        )
+    }
+
+    /// Some part is a process substitution (1.x `w.parts?.some((p) => p.t === 'proc')`).
+    pub(super) fn has_process(&self) -> bool {
+        matches!(
+            self.form,
+            Form::Made {
+                expanded: Expansions::Process,
+                ..
+            }
+        )
     }
 
     pub(crate) fn raw(&self) -> &str {
@@ -158,13 +198,25 @@ impl Word {
 /// while no scope is open is never undone, so it is not journaled.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
-    map: HashMap<String, String>,
-    journal: Vec<(String, Option<String>)>,
+    /// Each name the line set, with its value, or `None` when it is unknown (only under
+    /// `untracked`: otherwise an unknown value deletes the name).
+    map: HashMap<String, Option<String>>,
+    journal: Vec<(String, Entry)>,
     /// Per open mark, innermost last, the names it has journaled. A scope the line leaves
     /// unclosed is closed by the rollback of the one outside it, or never.
     saved: Vec<HashSet<String>>,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
+    /// 1.x `untracked`: every name the line sets is unknown, whatever temper's model of the
+    /// shell makes of it.
+    untracked: bool,
+}
+
+/// A name's place in [`Vars`]: absent, or set to a value that may be unknown.
+#[derive(Debug)]
+enum Entry {
+    Absent,
+    Set(Option<String>),
 }
 
 /// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
@@ -175,13 +227,32 @@ pub(super) struct Mark {
 }
 
 impl Vars {
-    pub(super) fn get(&self, name: &str) -> Option<&str> {
-        self.map.get(name).map(String::as_str)
+    /// No variables yet; `untracked` makes every name set unknown.
+    pub(super) fn new(untracked: bool) -> Self {
+        Self {
+            untracked,
+            ..Self::default()
+        }
     }
 
-    /// 1.x `setVar`: `None` deletes.
+    /// A name's value, when the line set it to one temper knows.
+    pub(super) fn get(&self, name: &str) -> Option<&str> {
+        self.map.get(name).and_then(Option::as_deref)
+    }
+
+    /// `Some` when the line set the name: its value, which is `None` when unknown.
+    pub(super) fn lookup(&self, name: &str) -> Option<&Option<String>> {
+        self.map.get(name)
+    }
+
+    /// 1.x `setVar`: `None` deletes, and under `untracked` every value is unknown.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
-        let old = self.put(name, value);
+        let entry = match value {
+            _ if self.untracked => Entry::Set(None),
+            Some(value) => Entry::Set(Some(value)),
+            None => Entry::Absent,
+        };
+        let old = self.put(name, entry);
         if let Some(saved) = self.saved.last_mut()
             && !saved.contains(name)
         {
@@ -190,10 +261,10 @@ impl Vars {
         }
     }
 
-    fn put(&mut self, name: &str, value: Option<String>) -> Option<String> {
-        let old = match value {
-            Some(value) => self.map.insert(name.to_owned(), value),
-            None => self.map.remove(name),
+    fn put(&mut self, name: &str, entry: Entry) -> Entry {
+        let old = match entry {
+            Entry::Set(value) => self.map.insert(name.to_owned(), value),
+            Entry::Absent => self.map.remove(name),
         };
         if name.starts_with("GIT_CONFIG") {
             let now = self.map.contains_key(name);
@@ -203,7 +274,7 @@ impl Vars {
                 _ => {}
             }
         }
-        old
+        old.map_or(Entry::Absent, Entry::Set)
     }
 
     /// Opens a scope, for [`Self::rollback`], which closes it.
@@ -300,8 +371,23 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         glob = true;
     }
     // An unquoted `{` may open a brace list, one that spans a quoted part too.
-    let expanded = parts.iter().any(|p| !p.is_lit());
-    let literal = !expanded && !glob && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
+    let expanded = if parts.iter().any(|p| matches!(p.kind, PartKind::Proc(_))) {
+        Expansions::Process
+    } else if parts.iter().any(|p| !p.is_lit()) {
+        Expansions::Present
+    } else {
+        Expansions::Absent
+    };
+    let literal = expanded == Expansions::Absent
+        && !glob
+        && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
+    let fixed = !glob
+        && parts
+            .first()
+            .is_some_and(|p| p.is_lit() && !p.text.is_empty())
+        && parts
+            .iter()
+            .all(|p| p.quoted || (p.is_lit() && !p.text.replace("{}", "").contains('{')));
     Word {
         raw,
         text,
@@ -311,7 +397,11 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         form: if literal {
             Form::Literal
         } else {
-            Form::Made { glob, expanded }
+            Form::Made {
+                glob,
+                expanded,
+                fixed,
+            }
         },
     }
 }
@@ -393,8 +483,8 @@ fn is_temp_var(name: &str) -> bool {
 fn part_value<'e>(part: &Part, env: &WordEnv<'e>) -> Option<Cow<'e, str>> {
     match &part.kind {
         PartKind::Var(name) => {
-            if let Some(value) = env.vars.get(name) {
-                return Some(Cow::Borrowed(value));
+            if let Some(value) = env.vars.lookup(name) {
+                return value.as_deref().map(Cow::Borrowed);
             }
             match name.as_str() {
                 "HOME" => Some(Cow::Borrowed(env.home)),

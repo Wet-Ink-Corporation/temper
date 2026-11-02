@@ -1029,7 +1029,7 @@
           "node": "Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable are denied; reads stay allowed",
           "crate": "temper-app",
           "rust": [
-            "hooks::pre_bash::tests::state_dir::state_dir_writes_spelled_with_bash_backslash_escapes_are_denied_reads_stay_allowed"
+            "hooks::pre_bash::tests::state_dir::state_dir_writes_spelled_with_bash_backslash_escapes_or_a_python_mode_variable_are_denied_reads_stay_allowed"
           ]
         }
       ]

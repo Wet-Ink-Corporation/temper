@@ -2,13 +2,14 @@
 //! `psCopyArgs`, `optionValues`, `inPlace`, `inPlaceTargets`, `gitRestore`, `landing`,
 //! `pathspecPattern`).
 //!
-//! Interpreter code and PowerShell expressions that write files (1.x `codeWriteTargets`) are
-//! read in port Phase 2f, with the patches and copies onto `.rs` files that read them too.
+//! Interpreter code and PowerShell expressions that write files are read with the domain's
+//! [`InterpreterCode`] (1.x `codeWriteTargets`).
 
 use std::borrow::Cow;
 
-use temper_domain::PathStyle;
+use temper_domain::{InterpreterCode, PathStyle};
 
+use super::code::{interpreter_code, is_interpreter};
 use super::git::git_command;
 use super::walk::Command;
 use super::words::{Dir, PathCx, Word, word_path};
@@ -30,6 +31,8 @@ pub(crate) enum Verb<'c> {
         checkout: bool,
         source: Option<String>,
     },
+    /// Interpreter code or a PowerShell expression (1.x verb `code`).
+    Code,
 }
 
 /// A copy's sources and how its destination takes them.
@@ -70,8 +73,13 @@ pub(crate) struct Target<'c> {
     pub(crate) path: Option<String>,
 }
 
-/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would.
-pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'c>> {
+/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would, the
+/// files its interpreter code or PowerShell expression writes last.
+pub(crate) fn command_writes<'c>(
+    c: &'c Command,
+    cx: PathCx<'_>,
+    code: &InterpreterCode,
+) -> Vec<Target<'c>> {
     let mut out = Vec::new();
     let mut add =
         |verb: Verb<'c>, word: Cow<'c, Word>, copy: Option<CopyOp<'c>>, cwd: Option<Dir>| {
@@ -115,6 +123,22 @@ pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'
     };
     if let Some((dest, op)) = copy {
         add(Verb::Named(name), dest, Some(op), cwd());
+    }
+    let literal = |lit: &str| Cow::Owned(Word::plain(lit));
+    if is_interpreter(name) {
+        for body in interpreter_code(c) {
+            for lit in code.write_targets(body) {
+                add(Verb::Code, literal(&lit), None, cwd());
+            }
+        }
+    }
+    // A PowerShell expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`); `[ -f x ]`
+    // is a test.
+    let a0 = c.argv0.raw.as_str();
+    if a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[[" {
+        for lit in c.line.code_targets(code) {
+            add(Verb::Code, literal(lit), None, cwd());
+        }
     }
     out
 }

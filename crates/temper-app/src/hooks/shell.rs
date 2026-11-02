@@ -18,6 +18,7 @@
 //! journaled once per name per scope, and its directories are shared handles; each string is
 //! held to V8's longest (see [`walk::TooLong`]), and so is each path joined from them.
 
+mod code;
 mod deletes;
 mod dir;
 mod git;

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
-use temper_domain::{ConfigChanges, Glob, GlobError, Globs};
+use temper_domain::{ConfigChanges, Glob, GlobError, Globs, InterpreterCode};
 
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
@@ -93,6 +93,7 @@ pub(super) fn protected_shell_writes(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     cmd: &str,
+    code: &InterpreterCode,
 ) -> Changes {
     let env_cwd = call.env.cwd.to_string_lossy();
     let temp = call.env.temp_dir.to_string_lossy();
@@ -124,6 +125,7 @@ pub(super) fn protected_shell_writes(
         top: Some(&ws.root),
         git_dir: ".git",
         tmp: Some(&temp),
+        untracked: false,
     };
     let Ok(commands) = parse_commands(cmd, opts) else {
         return Changes::default();
@@ -137,6 +139,7 @@ pub(super) fn protected_shell_writes(
         cx,
         start: &start,
         globs,
+        code,
         owners: HashMap::new(),
         listed: HashMap::new(),
         changes: Changes::default(),
@@ -174,6 +177,7 @@ struct Reader<'a, 'c, P> {
     cx: PathCx<'a>,
     start: &'a str,
     globs: Globs,
+    code: &'a InterpreterCode,
     /// 1.x `ownerOf`'s cache: each ancestor checked, and the checkout there, if any.
     owners: HashMap<String, Option<Owner>>,
     /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
@@ -228,7 +232,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         if let Some(PatchCommand::Applies(p)) = patch_command(c, self.cx) {
             self.patch(c, &p)?;
         }
-        for t in command_writes(c, self.cx) {
+        for t in command_writes(c, self.cx, self.code) {
             self.write(&t)?;
         }
         let (start, ws) = (self.start, self.ws);

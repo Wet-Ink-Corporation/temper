@@ -7,7 +7,9 @@
 
 mod long_inputs;
 
-use temper_domain::PathStyle;
+use std::sync::LazyLock;
+
+use temper_domain::{InterpreterCode, PathStyle};
 
 use super::words::{Dir, word_path};
 use super::{
@@ -20,6 +22,10 @@ use crate::paths::PathEnv;
 /// 1.x `path.resolve(os.tmpdir(), 'shell-test-root')`.
 const ROOT: &str = "/tmp/shell-test-root";
 const HOME: &str = "/home/u";
+
+/// The interpreter-code patterns, compiled once for the tests.
+static CODE: LazyLock<InterpreterCode> =
+    LazyLock::new(|| InterpreterCode::new().expect("the code patterns compile"));
 
 fn cx() -> PathCx<'static> {
     PathCx {
@@ -46,6 +52,7 @@ fn opts() -> ParseOpts<'static> {
         top: None,
         git_dir: ".git",
         tmp: Some("/tmp"),
+        untracked: false,
     }
 }
 
@@ -69,6 +76,7 @@ fn verb(t: &Target<'_>) -> String {
         Verb::GitRestore {
             checkout: false, ..
         } => "git restore".to_owned(),
+        Verb::Code => "code".to_owned(),
     }
 }
 
@@ -87,7 +95,7 @@ fn targets_with(cmd: &str, opts: ParseOpts<'_>) -> Vec<(String, Option<String>)>
     let commands = parse_with(cmd, opts);
     commands
         .iter()
-        .flat_map(|c| command_writes(c, cx()))
+        .flat_map(|c| command_writes(c, cx(), &CODE))
         .map(|t| (verb(&t), path_of(&t)))
         .collect()
 }
@@ -148,7 +156,14 @@ fn redirects_and_write_verbs_are_reported_with_absolute_paths() {
             target("wget", "w1")
         ]
     );
-    // Port Phase 2f: the python and node code targets.
+    assert_eq!(
+        targets("python3 -c \"p='py1'; open(p, 'w')\""),
+        [target("code", "py1")]
+    );
+    assert_eq!(
+        targets("node -e \"require('fs').writeFileSync('n1', '')\""),
+        [target("code", "n1")]
+    );
     assert_eq!(
         targets("Set-Content -Path ps1 -Value x"),
         [target("set-content", "ps1")]
@@ -159,7 +174,7 @@ fn redirects_and_write_verbs_are_reported_with_absolute_paths() {
         .collect();
     assert_eq!(checkout, ["git checkout"]);
     let restore = parse("git restore --source=v1 g1");
-    let restore = restore.first().map(|c| command_writes(c, cx()));
+    let restore = restore.first().map(|c| command_writes(c, cx(), &CODE));
     let source = restore
         .as_ref()
         .and_then(|t| t.first())
@@ -301,7 +316,7 @@ fn a_cd_of_one_segment_lands_where_the_full_resolve_does() {
         };
         parse_with(cmd, opts)
             .iter()
-            .flat_map(|c| command_writes(c, windows))
+            .flat_map(|c| command_writes(c, windows, &CODE))
             .map(|t| word_path(windows, &t.word, t.cwd.as_ref()))
             .collect()
     };
@@ -410,14 +425,14 @@ fn copies_report_sources_and_landing_places_each_one() {
         let commands = parse(cmd);
         let index = commands
             .iter()
-            .position(|c| !command_writes(c, cx()).is_empty())
+            .position(|c| !command_writes(c, cx(), &CODE).is_empty())
             .unwrap_or(0);
         (commands, index)
     };
     let lands = |cmd: &str, dest_is_dir: bool| -> Vec<Option<String>> {
         let (commands, k) = first(cmd);
         let c = commands.get(k).expect("the command writes");
-        let writes = command_writes(c, cx());
+        let writes = command_writes(c, cx(), &CODE);
         let t = writes.first().expect("one target");
         let dest = path_of(t).expect("the destination is known");
         let op = t.copy.as_ref().expect("a copy");
@@ -437,7 +452,7 @@ fn copies_report_sources_and_landing_places_each_one() {
             .collect()
     };
     let (commands, _) = first("cp -r a/x b/y c/");
-    let writes = command_writes(commands.first().expect("cp"), cx());
+    let writes = command_writes(commands.first().expect("cp"), cx(), &CODE);
     let op = writes
         .first()
         .and_then(|t| t.copy.as_ref())
@@ -454,7 +469,7 @@ fn copies_report_sources_and_landing_places_each_one() {
     assert_eq!(targets("rsync -a x host:/y"), []);
     assert_eq!(targets("install -d a b"), []);
     let (commands, _) = first("Copy-Item -Path a -Destination b -Recurse");
-    let writes = command_writes(commands.first().expect("copy"), cx());
+    let writes = command_writes(commands.first().expect("copy"), cx(), &CODE);
     assert!(
         writes
             .first()
@@ -1012,7 +1027,6 @@ fn deeply_nested_find_exec_stops_at_the_depth_limit() {
 
 #[test]
 fn a_test_command_is_not_powershell_and_heredoc_bodies_are_not_code_of_the_line() {
-    // The no-target half; the PowerShell expressions arrive in port Phase 2f.
     assert_eq!(
         targets(
             "[ -d docs ] || mkdir docs; cat <<'EOF'\nPath(\".cargo/config.toml\").write_text(x)\nEOF"
@@ -1021,6 +1035,36 @@ fn a_test_command_is_not_powershell_and_heredoc_bodies_are_not_code_of_the_line(
     );
     assert_eq!(targets("[[ -n x ]] && echo \"open('w.txt', 'w')\""), []);
     assert_eq!(targets("$x = 1\ncat <<'EOF'\nopen('w.txt', 'w')\nEOF"), []);
+    // PowerShell expressions still count, with a variable assigned earlier in the line.
+    let once = |cmd: &str| {
+        let mut seen: Vec<(String, Option<String>)> = Vec::new();
+        for t in targets(cmd) {
+            if !seen.contains(&t) {
+                seen.push(t);
+            }
+        }
+        seen
+    };
+    assert_eq!(
+        once("$p = 'ps.txt'; [IO.File]::WriteAllText($p, 'x')"),
+        [target("code", "ps.txt")]
+    );
+    assert_eq!(
+        once("[System.IO.File]::WriteAllText('ps2.txt', 'x')"),
+        [target("code", "ps2.txt")]
+    );
+}
+
+/// 1.x "code and word scans stay roughly linear on pathological input": the PowerShell
+/// line, whose code is read once however many expressions it holds; the brace list and the
+/// code scans are in `long_inputs` and the domain's `InterpreterCode` tests.
+#[test]
+fn a_powershell_line_is_read_once_for_all_its_expressions() {
+    let line = format!("$x copy( {}", "x ".repeat(20_000));
+    assert_eq!(targets(&line), []);
+    let many = "[IO.File]::WriteAllText('m.txt', 'x'); ".repeat(1 << 12);
+    assert_eq!(targets(&many).len(), 1 << 12);
+    assert!(targets(&many).iter().all(|t| *t == target("code", "m.txt")));
 }
 
 #[test]
@@ -1057,7 +1101,7 @@ fn bash_drops_a_backslash_before_any_char_outside_quotes() {
     let texts = |cmd: &str| -> Vec<String> {
         parse(cmd)
             .iter()
-            .flat_map(|c| command_writes(c, cx()))
+            .flat_map(|c| command_writes(c, cx(), &CODE))
             .map(|t| t.word.text().to_owned())
             .collect()
     };
@@ -1089,7 +1133,7 @@ fn a_powershell_command_keeps_its_backslashes_as_path_separators() {
     ] {
         let texts: Vec<String> = parse(cmd)
             .iter()
-            .flat_map(|c| command_writes(c, cx()))
+            .flat_map(|c| command_writes(c, cx(), &CODE))
             .map(|t| t.word.text().to_owned())
             .collect();
         assert_eq!(texts, [".git\\temper\\a.json"], "{cmd:?}");

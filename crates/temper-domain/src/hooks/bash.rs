@@ -8,6 +8,7 @@
 //! which live in the application. So the policy is four stages, each answering in 1.x's order
 //! within it, and the handler runs the others between them.
 
+mod code;
 mod config;
 mod deps;
 mod flags;
@@ -18,6 +19,7 @@ mod raise;
 mod texts;
 mod writes;
 
+pub use self::code::InterpreterCode;
 pub use config::{ConfigAsk, ConfigChanges};
 pub use raise::RaiseFlag;
 
@@ -62,6 +64,7 @@ pub struct BashPolicy {
     raise: RaisePatterns,
     deps: DepPatterns,
     redactor: Redactor,
+    code: InterpreterCode,
 }
 
 impl BashPolicy {
@@ -82,7 +85,14 @@ impl BashPolicy {
             raise: RaisePatterns::new()?,
             deps: DepPatterns::new()?,
             redactor: Redactor::new()?,
+            code: InterpreterCode::new()?,
         })
+    }
+
+    /// The patterns that read interpreter code, which the shell reader's rules use.
+    #[must_use]
+    pub fn code(&self) -> &InterpreterCode {
+        &self.code
     }
 
     /// 1.x's first check: a shell write to a `.rs` file is denied, with a `deny-shell-write`

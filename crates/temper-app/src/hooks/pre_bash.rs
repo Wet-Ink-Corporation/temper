@@ -39,7 +39,7 @@ pub(crate) fn pre_bash(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, H
     if let Some(decision) = policy.cargo_or_baseline_write(&cmd) {
         return Ok(answered(call, &workspace, decision));
     }
-    if state_dir::state_dir_write(call, &workspace, &cmd) {
+    if state_dir::state_dir_write(call, &workspace, &cmd, policy.code()) {
         return Ok(answered(call, &workspace, policy.state_dir_write(&cmd)));
     }
     if let Some(decision) = policy.verification_bypass(&cmd) {
@@ -47,7 +47,7 @@ pub(crate) fn pre_bash(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, H
     }
     // Protected configuration written, deleted or patched from the shell asks, after every
     // deny above, and its ask is shown with the dependency or snapshot ask below.
-    let changes = protected::protected_shell_writes(call, &workspace, &cmd);
+    let changes = protected::protected_shell_writes(call, &workspace, &cmd, policy.code());
     let config_ask = ConfigAsk::new(changes.as_domain());
     let config = &workspace.config;
     let dependencies = if config.ask_on_new_dependency() {

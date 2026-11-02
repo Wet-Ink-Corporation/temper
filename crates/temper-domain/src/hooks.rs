@@ -10,7 +10,7 @@ mod setup;
 mod skill;
 mod telemetry;
 
-pub use bash::{BashPolicy, ConfigAsk, ConfigChanges, RaiseFlag};
+pub use bash::{BashPolicy, ConfigAsk, ConfigChanges, InterpreterCode, RaiseFlag};
 pub use edit::{
     DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, Exemptions, ManifestEdit,
     PolicyDecision, Replacements, RustEdit, STATE_DIR_DENIAL, apply_edit, edit_policy,
