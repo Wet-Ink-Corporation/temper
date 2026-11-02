@@ -320,7 +320,7 @@ impl Walker<'_> {
             let mut units = js_len(&script);
             for rest in words.get(run.at..).unwrap_or(&[]) {
                 let fits = push_js(&mut script, &mut units, " ", &self.overflow)
-                    && push_js(&mut script, &mut units, &rest.text, &self.overflow);
+                    && push_js(&mut script, &mut units, rest.text(), &self.overflow);
                 if !fits {
                     return None;
                 }
@@ -411,7 +411,7 @@ pub(super) fn inner_script(
             join_texts(args, overflow).map(Inner::Run)
         }
         "trap" => trap_action(args)
-            .filter(|a| !a.text.is_empty())
+            .filter(|a| !a.text().is_empty())
             .map(|a| Inner::Run(a.text().to_owned())),
         "awk" | "gawk" | "mawk" | "nawk" => {
             let systems: Vec<String> = awk_programs(args)
@@ -443,7 +443,7 @@ fn join_texts(words: &[Word], overflow: &Cell<bool>) -> Option<String> {
     for (k, w) in words.iter().enumerate() {
         let sep = if k > 0 { " " } else { "" };
         let fits = push_js(&mut out, &mut units, sep, overflow)
-            && push_js(&mut out, &mut units, &w.text, overflow);
+            && push_js(&mut out, &mut units, w.text(), overflow);
         if !fits {
             return None;
         }

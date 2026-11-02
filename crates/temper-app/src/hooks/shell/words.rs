@@ -10,6 +10,7 @@ use temper_domain::{PathStyle, js_trim};
 
 pub(crate) use super::dir::{Dir, Guard};
 use super::lex::{Part, PartKind, name_len};
+use super::text::Text;
 use crate::paths::{self, PathEnv};
 use crate::project::is_js_space;
 
@@ -48,12 +49,13 @@ pub(crate) fn js_len(s: &str) -> usize {
 /// A word: `raw` (quotes removed, expansions as written), `text` (known expansions replaced,
 /// unknown ones as written) and whether every part is known, which makes `text` its value.
 ///
-/// A word that is one expansion (`$X`, `"$PWD"`) shares the value's text rather than copying
-/// it, as V8 shares a string: `: $X; ` repeated holds `$X` once (#202 F2).
+/// The text shares each value it expands rather than copying it, and is joined only when a
+/// rule reads it ([`Text`]), as V8 joins strings: `: $X; ` or `: $X/a; ` repeated holds `$X`
+/// once (#202 F2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Word {
     pub(super) raw: String,
-    pub(super) text: Rc<str>,
+    pub(super) text: Text,
     pub(super) known: bool,
     pub(super) quoted: bool,
     /// The length of the name a `NAME=` or `NAME+=` word assigns, or 0.
@@ -99,7 +101,7 @@ impl Word {
     pub(super) fn literal(s: &str) -> Self {
         Self {
             raw: s.to_owned(),
-            text: Rc::from(s),
+            text: Text::whole(Rc::from(s)),
             known: true,
             quoted: false,
             assign: 0,
@@ -174,12 +176,18 @@ impl Word {
     }
 
     pub(crate) fn text(&self) -> &str {
-        &self.text
+        self.text.get()
     }
 
     /// The value, or `None` when a part is unknown.
     pub(crate) fn value(&self) -> Option<&str> {
-        self.known.then_some(&*self.text)
+        self.known.then(|| self.text.get())
+    }
+
+    /// Whether the value is `s` (`value() == Some(s)`), without joining a text that cannot
+    /// be it.
+    pub(super) fn value_is(&self, s: &str) -> bool {
+        self.known && self.text.is(s)
     }
 
     /// An unquoted `*`, `?`, `[...]` or brace list.
@@ -240,6 +248,11 @@ pub(super) struct Shared {
 impl Shared {
     fn new(text: Rc<str>, units: usize) -> Self {
         Self { text, units }
+    }
+
+    /// A copy of `s`, counted.
+    fn of(s: &str) -> Self {
+        Self::new(Rc::from(s), js_len(s))
     }
 }
 
@@ -343,91 +356,33 @@ pub(super) struct WordEnv<'e> {
     pub(super) style: PathStyle,
     /// Set when a word grows past [`JS_MAX_STRING`].
     pub(super) overflow: &'e Cell<bool>,
-    /// The line's budget of text built, which the expansions a word copies are charged to.
+    /// The line's budget of text built, which a directory's text is charged to the first time
+    /// a word expands `$PWD` or `$OLDPWD` to it.
     pub(super) guard: Option<&'e Guard>,
 }
 
-/// A word that is one expansion of a value it can share: no copy, and no charge.
-fn shared_word(parts: &[Part], env: &WordEnv<'_>) -> Option<Word> {
-    // A quote opens and closes with empty literal parts around what it holds.
-    let mut held = parts.iter().filter(|p| !(p.is_lit() && p.text.is_empty()));
-    let (Some(part), None) = (held.next(), held.next()) else {
-        return None;
-    };
-    let PartKind::Var(name) = &part.kind else {
-        return None;
-    };
-    // A name the line set wins over the shell's own, even when its value is unknown.
-    let shared = if let Some(value) = env.vars.lookup(name) {
-        value?.clone() // a shared handle on the value
-    } else {
-        let dir = match name.as_str() {
-            "PWD" => env.cwd,
-            "OLDPWD" => env.prev,
-            _ => None,
-        }?;
-        Shared::new(dir.shared_text(env.guard)?, dir.units())
-    };
-    if shared.units > JS_MAX_STRING {
-        return None; // the general path marks the overflow
-    }
-    Some(Word {
-        raw: part.text.clone(), // the word's own spelling, a few bytes
-        text: shared.text,
-        known: true,
-        quoted: parts.iter().any(|p| p.quoted),
-        assign: 0,
-        // Its first part is never literal text, so it is not `fixed`.
-        form: Form::Made {
-            glob: false,
-            expanded: Expansions::Present,
-            fixed: false,
-        },
-    })
-}
-
-/// What one part of a word shows, and whether that is its value: an expansion's value, a
-/// leading `~` as the home directory, or the part as written. `None` once an expansion copied
-/// into the word passes `guard`'s budget: a word a command holds keeps that text.
-fn part_shown<'a>(
-    part: &'a Part,
-    first: bool,
-    env: &WordEnv<'a>,
-    guard: Option<&Guard>,
-) -> Option<(Cow<'a, str>, bool)> {
+/// What one part of a word shows, as a piece of its text: an expansion's value, shared with
+/// what holds it; a leading `~` as the home directory; or the part as written. With it, its
+/// length in UTF-16 units and whether it is the part's value.
+fn part_piece(part: &Part, first: bool, env: &WordEnv<'_>) -> (Shared, bool) {
     let s = part.text.as_str();
     let found = if !part.is_lit() {
-        let value = part_value(part, env);
-        if let Some(value) = &value
-            && guard.is_some_and(|guard| !guard.charge(value.len()))
-        {
-            return None;
-        }
-        value
+        part_value(part, env)
     } else if !part.quoted && first {
-        tilde(s, env.home)
+        tilde(s, env.home).map(|t| Shared::of(&t))
     } else {
-        Some(Cow::Borrowed(s))
+        Some(Shared::of(s))
     };
-    Some(match found {
-        Some(shown) => (shown, true),
-        None => (Cow::Borrowed(s), false),
-    })
+    found.map_or_else(|| (Shared::of(s), false), |piece| (piece, true))
 }
 
 /// 1.x `makeWord(parts, env)`.
 pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
-    if let Some(word) = shared_word(parts, env) {
-        return word;
-    }
     let mut raw = String::new();
-    let mut text = String::new();
-    let mut units = 0;
+    let mut pieces = Vec::new();
+    let mut units = 0_usize;
     let mut known = true;
     let mut glob = false;
-    let assign = assign_len(parts);
-    // An assignment's copy is replaced by the next one; any other word is held by its command.
-    let guard = env.guard.filter(|_| assign == 0);
     // Where an unquoted `[` is in raw: a glob when a `]` follows it.
     let mut bracket: Option<usize> = None;
     for (k, part) in parts.iter().enumerate() {
@@ -437,23 +392,24 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         }
         raw.push_str(&part.text);
         let s = part.text.as_str();
-        let Some((shown, part_known)) = part_shown(part, k == 0, env, guard) else {
-            known = false; // past the line's budget
-            break;
-        };
+        let (piece, part_known) = part_piece(part, k == 0, env);
         known &= part_known;
         if part.is_lit() && !part.quoted {
-            glob |= shown.contains(['*', '?']) || brace_list(&shown);
+            glob |= piece.text.contains(['*', '?']) || brace_list(&piece.text);
             if bracket.is_none()
                 && let Some(at) = s.find('[')
             {
                 bracket = Some(raw.len().saturating_sub(s.len()).saturating_add(at));
             }
         }
-        if !push_js(&mut text, &mut units, &shown, env.overflow) {
+        // 1.x's `+=` throws past V8's longest string; the text stops before it.
+        units = units.saturating_add(piece.units);
+        if units > JS_MAX_STRING {
+            env.overflow.set(true);
             known = false;
             break;
         }
+        pieces.push(piece.text);
     }
     if let Some(at) = bracket
         && raw
@@ -482,10 +438,10 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
             .all(|p| p.quoted || (p.is_lit() && !p.text.replace("{}", "").contains('{')));
     Word {
         raw,
-        text: Rc::from(text),
+        text: Text::of(pieces),
         known,
         quoted: parts.iter().any(|p| p.quoted),
-        assign,
+        assign: assign_len(parts),
         form: if literal {
             Form::Literal
         } else {
@@ -572,23 +528,29 @@ fn is_temp_var(name: &str) -> bool {
 }
 
 /// 1.x `partValue(p, env)`: an expansion's value, or `None` when temper does not know it.
-fn part_value<'e>(part: &Part, env: &WordEnv<'e>) -> Option<Cow<'e, str>> {
+/// A variable's value is shared with the variable, and a directory's with the directory.
+fn part_value(part: &Part, env: &WordEnv<'_>) -> Option<Shared> {
+    let dir_value = |dir: &Dir| {
+        let text = dir.shared_text(env.guard)?;
+        Some(Shared::new(text, dir.units()))
+    };
     match &part.kind {
         PartKind::Var(name) => {
+            // A name the line set wins over the shell's own, even when its value is unknown.
             if let Some(value) = env.vars.lookup(name) {
-                return value.map(|v| Cow::Borrowed(&*v.text));
+                return value.cloned(); // a shared handle on the value
             }
             match name.as_str() {
-                "HOME" => Some(Cow::Borrowed(env.home)),
-                "PWD" => env.cwd.map(Dir::text),
-                "OLDPWD" => env.prev.map(Dir::text),
-                _ if is_temp_var(name) => env.tmp.map(Cow::Borrowed),
+                "HOME" => Some(Shared::of(env.home)),
+                "PWD" => env.cwd.and_then(dir_value),
+                "OLDPWD" => env.prev.and_then(dir_value),
+                _ if is_temp_var(name) => env.tmp.map(Shared::of),
                 _ => None,
             }
         }
         PartKind::Sub(src) => git_rev_parse(src, env)
             .or_else(|| mktemp(src, env))
-            .map(Cow::Owned),
+            .map(|value| Shared::of(&value)),
         PartKind::Lit
         | PartKind::Escape
         | PartKind::Param

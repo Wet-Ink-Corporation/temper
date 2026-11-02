@@ -18,12 +18,12 @@ use temper_domain::PathStyle;
 use super::words::{JS_MAX_STRING, js_len};
 use crate::paths;
 
-/// How many bytes of text one rule may build from a command line: the directory text it
-/// builds to resolve relative names, and the expansions copied into the words its commands
-/// hold. Past it the rule stops as it does at V8's longest string, and gives its fallback.
-/// Only a deeper directory's text is built and counted, once per name resolved from it: a
-/// root's is borrowed, and an absolute name reads none (#202 F1). A word that is one
-/// expansion shares the value, and costs nothing (#202 F2).
+/// How many bytes of directory text one rule may build from a command line: to resolve
+/// relative names, and once per directory a word expands `$PWD` or `$OLDPWD` to. Past it the
+/// rule stops as it does at V8's longest string, and gives its fallback. Only a deeper
+/// directory's text is built and counted, once per name resolved from it: a root's is
+/// borrowed, and an absolute name reads none (#202 F1). Words share the values they expand
+/// and copy nothing (#202 F2).
 ///
 /// 1.x reads every byte of it several times in JavaScript: the state-dir rule takes about 20 s
 /// on 960 MiB of it, and the protected-config rule after it about 69 s, both past the hook's

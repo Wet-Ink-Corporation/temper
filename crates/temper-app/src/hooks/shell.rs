@@ -24,6 +24,7 @@ mod dir;
 mod git;
 mod lex;
 mod patch;
+mod text;
 mod walk;
 mod words;
 mod wrappers;

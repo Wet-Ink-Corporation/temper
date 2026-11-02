@@ -12,6 +12,7 @@ use temper_domain::{InterpreterCode, PathStyle};
 
 use super::code::{interpreter_code, is_interpreter};
 use super::git::git_command;
+use super::text::Text;
 use super::walk::Command;
 use super::words::{Dir, PathCx, Word, word_path_fits};
 use super::wrappers::cluster_reaches;
@@ -327,14 +328,14 @@ impl Word {
     /// 1.x `{ ...a, raw: a.raw.slice(r), text: a.text.slice(t), value: ... }`.
     pub(super) fn sliced(&self, raw_from: usize, text_from: usize) -> Self {
         let mut word = self.derived(self.raw.get(raw_from..).unwrap_or(""));
-        word.text = Rc::from(self.text.get(text_from..).unwrap_or(""));
+        word.text = Text::whole(Rc::from(self.text().get(text_from..).unwrap_or("")));
         word
     }
 
     /// The part after the first `=`, cut from raw and from text each at its own `=`.
     pub(super) fn after_eq(&self) -> Self {
         let raw = self.raw.find('=').map_or(0, |e| e.saturating_add(1));
-        let text = self.text.find('=').map_or(0, |e| e.saturating_add(1));
+        let text = self.text().find('=').map_or(0, |e| e.saturating_add(1));
         self.sliced(raw, text)
     }
 }

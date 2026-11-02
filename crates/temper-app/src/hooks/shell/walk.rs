@@ -426,7 +426,7 @@ impl Walker<'_> {
                     Some(Stdin::Heredoc { body, literal })
                 }
                 (RedirectOp::HereString, _) => Some(Stdin::Str {
-                    body: Rc::clone(&redirect.word.text), // shared with the word
+                    body: redirect.word.text.shared(),
                     literal: redirect.word.is_literal(),
                 }),
                 _ => stdin,
@@ -475,7 +475,7 @@ impl Walker<'_> {
         };
         let words = words
             .into_iter()
-            .filter(|w| !(w.value() == Some("") && !w.quoted && w.expanded()))
+            .filter(|w| !(w.value_is("") && !w.quoted && w.expanded()))
             .collect();
         CommandWords { words, ps }
     }
@@ -803,7 +803,7 @@ fn find_execs(args: &[Word], cwd: Option<&Dir>, depth: usize) -> Option<Inner> {
             .get(from..)
             .unwrap_or(&[])
             .iter()
-            .position(|a| matches!(a.value(), Some(";" | "+")))
+            .position(|a| a.value_is(";") || a.value_is("+"))
             .map(|j| from.saturating_add(j));
         let words: Vec<Word> = args
             .get(from..end.unwrap_or(args.len()))
