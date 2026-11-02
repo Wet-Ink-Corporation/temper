@@ -276,7 +276,7 @@ impl Walker<'_> {
                 run.at = run.at.saturating_add(1);
                 words
                     .get(run.at.saturating_sub(1))
-                    .map_or("", |next| next.text.as_str())
+                    .map_or("", |next| next.text())
             });
             let mut script = env_split_spaces(text);
             let mut units = js_len(&script);
@@ -353,7 +353,7 @@ pub(super) fn inner_script(
         "bash" | "sh" | "zsh" | "dash" | "ksh" => {
             // The script is walked after the command is pushed, which takes its words.
             let script = match shell_script(args) {
-                Script::Arg(word) => word.map(|w| w.text.clone()),
+                Script::Arg(word) => word.map(|w| w.text().to_owned()),
                 Script::Stdin => meta
                     .stdin
                     .as_ref()
@@ -374,7 +374,7 @@ pub(super) fn inner_script(
         }
         "trap" => trap_action(args)
             .filter(|a| !a.text.is_empty())
-            .map(|a| Inner::Run(a.text.clone())),
+            .map(|a| Inner::Run(a.text().to_owned())),
         "awk" | "gawk" | "mawk" | "nawk" => {
             let systems: Vec<String> = awk_programs(args)
                 .into_iter()
@@ -529,7 +529,7 @@ fn awk_programs(args: &[Word]) -> Vec<AwkProgram<'_>> {
         && !found.main
         && let Some(a) = args.get(operand)
     {
-        found.progs.push(AwkProgram::of(a, a.text.as_str()));
+        found.progs.push(AwkProgram::of(a, a.text()));
     }
     found.progs
 }
@@ -577,7 +577,7 @@ impl<'w> AwkArgs<'w> {
         };
         // awk sees the word's value: `'-f/dev/stdin'` is still `-f`.
         let r = if a.is_literal() {
-            a.text.as_str()
+            a.text()
         } else {
             a.raw.as_str()
         };
@@ -608,7 +608,7 @@ impl<'w> AwkArgs<'w> {
             if let Some(v) = args.get(next)
                 && (r == "-e" || r == "--source")
             {
-                self.progs.push(AwkProgram::of(v, v.text.as_str()));
+                self.progs.push(AwkProgram::of(v, v.text()));
             }
             self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
             return stop_if(r == "-E" || r == "--exec", next.saturating_add(1));

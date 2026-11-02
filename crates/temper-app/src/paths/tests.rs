@@ -56,6 +56,17 @@ fn resolve_like_node_posix() {
         ("a//b/./c/", "/ws/crates/core/a/b/c"),
         ("../../../../../up.rs", "/up.rs"),
         (r"src\lib.rs", r"/ws/crates/core/src\lib.rs"),
+        // Absolute paths at and near normal form, which are given back without a rebuild.
+        ("/a/b", "/a/b"),
+        ("/a/b/", "/a/b"),
+        ("/a/.", "/a"),
+        ("/a/..", "/"),
+        ("/a/./b", "/a/b"),
+        ("/.../a", "/.../a"),
+        ("/a/..b", "/a/..b"),
+        ("/a.//b", "/a./b"),
+        ("/", "/"),
+        ("/a/b..", "/a/b.."),
     ];
 
     let wrong = wrong(&rows, |p| resolve(Posix, POSIX_CWD, p));

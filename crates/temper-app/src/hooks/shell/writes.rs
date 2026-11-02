@@ -6,12 +6,13 @@
 //! read in port Phase 2f, with the patches and copies onto `.rs` files that read them too.
 
 use std::borrow::Cow;
+use std::rc::Rc;
 
 use temper_domain::PathStyle;
 
 use super::git::git_command;
 use super::walk::Command;
-use super::words::{Dir, PathCx, Word, word_path};
+use super::words::{Dir, PathCx, Word, word_path_fits};
 use super::wrappers::cluster_reaches;
 
 /// How a target is written.
@@ -64,24 +65,38 @@ pub(crate) struct Target<'c> {
     pub(crate) cwd: Option<Dir>,
     /// For a copy, the destination's sources.
     pub(crate) copy: Option<CopyOp<'c>>,
-    /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
-    /// the directory is unknown. Made for every target, as 1.x makes it, so a path past V8's
-    /// longest string stops the rule wherever it is (#201 F2).
-    pub(crate) path: Option<String>,
+    /// The path fits in a JS string ([`word_path_fits`]); when not, 1.x has thrown.
+    fits: bool,
 }
 
-/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would.
+impl Target<'_> {
+    /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
+    /// the directory is unknown, or the line went past a bound. Built when a rule reads it;
+    /// [`command_writes`] has already checked that it fits (#201 F2). The scan of copies onto
+    /// `.rs` files reads it from port Phase 2f; until then only the tests do.
+    #[cfg(test)]
+    pub(crate) fn path(&self, cx: PathCx<'_>) -> Option<String> {
+        self.fits
+            .then(|| super::words::word_path(cx, &self.word, self.cwd.as_ref()))
+            .flatten()
+    }
+}
+
+/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would. 1.x
+/// makes each target's path here, so a path past V8's longest string stops the rule wherever
+/// it is (#201 F2): this checks that each would fit, and builds none of them.
 pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'c>> {
     let mut out = Vec::new();
     let mut add =
         |verb: Verb<'c>, word: Cow<'c, Word>, copy: Option<CopyOp<'c>>, cwd: Option<Dir>| {
-            let path = word_path(cx, &word, cwd.as_ref());
+            // Where it does not fit, this marks the overflow, and the rule falls back.
+            let fits = word_path_fits(cx, &word, cwd.as_ref());
             out.push(Target {
                 verb,
                 word,
                 cwd,
                 copy,
-                path,
+                fits,
             });
         };
     // Each target runs in the command's directory; `Dir` is a shared handle.
@@ -288,10 +303,7 @@ impl Word {
     /// 1.x `{ ...a, raw: a.raw.slice(r), text: a.text.slice(t), value: ... }`.
     pub(super) fn sliced(&self, raw_from: usize, text_from: usize) -> Self {
         let mut word = self.derived(self.raw.get(raw_from..).unwrap_or(""));
-        self.text
-            .get(text_from..)
-            .unwrap_or("")
-            .clone_into(&mut word.text);
+        word.text = Rc::from(self.text.get(text_from..).unwrap_or(""));
         word
     }
 

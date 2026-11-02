@@ -7,8 +7,10 @@ use super::{
     Command, Dir, ParseOpts, command_deletes, command_writes, cx, parse_commands, parse_with,
     path_of,
 };
-use crate::hooks::shell::Guard;
+use temper_domain::PathStyle;
+
 use crate::hooks::shell::walk::TooLong;
+use crate::hooks::shell::{Guard, PathCx, Word};
 
 const N15: usize = 1 << 15;
 const N17: usize = 1 << 17;
@@ -275,7 +277,7 @@ fn a_line_of_cds_holds_each_name_once_however_deep_it_goes() {
     let ran = parse_with(&line, r());
     let want = ["/r", &["/", d_value.as_str()].concat().repeat(4000), "/o"].concat();
     let first = ran.iter().flat_map(|c| command_writes(c, cx())).next();
-    assert_eq!(first.and_then(|t| t.path), Some(want));
+    assert_eq!(first.and_then(|t| t.path(cx())), Some(want));
 }
 
 /// A `..` takes a name off without copying the directory, and several in one value step up
@@ -322,20 +324,94 @@ fn dir_of(c: Option<&Command>) -> Option<String> {
 /// The path of a line's first write.
 fn first_write(commands: &[Command]) -> Option<String> {
     let first = commands.iter().flat_map(|c| command_writes(c, cx())).next();
-    first.and_then(|t| t.path)
+    first.and_then(|t| t.path(cx()))
 }
 
-/// Past [`Dir::BUDGET`] bytes of directory text built for the rules, the line stops as at
-/// V8's longest string.
+/// Past its budget of directory text built for the rules, the line stops as at V8's longest
+/// string. Only text built counts: a root's is borrowed, and costs nothing (#202 F1).
 #[test]
 fn the_directory_text_a_line_builds_is_held_to_a_budget() {
-    let guard = Guard::default();
-    let dir = Dir::resolved(["/", &"a".repeat(1 << 20)].concat());
-    let calls = Dir::BUDGET / dir.text().len();
+    let name = "a".repeat(1 << 20);
+    let root = Dir::resolved(["/", name.as_str()].concat());
+    let Some(deeper) = Dir::resolved("/").step(PathStyle::Posix, &name) else {
+        panic!("a name steps from the root");
+    };
+    let budget = 64 << 20;
+    let guard = Guard::with_budget(budget);
+    // A root is free however often it is read: 1,024 reads of 1 MiB, past the budget.
+    for _ in 0..(1 << 10) {
+        assert_eq!(guard.dir_text(&root).as_deref(), Some(root.text().as_ref()));
+    }
+    let calls = budget / deeper.len();
     for _ in 0..calls {
-        assert_eq!(guard.dir_text(&dir), Some(dir.text()));
+        assert_eq!(
+            guard.dir_text(&deeper).as_deref(),
+            Some(root.text().as_ref())
+        );
     }
     assert!(!guard.overflowed());
-    assert_eq!(guard.dir_text(&dir), None);
+    assert_eq!(guard.dir_text(&deeper), None);
     assert!(guard.overflowed());
+    assert_eq!(Dir::BUDGET, 2 << 30);
+}
+
+/// #202 F2: a word that is one expansion shares its value, as V8 shares a string, so a line
+/// holds `$X` once however often it names it. Each line held a copy per word: with `$X` of
+/// 2^24 chars, `: $X; ` x 2000 was OOM-killed at 10.9 GB, and `$PWD` and `$OLDPWD` the same.
+#[test]
+fn a_word_of_one_expansion_shares_the_value_however_often_a_line_names_it() {
+    let r = || ParseOpts {
+        cwd: Some("/r"),
+        ..super::opts()
+    };
+    let x = ["X=a; ", &"X=$X$X; ".repeat(20)].concat();
+    let shapes = [
+        [x.as_str(), &": $X; ".repeat(2000)].concat(),
+        [x.as_str(), "cd /; cd $X; ", &": \"$PWD\"; ".repeat(2000)].concat(),
+        [x.as_str(), "cd $X; cd /; ", &": $OLDPWD; ".repeat(2000)].concat(),
+    ];
+    for line in &shapes {
+        let ran = parse_with(line, r());
+        let texts: Vec<&str> = ran.iter().flat_map(|c| &c.args).map(Word::text).collect();
+        assert_eq!(texts.len(), 2000);
+        let Some(first) = texts.first() else {
+            panic!("the line has words");
+        };
+        assert!(first.len() >= 1 << 20, "{}", first.len());
+        let shared = texts
+            .iter()
+            .all(|t| std::ptr::eq(t.as_ptr(), first.as_ptr()));
+        let shape = line.get(line.len().saturating_sub(12)..).unwrap_or("");
+        assert!(shared, "each word of {shape:?} holds its own copy");
+    }
+}
+
+/// #202 F2: an expansion copied into a longer word (`$X/a`) is text built, charged to the
+/// line's budget, so past it the line stops as at V8's longest string instead of holding
+/// gigabytes.
+#[test]
+fn the_expansions_a_line_copies_into_its_words_are_held_to_the_budget() {
+    let guard = Guard::with_budget(2 << 20);
+    let paths = PathCx {
+        guard: Some(&guard),
+        ..cx()
+    };
+    let opts = ParseOpts {
+        paths,
+        ..super::opts()
+    };
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let under = [x.as_str(), &": $X/a; ".repeat(10)].concat();
+    let held = parse_commands(&under, opts).map(|c| c.len());
+    assert_eq!(held, Ok(10));
+    let guard = Guard::with_budget(2 << 20);
+    let opts = ParseOpts {
+        paths: PathCx {
+            guard: Some(&guard),
+            ..cx()
+        },
+        ..super::opts()
+    };
+    let over = [x.as_str(), &": $X/a; ".repeat(40)].concat();
+    assert_eq!(parse_commands(&over, opts), Err(TooLong));
 }

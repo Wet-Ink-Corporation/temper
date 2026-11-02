@@ -4,17 +4,17 @@
 //! Variables live in a journal ([`Vars`]) and directories are shared [`Dir`]s, so opening and
 //! closing a subshell or a substitution costs the names it changes, not the variables before
 //! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
-//! never a copy or a re-read of the whole path ([`cd_step`]).
+//! never a copy or a re-read of the whole path ([`word_dir`]).
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use temper_domain::{PathStyle, js_trim};
+use temper_domain::js_trim;
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
     Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len, make_word,
-    name_of, push_js, word_path,
+    name_of, push_js, word_dir,
 };
 use super::wrappers::{Run, Xargs, inner_script};
 
@@ -214,12 +214,8 @@ impl Walker<'_> {
             vars: &self.env.vars,
             style: self.opts.paths.at.style,
             overflow: &self.overflow,
+            guard: self.opts.paths.guard,
         }
-    }
-
-    /// 1.x `wordPath(w, cwd)`.
-    pub(super) fn word_path(&self, word: &Word, cwd: Option<&Dir>) -> Option<String> {
-        word_path(self.opts.paths, word, cwd)
     }
 
     /// `dir`, unless it is longer than a JS string can be: 1.x's `path.resolve` throws there,
@@ -325,7 +321,7 @@ impl Walker<'_> {
                     Some(Stdin::Heredoc { body, literal })
                 }
                 (RedirectOp::HereString, _) => Some(Stdin::Str {
-                    body: Rc::from(redirect.word.text.as_str()),
+                    body: Rc::clone(&redirect.word.text), // shared with the word
                     literal: redirect.word.is_literal(),
                 }),
                 _ => stdin,
@@ -640,27 +636,10 @@ impl Walker<'_> {
     }
 
     /// The directory `cd <word>` enters: Node's `path.resolve(cwd, value)`, stepping a relative
-    /// value's names from a directory already in normal form ([`cd_step`]).
+    /// value's names from a directory already in normal form ([`word_dir`]).
     fn cd_into(&self, word: &Word) -> Option<Dir> {
-        let step = self
-            .env
-            .cwd
-            .as_ref()
-            .zip(word.value().filter(|_| !word.glob()));
-        if let Some((base, value)) = step
-            && let Some(dir) = cd_step(self.opts.paths.at.style, base, value)
-        {
-            return Some(dir);
-        }
-        self.word_path(word, self.env.cwd.as_ref())
-            .map(Dir::resolved)
+        word_dir(self.opts.paths, word, self.env.cwd.as_ref())
     }
-}
-
-/// `path.resolve(base, value)` for a `base` in normal form and a relative `value`, stepping
-/// the value's names from `base` ([`Dir::step`]): that costs the value, never the directory.
-pub(super) fn cd_step(style: PathStyle, base: &Dir, value: &str) -> Option<Dir> {
-    base.step(style, value)
 }
 
 /// A command's words, and whether they were made as PowerShell's.

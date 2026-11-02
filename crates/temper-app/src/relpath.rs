@@ -58,8 +58,18 @@ fn long_path(files: &impl Files, style: PathStyle, path: &str) -> String {
         .fold(base, |dir, name| paths::join(style, &dir, name))
 }
 
+/// Past this many bytes a path is longer than any platform resolves: Windows takes 32,767
+/// UTF-16 units with a verbatim prefix, each at most three bytes of UTF-8, and Linux's and
+/// macOS's `PATH_MAX` are shorter. `realpath` fails on such a path everywhere, after reading
+/// all of it, so it is not asked (#202 F3: a line of deep directories spent most of its time
+/// there).
+const LONGEST_REAL_PATH: usize = 3 * 32_767;
+
 /// 1.x `realpathSync.native(path)` inside `longPath`'s `try`.
 fn real_path(files: &impl Files, path: &str) -> Option<String> {
+    if path.len() > LONGEST_REAL_PATH {
+        return None; // as `realpath` fails on it
+    }
     match files.real_path(Path::new(path)) {
         Ok(found) => found.map(|real| real.to_string_lossy().into_owned()),
         // 1.x catches every failure, not only a missing path, and tries the parent.

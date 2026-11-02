@@ -20,8 +20,8 @@ use crate::git::{self, Short};
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
     Command, CopyDest, Guard, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target,
-    Verb, Word, command_deletes, command_writes, js_len, landing, parse_commands, patch_command,
-    patch_files, pathspec_pattern, resolve_path,
+    Verb, Word, command_deletes, command_writes, js_len, landing, names_absolute, parse_commands,
+    patch_command, patch_files, pathspec_pattern, resolve_path,
 };
 use crate::paths::{self, PathEnv};
 use crate::ports::{EntryKind, FileMeta, Files, Ports};
@@ -94,6 +94,16 @@ pub(super) fn protected_shell_writes(
     ws: &Workspace,
     cmd: &str,
 ) -> Changes {
+    protected_shell_writes_in(call, ws, cmd, &Guard::default())
+}
+
+/// [`protected_shell_writes`] within `guard`'s bounds, which a test may set lower.
+pub(super) fn protected_shell_writes_in(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    cmd: &str,
+    guard: &Guard,
+) -> Changes {
     let env_cwd = call.env.cwd.to_string_lossy();
     let temp = call.env.temp_dir.to_string_lossy();
     let home = call.env.home.to_string_lossy();
@@ -111,11 +121,10 @@ pub(super) fn protected_shell_writes(
         .map(|dir| paths::resolve(at.style, at.cwd, dir))
         .filter(|dir| exists(files, dir))
         .unwrap_or_else(|| ws.root.clone());
-    let guard = Guard::default();
     let cx = PathCx {
         at,
         os_tmp: &temp,
-        guard: Some(&guard),
+        guard: Some(guard),
     };
     let opts = ParseOpts {
         paths: cx,
@@ -138,6 +147,7 @@ pub(super) fn protected_shell_writes(
         start: &start,
         globs,
         owners: HashMap::new(),
+        owner_in: HashMap::new(),
         listed: HashMap::new(),
         changes: Changes::default(),
     };
@@ -176,6 +186,9 @@ struct Reader<'a, 'c, P> {
     globs: Globs,
     /// 1.x `ownerOf`'s cache: each ancestor checked, and the checkout there, if any.
     owners: HashMap<String, Option<Owner>>,
+    /// The owner of every name in a directory, by the directory relative to the root: the
+    /// walk up its ancestors is made once per directory, not once per name (#202 F3).
+    owner_in: HashMap<String, Owner>,
     /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
     /// the line repeats one, though the answer cannot change within a line (#201 F4).
     listed: HashMap<(String, String, String), Listed>,
@@ -235,11 +248,23 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let style = self.cx.at.style;
         // A delete takes the file, or with -r a whole directory and the protected files in it.
         for d in command_deletes(c, self.cx) {
-            let cwd = self.cx.dir_text(d.cwd.as_ref());
+            // An absolute name reads no directory, as 1.x's resolve stops at it, so its
+            // directory is not built, and one base stands for all (#202 F1).
+            let absolute = names_absolute(self.cx, &d.word);
+            let cwd = if absolute {
+                None
+            } else {
+                self.cx.dir_text(d.cwd.as_ref())
+            };
             if self.cx.stopped() {
                 return Ok(()); // 1.x has thrown: the rule falls back
             }
-            for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
+            let dir = if absolute {
+                Some(start)
+            } else {
+                cwd.as_deref()
+            };
+            for base in bases(dir, start, &ws.root).into_iter().flatten() {
                 let Some(abs) = self.word_abs(&d.word, Some(base)) else {
                     continue;
                 };
@@ -304,6 +329,15 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         Ok(())
     }
 
+    /// A plain write to an absolute name. It reads no directory, as 1.x's resolve stops at
+    /// the name, so the command's directory is not built (#202 F1).
+    fn write_absolute(&mut self, word: &Word) -> Result<(), GlobError> {
+        match self.word_abs(word, None) {
+            Some(dest) => self.check(&dest, false, List::Written),
+            None => Ok(()),
+        }
+    }
+
     /// One write: a file, a copy's landing places, or a restore from another revision.
     fn write(&mut self, t: &Target<'_>) -> Result<(), GlobError> {
         let source = match &t.verb {
@@ -318,6 +352,9 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             source,
             pathspec: t.word.raw(),
         });
+        if t.copy.is_none() && restore.is_none() && names_absolute(self.cx, &t.word) {
+            return self.write_absolute(&t.word);
+        }
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
         let cwd = self.cx.dir_text(t.cwd.as_ref());
@@ -489,8 +526,24 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     }
 
     /// 1.x `ownerOf(proj, rel, cache)`: the checkout of the deepest ancestor of `rel` with a
-    /// `.git` in it, else the project. Each ancestor is looked at once per command line.
+    /// `.git` in it, else the project. Each ancestor is looked at once per command line, and
+    /// the walk is made once per directory: it reads only the ancestors, which the names in
+    /// one directory share.
     fn owner_of(&mut self, rel: &str) -> Result<Owner, GlobError> {
+        let Some(slash) = rel.rfind('/') else {
+            return Ok(Owner::Project); // no ancestor to look at
+        };
+        let dir = rel.get(..slash).unwrap_or("");
+        if let Some(owner) = self.owner_in.get(dir) {
+            return Ok(owner.clone()); // an `Rc` handle
+        }
+        let owner = self.owner_up(rel)?;
+        self.owner_in.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
+        Ok(owner)
+    }
+
+    /// [`Self::owner_of`]'s walk up `rel`'s ancestors.
+    fn owner_up(&mut self, rel: &str) -> Result<Owner, GlobError> {
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).
         let mut units = js_len(rel);

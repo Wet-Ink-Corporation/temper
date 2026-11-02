@@ -272,3 +272,28 @@ fn a_path_joined_past_v8s_longest_string_is_no_state_dir_or_protected_write() {
     let config = [x26.as_str(), "/clippy.toml; echo > $Y"].concat();
     answers(&Ws::new(), &[], &[&state, &config]);
 }
+
+/// #202 F5: past its budget of directory text, each rule stops with its fallback, where no
+/// string comes near V8's longest. Each `echo > o` in `/ws/$X` (`$X` is 2^16 chars) builds
+/// that directory once, 20 of them about 1.25 MiB; the last write is from `/ws`, a root,
+/// which builds nothing. Under a 2 MiB budget both rules answer; under 1 MiB neither does.
+/// A root's text is never charged: the same line with an absolute `cd /ws/$X` answers under
+/// the smaller budget (#202 F1: it was charged, and short lines fell back).
+#[test]
+fn past_the_directory_text_budget_the_state_dir_and_protected_rules_fall_back() {
+    let ws = Ws::new();
+    let x16 = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let writes = "echo > o; ".repeat(20);
+    let line = |cd: &str, last: &str| [x16.as_str(), cd, &writes, "cd /ws; echo > ", last].concat();
+    let state = line("cd $X; ", ".git/temper/x");
+    let config = line("cd $X; ", "clippy.toml");
+    let clippy = vec!["clippy.toml".to_owned()];
+    assert!(ws.rules_within(&state, 2 << 20).0);
+    assert_eq!(ws.rules_within(&config, 2 << 20).1, clippy);
+    assert_eq!(ws.rules_within(&state, 1 << 20), (false, Vec::new()));
+    assert_eq!(ws.rules_within(&config, 1 << 20), (false, Vec::new()));
+    let rooted = line("cd /ws/$X; ", "clippy.toml");
+    assert_eq!(ws.rules_within(&rooted, 1 << 20).1, clippy);
+    let rooted = line("cd /ws/$X; ", ".git/temper/x");
+    assert!(ws.rules_within(&rooted, 1 << 20).0);
+}

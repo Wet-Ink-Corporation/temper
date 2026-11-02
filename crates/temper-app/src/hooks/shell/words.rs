@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use temper_domain::{PathStyle, js_trim};
 
@@ -46,10 +47,13 @@ pub(crate) fn js_len(s: &str) -> usize {
 
 /// A word: `raw` (quotes removed, expansions as written), `text` (known expansions replaced,
 /// unknown ones as written) and whether every part is known, which makes `text` its value.
+///
+/// A word that is one expansion (`$X`, `"$PWD"`) shares the value's text rather than copying
+/// it, as V8 shares a string: `: $X; ` repeated holds `$X` once (#202 F2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Word {
     pub(super) raw: String,
-    pub(super) text: String,
+    pub(super) text: Rc<str>,
     pub(super) known: bool,
     pub(super) quoted: bool,
     /// The length of the name a `NAME=` or `NAME+=` word assigns, or 0.
@@ -78,7 +82,7 @@ impl Word {
     pub(super) fn literal(s: &str) -> Self {
         Self {
             raw: s.to_owned(),
-            text: s.to_owned(),
+            text: Rc::from(s),
             known: true,
             quoted: false,
             assign: 0,
@@ -135,7 +139,7 @@ impl Word {
 
     /// The value, or `None` when a part is unknown.
     pub(crate) fn value(&self) -> Option<&str> {
-        self.known.then_some(self.text.as_str())
+        self.known.then_some(&*self.text)
     }
 
     /// An unquoted `*`, `?`, `[...]` or brace list.
@@ -158,8 +162,8 @@ impl Word {
 /// while no scope is open is never undone, so it is not journaled.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
-    map: HashMap<String, String>,
-    journal: Vec<(String, Option<String>)>,
+    map: HashMap<String, Shared>,
+    journal: Vec<(String, Option<Shared>)>,
     /// Per open mark, innermost last, the names it has journaled. A scope the line leaves
     /// unclosed is closed by the rollback of the one outside it, or never.
     saved: Vec<HashSet<String>>,
@@ -174,13 +178,35 @@ pub(super) struct Mark {
     depth: usize,
 }
 
+/// A value words may share: its text and its length in UTF-16 units, counted once.
+#[derive(Debug, Clone)]
+pub(super) struct Shared {
+    text: Rc<str>,
+    units: usize,
+}
+
+impl Shared {
+    fn new(text: Rc<str>, units: usize) -> Self {
+        Self { text, units }
+    }
+}
+
 impl Vars {
     pub(super) fn get(&self, name: &str) -> Option<&str> {
-        self.map.get(name).map(String::as_str)
+        self.map.get(name).map(|v| &*v.text)
+    }
+
+    /// The value of `name`, for a word to share.
+    fn shared(&self, name: &str) -> Option<&Shared> {
+        self.map.get(name)
     }
 
     /// 1.x `setVar`: `None` deletes.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
+        let value = value.map(|text| {
+            let units = js_len(&text);
+            Shared::new(Rc::from(text), units)
+        });
         let old = self.put(name, value);
         if let Some(saved) = self.saved.last_mut()
             && !saved.contains(name)
@@ -190,7 +216,7 @@ impl Vars {
         }
     }
 
-    fn put(&mut self, name: &str, value: Option<String>) -> Option<String> {
+    fn put(&mut self, name: &str, value: Option<Shared>) -> Option<Shared> {
         let old = match value {
             Some(value) => self.map.insert(name.to_owned(), value),
             None => self.map.remove(name),
@@ -248,15 +274,88 @@ pub(super) struct WordEnv<'e> {
     pub(super) style: PathStyle,
     /// Set when a word grows past [`JS_MAX_STRING`].
     pub(super) overflow: &'e Cell<bool>,
+    /// The line's budget of text built, which the expansions a word copies are charged to.
+    pub(super) guard: Option<&'e Guard>,
+}
+
+/// A word that is one expansion of a value it can share: no copy, and no charge.
+fn shared_word(parts: &[Part], env: &WordEnv<'_>) -> Option<Word> {
+    // A quote opens and closes with empty literal parts around what it holds.
+    let mut held = parts.iter().filter(|p| !(p.is_lit() && p.text.is_empty()));
+    let (Some(part), None) = (held.next(), held.next()) else {
+        return None;
+    };
+    let PartKind::Var(name) = &part.kind else {
+        return None;
+    };
+    let shared = if let Some(value) = env.vars.shared(name) {
+        value.clone() // a shared handle on the value
+    } else {
+        let dir = match name.as_str() {
+            "PWD" => env.cwd,
+            "OLDPWD" => env.prev,
+            _ => None,
+        }?;
+        Shared::new(dir.shared_text(env.guard)?, dir.units())
+    };
+    if shared.units > JS_MAX_STRING {
+        return None; // the general path marks the overflow
+    }
+    Some(Word {
+        raw: part.text.clone(), // the word's own spelling, a few bytes
+        text: shared.text,
+        known: true,
+        quoted: parts.iter().any(|p| p.quoted),
+        assign: 0,
+        form: Form::Made {
+            glob: false,
+            expanded: true,
+        },
+    })
+}
+
+/// What one part of a word shows, and whether that is its value: an expansion's value, a
+/// leading `~` as the home directory, or the part as written. `None` once an expansion copied
+/// into the word passes `guard`'s budget: a word a command holds keeps that text.
+fn part_shown<'a>(
+    part: &'a Part,
+    first: bool,
+    env: &WordEnv<'a>,
+    guard: Option<&Guard>,
+) -> Option<(Cow<'a, str>, bool)> {
+    let s = part.text.as_str();
+    let found = if !part.is_lit() {
+        let value = part_value(part, env);
+        if let Some(value) = &value
+            && guard.is_some_and(|guard| !guard.charge(value.len()))
+        {
+            return None;
+        }
+        value
+    } else if !part.quoted && first {
+        tilde(s, env.home)
+    } else {
+        Some(Cow::Borrowed(s))
+    };
+    Some(match found {
+        Some(shown) => (shown, true),
+        None => (Cow::Borrowed(s), false),
+    })
 }
 
 /// 1.x `makeWord(parts, env)`.
 pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
+    if let Some(word) = shared_word(parts, env) {
+        return word;
+    }
     let mut raw = String::new();
     let mut text = String::new();
     let mut units = 0;
     let mut known = true;
     let mut glob = false;
+    let assign = assign_len(parts);
+    // An assignment's copy is replaced by the next one; any other word is held by its command.
+    let guard = env.guard.filter(|_| assign == 0);
     // Where an unquoted `[` is in raw: a glob when a `]` follows it.
     let mut bracket: Option<usize> = None;
     for (k, part) in parts.iter().enumerate() {
@@ -266,19 +365,11 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         }
         raw.push_str(&part.text);
         let s = part.text.as_str();
-        let shown = if !part.is_lit() {
-            part_value(part, env).unwrap_or_else(|| {
-                known = false;
-                Cow::Borrowed(s)
-            })
-        } else if !part.quoted && k == 0 {
-            tilde(s, env.home).unwrap_or_else(|| {
-                known = false;
-                Cow::Borrowed(s)
-            })
-        } else {
-            Cow::Borrowed(s)
+        let Some((shown, part_known)) = part_shown(part, k == 0, env, guard) else {
+            known = false; // past the line's budget
+            break;
         };
+        known &= part_known;
         if part.is_lit() && !part.quoted {
             glob |= shown.contains(['*', '?']) || brace_list(&shown);
             if bracket.is_none()
@@ -304,10 +395,10 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     let literal = !expanded && !glob && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
     Word {
         raw,
-        text,
+        text: Rc::from(text),
         known,
         quoted: parts.iter().any(|p| p.quoted),
-        assign: assign_len(parts),
+        assign,
         form: if literal {
             Form::Literal
         } else {
@@ -709,13 +800,59 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
             return None;
         }
         if let Some(to) = dir.step(style, &t) {
-            // The copy of the directory is what the budget counts, not the name added to it.
-            let charged = cx.guard.is_none_or(|guard| guard.charge(dir));
+            // The path is built here, and that is what the budget counts.
+            let charged = cx.guard.is_none_or(|guard| guard.charge(to.len()));
             return charged.then(|| to.text().into_owned());
         }
     }
+    if names_absolute(cx, word) {
+        return resolve_path(cx, value, None); // no directory to read
+    }
     let base = cx.dir_text(cwd);
     resolve_path(cx, value, base.as_deref())
+}
+
+/// Whether `word` names an absolute path, which Node's `path.resolve` reads without the
+/// directory: a rule then need not build it.
+pub(crate) fn names_absolute(cx: PathCx<'_>, word: &Word) -> bool {
+    let style = cx.at.style;
+    word.value()
+        .filter(|v| !v.is_empty() && !word.glob())
+        .is_some_and(|v| paths::is_absolute(style, &msys_path(v, style, cx.os_tmp)))
+}
+
+/// Whether [`word_path`] would stop the line, where 1.x's `wordPath` throws past V8's
+/// longest string, without building the path: 1.x makes every target's path before it
+/// checks one, so this marks the overflow for each, and a rule builds only the paths it reads.
+pub(super) fn word_path_fits(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> bool {
+    let Some(value) = word.value().filter(|v| !v.is_empty() && !word.glob()) else {
+        return true;
+    };
+    let style = cx.at.style;
+    let t = msys_path(value, style, cx.os_tmp);
+    if paths::is_absolute(style, &t) {
+        return cx.joins(&t, "", 1); // `${t}/`
+    }
+    // `${base}/${t}/`, for the full resolve and the step alike.
+    cwd.is_none_or(|dir| cx.fits(dir.units().saturating_add(js_len(&t)).saturating_add(2)))
+}
+
+/// The directory `word` names from `cwd`, as a `cd`, `git -C` or `patch -d` enters it: a
+/// relative name steps from a directory in normal form, which builds no path, and any other
+/// is resolved whole.
+pub(super) fn word_dir(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Option<Dir> {
+    let style = cx.at.style;
+    let step = cwd.zip(word.value().filter(|v| !v.is_empty() && !word.glob()));
+    if let Some((base, value)) = step {
+        let t = msys_path(value, style, cx.os_tmp);
+        if !word_path_fits(cx, word, cwd) {
+            return None;
+        }
+        if let Some(dir) = base.step(style, &t) {
+            return Some(dir);
+        }
+    }
+    word_path(cx, word, cwd).map(Dir::resolved)
 }
 
 /// 1.x `commandName(v)`: the basename, lower case, without `.exe`; `gpatch` is `patch`.

@@ -31,7 +31,7 @@ mod writes;
 pub(crate) use deletes::command_deletes;
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
-pub(crate) use words::{Guard, PathCx, Word, js_len, msys_path, resolve_path};
+pub(crate) use words::{Dir, Guard, PathCx, Word, js_len, msys_path, names_absolute, resolve_path};
 pub(crate) use writes::{CopyDest, Target, Verb, command_writes, landing, pathspec_pattern};
 
 #[cfg(test)]
