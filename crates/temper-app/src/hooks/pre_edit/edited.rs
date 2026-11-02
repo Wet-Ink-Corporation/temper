@@ -9,12 +9,13 @@ use crate::hooks::input::{given, js_string_or_empty};
 const EDITS_NOT_ITERABLE: &str = "edits is not iterable";
 
 /// What the edit leaves, as 1.x's `applyEdit` returns it.
-pub(super) enum After {
+pub(super) enum After<'a> {
     /// The new text.
     Text(String),
-    /// A `Write` whose `content` is neither a string nor absent: 1.x carries the value on and
-    /// throws where it first reads it as text.
-    NotText,
+    /// A `Write` whose `content` is neither a string nor absent: 1.x carries the value on.
+    /// The manifest checks read it as `String(value)`, and the scan and the line-based
+    /// manifest readers throw on it.
+    NotText(&'a JsValue),
 }
 
 /// 1.x `applyEdit(before, ti, tool)` on the hook input: `None` when the edit fails on its own.
@@ -27,16 +28,16 @@ pub(super) enum After {
 /// [`HookError::InputType`] or [`HookError::NullInput`] where 1.x's `for` loop throws: on
 /// `edits` that are not iterable, and on a `null` step reached after the steps before it
 /// applied.
-pub(super) fn edited_text(
+pub(super) fn edited_text<'a>(
     before: &str,
     tool: Option<&str>,
-    tool_input: Option<&JsValue>,
-) -> Result<Option<After>, HookError> {
+    tool_input: Option<&'a JsValue>,
+) -> Result<Option<After<'a>>, HookError> {
     let op = match tool {
         Some("Write") => match given(tool_input, "content") {
             None => EditOp::Write { content: "" },
             Some(JsValue::String(content)) => EditOp::Write { content },
-            Some(_) => return Ok(Some(After::NotText)),
+            Some(content) => return Ok(Some(After::NotText(content))),
         },
         Some("MultiEdit") => match given(tool_input, "edits") {
             None => EditOp::Replace(Vec::new()),

@@ -2,10 +2,13 @@
 //! one-crate workspace): what passes, what is decided, and what fails as 1.x throws (the text
 //! after `failed: ` is the Rust error's, OC-3 (p)).
 
-use super::{Ws, decision, files};
+use super::{Ws, decision, files, reason};
 use crate::engine::HookError;
 
 const LIB: &str = "/ws/crates/ledger-domain/src/lib.rs";
+/// V8's text when `lintSections` or `depNamesByLine` splits manifest content that is not a
+/// string (`for (const line of toml.split(..))`).
+const MANIFEST_NOT_TEXT: &str = "toml.split is not a function or its return value is not iterable";
 
 fn run(ws: &Ws, tool: &str, tool_input: &str) -> Result<&'static str, String> {
     let json = format!(
@@ -75,9 +78,14 @@ fn a_file_path_that_is_not_a_string_fails() {
         r#"{"file_path":{}}"#,
         r#"{"file_path":true}"#,
     ]
-    .map(|ti| run(&ws, r#""Write""#, ti).is_err());
+    .map(|ti| run(&ws, r#""Write""#, ti));
 
-    assert_eq!(got, [true; 3], "`path.resolve` throws a TypeError");
+    // V8 goes on with `. Received type number (5)`; the value is left out (D16(p)).
+    let want: [Result<&str, String>; 3] =
+        std::array::from_fn(
+            |_| Err(r#"The "paths[0]" argument must be of type string"#.to_owned()),
+        );
+    assert_eq!(got, want, "`path.resolve` throws a TypeError");
 }
 
 /// 1.x applies the edit, then throws where the text is first read as a string: the manifest
@@ -94,14 +102,87 @@ fn written_content_that_is_not_a_string_fails_only_where_1x_reads_it() {
     };
 
     let got = [
-        content(LIB, "5").is_err(),
-        content(LIB, "{}").is_err(),
-        content("/ws/crates/ledger-domain/Cargo.toml", "5").is_err(),
-        content("/ws/notes.md", "5").is_err(),
-        content(LIB, "null").is_err(),
+        content(LIB, "5"),
+        content(LIB, "{}"),
+        content("/ws/crates/ledger-domain/Cargo.toml", "5"),
+        content("/ws/notes.md", "5"),
+        content(LIB, "null"),
     ];
 
-    assert_eq!(got, [true, true, true, false, false], "`ti.content ?? ''`");
+    let scan = || Err("src.split is not a function".to_owned());
+    assert_eq!(
+        got,
+        [
+            scan(),
+            scan(),
+            Err(MANIFEST_NOT_TEXT.to_owned()),
+            Ok("none"),
+            Ok("ask"),
+        ],
+        "`ti.content ?? ''`; an empty lib.rs removes its test"
+    );
+}
+
+/// 1.x's `parseToml` reads `String(text ?? '')`, so written content that is not a string is
+/// checked as its JS string when that, and a non-empty file before it, parse; otherwise the
+/// line-based fallback throws on the value.
+#[test]
+fn manifest_content_that_is_not_a_string_is_checked_as_its_js_string() {
+    let ws = Ws::new(files().with_file("/ws/crates/bad/Cargo.toml", "[package\n"));
+    let content = |file: &str, content: &str| {
+        let json = format!(
+            r#"{{"tool_name":"Write","cwd":"/ws","agent_type":"rust-implementer","tool_input":{{"file_path":"{file}","content":{content}}}}}"#
+        );
+        ws.hook(&json).map_err(|e| e.to_string())
+    };
+    let new = "/ws/crates/newc/Cargo.toml";
+    let member = "/ws/crates/ledger-domain/Cargo.toml";
+
+    let decided = [
+        content(new, "[]"),
+        content(new, r#"["a = 1"]"#),
+        content(new, r#"["[package]\nname='x'\n[lints]\nworkspace = true"]"#),
+        content(member, "[]"),
+    ]
+    .map(|got| got.map(|outcome| (decision(&outcome), reason(&outcome))));
+    let failed = [
+        content(new, r#"[["[package]"],"x=1"]"#),
+        content(new, "true"),
+        content(member, "{}"),
+        content("/ws/crates/bad/Cargo.toml", r#"["a = 1"]"#),
+    ];
+
+    let changes = |key: &str| {
+        format!(
+            "- crates/ledger-domain/Cargo.toml: `package.{key}` changes ({{\"workspace\":true}} -> unset); MSRV, edition and resolver changes are human decisions (H-16)."
+        )
+    };
+    assert_eq!(
+        decided,
+        [
+            Ok(("none", "\n".to_owned())),
+            Ok(("none", "\n".to_owned())),
+            Ok((
+                "ask",
+                "temper needs your approval:\n- crates/newc/Cargo.toml: new crate `x` in the workspace. Crate boundaries are a human decision (H-16, ARC-07), and the gate fails until the crate has its charter (`AGENTS.md`, ARC-08).\n".to_owned()
+            )),
+            Ok((
+                "ask",
+                format!(
+                    "temper needs your approval:\n{}\n{}\n",
+                    changes("rust-version"),
+                    changes("edition")
+                )
+            )),
+        ],
+        "printed by 1.x's preEdit on the same tree"
+    );
+    let failure = || Err(MANIFEST_NOT_TEXT.to_owned());
+    assert_eq!(
+        failed,
+        [failure(), failure(), failure(), failure()],
+        "`String([['[package]'], 'x=1'])` is `[package],x=1`; `lintSections` splits the value"
+    );
 }
 
 #[test]
