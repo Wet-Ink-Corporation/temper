@@ -56,15 +56,19 @@ pub(crate) fn emit(stdout: &str, stderr: &str, exit: Exit) -> Exit {
 /// Reports `error` on stderr as `temper: ` and the error with each of its causes, joined with
 /// `: `, and returns [`Exit::Failure`].
 pub(crate) fn fail(error: &dyn Error) -> Exit {
-    let mut text = format!("temper: {error}");
+    emit("", &format!("temper: {}\n", chain(error)), Exit::Failure)
+}
+
+/// `error` and each of its causes, joined with `: ` (anyhow's `{:#}` shape).
+pub(crate) fn chain(error: &dyn Error) -> String {
+    let mut text = error.to_string();
     let mut cause = error.source();
     while let Some(source) = cause {
         text.push_str(": ");
         text.push_str(&source.to_string());
         cause = source.source();
     }
-    text.push('\n');
-    emit("", &text, Exit::Failure)
+    text
 }
 
 fn write_to(mut out: impl Write, text: &str) -> io::Result<()> {

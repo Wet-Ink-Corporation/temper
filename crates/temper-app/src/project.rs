@@ -1,9 +1,9 @@
-//! Where the project and each file's crate are (1.x `project.mjs`: `discover`, `findUp`,
-//! `crateOf`).
+//! Where the project and each file's crate are (1.x `project.mjs`: `discover`, `loadConfig`,
+//! `findUp`, `crateOf`).
 
 use std::path::Path;
 
-use temper_domain::{LibTarget, js_trim};
+use temper_domain::{Config, LibTarget, js_trim};
 
 use crate::engine::RunEnv;
 use crate::git;
@@ -18,9 +18,65 @@ pub(crate) struct Project {
     pub(crate) root: String,
 }
 
-/// 1.x `discover(cwd)`: the project root, or `None` when this is not a Rust project, which
-/// is when neither the root nor any ancestor of the working directory has a `Cargo.toml`.
+/// The project a hook runs in, with what 1.x's `discover` returns beside the root.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Workspace {
+    /// The project root, as [`Project::root`].
+    pub(crate) root: String,
+    /// Where temper keeps its state: `<git common dir>/temper` in a repository, so every
+    /// worktree shares one, otherwise `<root>/target/temper`.
+    pub(crate) state_dir: String,
+    /// `.claude/temper.json` under the root, or the defaults.
+    pub(crate) config: Config,
+}
+
+/// 1.x `discover(cwd)` for the working directory: the project root, or `None` when this is not
+/// a Rust project, which is when neither the root nor any ancestor of the working directory
+/// has a `Cargo.toml`.
 pub(crate) fn discover(ports: &impl Ports, env: &RunEnv) -> Option<Project> {
+    let cwd = env.cwd.to_string_lossy();
+    locate(ports, env, &cwd).map(|found| Project { root: found.root })
+}
+
+/// 1.x `discover(start)` in full: the root, the state dir and the config, for an absolute
+/// `start`.
+pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Option<Workspace> {
+    let style = env.style;
+    let Located { root, git_root } = locate(ports, env, start)?;
+    let state_dir = match git_root {
+        Some(top) => {
+            let common = match git::common_dir(ports.process(), Path::new(&top)) {
+                Some(dir) => paths::resolve(style, &top, js_trim(&dir)),
+                // 1.x falls back to `<git root>/.git` when git cannot say.
+                None => paths::join(style, &top, ".git"),
+            };
+            paths::join(style, &common, "temper")
+        }
+        None => paths::join(style, &paths::join(style, &root, "target"), "temper"),
+    };
+    let config = paths::join(style, &paths::join(style, &root, ".claude"), "temper.json");
+    let config = match ports.files().read_text(Path::new(&config)) {
+        Ok(Some(text)) => Config::load(Some(&text)).config,
+        // 1.x's `readText` turns any failure into null, which means the defaults.
+        Ok(None) | Err(_) => Config::defaults(),
+    };
+    Some(Workspace {
+        root,
+        state_dir,
+        config,
+    })
+}
+
+/// Where `discover` found the project.
+struct Located {
+    root: String,
+    git_root: Option<String>,
+}
+
+/// The root seen from `start`: git's top level when `start` is in a repository, otherwise the
+/// outermost directory above `start` with a `Cargo.toml`; `None` when this is not a Rust
+/// project.
+fn locate(ports: &impl Ports, env: &RunEnv, start: &str) -> Option<Located> {
     let files = ports.files();
     let cwd = env.cwd.to_string_lossy();
     let at = PathEnv {
@@ -28,21 +84,32 @@ pub(crate) fn discover(ports: &impl Ports, env: &RunEnv) -> Option<Project> {
         cwd: &cwd,
     };
     let has_manifest = |dir: &str| exists(files, &paths::join(at.style, dir, "Cargo.toml"));
-    let root = match git::toplevel(ports.process(), &env.cwd) {
+    match git::toplevel(ports.process(), Path::new(start)) {
         Some(top) => {
             let root = paths::resolve(at.style, at.cwd, js_trim(&top));
             // A git repository is a Rust project only with a manifest at its top or above the
-            // working directory; one below it does not count.
-            (has_manifest(&root) || find_up(at, &cwd, has_manifest).is_some()).then_some(root)
+            // start; one below it does not count.
+            let rust = has_manifest(&root) || find_up(at, start, has_manifest).is_some();
+            // The root and the git root are one path, held twice as 1.x's object holds it.
+            rust.then(|| Located {
+                git_root: Some(root.clone()),
+                root,
+            })
         }
-        None => outermost_manifest_dir(at, has_manifest),
-    }?;
-    Some(Project { root })
+        None => outermost_manifest_dir(at, start, has_manifest).map(|root| Located {
+            root,
+            git_root: None,
+        }),
+    }
 }
 
-/// The outermost ancestor of the working directory, itself included, that has a manifest.
-fn outermost_manifest_dir(at: PathEnv<'_>, has_manifest: impl Fn(&str) -> bool) -> Option<String> {
-    let mut outer = find_up(at, at.cwd, &has_manifest)?;
+/// The outermost ancestor of `start`, itself included, that has a manifest.
+fn outermost_manifest_dir(
+    at: PathEnv<'_>,
+    start: &str,
+    has_manifest: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let mut outer = find_up(at, start, &has_manifest)?;
     loop {
         let parent = paths::dirname(at.style, &outer);
         if parent == outer {

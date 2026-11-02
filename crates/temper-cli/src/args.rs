@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 
 use temper_app::{OutputFormat, ScanArgs, ScanTargets};
+use temper_domain::{HookEvent, UnknownHookEvent};
 
 /// The 1.x usage text, verbatim from `scripts/temper.mjs`, so a script that matches it keeps
 /// working. It lists every 1.x subcommand, including those not yet ported.
@@ -18,6 +19,8 @@ pub(crate) enum Command {
     Version,
     /// `temper scan --all` or `temper scan FILES..`.
     Scan(ScanArgs),
+    /// `temper hook <event>` for a ported event, or a name that is no event at all.
+    Hook(Result<HookEvent, UnknownHookEvent>),
     /// Print the usage text, as asked for or because the command line is not understood.
     Usage(UsageExit),
 }
@@ -44,6 +47,9 @@ pub(crate) fn parse<I: IntoIterator<Item = OsString>>(args: I) -> Command {
     }
     if first == "scan" {
         return scan(args);
+    }
+    if first == "hook" {
+        return hook(args.next());
     }
     match args.peek() {
         None if first == "--version" => Command::Version,
@@ -80,11 +86,38 @@ fn scan(args: impl Iterator<Item = OsString>) -> Command {
     Command::Scan(ScanArgs { targets, format })
 }
 
+/// `hook`'s event, decoded lossily, with a missing one read as JS's `undefined`, as 1.x's
+/// `HOOKS[argv[1]]` sees it. 1.x ignores any further argument. An event whose handler is not
+/// ported yet is an unported subcommand, like any other (port plan 2b-1).
+fn hook(event: Option<OsString>) -> Command {
+    let name = event.map_or_else(
+        || "undefined".to_owned(),
+        |raw| {
+            raw.into_string()
+                .unwrap_or_else(|raw| raw.to_string_lossy().into_owned())
+        },
+    );
+    match name.parse::<HookEvent>() {
+        Ok(event @ (HookEvent::PostTool | HookEvent::UserPrompt)) => Command::Hook(Ok(event)),
+        Ok(
+            HookEvent::SessionStart
+            | HookEvent::PreEdit
+            | HookEvent::PreBash
+            | HookEvent::PreHandback
+            | HookEvent::Stop
+            | HookEvent::SubagentStop
+            | HookEvent::SubagentStart,
+        ) => Command::Usage(UsageExit::Unknown),
+        Err(unknown) => Command::Hook(Err(unknown)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Command, UsageExit, parse};
     use std::ffi::OsString;
     use temper_app::{OutputFormat, ScanArgs, ScanTargets};
+    use temper_domain::HookEvent;
 
     fn parse_strs(args: &[&str]) -> Command {
         parse(args.iter().map(OsString::from))
@@ -170,6 +203,33 @@ mod tests {
                 Command::Usage(UsageExit::Unknown),
             ],
             "no file and no --all"
+        );
+    }
+
+    /// 1.x looks the event up by name; a missing one is JS's `undefined`. Events not ported yet
+    /// stay unported subcommands, as `hook stop` above.
+    #[test]
+    fn hook_reads_its_event_and_ignores_the_rest() {
+        let hook = |name: &str| Command::Hook(name.parse::<HookEvent>());
+
+        assert_eq!(
+            [
+                parse_strs(&["hook", "post-tool"]),
+                parse_strs(&["hook", "user-prompt", "extra"]),
+                parse_strs(&["hook"]),
+                parse_strs(&["hook", ""]),
+                parse_strs(&["hook", "bogus"]),
+                parse_strs(&["hook", "pre-edit"]),
+            ],
+            [
+                hook("post-tool"),
+                hook("user-prompt"),
+                hook("undefined"),
+                hook(""),
+                hook("bogus"),
+                Command::Usage(UsageExit::Unknown),
+            ],
+            "the hook command"
         );
     }
 

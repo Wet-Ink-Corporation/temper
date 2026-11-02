@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use temper_domain::{PathStyle, Scanner};
+use temper_domain::{HookEvent, HookOutcome, PathStyle, Scanner};
 
+use crate::hooks::{self, HookInput};
 use crate::ports::{FsError, Ports};
 use crate::scan;
 
@@ -14,6 +15,13 @@ pub struct RunEnv {
     pub cwd: PathBuf,
     /// The platform's path rules.
     pub style: PathStyle,
+    /// `CLAUDE_PLUGIN_DATA` when it is set and not empty: where the skill markers live.
+    pub plugin_data: Option<PathBuf>,
+    /// Node's `os.tmpdir()`, where the skill markers live without `plugin_data`.
+    pub temp_dir: PathBuf,
+    /// `CLAUDE_CODE_REMOTE_SESSION_ID` when it is set and not empty: the cloud session that
+    /// telemetry rows name.
+    pub remote_session: Option<String>,
 }
 
 /// The use cases, over the ports `P`.
@@ -44,6 +52,39 @@ impl<P: Ports> Engine<P> {
     pub fn scan(&self, args: &ScanArgs) -> Result<CommandOutput, CommandError> {
         scan::run(&self.ports, &self.env, &self.scanner, args)
     }
+
+    /// `temper hook <event>` with the parsed hook input: the handler's answer. So far only
+    /// `post-tool` and `user-prompt` are ported.
+    ///
+    /// # Errors
+    ///
+    /// [`HookError::NotPorted`] for the other events; [`HookError::NullInput`] when the input
+    /// is JSON `null`; [`HookError::Files`] when a file the handler must write cannot be.
+    pub fn hook(&self, event: HookEvent, input: &HookInput) -> Result<HookOutcome, HookError> {
+        hooks::run(&self.ports, &self.env, event, input)
+    }
+}
+
+/// Why a hook handler could not answer. 1.x reports each as `temper hook <event> failed: <msg>`
+/// and lets the action proceed.
+#[derive(Debug, thiserror::Error)]
+pub enum HookError {
+    /// A file the handler must write could not be.
+    #[error(transparent)]
+    Files(#[from] FsError),
+    /// The hook input is JSON `null`, which 1.x's first property read throws on; the message
+    /// is V8's (port plan 2-22).
+    #[error("Cannot read properties of null (reading '{field}')")]
+    NullInput {
+        /// The first property the handler reads.
+        field: &'static str,
+    },
+    /// The event's handler is not in this build yet (port plan 2-13).
+    #[error("temper hook {} is not ported to this engine yet", event.name())]
+    NotPorted {
+        /// The event.
+        event: HookEvent,
+    },
 }
 
 /// The arguments of `temper scan`.
