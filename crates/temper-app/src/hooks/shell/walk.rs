@@ -3,10 +3,9 @@
 //!
 //! Variables live in a journal ([`Vars`]) and directories are shared [`Dir`]s, so opening and
 //! closing a subshell or a substitution costs the names it changes, not the variables before
-//! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the directory it
-//! builds, never a re-read of the whole path ([`cd_step`]).
+//! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
+//! never a copy or a re-read of the whole path ([`cd_step`]).
 
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -14,7 +13,7 @@ use temper_domain::{PathStyle, js_trim};
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
-    Dir, Mark, PathCx, Vars, Word, WordEnv, fits_js, git_rev_parse, is_ps_var, js_len, make_word,
+    Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len, make_word,
     name_of, push_js, word_path,
 };
 use super::wrappers::{Run, Xargs, inner_script};
@@ -114,15 +113,21 @@ pub(crate) struct TooLong;
 /// 1.x `parseCommands(cmd, opts)`.
 pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Command>, TooLong> {
     let cwd = opts.cwd.map(|dir| {
-        Dir::from(crate::paths::resolve(
+        Dir::resolved(crate::paths::resolve(
             opts.paths.at.style,
             opts.paths.at.cwd,
             dir,
         ))
     });
+    // A resolve past V8's longest string stops the walk whoever asked for it.
+    let own = Guard::default();
+    let guard = opts.paths.guard.unwrap_or(&own);
+    let paths = PathCx {
+        guard: Some(guard),
+        ..opts.paths
+    };
     let mut walker = Walker {
-        opts,
-        normal: cwd.clone(), // a second handle on the start directory, which is resolved
+        opts: ParseOpts { paths, ..opts },
         overflow: Cell::new(false),
         env: Env {
             cwd,
@@ -132,7 +137,7 @@ pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Comma
         depth: 0,
     };
     walker.run(cmd);
-    if walker.overflow.get() {
+    if walker.overflow.get() || guard.overflowed() {
         return Err(TooLong);
     }
     Ok(walker.out)
@@ -164,10 +169,6 @@ pub(super) struct Meta {
 
 pub(super) struct Walker<'o> {
     pub(super) opts: ParseOpts<'o>,
-    /// The last directory `cd` resolved, which is in Node's normal form: a relative `cd` from
-    /// it steps the value's names instead of normalising the whole path again, so a line of
-    /// `cd a/b;` costs a copy of the directory per `cd` (1.x normalises it each time).
-    normal: Option<Dir>,
     /// A word, directory or joined script grew past V8's longest string (see [`TooLong`]).
     pub(super) overflow: Cell<bool>,
     pub(super) env: Env,
@@ -205,8 +206,8 @@ impl Walker<'_> {
         WordEnv {
             ps,
             home: self.opts.home,
-            cwd: self.env.cwd.as_deref(),
-            prev: self.env.prev.as_deref(),
+            cwd: self.env.cwd.as_ref(),
+            prev: self.env.prev.as_ref(),
             tmp: self.opts.tmp,
             top: self.opts.top,
             git_dir: self.opts.git_dir,
@@ -217,14 +218,25 @@ impl Walker<'_> {
     }
 
     /// 1.x `wordPath(w, cwd)`.
-    pub(super) fn word_path(&self, word: &Word, cwd: Option<&str>) -> Option<String> {
+    pub(super) fn word_path(&self, word: &Word, cwd: Option<&Dir>) -> Option<String> {
         word_path(self.opts.paths, word, cwd)
     }
 
     /// `dir`, unless it is longer than a JS string can be: 1.x's `path.resolve` throws there,
     /// so this marks the overflow that stops the reader (see [`TooLong`]).
     pub(super) fn capped(&self, dir: Option<Dir>) -> Option<Dir> {
-        dir.filter(|d| fits_js(d, &self.overflow))
+        dir.filter(|d| {
+            let fits = self.opts.paths.fits(d.units());
+            if !fits {
+                self.overflow.set(true);
+            }
+            fits
+        })
+    }
+
+    /// A string grew past V8's longest, where 1.x throws (see [`TooLong`]).
+    fn stopped(&self) -> bool {
+        self.overflow.get() || self.opts.paths.guard.is_some_and(Guard::overflowed)
     }
 
     /// Runs `walk` one level deeper (1.x's `depth + 1`).
@@ -243,6 +255,10 @@ impl Walker<'_> {
         let mut scopes: Vec<Scope> = Vec::new();
         let mut prev_body: Option<Rc<str>> = None;
         for item in lex::lex(src) {
+            // 1.x has thrown by now: nothing after it is read.
+            if self.stopped() {
+                return;
+            }
             match item {
                 Item::Open => scopes.push(Scope {
                     cwd: self.env.cwd.clone(),
@@ -614,13 +630,9 @@ impl Walker<'_> {
             }
             self.env.cwd = match a.as_slice() {
                 [] if name == "pushd" => None,
-                [] => Some(Dir::from(self.opts.home)),
+                [] => Some(Dir::given(self.opts.home)),
                 [only] if only.value() == Some("-") => self.env.prev.clone(),
-                [only] => {
-                    let dir = self.capped(self.cd_into(only));
-                    self.normal.clone_from(&dir); // the handle the next `cd` compares with
-                    dir
-                }
+                [only] => self.capped(self.cd_into(only)),
                 _ => None,
             };
         }
@@ -630,60 +642,25 @@ impl Walker<'_> {
     /// The directory `cd <word>` enters: Node's `path.resolve(cwd, value)`, stepping a relative
     /// value's names from a directory already in normal form ([`cd_step`]).
     fn cd_into(&self, word: &Word) -> Option<Dir> {
-        let normal = self.env.cwd.as_ref().filter(|cwd| {
-            self.normal
-                .as_ref()
-                .is_some_and(|normal| Rc::ptr_eq(normal, cwd))
-        });
-        let step = normal.zip(word.value().filter(|_| !word.glob()));
+        let step = self
+            .env
+            .cwd
+            .as_ref()
+            .zip(word.value().filter(|_| !word.glob()));
         if let Some((base, value)) = step
             && let Some(dir) = cd_step(self.opts.paths.at.style, base, value)
         {
             return Some(dir);
         }
-        self.word_path(word, self.env.cwd.as_deref()).map(Dir::from)
+        self.word_path(word, self.env.cwd.as_ref())
+            .map(Dir::resolved)
     }
 }
 
-/// `path.resolve(base, value)` for a `base` in normal form and a relative `value`, as Node's
-/// normalisation reads it: each name is appended and each `..` takes the parent, skipping
-/// empty names and `.`. That costs `base` once plus `value`, where the full resolve walks the
-/// whole joined path. `None` for an empty or absolute value, or on Windows one that names a
-/// drive (`D:x`), for the full resolve to read.
+/// `path.resolve(base, value)` for a `base` in normal form and a relative `value`, stepping
+/// the value's names from `base` ([`Dir::step`]): that costs the value, never the directory.
 pub(super) fn cd_step(style: PathStyle, base: &Dir, value: &str) -> Option<Dir> {
-    let windows = style == PathStyle::Windows;
-    let rooted = windows && (value.starts_with('\\') || value.contains(':'));
-    if value.is_empty() || value.starts_with('/') || rooted {
-        return None;
-    }
-    // Windows reads `\` as a separator too: as `/`, the split below finds both with `memchr`.
-    let value = if windows && value.contains('\\') {
-        Cow::Owned(value.replace('\\', "/"))
-    } else {
-        Cow::Borrowed(value)
-    };
-    let sep = if windows { '\\' } else { '/' };
-    let mut names = value
-        .split('/')
-        .filter(|name| !name.is_empty() && *name != ".")
-        .peekable();
-    if names.peek().is_none() {
-        return Some(Rc::clone(base));
-    }
-    let mut dir = String::with_capacity(base.len().saturating_add(value.len()).saturating_add(1));
-    dir.push_str(base);
-    for name in names {
-        if name == ".." {
-            let parent = crate::paths::dirname(style, &dir).len();
-            dir.truncate(parent);
-        } else {
-            if !dir.ends_with(sep) {
-                dir.push(sep);
-            }
-            dir.push_str(name);
-        }
-    }
-    Some(Dir::from(dir))
+    base.step(style, value)
 }
 
 /// A command's words, and whether they were made as PowerShell's.

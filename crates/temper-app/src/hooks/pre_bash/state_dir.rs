@@ -11,7 +11,9 @@ use std::borrow::Cow;
 use temper_domain::PathStyle;
 
 use crate::hooks::HookCall;
-use crate::hooks::shell::{ParseOpts, PathCx, Target, command_writes, msys_path, parse_commands};
+use crate::hooks::shell::{
+    Guard, ParseOpts, PathCx, Target, command_writes, msys_path, parse_commands,
+};
 use crate::paths::{self, PathEnv};
 use crate::ports::Ports;
 use crate::project::Workspace;
@@ -30,9 +32,11 @@ pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, c
     };
     let temp = env.temp_dir.to_string_lossy();
     let home = env.home.to_string_lossy();
+    let guard = Guard::default();
     let cx = PathCx {
         at: PathEnv { style, cwd: &cwd },
         os_tmp: &temp,
+        guard: Some(&guard),
     };
     let state = paths::resolve(style, &cwd, &ws.state_dir);
     // In a repository, `$(git rev-parse --git-common-dir)` is the state dir's parent.
@@ -57,10 +61,18 @@ pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, c
         state: fold(style, slash(&state)),
         git: ws.git,
     };
-    commands
+    // 1.x lists every target with its path (`writeTargets`) before it checks one, so a path
+    // past V8's longest string anywhere in the line throws, and `readerRule` falls back
+    // (#201 F2). Once one has, nothing after it is read.
+    let targets: Vec<Target<'_>> = commands
         .iter()
+        .take_while(|_| !guard.overflowed())
         .flat_map(|c| command_writes(c, cx))
-        .any(|t| probe.target(&t, &start))
+        .collect();
+    !guard.overflowed()
+        && targets
+            .iter()
+            .any(|t| probe.target(t, &start) && !guard.overflowed())
 }
 
 /// What a destination is compared with.
@@ -74,7 +86,11 @@ struct Probe<'a> {
 impl Probe<'_> {
     /// A target in the state dir, or a copy whose source lands there (`mv temper .git/`).
     fn target(&self, t: &Target<'_>, start: &str) -> bool {
-        let base = t.cwd.as_deref().unwrap_or(start);
+        let cwd = self.cx.dir_text(t.cwd.as_ref());
+        if self.cx.stopped() {
+            return false; // 1.x has thrown: the rule falls back
+        }
+        let base = cwd.as_deref().unwrap_or(start);
         let text = t.word.text();
         let value = t.word.value().filter(|_| !t.word.glob());
         if self.names_state(text, value, base) {
@@ -119,6 +135,10 @@ impl Probe<'_> {
         let named = msys_path(value.unwrap_or(text), style, self.cx.os_tmp);
         let mut p = slash(&named).into_owned();
         if !anchored(&p) {
+            // 1.x's `${slash(base)}/${p}` throws past V8's longest string (#201 F2).
+            if !self.cx.joins(base, &p, 1) {
+                return false;
+            }
             p = [slash(base).as_ref(), "/", &p].concat();
         }
         let f = fold(style, Cow::Owned(paths::posix_normalize(&p)));

@@ -3,7 +3,11 @@
 //! Phase 2e progress). A scan that read back over its input from each start would take
 //! minutes here; each of these reads it forward once per level.
 
-use super::{ParseOpts, command_deletes, command_writes, cx, parse_commands, parse_with, path_of};
+use super::{
+    Command, Dir, ParseOpts, command_deletes, command_writes, cx, parse_commands, parse_with,
+    path_of,
+};
+use crate::hooks::shell::Guard;
 use crate::hooks::shell::walk::TooLong;
 
 const N15: usize = 1 << 15;
@@ -232,4 +236,106 @@ fn a_cd_of_several_names_repeated_lands_the_write_under_every_one() {
     let a = ["/r", &"/a".repeat(N15), "/o"].concat();
     expect("cd a/b; ", N15, "> o", (1, 1, Some(&ab)));
     expect("cd ./a; ", N15, "> o", (1, 1, Some(&a)));
+}
+
+/// The commands' directories between them, each shared node counted once.
+fn held(commands: &[Command]) -> usize {
+    Dir::held_bytes(commands.iter().filter_map(|c| c.cwd.as_ref()))
+}
+
+/// Each directory holds its parent and the names it adds, so a line of `pushd` or `cd`
+/// holds each name once (port plan item 50). As whole strings, as in 1.x, the first shape
+/// held 1,161 MB and the second 2,763 MB (7.2 s), and `cd $d; ` x 4000 took 113 s.
+#[test]
+fn a_line_of_cds_holds_each_name_once_however_deep_it_goes() {
+    let r = || ParseOpts {
+        cwd: Some("/r"),
+        ..super::opts()
+    };
+    let pushed = parse_with(
+        &["pushd a; : ; ".repeat(N15), "> o".to_owned()].concat(),
+        r(),
+    );
+    assert_eq!(pushed.len(), N15.saturating_add(1));
+    let deep = ["/r", &"/a".repeat(N15)].concat();
+    assert_eq!(dir_of(pushed.last()), Some(deep));
+    assert!(held(&pushed) < 4 * N15, "{} bytes", held(&pushed));
+
+    let d = ["d=a; ", &"d=$d/a; ".repeat(4000)].concat();
+    let d_value = ["a", &"/a".repeat(4000)].concat();
+    let line = [d.as_str(), &"cd $d; : ; ".repeat(600), "> o"].concat();
+    let ran = parse_with(&line, r());
+    assert_eq!(ran.len(), 601);
+    let want = ["/r", &["/", d_value.as_str()].concat().repeat(600)].concat();
+    assert_eq!(dir_of(ran.last()), Some(want));
+    assert!(held(&ran) < 601 * 8100, "{} bytes", held(&ran));
+
+    let line = [d.as_str(), &"cd $d; ".repeat(4000), "> o"].concat();
+    assert!(line.len() < 64 * 1024);
+    let ran = parse_with(&line, r());
+    let want = ["/r", &["/", d_value.as_str()].concat().repeat(4000), "/o"].concat();
+    let first = ran.iter().flat_map(|c| command_writes(c, cx())).next();
+    assert_eq!(first.and_then(|t| t.path), Some(want));
+}
+
+/// A `..` takes a name off without copying the directory, and several in one value step up
+/// together, so these land where the full resolve does.
+#[test]
+fn a_line_of_cd_up_steps_back_through_the_shared_names() {
+    let r = || ParseOpts {
+        cwd: Some("/r"),
+        ..super::opts()
+    };
+    let up = [
+        "cd ",
+        &"a/".repeat(N15),
+        "; ",
+        &"cd ..; ".repeat(N15 - 1),
+        "> o",
+    ]
+    .concat();
+    assert_eq!(
+        first_write(&parse_with(&up, r())),
+        Some("/r/a/o".to_owned())
+    );
+    // `$u` climbs the 4001 names `$d` adds, so each pair comes back to `/r`.
+    let d = [
+        "d=a; ",
+        &"d=$d/a; ".repeat(4000),
+        "u=..; ",
+        &"u=$u/..; ".repeat(4000),
+    ]
+    .concat();
+    let line = [d.as_str(), &"cd $d; cd $u; ".repeat(2000), "cd a; > o"].concat();
+    assert_eq!(
+        first_write(&parse_with(&line, r())),
+        Some("/r/a/o".to_owned())
+    );
+}
+
+/// The text of a command's directory.
+fn dir_of(c: Option<&Command>) -> Option<String> {
+    c.and_then(|c| c.cwd.as_ref())
+        .map(|d| d.text().into_owned())
+}
+
+/// The path of a line's first write.
+fn first_write(commands: &[Command]) -> Option<String> {
+    let first = commands.iter().flat_map(|c| command_writes(c, cx())).next();
+    first.and_then(|t| t.path)
+}
+
+/// Past [`Dir::BUDGET`] bytes of directory text built for the rules, the line stops as at
+/// V8's longest string.
+#[test]
+fn the_directory_text_a_line_builds_is_held_to_a_budget() {
+    let guard = Guard::default();
+    let dir = Dir::resolved(["/", &"a".repeat(1 << 20)].concat());
+    let calls = Dir::BUDGET / dir.text().len();
+    for _ in 0..calls {
+        assert_eq!(guard.dir_text(&dir), Some(dir.text()));
+    }
+    assert!(!guard.overflowed());
+    assert_eq!(guard.dir_text(&dir), None);
+    assert!(guard.overflowed());
 }

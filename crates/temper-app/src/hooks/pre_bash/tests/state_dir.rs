@@ -254,3 +254,21 @@ fn a_command_the_reader_gives_up_on_is_not_a_state_dir_write() {
     .concat();
     answers(&Ws::new(), &[], &[&doubled]);
 }
+
+/// #201 re-review F2: a path joined from a directory and a name past V8's longest string
+/// throws in 1.x's `path.resolve`, and `readerRule` falls back, so neither the state-dir deny
+/// nor the protected-config ask answers (1.x prints nothing for both lines, 2.4 s and 2.1 s).
+/// The directory and the name each fit: `$X` is 2^26 chars, the name seven of it.
+#[test]
+fn a_path_joined_past_v8s_longest_string_is_no_state_dir_or_protected_write() {
+    let x26 = [
+        "X=a; ",
+        &"X=$X$X; ".repeat(26),
+        "cd $X; Y=",
+        &"$X".repeat(7),
+    ]
+    .concat();
+    let state = [x26.as_str(), "/.git/temper/gate/x; echo > $Y"].concat();
+    let config = [x26.as_str(), "/clippy.toml; echo > $Y"].concat();
+    answers(&Ws::new(), &[], &[&state, &config]);
+}

@@ -11,7 +11,7 @@ use temper_domain::PathStyle;
 
 use super::git::git_command;
 use super::walk::Command;
-use super::words::{Dir, PathCx, Word};
+use super::words::{Dir, PathCx, Word, word_path};
 use super::wrappers::cluster_reaches;
 
 /// How a target is written.
@@ -64,6 +64,10 @@ pub(crate) struct Target<'c> {
     pub(crate) cwd: Option<Dir>,
     /// For a copy, the destination's sources.
     pub(crate) copy: Option<CopyOp<'c>>,
+    /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
+    /// the directory is unknown. Made for every target, as 1.x makes it, so a path past V8's
+    /// longest string stops the rule wherever it is (#201 F2).
+    pub(crate) path: Option<String>,
 }
 
 /// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would.
@@ -71,11 +75,13 @@ pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'
     let mut out = Vec::new();
     let mut add =
         |verb: Verb<'c>, word: Cow<'c, Word>, copy: Option<CopyOp<'c>>, cwd: Option<Dir>| {
+            let path = word_path(cx, &word, cwd.as_ref());
             out.push(Target {
                 verb,
                 word,
                 cwd,
                 copy,
+                path,
             });
         };
     // Each target runs in the command's directory; `Dir` is a shared handle.

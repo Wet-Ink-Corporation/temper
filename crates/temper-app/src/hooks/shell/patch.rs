@@ -253,7 +253,7 @@ fn read_patch<'a>(args: &'a [Word], mut at: PatchAt, cx: PathCx<'_>) -> PatchCom
             "-i" | "--input" => inputs.push(value),
             "-o" | "--output" => outputs.push(value),
             "-d" | "--directory" => {
-                at.cwd = super::words::word_path(cx, &value, at.cwd.as_deref()).map(Dir::from);
+                at.cwd = super::words::word_path(cx, &value, at.cwd.as_ref()).map(Dir::resolved);
             }
             _ => {}
         }

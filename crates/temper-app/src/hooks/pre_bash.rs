@@ -1,10 +1,12 @@
 //! `pre-bash`: `Bash` calls are checked before they run (1.x `hooks.mjs` `preBash`).
 //!
-//! Port Phase 2d brought the checks that read only the command's text, in 1.x's order, and
-//! 2e the shell reader (`hooks::shell`) with the state-dir writes it finds. The other checks
-//! that read the command's words and the file system follow: protected configuration in the
-//! second part of 2e, the reviewer's patch denials and copies onto `.rs` files in 2f. Each is
-//! marked where it goes. `pre-bash` graduates in 2f.
+//! The checks run in 1.x's order: the shell writes to `.rs` files, `Cargo.lock`,
+//! `Cargo.toml` and the baseline that the command's text shows; the state-dir writes the shell
+//! reader (`hooks::shell`) finds; the verification bypasses; then protected configuration
+//! written, deleted or patched, whose ask is shown with the dependency or snapshot ask. Where
+//! 1.x's reader throws, a rule gives `readerRule`'s fallback. Two of 1.x's checks are not here
+//! yet, and the comments mark where they go: the reviewer's patch denials and the scan of
+//! copies and patches onto `.rs` files (port plan item 45 to 48).
 
 use temper_domain::{BashPolicy, ConfigAsk, DependencyCheck, HookOutcome};
 

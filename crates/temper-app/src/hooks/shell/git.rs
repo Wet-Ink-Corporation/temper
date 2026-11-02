@@ -260,8 +260,8 @@ pub(crate) fn git_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<Git<'c>>
             at = at.saturating_add(1);
             opts.dir = args
                 .get(at)
-                .and_then(|value| word_path(cx, value, opts.dir.as_deref()))
-                .map(Dir::from);
+                .and_then(|value| word_path(cx, value, opts.dir.as_ref()))
+                .map(Dir::resolved);
         } else if opt == "-c" {
             at = at.saturating_add(1);
             opts.config(args.get(at));

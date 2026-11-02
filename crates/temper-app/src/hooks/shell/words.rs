@@ -4,10 +4,10 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 use temper_domain::{PathStyle, js_trim};
 
+pub(crate) use super::dir::{Dir, Guard};
 use super::lex::{Part, PartKind, name_len};
 use crate::paths::{self, PathEnv};
 use crate::project::is_js_space;
@@ -15,7 +15,7 @@ use crate::project::is_js_space;
 /// V8's `String::kMaxLength` on a 64-bit host, in UTF-16 units: 1.x throws `RangeError:
 /// Invalid string length` when a word's text would grow past it (`X=$X$X` repeated), and its
 /// rule then falls back.
-const JS_MAX_STRING: usize = (1 << 29) - 24;
+pub(super) const JS_MAX_STRING: usize = (1 << 29) - 24;
 
 /// Appends `more` to `text`, whose length in UTF-16 units is `units`, unless the result
 /// would be longer than a JS string can be: then it marks `overflow` and leaves `text`.
@@ -33,15 +33,6 @@ pub(super) fn push_js(
     *units = total;
     text.push_str(more);
     true
-}
-
-/// Whether `s` fits in a JS string; when it does not, marks `overflow`, where 1.x throws.
-pub(super) fn fits_js(s: &str, overflow: &Cell<bool>) -> bool {
-    let fits = js_len(s) <= JS_MAX_STRING;
-    if !fits {
-        overflow.set(true);
-    }
-    fits
 }
 
 /// A string's length in UTF-16 units, as JS counts it.
@@ -248,8 +239,8 @@ impl Vars {
 pub(super) struct WordEnv<'e> {
     pub(super) ps: bool,
     pub(super) home: &'e str,
-    pub(super) cwd: Option<&'e str>,
-    pub(super) prev: Option<&'e str>,
+    pub(super) cwd: Option<&'e Dir>,
+    pub(super) prev: Option<&'e Dir>,
     pub(super) tmp: Option<&'e str>,
     pub(super) top: Option<&'e str>,
     pub(super) git_dir: &'e str,
@@ -406,13 +397,12 @@ fn part_value<'e>(part: &Part, env: &WordEnv<'e>) -> Option<Cow<'e, str>> {
                 return Some(Cow::Borrowed(value));
             }
             match name.as_str() {
-                "HOME" => Some(env.home),
-                "PWD" => env.cwd,
-                "OLDPWD" => env.prev,
-                _ if is_temp_var(name) => env.tmp,
+                "HOME" => Some(Cow::Borrowed(env.home)),
+                "PWD" => env.cwd.map(Dir::text),
+                "OLDPWD" => env.prev.map(Dir::text),
+                _ if is_temp_var(name) => env.tmp.map(Cow::Borrowed),
                 _ => None,
             }
-            .map(Cow::Borrowed)
         }
         PartKind::Sub(src) => git_rev_parse(src, env)
             .or_else(|| mktemp(src, env))
@@ -622,6 +612,39 @@ pub(crate) fn msys_path<'t>(t: &'t str, style: PathStyle, os_tmp: &str) -> Cow<'
 pub(crate) struct PathCx<'a> {
     pub(crate) at: PathEnv<'a>,
     pub(crate) os_tmp: &'a str,
+    /// What stops the line's reading where 1.x throws. Every rule passes its own; `None`
+    /// (the reader's unit tests) records nothing and sets no budget.
+    pub(crate) guard: Option<&'a Guard>,
+}
+
+impl PathCx<'_> {
+    /// A directory's whole path, for a resolve (see [`Guard::dir_text`]).
+    pub(crate) fn dir_text<'d>(&self, dir: Option<&'d Dir>) -> Option<Cow<'d, str>> {
+        let dir = dir?;
+        match self.guard {
+            Some(guard) => guard.dir_text(dir),
+            None => Some(dir.text()),
+        }
+    }
+
+    /// Whether `a` and `b` joined with `extra` more units fit in a JS string; when not, marks
+    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws (#201 F2).
+    pub(crate) fn joins(&self, a: &str, b: &str, extra: usize) -> bool {
+        self.fits(js_len(a).saturating_add(js_len(b)).saturating_add(extra))
+    }
+
+    /// Whether the line has gone past a bound, where 1.x has thrown: the rule reads no more.
+    pub(crate) fn stopped(&self) -> bool {
+        self.guard.is_some_and(Guard::overflowed)
+    }
+
+    /// Whether `units` UTF-16 units fit in a JS string; when not, marks the overflow.
+    pub(crate) fn fits(&self, units: usize) -> bool {
+        match self.guard {
+            Some(guard) => guard.fits(units),
+            None => units <= JS_MAX_STRING,
+        }
+    }
 }
 
 /// 1.x `resolvePath(value, base)`: the absolute path `value` names from `base`, or `None`
@@ -635,10 +658,14 @@ pub(crate) fn resolve_path(
     let style = cx.at.style;
     let t = msys_path(value, style, cx.os_tmp);
     if paths::is_absolute(style, &t) {
-        return Some(paths::resolve(style, cx.at.cwd, &t));
+        // Node's resolve builds `${t}/` first.
+        return cx
+            .joins(&t, "", 1)
+            .then(|| paths::resolve(style, cx.at.cwd, &t));
     }
     let base = base.filter(|b| !b.is_empty())?;
-    Some(resolve_from(cx.at, base, &t))
+    // Then `${base}/${t}/`, which throws past V8's longest string (#201 F2).
+    cx.joins(base, &t, 2).then(|| resolve_from(cx.at, base, &t))
 }
 
 /// Node's `path.resolve(base, t)` for an absolute `base`: a drive-relative `t` on another
@@ -663,11 +690,32 @@ pub(crate) fn resolve_from(at: PathEnv<'_>, base: &str, t: &str) -> String {
 
 /// 1.x `wordPath(w, cwd)`: the absolute path a word names when the command runs in `cwd`;
 /// `None` for a glob or an unknown word.
-pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&str>) -> Option<String> {
+pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Option<String> {
     if word.glob() {
         return None;
     }
-    resolve_path(cx, word.value(), cwd)
+    // A relative name steps from a directory in normal form, as `cd` does ([`Dir::step`]):
+    // the same path as the full resolve, for the cost of a copy.
+    let style = cx.at.style;
+    let value = word.value().filter(|v| !v.is_empty());
+    let relative = cwd.zip(value).and_then(|(dir, value)| {
+        let t = msys_path(value, style, cx.os_tmp);
+        (dir.is_normal() && !paths::is_absolute(style, &t)).then_some((dir, t))
+    });
+    if let Some((dir, t)) = relative {
+        // 1.x's `${base}/${t}/` past V8's longest string throws (#201 F2).
+        let units = dir.units().saturating_add(js_len(&t)).saturating_add(2);
+        if !cx.fits(units) {
+            return None;
+        }
+        if let Some(to) = dir.step(style, &t) {
+            // The copy of the directory is what the budget counts, not the name added to it.
+            let charged = cx.guard.is_none_or(|guard| guard.charge(dir));
+            return charged.then(|| to.text().into_owned());
+        }
+    }
+    let base = cx.dir_text(cwd);
+    resolve_path(cx, value, base.as_deref())
 }
 
 /// 1.x `commandName(v)`: the basename, lower case, without `.exe`; `gpatch` is `patch`.
@@ -686,9 +734,6 @@ pub(super) fn command_name(value: &str) -> String {
 pub(super) fn name_of(word: &Word) -> Option<String> {
     word.value().map(command_name)
 }
-
-/// A shared directory, as the walker carries it.
-pub(super) type Dir = Rc<str>;
 
 /// `^\$\w+$`: a PowerShell variable as a whole word.
 pub(super) fn is_ps_var(raw: &str) -> bool {

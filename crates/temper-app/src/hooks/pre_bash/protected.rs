@@ -19,8 +19,8 @@ use temper_domain::{ConfigChanges, Glob, GlobError, Globs};
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
-    Command, CopyDest, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target, Verb,
-    Word, command_deletes, command_writes, js_len, landing, parse_commands, patch_command,
+    Command, CopyDest, Guard, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target,
+    Verb, Word, command_deletes, command_writes, js_len, landing, parse_commands, patch_command,
     patch_files, pathspec_pattern, resolve_path,
 };
 use crate::paths::{self, PathEnv};
@@ -111,7 +111,12 @@ pub(super) fn protected_shell_writes(
         .map(|dir| paths::resolve(at.style, at.cwd, dir))
         .filter(|dir| exists(files, dir))
         .unwrap_or_else(|| ws.root.clone());
-    let cx = PathCx { at, os_tmp: &temp };
+    let guard = Guard::default();
+    let cx = PathCx {
+        at,
+        os_tmp: &temp,
+        guard: Some(&guard),
+    };
     let opts = ParseOpts {
         paths: cx,
         cwd: Some(&start),
@@ -136,7 +141,14 @@ pub(super) fn protected_shell_writes(
         listed: HashMap::new(),
         changes: Changes::default(),
     };
-    match commands.iter().try_for_each(|c| reader.command(c)) {
+    // Once a path has gone past V8's longest string, 1.x has thrown: the rest is not read.
+    let read = commands
+        .iter()
+        .take_while(|_| !guard.overflowed())
+        .try_for_each(|c| reader.command(c));
+    match read {
+        // A path joined past V8's longest string throws in 1.x, and `readerRule` falls back.
+        Ok(()) if guard.overflowed() => Changes::default(),
         Ok(()) => reader.changes,
         Err(_) => Changes::default(),
     }
@@ -223,10 +235,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let style = self.cx.at.style;
         // A delete takes the file, or with -r a whole directory and the protected files in it.
         for d in command_deletes(c, self.cx) {
-            for base in bases(d.cwd.as_deref(), start, &ws.root)
-                .into_iter()
-                .flatten()
-            {
+            let cwd = self.cx.dir_text(d.cwd.as_ref());
+            if self.cx.stopped() {
+                return Ok(()); // 1.x has thrown: the rule falls back
+            }
+            for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
                 let Some(abs) = self.word_abs(&d.word, Some(base)) else {
                     continue;
                 };
@@ -266,10 +279,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             .collect();
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(p.cwd.as_deref(), start, &ws.root)
-            .into_iter()
-            .flatten()
-        {
+        let cwd = self.cx.dir_text(p.cwd.as_ref());
+        if self.cx.stopped() {
+            return Ok(()); // 1.x has thrown: the rule falls back
+        }
+        for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
             for v in &named {
                 if let Some(abs) = resolve_path(self.cx, *v, Some(base)) {
                     self.check(&abs, false, List::Written)?;
@@ -306,10 +320,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         });
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(t.cwd.as_deref(), start, &ws.root)
-            .into_iter()
-            .flatten()
-        {
+        let cwd = self.cx.dir_text(t.cwd.as_ref());
+        if self.cx.stopped() {
+            return Ok(()); // 1.x has thrown: the rule falls back
+        }
+        for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
             if let Some(restore) = restore
                 && pathspec_pattern(t.word.raw())
             {
@@ -476,12 +491,12 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// 1.x `ownerOf(proj, rel, cache)`: the checkout of the deepest ancestor of `rel` with a
     /// `.git` in it, else the project. Each ancestor is looked at once per command line.
     fn owner_of(&mut self, rel: &str) -> Result<Owner, GlobError> {
-        let style = self.cx.at.style;
-        let ws = self.ws;
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).
         let mut units = js_len(rel);
         let mut after = rel.len();
+        let style = self.cx.at.style;
+        let ws = self.ws;
         for (end, _) in rel.rmatch_indices('/') {
             units = units.saturating_sub(js_len(rel.get(end..after).unwrap_or("")));
             after = end;
@@ -586,14 +601,16 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                     texts.push(Some(body.to_string()));
                 }
                 (Some(Stdin::File(word)), false) => {
-                    let abs = self.word_abs(word, c.cwd.as_deref());
+                    let cwd = self.cx.dir_text(c.cwd.as_ref());
+                    let abs = self.word_abs(word, cwd.as_deref());
                     texts.push(self.patch_text(abs.as_deref()));
                 }
                 _ => return None,
             }
         }
         for w in &p.inputs {
-            let abs = self.word_abs(w, p.cwd.as_deref());
+            let cwd = self.cx.dir_text(p.cwd.as_ref());
+            let abs = self.word_abs(w, cwd.as_deref());
             texts.push(self.patch_text(abs.as_deref()));
         }
         for text in texts {

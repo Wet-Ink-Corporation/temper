@@ -236,7 +236,7 @@ impl Walker<'_> {
             }
             if name == "sudo" && (opt == "-C" || opt == "--chdir") {
                 let value = words.get(run.at).and_then(Word::value);
-                run.cwd = self.option_dir(value, run.cwd.as_deref());
+                run.cwd = self.option_dir(value, run.cwd.as_ref());
                 run.at = run.at.saturating_add(1);
                 continue;
             }
@@ -296,14 +296,16 @@ impl Walker<'_> {
             words.get(run.at.saturating_sub(1)).and_then(Word::value)
         });
         if flag.opt == 'C' {
-            run.cwd = self.option_dir(value, run.cwd.as_deref());
+            run.cwd = self.option_dir(value, run.cwd.as_ref());
         }
         Some(())
     }
 
     /// The directory a wrapper's `-C value` runs its command in, from `cwd`.
-    fn option_dir(&self, value: Option<&str>, cwd: Option<&str>) -> Option<Dir> {
-        self.capped(resolve_path(self.opts.paths, value, cwd).map(Dir::from))
+    fn option_dir(&self, value: Option<&str>, cwd: Option<&Dir>) -> Option<Dir> {
+        let paths = self.opts.paths;
+        let base = paths.dir_text(cwd);
+        self.capped(resolve_path(paths, value, base.as_deref()).map(Dir::resolved))
     }
 }
 
