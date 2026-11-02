@@ -3,6 +3,7 @@
 mod input;
 mod pre_bash;
 mod pre_edit;
+mod shell;
 mod skill;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
@@ -54,6 +55,20 @@ fn logged(
         // Telemetry is best effort (1.x): a row that cannot be written does not change the
         // answer.
         Ok(()) | Err(_) => outcome,
+    }
+}
+
+/// The outcome `then` gives, after a telemetry row for `event`: `then` may log rows of its own,
+/// which follow this one.
+fn logged_then(
+    call: &HookCall<'_, impl Ports>,
+    workspace: &Workspace,
+    event: &TelemetryEvent,
+    then: impl FnOnce() -> HookOutcome,
+) -> HookOutcome {
+    match telemetry::log(call, workspace, event) {
+        // Best effort, as in `logged`.
+        Ok(()) | Err(_) => then(),
     }
 }
 

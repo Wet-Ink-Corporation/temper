@@ -28,6 +28,8 @@ pub(crate) struct Workspace {
     pub(crate) state_dir: String,
     /// `.claude/temper.json` under the root, or the defaults.
     pub(crate) config: Config,
+    /// The root is git's top level (1.x's `proj.gitRoot` is set).
+    pub(crate) git: bool,
 }
 
 /// 1.x `discover(cwd)` for the working directory: the project root, or `None` when this is not
@@ -58,6 +60,7 @@ pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Opti
             paths::join(style, &paths::join(style, root, "target"), "temper")
         }
     };
+    let git = matches!(located, Located::Git(_));
     let root = located.into_root();
     let config = paths::join(style, &paths::join(style, &root, ".claude"), "temper.json");
     let config = match ports.files().read_text(Path::new(&config)) {
@@ -69,6 +72,7 @@ pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Opti
         root,
         state_dir,
         config,
+        git,
     })
 }
 

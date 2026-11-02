@@ -1,6 +1,8 @@
 //! Commands that raise the lint baseline or restore older verification configuration (1.x
 //! `hooks.mjs` `unquotedSegments`, `baselineCall`, `baselineRaise` and `claudeRestore`).
 
+use std::borrow::Cow;
+
 use regex::Regex;
 
 use crate::hooks::setup::{PolicySetupError, compile};
@@ -70,20 +72,17 @@ impl RaisePatterns {
         })
     }
 
-    /// 1.x `unquotedSegments(cmd)`: the simple commands, each with its quotes removed.
-    fn unquoted_segments(&self, cmd: &str) -> Vec<String> {
-        self.separators
-            .split(cmd)
-            .map(|seg| {
-                self.quoted
-                    .replace_all(seg, |caps: &regex::Captures<'_>| {
-                        caps.get(1)
-                            .or_else(|| caps.get(2))
-                            .map_or(String::new(), |g| g.as_str().to_owned())
-                    })
-                    .into_owned()
+    /// 1.x `unquotedSegments(cmd)`: the simple commands, each with its quotes removed. Lazy,
+    /// so a caller that stops at its first hit unquotes no further, and a segment without
+    /// quotes is borrowed, not copied.
+    fn unquoted_segments<'c>(&self, cmd: &'c str) -> impl Iterator<Item = Cow<'c, str>> {
+        self.separators.split(cmd).map(|seg| {
+            self.quoted.replace_all(seg, |caps: &regex::Captures<'_>| {
+                caps.get(1)
+                    .or_else(|| caps.get(2))
+                    .map_or(String::new(), |g| g.as_str().to_owned())
             })
-            .collect()
+        })
     }
 
     /// 1.x `baselineCall(seg)`: the text after the first `<cli> [options] baseline` in `seg`.
@@ -109,8 +108,8 @@ impl RaisePatterns {
     /// 1.x `baselineRaise(cmd)`: `temper baseline --init` or `--update`, through any spelling
     /// of the CLI; quotes do not hide a flag.
     pub(super) fn baseline_raise(&self, cmd: &str) -> Option<RaiseFlag> {
-        self.unquoted_segments(cmd).iter().find_map(|seg| {
-            let rest = self.baseline_call(seg)?;
+        self.unquoted_segments(cmd).find_map(|seg| {
+            let rest = self.baseline_call(&seg)?;
             let flag = self.raise_flag.captures(rest)?;
             match flag.get(1)?.as_str() {
                 "init" => Some(RaiseFlag::Init),
@@ -123,7 +122,7 @@ impl RaisePatterns {
     /// `.claude/` back: checkout, restore or stash of a `.claude` path from a revision other
     /// than `HEAD` or `@`, or `git show ... >` into `.claude/`.
     pub(super) fn claude_restore(&self, cmd: &str) -> Option<String> {
-        self.unquoted_segments(cmd).into_iter().find_map(|seg| {
+        self.unquoted_segments(cmd).find_map(|seg| {
             let restores = self.restore.captures(&seg).is_some_and(|m| {
                 let (verb, args) = (
                     m.get(1).map_or("", |g| g.as_str()),

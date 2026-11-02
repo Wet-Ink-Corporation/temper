@@ -98,7 +98,7 @@ pub(crate) fn clean_rel(path: &str) -> String {
 }
 
 /// Node's `path.posix.normalize`.
-fn posix_normalize(path: &str) -> String {
+pub(crate) fn posix_normalize(path: &str) -> String {
     if path.is_empty() {
         return ".".to_owned();
     }

@@ -54,7 +54,17 @@ impl Files for StdFiles {
 
     fn stat(&self, path: &Path) -> Result<Option<FileMeta>, FsError> {
         match fs::metadata(path) {
-            Ok(meta) => Ok(Some(FileMeta { len: meta.len() })),
+            Ok(meta) => Ok(Some(FileMeta {
+                // `metadata` follows symlinks, as `statSync` does.
+                kind: if meta.is_dir() {
+                    EntryKind::Dir
+                } else if meta.is_file() {
+                    EntryKind::File
+                } else {
+                    EntryKind::Other
+                },
+                len: meta.len(),
+            })),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(FsError::new(FsOp::Stat, path, error)),
         }

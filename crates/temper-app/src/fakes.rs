@@ -1,7 +1,7 @@
 //! In-memory fakes of the ports, for this crate's tests (TST-09). A `test-util` feature will
 //! expose them when another crate's tests need them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
@@ -236,12 +236,13 @@ impl Files for FakeFiles {
 
     fn stat(&self, path: &Path) -> Result<Option<FileMeta>, FsError> {
         let real = self.unlinked(&text_of(path));
-        let len = match self.files.borrow().get(&real) {
-            Some(text) => text.as_ref().map_or(0, String::len),
-            None if self.is_dir(&real) => 0,
+        let (kind, len) = match self.files.borrow().get(&real) {
+            Some(text) => (EntryKind::File, text.as_ref().map_or(0, String::len)),
+            None if self.is_dir(&real) => (EntryKind::Dir, 0),
             None => return Ok(None),
         };
         Ok(Some(FileMeta {
+            kind,
             len: u64::try_from(len).unwrap_or(u64::MAX),
         }))
     }
@@ -311,15 +312,25 @@ pub(crate) enum Reply {
 }
 
 /// Child processes that answer from a table: each entry matches a program, its arguments and
-/// its directory. Anything else fails to start, as on a machine without the program.
+/// its directory. Anything else gets the `otherwise` reply, by default a failure to start, as
+/// on a machine without the program.
 #[derive(Debug, Default)]
 pub(crate) struct FakeProcess {
     replies: Vec<(String, Vec<OsString>, PathBuf, Reply)>,
+    otherwise: Option<Reply>,
+    /// How many requests it has answered.
+    calls: Cell<usize>,
 }
 
 impl FakeProcess {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Every command the table does not name answers `reply`.
+    pub(crate) fn otherwise(mut self, reply: Reply) -> Self {
+        self.otherwise = Some(reply);
+        self
     }
 
     /// `command` (the program, then its arguments) run in `cwd` answers `reply`.
@@ -330,14 +341,25 @@ impl FakeProcess {
             .push(((*program).to_owned(), args, PathBuf::from(cwd), reply));
         self
     }
+
+    /// How many requests it has answered so far.
+    pub(crate) fn calls(&self) -> usize {
+        self.calls.get()
+    }
 }
 
 impl ProcessRunner for FakeProcess {
     fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+        self.calls.set(self.calls.get().saturating_add(1));
         let program = request.program.to_owned();
-        let reply = self.replies.iter().find_map(|(name, args, cwd, reply)| {
-            (name == request.program && args == request.args && cwd == request.cwd).then_some(reply)
-        });
+        let reply = self
+            .replies
+            .iter()
+            .find_map(|(name, args, cwd, reply)| {
+                (name == request.program && args == request.args && cwd == request.cwd)
+                    .then_some(reply)
+            })
+            .or(self.otherwise.as_ref());
         match reply {
             Some(Reply::Exit { status, stdout }) => Ok(ProcessOutput {
                 status: *status,
@@ -417,17 +439,19 @@ impl Ports for FakePorts {
 }
 
 impl RunEnv {
-    /// A run in `cwd` with `style`'s rules, no plugin data dir, no cloud session, and the
-    /// system temporary directory `/tmp` (or `C:\Temp`).
+    /// A run in `cwd` with `style`'s rules, no plugin data dir, no cloud session, the system
+    /// temporary directory `/tmp` (or `C:\Temp`) and the home `/home/u` (or `C:\Users\u`).
     pub(crate) fn at(cwd: &str, style: PathStyle) -> Self {
+        let (temp, home) = match style {
+            PathStyle::Posix => ("/tmp", "/home/u"),
+            PathStyle::Windows => (r"C:\Temp", r"C:\Users\u"),
+        };
         Self {
             cwd: PathBuf::from(cwd),
             style,
             plugin_data: None,
-            temp_dir: PathBuf::from(match style {
-                PathStyle::Posix => "/tmp",
-                PathStyle::Windows => r"C:\Temp",
-            }),
+            temp_dir: PathBuf::from(temp),
+            home: PathBuf::from(home),
             remote_session: None,
         }
     }

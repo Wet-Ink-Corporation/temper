@@ -77,6 +77,8 @@ pub trait Files {
 /// What [`Files::stat`] reports about a path. Fields arrive with their readers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMeta {
+    /// What is there, after symlinks: never [`EntryKind::Symlink`].
+    pub kind: EntryKind,
     /// The size in bytes.
     pub len: u64,
 }

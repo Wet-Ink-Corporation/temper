@@ -8,6 +8,7 @@
 //! which live in the application. So the policy is four stages, each answering in 1.x's order
 //! within it, and the handler runs the others between them.
 
+mod config;
 mod deps;
 mod flags;
 mod heredoc;
@@ -17,6 +18,7 @@ mod raise;
 mod texts;
 mod writes;
 
+pub use config::{ConfigAsk, ConfigChanges};
 pub use raise::RaiseFlag;
 
 use self::deps::DepPatterns;
@@ -107,6 +109,13 @@ impl BashPolicy {
         self.baseline
             .test(cmd)
             .then(|| self.shell_write(cmd, ShellWriteFile::Baseline, texts::BASELINE))
+    }
+
+    /// The denial of a shell write into temper's state dir, which the app's shell reader
+    /// finds (1.x `stateDirWrite`).
+    #[must_use]
+    pub fn state_dir_write(&self, cmd: &str) -> PolicyDecision {
+        self.shell_write(cmd, ShellWriteFile::StateDir, texts::STATE_DIR)
     }
 
     /// The checks between the state-dir write and the protected configuration, in 1.x's
