@@ -386,25 +386,13 @@ fn a_word_of_one_expansion_shares_the_value_however_often_a_line_names_it() {
     }
 }
 
-/// #202 F2: an expansion copied into a longer word (`$X/a`) is text built, charged to the
-/// line's budget, so past it the line stops as at V8's longest string instead of holding
-/// gigabytes.
+/// #202 F2: a word that holds an expansion among other text (`$X/a`) shares the value too,
+/// and its text is joined only when a rule reads it, as V8 joins strings: 1.x answers
+/// `: $X/a; ` x 140 with a 2^24-char `$X` in 0.16 s, where each word copied it (2.1 GB). No
+/// budget is spent on it.
 #[test]
-fn the_expansions_a_line_copies_into_its_words_are_held_to_the_budget() {
-    let guard = Guard::with_budget(2 << 20);
-    let paths = PathCx {
-        guard: Some(&guard),
-        ..cx()
-    };
-    let opts = ParseOpts {
-        paths,
-        ..super::opts()
-    };
-    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
-    let under = [x.as_str(), &": $X/a; ".repeat(10)].concat();
-    let held = parse_commands(&under, opts).map(|c| c.len());
-    assert_eq!(held, Ok(10));
-    let guard = Guard::with_budget(2 << 20);
+fn a_word_with_an_expansion_in_it_joins_its_text_only_when_read() {
+    let guard = Guard::with_budget(1 << 20);
     let opts = ParseOpts {
         paths: PathCx {
             guard: Some(&guard),
@@ -412,6 +400,21 @@ fn the_expansions_a_line_copies_into_its_words_are_held_to_the_budget() {
         },
         ..super::opts()
     };
-    let over = [x.as_str(), &": $X/a; ".repeat(40)].concat();
-    assert_eq!(parse_commands(&over, opts), Err(TooLong));
+    let x = ["X=a; ", &"X=$X$X; ".repeat(20)].concat();
+    let line = [x.as_str(), &": $X/a; ".repeat(2000), "> o"].concat();
+    let ran = parse_commands(&line, opts).map(|c| c.len());
+    assert_eq!(ran, Ok(2001));
+    let Ok(ran) = parse_commands(&line, opts) else {
+        panic!("the line is read");
+    };
+    let words: Vec<&Word> = ran.iter().flat_map(|c| &c.args).collect();
+    assert_eq!(words.len(), 2000);
+    let joined = words.iter().filter(|w| w.text.joined()).count();
+    assert_eq!(joined, 0, "words joined unread");
+    let Some(last) = words.last() else {
+        panic!("the line has words");
+    };
+    assert_eq!(last.text().len(), (1 << 20) + 2);
+    assert!(last.text().ends_with("a/a"));
+    assert!(last.text.joined());
 }
