@@ -134,3 +134,33 @@ export function snapshotTree(root) {
   rec(root, '');
   return out.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
+
+const WORKSPACE = {
+  'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\nresolver = "3"\n',
+  'crates/core/Cargo.toml': '[package]\nname = "core"\nversion = "0.1.0"\nedition = "2024"\n',
+  'crates/core/src/lib.rs': '//! Core.\n',
+};
+
+/** One telemetry row of 1.x's shape, for the rotation fixtures. */
+const ROW = '{"t":"2024-10-27T03:33:20.123Z","sid":"old","agent":"main","event":"skill-loaded","via":"Skill"}\n';
+
+/** `bytes` bytes of whole lines: a filler line, then rows. */
+function rows(bytes) {
+  const rest = bytes % ROW.length;
+  return `${rest ? `${'x'.repeat(rest - 1)}\n` : ''}${ROW.repeat(Math.floor(bytes / ROW.length))}`;
+}
+
+/**
+ * The hook cases' trees: a workspace; the same with `"skillGate": false`; a workspace whose
+ * telemetry log is one byte under, or at, the 1 MiB rotation cap (with an old file to replace);
+ * a workspace under `ws/` beside a directory outside it, `notes/`; and an empty directory, outside
+ * any Rust project.
+ */
+export const HOOK_FIXTURES = {
+  workspace: WORKSPACE,
+  'no-skill-gate': { ...WORKSPACE, '.claude/temper.json': '{ "skillGate": false }\n' },
+  'below-cap': { ...WORKSPACE, 'target/temper/telemetry.jsonl': rows(1024 * 1024 - 1) },
+  'at-cap': { ...WORKSPACE, 'target/temper/telemetry.jsonl': rows(1024 * 1024), 'target/temper/telemetry.1.jsonl': ROW },
+  nested: { 'notes/readme.txt': 'x\n', ...Object.fromEntries(Object.entries(WORKSPACE).map(([k, v]) => [`ws/${k}`, v])) },
+  empty: {},
+};

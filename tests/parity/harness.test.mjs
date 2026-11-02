@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,11 +12,13 @@ import { fileURLToPath } from 'node:url';
 import { HarnessError } from './lib/error.mjs';
 import { firstDifference, hitDiff } from './lib/diff.mjs';
 import { hermeticEnv, runEngine, rustEngine } from './lib/engines.mjs';
-import { SCAN_FIXTURE, freshCopy, largeFile, snapshotTree, writeTree } from './lib/fixtures.mjs';
-import { runInFreshCopy } from './lib/cases.mjs';
+import { HOOK_FIXTURES, SCAN_FIXTURE, freshCopy, largeFile, snapshotTree, writeTree } from './lib/fixtures.mjs';
+import { runHookCase, runInFreshCopy, treeContents } from './lib/cases.mjs';
 import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from './lib/corpus.mjs';
 import { UsageError, parseArgs } from './corpus.mjs';
-import { byteOrderHits, dropLoneSurrogateTail, maskRoots } from './lib/normalise.mjs';
+import {
+  byteOrderHits, dropLoneSurrogateTail, maskFailureText, maskMarkerTime, maskRoots, maskTelemetryTimes,
+} from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -218,6 +221,75 @@ test('runInFreshCopy: an engine that writes into the tree is caught (C14 wiring)
     { exit: 1, wrote: [], stdout: '', stderr: '' });
   const git = runInFreshCopy(stub('process.stdout.write(String(require("node:fs").existsSync(".git")))'), src, { args: [], git: true });
   assert.equal(git.stdout, 'true');
+});
+
+test('runEngine: input is piped to stdin, else stdin is empty; env is merged over the hermetic one', () => {
+  const echo = stub('let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => process.stdout.write(`${s}|${process.env.X}|${process.env.GIT_CEILING_DIRECTORIES}`))');
+  const piped = runEngine(echo, [], os.tmpdir(), { input: '{"a":1}', env: { X: 'y', GIT_CEILING_DIRECTORIES: '/e' }, ceiling: '/c' });
+  assert.equal(piped.stdout.toString(), '{"a":1}|y|/e');
+  assert.equal(runEngine(echo, [], os.tmpdir()).stdout.toString(), '|undefined|undefined');
+});
+
+test('runHookCase: steps share the copy; scratch temp and plugin data dirs; <ROOT>; written files', (t) => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tree-'));
+  t.after(() => fs.rmSync(src, { recursive: true, force: true }));
+  writeTree(src, { 'Cargo.toml': '', 'sub/keep.txt': 'k' });
+  const script = [
+    'const fs = require("node:fs"), path = require("node:path"), os = require("node:os");',
+    'let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => {',
+    '  const ev = process.argv.at(-1), seen = fs.existsSync("../marker");',
+    '  if (ev === "write") { fs.writeFileSync("../marker", s); fs.writeFileSync(path.join(os.tmpdir(), "t"), "2024-10-27T03:33:20.123Z"); }',
+    '  if (ev === "data") fs.writeFileSync(path.join(process.env.CLAUDE_PLUGIN_DATA, "d"), process.env.Y);',
+    '  process.stdout.write(`${ev}:${seen}:${s}`);',
+    '});',
+  ].join('\n');
+  const steps = [{ event: 'write', stdin: '{"cwd":"<ROOT>"}' }, { event: 'data', stdin: '', env: { Y: '<ROOT>/y' } }, { event: null }];
+  const r = runHookCase(stub(script), src, {
+    steps, cwd: 'sub', pluginData: true, maskFile: (rel, text) => (rel === 'scratch/tmp/t' ? '<T>' : text),
+  });
+  const root = JSON.stringify('<TMP>').slice(1, -1);
+  assert.deepEqual(r.steps.map((s) => s.stdout), [`write:false:{"cwd":"${root}"}`, 'data:true:', 'hook:true:']);
+  assert.deepEqual(r.files, {
+    'tree/marker': `{"cwd":"${root}"}`,
+    'scratch/data/': 'dir',
+    'scratch/data/d': '<TMP>/y',
+    'scratch/tmp/': 'dir',
+    'scratch/tmp/t': '<T>',
+  });
+  const bare = runHookCase(stub('process.stdout.write(String(process.env.CLAUDE_PLUGIN_DATA))'), src, { steps: [{ event: 'x' }], pluginData: 'Cargo.toml' });
+  assert.equal(bare.steps[0].stdout, path.join('<TMP>', 'Cargo.toml'));
+  assert.deepEqual(bare.files, { 'scratch/tmp/': 'dir' }, 'no data dir unless asked for');
+});
+
+test('treeContents: a file over 4 KiB is the SHA-256 of its masked text', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tree-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  writeTree(dir, { 'big': 'a'.repeat(4097), 'small': `at ${dir}` });
+  const sha = crypto.createHash('sha256').update('b'.repeat(4097)).digest('hex');
+  assert.deepEqual(treeContents(dir, [dir], { prefix: 'p/', maskFile: (rel, text) => (rel === 'p/big' ? text.replaceAll('a', 'b') : text) }),
+    { 'p/big': `sha256:${sha}`, 'p/small': 'at <TMP>' });
+});
+
+test('maskTelemetryTimes and maskMarkerTime (§2.2): only an ISO time, and only where 1.x puts it', () => {
+  const rows = '{"t":"2024-10-27T03:33:20.123Z","sid":"s"}\n{"t":"+275760-09-13T00:00:00.000Z"}\n{"sid":"s","t":"2024-10-27T03:33:20.123Z"}\n';
+  assert.equal(maskTelemetryTimes(rows), '{"t":"<T>","sid":"s"}\n{"t":"+275760-09-13T00:00:00.000Z"}\n{"sid":"s","t":"2024-10-27T03:33:20.123Z"}\n');
+  assert.equal(maskMarkerTime('2024-10-27T03:33:20.123Z'), '<T>');
+  for (const kept of ['2024-10-27T03:33:20.123Z\n', 'x', '']) assert.equal(maskMarkerTime(kept), kept);
+});
+
+test('maskFailureText (OC-3 (p)): the text after "failed: " in a whole systemMessage, counted', () => {
+  assert.deepEqual(maskFailureText('{"systemMessage":"temper hook post-tool failed: EACCES: \\"x\\" denied"}'),
+    { text: '{"systemMessage":"temper hook post-tool failed: <MSG>"}', count: 1 });
+  for (const kept of ['', '{"systemMessage":"temper hook post-tool: could not parse the hook input as JSON; nothing was checked"}',
+    '{"systemMessage":"temper hook post-tool failed: x"} ']) {
+    assert.deepEqual(maskFailureText(kept), { text: kept, count: 0 });
+  }
+});
+
+test('HOOK_FIXTURES: the rotation logs are whole lines, one byte under and at the 1 MiB cap', () => {
+  const log = (name) => HOOK_FIXTURES[name]['target/temper/telemetry.jsonl'];
+  assert.deepEqual(['below-cap', 'at-cap'].map((n) => [Buffer.byteLength(log(n)), log(n).endsWith('\n')]),
+    [[1024 * 1024 - 1, true], [1024 * 1024, true]]);
 });
 
 test('registryDirs: registry and sparse packages only, deduplicated and sorted', () => {

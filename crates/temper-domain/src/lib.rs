@@ -24,16 +24,22 @@
 
 mod config;
 mod glob;
+mod hooks;
 mod js;
 mod manifest;
 mod paths;
 mod scan;
+mod time;
 
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
 pub use glob::{Glob, GlobError, Globs};
-pub use js::js_trim;
+pub use hooks::{
+    ContextEvent, HookEvent, HookOutcome, SKILL_NOT_LOADED, SkillVia, TelemetryEvent, TelemetryRow,
+    UnknownHookEvent, skill_load_via,
+};
+pub use js::{JsonParseError, Object as JsObject, Value as JsValue, js_trim};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
@@ -47,3 +53,4 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
+pub use time::Timestamp;

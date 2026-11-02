@@ -1,11 +1,9 @@
-use std::path::PathBuf;
-
 use temper_domain::LibTarget;
 use temper_domain::PathStyle::{Posix, Windows};
 
 use super::{CrateRoot, Project, crate_of, declares_package, discover, exists};
 use crate::engine::RunEnv;
-use crate::fakes::{FakeFiles, FakePorts, FakeProcess, Reply};
+use crate::fakes::{FakeClock, FakeFiles, FakePorts, FakeProcess, Reply};
 use crate::paths::PathEnv;
 use crate::ports::{ExitKind, Stream};
 
@@ -99,10 +97,7 @@ fn discover_without_git_takes_the_outermost_cargo_directory() {
         .with_file(r"C:\ws\Cargo.toml", WORKSPACE)
         .with_file(r"C:\ws\crates\core\Cargo.toml", PACKAGE)
         .with_file(r"C:\ws\crates\core\src\lib.rs", "");
-    let env = RunEnv {
-        cwd: PathBuf::from(r"C:\ws\crates\core\src"),
-        style: Windows,
-    };
+    let env = RunEnv::at(r"C:\ws\crates\core\src", Windows);
 
     assert_eq!(
         discover(&FakePorts::new(files), &env),
@@ -116,10 +111,7 @@ fn discover_without_git_takes_the_outermost_cargo_directory() {
 #[test]
 fn discover_is_none_without_a_cargo_toml() {
     let files = FakeFiles::new(Posix).with_file("/elsewhere/Cargo.toml", PACKAGE);
-    let env = RunEnv {
-        cwd: PathBuf::from("/ws/src"),
-        style: Posix,
-    };
+    let env = RunEnv::at("/ws/src", Posix);
 
     assert_eq!(
         discover(&FakePorts::new(files), &env),
@@ -165,11 +157,9 @@ fn discover_prefers_the_git_top_level() {
             .with_file(r"C:\g\rust\Cargo.toml", WORKSPACE)
             .with_file(r"C:\g\rust\crates\core\Cargo.toml", PACKAGE),
         process: git_in(cwd, exit(ExitKind::Code(0), "C:/g\n")),
+        clock: FakeClock::default(),
     };
-    let env = RunEnv {
-        cwd: PathBuf::from(cwd),
-        style: Windows,
-    };
+    let env = RunEnv::at(cwd, Windows);
 
     assert_eq!(
         discover(&ports, &env),
@@ -190,10 +180,7 @@ fn discover_falls_back_without_git() {
         Reply::SpawnFails,
         Reply::Overflows(Stream::Stdout),
     ];
-    let env = RunEnv {
-        cwd: PathBuf::from(cwd),
-        style: Posix,
-    };
+    let env = RunEnv::at(cwd, Posix);
 
     let roots = replies.map(|reply| {
         let ports = FakePorts {
@@ -201,6 +188,7 @@ fn discover_falls_back_without_git() {
                 .with_file("/g/rust/Cargo.toml", WORKSPACE)
                 .with_file("/g/rust/crates/core/Cargo.toml", PACKAGE),
             process: git_in(cwd, reply),
+            clock: FakeClock::default(),
         };
         discover(&ports, &env).map(|project| project.root)
     });
@@ -220,11 +208,9 @@ fn discover_is_none_in_a_git_repo_without_cargo_toml_above_the_cwd() {
                 .with_file("/g/rust/Cargo.toml", WORKSPACE)
                 .with_file("/g/docs/guide.md", ""),
             process: git_in(cwd, exit(ExitKind::Code(0), "/g\n")),
+            clock: FakeClock::default(),
         };
-        let env = RunEnv {
-            cwd: PathBuf::from(cwd),
-            style: Posix,
-        };
+        let env = RunEnv::at(cwd, Posix);
         discover(&ports, &env)
     });
 

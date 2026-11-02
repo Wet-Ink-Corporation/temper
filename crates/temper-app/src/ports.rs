@@ -1,6 +1,5 @@
 //! The ports: what the use cases need from the outside world, as traits that `temper-host`
-//! implements and the tests fake (ARC-03): files and processes so far, and from Phase 3 the
-//! clock.
+//! implements and the tests fake (ARC-03): files, processes and the clock.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -8,7 +7,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The file system, read-only, with 1.x's (Node's) semantics.
+use temper_domain::Timestamp;
+
+/// The file system, with 1.x's (Node's) semantics.
 pub trait Files {
     /// The file's text, decoded as lossy UTF-8 with a leading BOM kept, as Node's
     /// `readFileSync(path, 'utf8')`; `None` when there is no such file.
@@ -33,6 +34,51 @@ pub trait Files {
     ///
     /// [`FsError`] when the path cannot be resolved for another reason.
     fn real_path(&self, path: &Path) -> Result<Option<PathBuf>, FsError>;
+
+    /// What is at `path`, following symlinks (Node's `statSync`); `None` when nothing is there.
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when the path cannot be inspected for another reason.
+    fn stat(&self, path: &Path) -> Result<Option<FileMeta>, FsError>;
+
+    /// Writes `text` to `path` so a reader sees the old file or the new one, never a part: the
+    /// parent directories are created, the text goes to a fresh temporary file beside `path`,
+    /// and that is renamed over it (1.x `writeAtomic`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when a directory cannot be created, or the file written or renamed.
+    fn write_atomic(&self, path: &Path, text: &str) -> Result<(), FsError>;
+
+    /// Appends `line` and a newline to `path` in one write, creating the file when it is missing
+    /// (Node's `appendFileSync`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when the file cannot be opened or written.
+    fn append_line(&self, path: &Path, line: &str) -> Result<(), FsError>;
+
+    /// Creates `path` and every missing parent (Node's `mkdirSync(path, { recursive: true })`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when a directory cannot be created, or a file is in the way.
+    fn create_dir_all(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Renames `from` to `to`, replacing `to` (Node's `renameSync`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] (on `from`) when the rename fails, `from` missing included.
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError>;
+}
+
+/// What [`Files::stat`] reports about a path. Fields arrive with their readers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileMeta {
+    /// The size in bytes.
+    pub len: u64,
 }
 
 /// One entry of a directory listing.
@@ -100,6 +146,16 @@ pub enum FsOp {
     ReadDir,
     /// [`Files::real_path`].
     RealPath,
+    /// [`Files::stat`].
+    Stat,
+    /// [`Files::write_atomic`].
+    Write,
+    /// [`Files::append_line`].
+    Append,
+    /// [`Files::create_dir_all`].
+    CreateDir,
+    /// [`Files::rename`].
+    Rename,
 }
 
 impl fmt::Display for FsOp {
@@ -108,6 +164,11 @@ impl fmt::Display for FsOp {
             Self::Read => "read",
             Self::ReadDir => "read directory",
             Self::RealPath => "resolve",
+            Self::Stat => "stat",
+            Self::Write => "write",
+            Self::Append => "append to",
+            Self::CreateDir => "create directory",
+            Self::Rename => "rename",
         })
     }
 }
@@ -238,16 +299,27 @@ pub enum ProcessError {
     },
 }
 
+/// The current time.
+pub trait Clock {
+    /// Now, as `Date.now()` reads it.
+    fn now(&self) -> Timestamp;
+}
+
 /// Every port a use case can reach, as the composition root wires them.
 pub trait Ports {
     /// The file system.
     type Files: Files;
     /// Child processes.
     type Process: ProcessRunner;
+    /// The clock.
+    type Clock: Clock;
 
     /// The file-system adapter.
     fn files(&self) -> &Self::Files;
 
     /// The process adapter.
     fn process(&self) -> &Self::Process;
+
+    /// The clock adapter.
+    fn clock(&self) -> &Self::Clock;
 }

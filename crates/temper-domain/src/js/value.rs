@@ -1,15 +1,18 @@
-//! The JS data model that 1.x's TOML reader (`toml.mjs`) produces, and the JS operations 1.x
-//! applies to it: `JSON.stringify`, `String(x)`, truthiness and `Object.entries`.
+//! The JS data model that 1.x's TOML reader (`toml.mjs`) and `JSON.parse` produce, and the JS
+//! operations 1.x applies to it: `JSON.stringify`, `String(x)`, truthiness and `Object.entries`.
 //!
 //! `toml.mjs` returns plain objects and arrays, every number as a JS number, and a date or time
-//! as its source text, so a TOML datetime is a [`Value::String`] here too.
+//! as its source text, so a TOML datetime is a [`Value::String`] here too; only JSON has `null`.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-/// A JS value as `toml.mjs` builds it. JS's `undefined` is the absence of a value (`None`).
+/// A JS value as `toml.mjs` or `JSON.parse` builds it. JS's `undefined` is the absence of a
+/// value (`None`).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Value {
+pub enum Value {
+    /// `null` (JSON only).
+    Null,
     /// `true` or `false`.
     Bool(bool),
     /// A JS number: TOML integers and floats alike.
@@ -25,21 +28,23 @@ pub(crate) enum Value {
 /// A plain JS object: its own properties in JS order, which puts integer-like keys first in
 /// ascending order, then the other keys in insertion order.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct Object(Vec<(String, Value)>);
+pub struct Object(Vec<(String, Value)>);
 
 impl Object {
     /// The own property `key`, if the object has one.
-    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
     /// The own properties in JS order (`Object.entries`).
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &Value)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Value)> + '_ {
         self.0.iter().map(|(k, v)| (k.as_str(), v))
     }
 
     /// `Object.keys(obj).length === 0`.
-    pub(crate) fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
@@ -65,7 +70,8 @@ fn array_index(key: &str) -> Option<u32> {
 impl Value {
     /// JS `value?.[key]` for the keys temper reads: an object's own property, else `undefined`.
     /// No key temper reads is an array index, `length` or an inherited name.
-    pub(crate) fn get(&self, key: &str) -> Option<&Self> {
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&Self> {
         match self {
             Self::Object(object) => object.get(key),
             _ => None,
@@ -73,11 +79,30 @@ impl Value {
     }
 
     /// The string, if this is one (`typeof v === 'string'`).
-    pub(crate) fn as_str(&self) -> Option<&str> {
+    #[must_use]
+    pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s),
             _ => None,
         }
+    }
+
+    /// JS truthiness (`if (value)`).
+    #[must_use]
+    pub fn is_truthy(&self) -> bool {
+        truthy(self)
+    }
+
+    /// JS `String(value)`.
+    #[must_use]
+    pub fn to_js_string(&self) -> Cow<'_, str> {
+        js_string(self)
+    }
+
+    /// JS `JSON.stringify(value)`.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        js_json(self)
     }
 }
 
@@ -108,6 +133,7 @@ pub(crate) fn entries(value: &Value) -> impl Iterator<Item = (Cow<'_, str>, &Val
 /// JS truthiness: `false`, `0`, `-0`, `NaN` and `""` are falsy; objects and arrays are truthy.
 pub(crate) fn truthy(value: &Value) -> bool {
     match value {
+        Value::Null => false,
         Value::Bool(b) => *b,
         Value::Number(n) => !n.is_nan() && *n != 0.0,
         Value::String(s) => !s.is_empty(),
@@ -115,15 +141,23 @@ pub(crate) fn truthy(value: &Value) -> bool {
     }
 }
 
-/// JS `String(value)`: numbers as `Number#toString`, arrays joined with `,`, objects as
-/// `[object Object]`.
+/// JS `String(value)`: numbers as `Number#toString`, arrays joined with `,` (a `null` item as
+/// nothing, as `Array#join` writes it), objects as `[object Object]`.
 pub(crate) fn js_string(value: &Value) -> Cow<'_, str> {
     match value {
+        Value::Null => Cow::Borrowed("null"),
         Value::Bool(b) => Cow::Borrowed(if *b { "true" } else { "false" }),
         Value::Number(n) => Cow::Owned(js_number(*n)),
         Value::String(s) => Cow::Borrowed(s),
         Value::Array(items) => {
-            Cow::Owned(items.iter().map(js_string).collect::<Vec<_>>().join(","))
+            let parts: Vec<Cow<'_, str>> = items
+                .iter()
+                .map(|item| match item {
+                    Value::Null => Cow::Borrowed(""),
+                    item => js_string(item),
+                })
+                .collect();
+            Cow::Owned(parts.join(","))
         }
         Value::Object(_) => Cow::Borrowed("[object Object]"),
     }
@@ -142,7 +176,7 @@ fn push_json(out: &mut String, value: &Value) {
     match value {
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Number(n) if n.is_finite() => out.push_str(&js_number(*n)),
-        Value::Number(_) => out.push_str("null"),
+        Value::Null | Value::Number(_) => out.push_str("null"),
         Value::String(s) => push_json_string(out, s),
         Value::Array(items) => {
             out.push('[');
@@ -167,6 +201,13 @@ fn push_json(out: &mut String, value: &Value) {
             out.push('}');
         }
     }
+}
+
+/// `JSON.stringify(s)` of a string.
+pub(crate) fn json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len().saturating_add(2));
+    push_json_string(&mut out, s);
+    out
 }
 
 /// `JSON.stringify` of a string: `"` and `\` escaped, the C0 controls as `\b`, `\t`, `\n`, `\f`,

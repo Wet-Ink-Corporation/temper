@@ -86,3 +86,31 @@ export function dropLoneSurrogateTail(json) {
   });
   return { text, count };
 }
+
+/**
+ * §2.2 ("`at` … fields are masked"): each telemetry row's leading `{"t":"<ISO time>"` becomes
+ * `{"t":"<T>"`. Only the first key of a line, so a row whose `t` is not first, or is not an ISO
+ * time, still fails; the rest of the row is compared as text, key order included (2-14).
+ */
+export function maskTelemetryTimes(text) {
+  return text.replace(/^\{"t":"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z"/gm, '{"t":"<T>"');
+}
+
+/** §2.2: a skill marker's content, an ISO time and nothing else, becomes `<T>`. */
+export function maskMarkerTime(text) {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text) ? '<T>' : text;
+}
+
+/**
+ * OC-3 (p): the text after `temper hook <event> failed: ` is the Rust error chain, not Node's
+ * errno text, so it becomes `<MSG>` up to the closing `"}`. Applied to both sides, only in the
+ * cases that declare it; `count` goes in the report, like D16(e)'s.
+ */
+export function maskFailureText(stdout) {
+  let count = 0;
+  const text = stdout.replace(/^(\{"systemMessage":"temper hook [a-z-]+ failed: )(?:[^"\\]|\\.)*("\})$/, (_, head, tail) => {
+    count += 1;
+    return `${head}<MSG>${tail}`;
+  });
+  return { text, count };
+}

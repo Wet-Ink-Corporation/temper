@@ -16,10 +16,7 @@ const DBG: &str = "fn f() {\n    dbg!(1);\n}\n";
 const SLEEP: &str = "fn f() {\n    std::thread::sleep(d);\n}\n";
 
 fn engine(files: FakeFiles, style: PathStyle, cwd: &str) -> Engine<FakePorts> {
-    let env = RunEnv {
-        cwd: PathBuf::from(cwd),
-        style,
-    };
+    let env = RunEnv::at(cwd, style);
     let scanner = Scanner::new().expect("every built-in pattern compiles");
     Engine::new(FakePorts::new(files), env, scanner)
 }

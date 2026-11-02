@@ -1,10 +1,11 @@
 //! The file system on the standard library, with Node's semantics where 1.x relies on them.
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use temper_app::{DirEntry, EntryKind, Files, FsError, FsOp};
+use temper_app::{DirEntry, EntryKind, FileMeta, Files, FsError, FsOp};
 
 /// The longest JS string, in UTF-16 code units: V8's `String::kMaxLength` on 64-bit targets,
 /// Node 22's `buffer.constants.MAX_STRING_LENGTH`. `readFileSync(path, 'utf8')` throws past it.
@@ -50,6 +51,59 @@ impl Files for StdFiles {
             Err(error) => Err(FsError::new(FsOp::RealPath, path, error)),
         }
     }
+
+    fn stat(&self, path: &Path) -> Result<Option<FileMeta>, FsError> {
+        match fs::metadata(path) {
+            Ok(meta) => Ok(Some(FileMeta { len: meta.len() })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(FsError::new(FsOp::Stat, path, error)),
+        }
+    }
+
+    /// 1.x `writeAtomic`. A write or rename that fails leaves the temporary file, as 1.x does.
+    fn write_atomic(&self, path: &Path, text: &str) -> Result<(), FsError> {
+        if let Some(parent) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+            self.create_dir_all(parent)?;
+        }
+        let tmp = temp_beside(path);
+        fs::write(&tmp, text).map_err(|error| FsError::new(FsOp::Write, &tmp, error))?;
+        fs::rename(&tmp, path).map_err(|error| FsError::new(FsOp::Write, path, error))
+    }
+
+    /// One `write_all` on a handle opened for appending, so concurrent hooks interleave whole
+    /// lines as `appendFileSync` does.
+    fn append_line(&self, path: &Path, line: &str) -> Result<(), FsError> {
+        let failed = |error| FsError::new(FsOp::Append, path, error);
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .map_err(failed)?;
+        let mut bytes = Vec::with_capacity(line.len().saturating_add(1));
+        bytes.extend_from_slice(line.as_bytes());
+        bytes.push(b'\n');
+        file.write_all(&bytes).map_err(failed)
+    }
+
+    fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
+        fs::create_dir_all(path).map_err(|error| FsError::new(FsOp::CreateDir, path, error))
+    }
+
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
+        fs::rename(from, to).map_err(|error| FsError::new(FsOp::Rename, from, error))
+    }
+}
+
+/// `<path>.<pid>.<nanos>.tmp`: unique per process and write, as 1.x's `<p>.<pid>.<ms>.tmp`.
+fn temp_beside(path: &Path) -> PathBuf {
+    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(since) => since.as_nanos(),
+        // A clock before 1970 still gives a name; the pid keeps it apart from other hooks.
+        Err(before) => before.duration().as_nanos(),
+    };
+    let mut name = path.as_os_str().to_owned();
+    name.push(format!(".{}.{nanos}.tmp", std::process::id()));
+    PathBuf::from(name)
 }
 
 /// Reads `reader` as lossy UTF-8, as Node's `readFileSync(path, 'utf8')`, failing with

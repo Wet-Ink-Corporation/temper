@@ -1,0 +1,132 @@
+[
+  {
+    "name": "a workspace without the marker gets the nudge, and writes nothing",
+    "fixture": "workspace",
+    "pluginData": true,
+    "event": "user-prompt",
+    "stdin": "{\"session_id\":\"s1\"}",
+    "stdout": [
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
+    ]
+  },
+  {
+    "name": "after the skill loads the nudge stops",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      },
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      }
+    ],
+    "stdout": [
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "",
+      ""
+    ]
+  },
+  {
+    "name": "\"skillGate\": false turns the nudge off",
+    "fixture": "no-skill-gate",
+    "pluginData": true,
+    "event": "user-prompt",
+    "stdin": "{\"session_id\":\"s1\"}",
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "outside a Rust project there is no nudge",
+    "fixture": "empty",
+    "pluginData": true,
+    "event": "user-prompt",
+    "stdin": "{\"session_id\":\"s1\"}",
+    "stdout": [
+      ""
+    ]
+  },
+  {
+    "name": "the marker is per session and per agent",
+    "fixture": "workspace",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"agent_id\": \"a1\", \"tool_input\": {\"skill\": \"rust-craft\"}}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\": \"s1\", \"agent_id\": \"a1\"}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\": \"s2\", \"agent_id\": \"a1\"}"
+      }
+    ],
+    "stdout": [
+      "",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      "",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}"
+    ]
+  },
+  {
+    "name": "the input's cwd picks the workspace for the nudge",
+    "fixture": "nested",
+    "cwd": "notes",
+    "pluginData": true,
+    "steps": [
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\": \"s1\", \"cwd\": \"<ROOT>/ws\"}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\": \"s1\", \"cwd\": \"\"}"
+      }
+    ],
+    "stdout": [
+      "",
+      "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"temper: this is a Rust workspace and the rust-craft standard (skill `temper:rust-craft`) is not loaded in this session yet; Rust edits are refused until it is. Planning Rust work benefits from loading it first.\"}}",
+      ""
+    ]
+  },
+  {
+    "name": "without CLAUDE_PLUGIN_DATA the marker under the temp dir is read",
+    "fixture": "workspace",
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+      },
+      {
+        "event": "user-prompt",
+        "stdin": "{\"session_id\":\"s1\"}"
+      }
+    ],
+    "stdout": [
+      "",
+      ""
+    ]
+  }
+]
