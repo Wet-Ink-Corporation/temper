@@ -202,15 +202,36 @@ const LEDGER = {
   'crates/legacy/src/lib.rs': '//! Legacy.\n',
 };
 
+/** A patch of the ledger's domain source, for the patch cases. */
+const LEDGER_PATCH = `diff --git a/crates/ledger-domain/src/lib.rs b/crates/ledger-domain/src/lib.rs
+--- a/crates/ledger-domain/src/lib.rs
++++ b/crates/ledger-domain/src/lib.rs
+@@ -1 +1 @@
+-//! Domain.
++//! The domain.
+`;
+// The ledger with sources and patches for the copy, move and patch cases of pre-bash (2f).
+const COPIES = {
+  ...LEDGER,
+  'scratch/unwrap.rs': '//! Scratch.\n\n/// The first.\npub fn first(v: &[u8]) -> u8 {\n    *v.first().unwrap()\n}\n',
+  'scratch/expect.rs': '//! Scratch.\n\n/// One.\n#[expect(clippy::cast_possible_truncation, reason = "a byte")]\npub fn one(n: u32) -> u8 {\n    n as u8\n}\n',
+  'scratch/cloned.rs': '//! Scratch.\n\n/// Two.\n#[must_use]\npub fn two(s: &str) -> (String, String) {\n    let t = s.to_owned();\n    (t.clone(), t)\n}\n',
+  'fix.patch': LEDGER_PATCH,
+  'docs.patch': LEDGER_PATCH.replaceAll('crates/ledger-domain/src/lib.rs', 'README.md'),
+  'README.md': '//! Domain.\n',
+};
+
 /**
  * The hook cases' trees: a workspace; the same with `"skillGate": false`; a workspace whose
  * telemetry log is one byte under, or at, the 1 MiB rotation cap (with an old file to replace);
  * a workspace under `ws/` beside a directory outside it, `notes/`; an empty directory, outside
- * any Rust project; and `hooks.test.mjs`'s workspace with its legacy and profiled members.
+ * any Rust project; `hooks.test.mjs`'s workspace with its legacy and profiled members; and
+ * that workspace with Rust sources and patches to copy and apply.
  */
 export const HOOK_FIXTURES = {
   workspace: WORKSPACE,
   ledger: LEDGER,
+  copies: COPIES,
   'no-skill-gate': { ...WORKSPACE, '.claude/temper.json': '{ "skillGate": false }\n' },
   'below-cap': { ...WORKSPACE, 'target/temper/telemetry.jsonl': rows(1024 * 1024 - 1) },
   'at-cap': { ...WORKSPACE, 'target/temper/telemetry.jsonl': rows(1024 * 1024), 'target/temper/telemetry.1.jsonl': ROW },
