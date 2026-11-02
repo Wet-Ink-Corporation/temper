@@ -1,12 +1,13 @@
 //! Cargo manifests as 1.x reads them, and the manifest policy the pre-edit hook and the gate
 //! apply (1.x `manifest.mjs` and the manifest helpers of `hooks.mjs`).
 
+use std::borrow::Cow;
 use std::str::FromStr;
 
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
 
-use crate::js::{Object, Value, integer_from_radix, number_from_text};
+use crate::js::{Object, Value, integer_from_radix, js_string, number_from_text, truthy};
 
 mod checks;
 mod deps;
@@ -72,6 +73,36 @@ impl Manifest {
     /// The top-level key `key` (JS `m?.[key]`).
     pub(crate) fn get(&self, key: &str) -> Option<&Value> {
         self.0.get(key)
+    }
+
+    /// Is `package` truthy (`a.package ? ..`)? An empty `[package]` table is.
+    #[must_use]
+    pub fn has_package(&self) -> bool {
+        self.get("package").is_some_and(truthy)
+    }
+
+    /// Is `workspace` truthy (`manifest?.workspace`)? An empty `[workspace]` table is.
+    #[must_use]
+    pub fn has_workspace(&self) -> bool {
+        self.get("workspace").is_some_and(truthy)
+    }
+
+    /// `package.workspace` when it is a string: the path to the governing workspace root.
+    #[must_use]
+    pub fn package_workspace(&self) -> Option<&str> {
+        self.get("package")
+            .and_then(|p| p.get("workspace"))
+            .and_then(Value::as_str)
+    }
+
+    /// `workspace.exclude`'s entries, each as JS `String(e)`. An exclude that is not an array
+    /// reads as empty, where 1.x's `.some` would throw (port plan D16(q)).
+    pub fn workspace_excludes(&self) -> impl Iterator<Item = Cow<'_, str>> + '_ {
+        let items = match self.get("workspace").and_then(|w| w.get("exclude")) {
+            Some(Value::Array(items)) => items.as_slice(),
+            Some(_) | None => &[],
+        };
+        items.iter().map(js_string)
     }
 }
 

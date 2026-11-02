@@ -36,8 +36,10 @@ pub use config::{
 };
 pub use glob::{Glob, GlobError, Globs};
 pub use hooks::{
-    ContextEvent, HookEvent, HookOutcome, SKILL_NOT_LOADED, SkillVia, TelemetryEvent, TelemetryRow,
-    UnknownHookEvent, skill_load_via,
+    ContextEvent, DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, Exemptions,
+    HookEvent, HookOutcome, IRON_RULES, ManifestEdit, PolicyDecision, Replacements, RustEdit,
+    SKILL_NOT_LOADED, STATE_DIR_DENIAL, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent,
+    apply_edit, edit_policy, lockfile_denial, skill_gate_denial, skill_load_via, skill_preloaded,
 };
 pub use js::{JsonParseError, Object as JsObject, Value as JsValue, js_trim};
 pub use manifest::{
