@@ -386,6 +386,31 @@ fn a_word_of_one_expansion_shares_the_value_however_often_a_line_names_it() {
     }
 }
 
+/// #202 re-review M2: a command name is read from the end of its word, and the targets'
+/// paths from words read once, so neither keeps a joined copy: `$X/a; ` x 2000 with a
+/// 2^24-char `$X` held 12 GB, a copy per command word.
+#[test]
+fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let line = [x.as_str(), &"$X/a; ".repeat(200), &"echo > $X/b; ".repeat(200)].concat();
+    let ran = parse_with(&line, super::opts());
+    let names: Vec<_> = ran.iter().filter_map(|c| c.name.as_deref()).collect();
+    assert_eq!(names.iter().filter(|&&n| n == "a").count(), 200);
+    let paths: Vec<_> = ran
+        .iter()
+        .flat_map(|c| command_writes(c, cx()))
+        .filter_map(|t| path_of(&t))
+        .collect();
+    assert_eq!(paths.len(), 200);
+    assert!(paths.iter().all(|p| p.ends_with("a/b") && p.len() > 1 << 16));
+    let joined = ran
+        .iter()
+        .flat_map(|c| std::iter::once(&c.argv0).chain(c.redirects.iter().map(|r| &r.word)))
+        .filter(|w| w.text.joined())
+        .count();
+    assert_eq!(joined, 0, "words kept a joined copy");
+}
+
 /// #202 F2: a word that holds an expansion among other text (`$X/a`) shares the value too,
 /// and its text is joined only when a rule reads it, as V8 joins strings: 1.x answers
 /// `: $X/a; ` x 140 with a 2^24-char `$X` in 0.16 s, where each word copied it (2.1 GB). No

@@ -124,8 +124,13 @@ impl Probe<'_> {
             built: OnceCell::new(),
         };
         let base = &base;
-        let text = t.word.text();
-        let value = t.word.value().filter(|_| !t.word.glob());
+        // Read once and charged, keeping no copy (#202 re-review M2); `None` once the line's
+        // budget is spent, which stops the rule.
+        let Some(text) = t.word.text_read(self.cx.guard) else {
+            return false;
+        };
+        let text = &*text;
+        let value = (t.word.value_is_known() && !t.word.glob()).then_some(text);
         if self.names_state(text, value, base) {
             return true;
         }

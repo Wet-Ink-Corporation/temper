@@ -297,3 +297,27 @@ fn past_the_directory_text_budget_the_state_dir_and_protected_rules_fall_back() 
     let rooted = line("cd /ws/$X; ", ".git/temper/x");
     assert!(ws.rules_within(&rooted, 1 << 20).0);
 }
+
+/// #202 re-review M2: the text a rule joins from a word's pieces is charged to the line's
+/// budget too, and is not kept, so a line naming a long value in many words falls back past
+/// the budget (1.x runs out of memory on these: `echo > $X/a; ` x 2000 with a 2^24-char `$X`
+/// held 11.4 GB). A command name is read from the end of its word, which joins nothing.
+#[test]
+fn past_the_budget_the_rules_fall_back_on_the_text_they_join_from_words() {
+    let ws = Ws::new();
+    let x16 = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let line = |each: &str, last: &str| [x16.as_str(), &each.repeat(40), last].concat();
+    let clippy = vec!["clippy.toml".to_owned()];
+    for each in ["echo > $X/a; ", "echo > /ws/$X/a; ", "echo > a/$X; "] {
+        let state = line(each, "echo > .git/temper/x");
+        let config = line(each, "echo > clippy.toml");
+        assert!(ws.rules_within(&state, 16 << 20).0, "{each}");
+        assert_eq!(ws.rules_within(&config, 16 << 20).1, clippy, "{each}");
+        assert_eq!(ws.rules_within(&state, 1 << 20), (false, Vec::new()), "{each}");
+        assert_eq!(ws.rules_within(&config, 1 << 20), (false, Vec::new()), "{each}");
+    }
+    let named = line("$X/a; ", "echo > .git/temper/x");
+    assert!(ws.rules_within(&named, 1 << 16).0, "a command name joins nothing");
+    let named = line("$X/a; ", "echo > clippy.toml");
+    assert_eq!(ws.rules_within(&named, 1 << 16).1, clippy);
+}
