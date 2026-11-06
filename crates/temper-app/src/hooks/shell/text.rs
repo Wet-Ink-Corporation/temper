@@ -101,7 +101,7 @@ impl Text {
         self.charged().then(|| Cow::Owned(self.join()))
     }
 
-    /// The whole text for one read that keeps nothing of it (a `NAME+=` tail, a print):
+    /// The whole text for one read that keeps nothing of it (a print):
     /// joined for this read alone and not charged.
     pub(super) fn unkept(&self) -> Cow<'_, str> {
         match self.joined.get() {
@@ -110,21 +110,52 @@ impl Text {
         }
     }
 
-    /// The text after its first `skip` bytes, for a variable to keep: the piece itself when
-    /// the rest is one whole piece, else the rest joined once, neither kept here nor charged
-    /// (the variables charge what they keep). `None` when `skip` is past the end or not on a
-    /// char boundary.
-    pub(super) fn tail_shared(&self, skip: usize, scratch: &mut String) -> Option<Rc<str>> {
+    /// `before`, then the text after its first `skip` bytes, for a variable to keep, and
+    /// whether the string was made here rather than shared. When one side is empty and the
+    /// other one whole string, that string is shared; otherwise both are joined once in
+    /// `scratch`, reserved first, and copied into one shared string. Neither keeps a join
+    /// on the text nor charges anything (the variables charge what they make). `None` when
+    /// `skip` is past the end or not on a char boundary.
+    pub(super) fn after(
+        &self,
+        before: Option<&Rc<str>>,
+        skip: usize,
+        scratch: &mut String,
+    ) -> Option<(Rc<str>, bool)> {
+        let (tail, whole_piece) = self.tail(skip)?;
+        let before = before.filter(|b| !b.is_empty());
+        Some(match (before, whole_piece, tail.as_slice()) {
+            (None, Some(piece), _) => (Rc::clone(piece), false),
+            (Some(before), _, []) => (Rc::clone(before), false),
+            (None, None, [one]) => (Rc::from(*one), true),
+            _ => {
+                let before = before.map_or("", |b| &**b);
+                let len: usize = tail.iter().map(|part| part.len()).sum();
+                scratch.clear();
+                // Exact, so the buffer charged is the longest join, not twice it.
+                scratch.reserve_exact(before.len().saturating_add(len));
+                scratch.push_str(before);
+                for part in tail {
+                    scratch.push_str(part);
+                }
+                (Rc::from(scratch.as_str()), true)
+            }
+        })
+    }
+
+    /// The chunks after the first `skip` bytes, and the piece they are when they are one
+    /// whole piece; `None` when `skip` is past the end or not on a char boundary.
+    fn tail(&self, skip: usize) -> Option<(Vec<&str>, Option<&Rc<str>>)> {
         let mut rest = skip;
         let mut tail: Vec<&str> = Vec::new();
-        let mut whole_piece = None;
+        let mut first_whole = None;
         for chunk in self.chunks() {
             if tail.is_empty() && rest >= chunk.len() {
                 rest = rest.saturating_sub(chunk.len());
                 continue;
             }
             if tail.is_empty() && rest == 0 {
-                whole_piece = Some(chunk);
+                first_whole = Some(chunk);
             }
             tail.push(chunk.get(rest..)?);
             rest = 0;
@@ -132,17 +163,8 @@ impl Text {
         if rest > 0 {
             return None;
         }
-        match (whole_piece, tail.as_slice()) {
-            (Some(piece), [_]) => Some(Rc::clone(piece)),
-            (_, [one]) => Some(Rc::from(*one)),
-            _ => {
-                scratch.clear();
-                for part in tail {
-                    scratch.push_str(part);
-                }
-                Some(Rc::from(scratch.as_str()))
-            }
-        }
+        let whole = first_whole.filter(|_| tail.len() == 1);
+        Some((tail, whole))
     }
 
     /// Whether the line's budget has room for one more join of the pieces, charging it.
@@ -378,9 +400,9 @@ mod tests {
         );
     }
 
-    /// The text after a prefix, for a variable to keep: a tail that is one whole piece is
-    /// that piece, shared; any other is joined once, through a buffer it reuses. Neither
-    /// keeps a join on the text.
+    /// The text after a prefix, for a variable to keep, after an old value or none: one
+    /// whole string with nothing beside it is shared; anything else is joined once, through a
+    /// buffer reserved to the exact length and reused. Neither keeps a join on the text.
     #[test]
     fn the_text_after_a_prefix_is_its_piece_shared_or_joined_once() {
         let long: Rc<str> = Rc::from("é".repeat(1 << 10));
@@ -388,29 +410,44 @@ mod tests {
         let units = 2 + (1 << 10) + 2;
         let mut scratch = String::new();
         let one = Text::of(vec![Rc::clone(&name), Rc::clone(&long)], units - 2, None);
-        let shared = one.tail_shared(2, &mut scratch);
-        assert!(shared.as_ref().is_some_and(|s| Rc::ptr_eq(s, &long)));
+        let (shared, made) = one.after(None, 2, &mut scratch).expect("on a boundary");
+        assert!(Rc::ptr_eq(&shared, &long) && !made);
         assert_eq!(scratch.capacity(), 0, "a whole piece is not joined");
         let two = Text::of(vec![Rc::clone(&name), Rc::clone(&long), slash], units, None);
-        let joined = two.tail_shared(2, &mut scratch).map(|s| s.len());
-        assert_eq!(joined, Some((2 << 10) + 2));
-        let held = scratch.capacity();
-        assert_eq!(
-            two.tail_shared(1, &mut scratch)
-                .as_deref()
-                .map(|s| s.get(..3)),
-            Some(Some("=é"))
-        );
-        assert_eq!(scratch.capacity(), held, "the buffer is reused");
+        let joined = two
+            .after(None, 2, &mut scratch)
+            .map(|(s, made)| (s.len(), made));
+        assert_eq!(joined, Some(((2 << 10) + 2, true)));
+        assert_eq!(scratch.capacity(), (2 << 10) + 2, "reserved, not doubled");
+        let again = two.after(None, 2, &mut scratch).map(|(s, _)| s.len());
+        assert_eq!(again, Some((2 << 10) + 2));
+        assert_eq!(scratch.capacity(), (2 << 10) + 2, "the buffer is reused");
+        let at_one = two.after(None, 1, &mut scratch);
+        assert_eq!(at_one.map(|(s, _)| s.get(..3) == Some("=é")), Some(true));
         assert!(two.copies(), "a join was kept");
         assert_eq!(
-            two.tail_shared(3, &mut scratch),
+            two.after(None, 3, &mut scratch),
             None,
             "not a char boundary"
         );
+
+        let old: Rc<str> = Rc::from("x");
+        let appended = two.after(Some(&old), 2, &mut scratch);
+        assert_eq!(appended.map(|(s, _)| s.len()), Some(1 + (2 << 10) + 2));
+        let (kept, made) = one
+            .after(Some(&old), 2 + (2 << 10), &mut scratch)
+            .expect("the end");
+        assert!(Rc::ptr_eq(&kept, &old) && !made, "nothing to append");
+        let (shared, made) = one.after(Some(&Rc::from("")), 2, &mut scratch).expect("ok");
+        assert!(
+            Rc::ptr_eq(&shared, &long) && !made,
+            "appended to an empty value"
+        );
+
         let whole = Text::whole(Rc::from("a=xy"));
-        assert_eq!(whole.tail_shared(2, &mut scratch).as_deref(), Some("xy"));
-        assert_eq!(whole.tail_shared(9, &mut scratch), None, "past the end");
+        let xy = whole.after(None, 2, &mut scratch).map(|(s, _)| s);
+        assert_eq!(xy.as_deref(), Some("xy"));
+        assert_eq!(whole.after(None, 9, &mut scratch), None, "past the end");
     }
 
     /// #202 third review F5: comparing or printing a text reads its pieces and neither

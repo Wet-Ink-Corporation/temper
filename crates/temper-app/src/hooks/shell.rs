@@ -10,9 +10,10 @@
 //!
 //! Each scan reads its input forward once per nesting level the walker follows (at most
 //! [`walk::MAX_DEPTH`] deep). On top of that, the work per assignment or command name is
-//! linear in the value, as in 1.x: an assignment copies its value once unless it names a
-//! single value, which it shares, so `a=$a/b` repeated n times copies O(n^2) bytes, as in
-//! 1.x. A directory is a parent handle plus the names a `cd` added ([`dir::Dir`]), so a `cd`
+//! linear in the value, as in 1.x: an assignment, `NAME=` or `NAME+=`, joins its value once
+//! in a reused buffer and copies that into the string the name keeps, unless the value is
+//! one string already (`a=$X`, or `a+=$X` on an empty `a`), which it shares; so `a=$a/b` or
+//! `a+=/b` repeated n times copies O(n^2) bytes, as in 1.x. A directory is a parent handle plus the names a `cd` added ([`dir::Dir`]), so a `cd`
 //! costs the value it reads and a line of `cd a` or `pushd a` holds each name once; the whole
 //! path is built only where a rule resolves a name from it. [`dir::Guard`]'s budget per line
 //! bounds the memory the line keeps alive and the text the rules build: the directory text,
