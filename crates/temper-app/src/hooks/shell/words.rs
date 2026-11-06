@@ -144,8 +144,8 @@ impl Word {
         self.known.then(|| self.text.get())
     }
 
-    /// The value for an assignment to store, which keeps no joined copy and is not charged
-    /// to the line's budget (see [`Text::unkept`]); `None` when a part is unknown.
+    /// The value for an assignment to store, which keeps no joined copy; [`Vars::set`]
+    /// charges what it keeps (see [`Text::unkept`]). `None` when a part is unknown.
     pub(super) fn value_to_store(&self) -> Option<Cow<'_, str>> {
         self.known.then(|| self.text.unkept())
     }
@@ -186,6 +186,12 @@ impl Word {
 /// journals a name once, with its value at the mark, which is all its rollback needs: `a=$a/b`
 /// repeated inside `( ... )` keeps one old value, not every earlier one (#201 F1). A change made
 /// while no scope is open is never undone, so it is not journaled.
+///
+/// The values it keeps alive are charged to the line's budget, net of those it drops (#202
+/// third review F2): each value set is charged, and refunded once it is freed. A dropped value
+/// a word still shares (the `$a` in `a=$a/b`, until that word is gone) waits in `dropped`,
+/// which is swept every so many releases, so a name grown in place holds its last few, and
+/// many names holding long values stop at the budget.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
     map: HashMap<String, Shared>,
@@ -195,6 +201,14 @@ pub(super) struct Vars {
     saved: Vec<HashSet<String>>,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
+    /// The line's budget; `None` charges nothing.
+    meter: Option<Guard>,
+    /// Values dropped while something else still held them, still charged.
+    dropped: Vec<Rc<str>>,
+    /// How many values were released since `dropped` was last swept.
+    since: usize,
+    /// How many the last sweep left in `dropped`.
+    kept: usize,
 }
 
 /// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
@@ -232,18 +246,72 @@ impl Vars {
         self.map.get(name)
     }
 
-    /// 1.x `setVar`: `None` deletes.
+    /// Variables whose values are charged to `guard`, the line's budget.
+    pub(super) fn metered(guard: &Guard) -> Self {
+        Self {
+            meter: Some(guard.clone()), // a shared handle on the line's budget
+            ..Self::default()
+        }
+    }
+
+    /// 1.x `setVar`: `None` deletes. Past the budget the guard is stopped, and the line
+    /// falls back.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
         let value = value.map(|text| {
             let units = js_len(&text);
             Shared::new(Rc::from(text), units)
         });
+        if let (Some(meter), Some(value)) = (&self.meter, &value) {
+            // `charge` stops the guard when the budget is spent; the walk then stops.
+            meter.charge(value.text.len());
+        }
         let old = self.put(name, value);
         if let Some(saved) = self.saved.last_mut()
             && !saved.contains(name)
         {
             saved.insert(name.to_owned());
             self.journal.push((name.to_owned(), old));
+        } else {
+            self.release(old);
+        }
+    }
+
+    /// Refunds a value no longer held here once nothing else holds it either.
+    fn release(&mut self, old: Option<Shared>) {
+        let Some(old) = old else {
+            return;
+        };
+        if Rc::strong_count(&old.text) > 1 {
+            self.dropped.push(old.text);
+        } else {
+            self.refund(&old.text);
+        }
+        // Swept once per twice as many releases as the last sweep left held, and at least
+        // 16: O(1) per release, amortised.
+        self.since = self.since.saturating_add(1);
+        if self.since > self.kept.saturating_mul(2).max(16) {
+            self.sweep();
+        }
+    }
+
+    /// Refunds every dropped value that nothing else holds now.
+    fn sweep(&mut self) {
+        let mut dropped = std::mem::take(&mut self.dropped);
+        dropped.retain(|text| {
+            let held = Rc::strong_count(text) > 1;
+            if !held {
+                self.refund(text);
+            }
+            held
+        });
+        self.since = 0;
+        self.kept = dropped.len();
+        self.dropped = dropped;
+    }
+
+    fn refund(&self, text: &str) {
+        if let Some(meter) = &self.meter {
+            meter.refund(text.len());
         }
     }
 
@@ -279,7 +347,8 @@ impl Vars {
     pub(super) fn rollback(&mut self, mark: Mark) {
         while self.journal.len() > mark.journal {
             if let Some((name, old)) = self.journal.pop() {
-                self.put(&name, old);
+                let undone = self.put(&name, old);
+                self.release(undone);
             }
         }
         self.saved.truncate(mark.depth);
@@ -882,7 +951,7 @@ pub(super) fn is_ps_var(raw: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Vars, brace_list, git_path, without_path_format};
+    use super::{Guard, Vars, brace_list, git_path, without_path_format};
 
     /// A top-level assignment keeps no undo record; a scope's are undone, nested or not.
     #[test]
@@ -934,6 +1003,41 @@ mod tests {
         assert_eq!(vars.journal.len(), 0);
         vars.set("a", Some("w".to_owned()));
         assert_eq!(vars.journal.len(), 0);
+    }
+
+    /// #202 third review F2: the guard is charged each value set and refunded each value the
+    /// variables drop that nothing else holds; a journaled value stays charged until its
+    /// scope closes, and one a word still shares until the word is gone.
+    #[test]
+    fn variables_charge_the_values_they_keep_alive_net_of_those_they_drop() {
+        let guard = Guard::with_budget(1 << 20);
+        let mut vars = Vars::metered(&guard);
+        let long = "x".repeat(1000);
+        vars.set("a", Some(long.clone()));
+        assert_eq!(guard.spent(), 1000);
+        vars.set("a", Some("y".to_owned()));
+        assert_eq!(guard.spent(), 1, "the old value was freed");
+        let mark = vars.mark();
+        vars.set("a", Some(long.clone()));
+        vars.set("b", Some(long.clone()));
+        assert_eq!(guard.spent(), 2001, "the journal holds `y`");
+        vars.rollback(mark);
+        assert_eq!(guard.spent(), 1, "both long values freed");
+        vars.set("c", Some(long));
+        let shared = vars.shared("c").map(|s| std::rc::Rc::clone(&s.text));
+        vars.set("c", None);
+        assert_eq!(guard.spent(), 1001, "a word still holds it");
+        drop(shared);
+        vars.set("d", Some("z".to_owned()));
+        for i in 0..64 {
+            vars.set("e", Some(i.to_string()));
+        }
+        assert!(
+            guard.spent() < 1000,
+            "freed once nothing holds it: {}",
+            guard.spent()
+        );
+        assert!(!guard.overflowed());
     }
 
     #[test]

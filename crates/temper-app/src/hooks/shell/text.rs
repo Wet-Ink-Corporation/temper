@@ -102,8 +102,9 @@ impl Text {
     }
 
     /// The whole text for the walker to store as a variable's value: joined for this read
-    /// alone and not charged, since the value it becomes is a string 1.x builds too, held to
-    /// V8's longest as every value is (`a=$a/b` repeated builds each value once).
+    /// alone and not charged here, since the variables charge the value they keep, net of
+    /// the ones they free ([`super::words::Vars`], #202 third review F2), so `a=$a/b`
+    /// repeated holds one value at a time to the budget.
     pub(super) fn unkept(&self) -> Cow<'_, str> {
         match self.joined.get() {
             Some(whole) => Cow::Borrowed(whole),

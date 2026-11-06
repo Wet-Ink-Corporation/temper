@@ -132,6 +132,7 @@ pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Comma
         overflow: Cell::new(false),
         env: Env {
             cwd,
+            vars: Vars::metered(guard),
             ..Env::default()
         },
         out: Vec::new(),
