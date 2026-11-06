@@ -37,6 +37,8 @@ pub(crate) struct FakeFiles {
     read_only: Vec<String>,
     /// How many times `real_path` was asked.
     real_paths: Cell<usize>,
+    /// How many bytes of path `real_path` was asked about, which a real `realpath` reads.
+    real_path_bytes: Cell<usize>,
 }
 
 impl FakeFiles {
@@ -50,12 +52,18 @@ impl FakeFiles {
             unresolvable: Vec::new(),
             read_only: Vec::new(),
             real_paths: Cell::new(0),
+            real_path_bytes: Cell::new(0),
         }
     }
 
     /// How many times `real_path` has been asked.
     pub(crate) fn real_path_calls(&self) -> usize {
         self.real_paths.get()
+    }
+
+    /// How many bytes of path `real_path` has been asked about.
+    pub(crate) fn real_path_bytes(&self) -> usize {
+        self.real_path_bytes.get()
     }
 
     pub(crate) fn with_file(self, path: &str, text: &str) -> Self {
@@ -232,6 +240,9 @@ impl Files for FakeFiles {
 
     fn real_path(&self, path: &Path) -> Result<Option<PathBuf>, FsError> {
         self.real_paths.set(self.real_paths.get().saturating_add(1));
+        let asked = path.as_os_str().len();
+        self.real_path_bytes
+            .set(self.real_path_bytes.get().saturating_add(asked));
         let real = self.unlinked(&text_of(path));
         if self.unresolvable.contains(&real) {
             return Err(FsError::new(

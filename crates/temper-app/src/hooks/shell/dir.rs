@@ -375,6 +375,18 @@ impl Guard {
         Some(dir.text())
     }
 
+    /// Gives back `bytes` charged for a value the line's variables held and have freed
+    /// ([`super::words::Vars`]), which no longer counts against the budget.
+    pub(super) fn refund(&self, bytes: usize) {
+        self.0.spent.set(self.0.spent.get().saturating_sub(bytes));
+    }
+
+    /// What has been charged and not given back, for the tests.
+    #[cfg(test)]
+    pub(crate) fn spent(&self) -> usize {
+        self.0.spent.get()
+    }
+
     /// Charges `bytes` of text built (a directory's, or a word's joined) to the line's
     /// budget; `false` once it is spent, which marks the overflow.
     pub(super) fn charge(&self, bytes: usize) -> bool {

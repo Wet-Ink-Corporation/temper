@@ -74,17 +74,48 @@ fn long_path(files: &impl Files, style: PathStyle, path: &str, memo: &mut LongPa
     }
     let known = match memo.last.take() {
         Some((last, long)) if last == dir => (last, long),
-        _ => (dir.to_owned(), nearest_long(files, style, dir)),
+        last => {
+            let long = dir_long(files, style, dir, last.as_ref());
+            (dir.to_owned(), long)
+        }
     };
     let long = paths::join(style, &known.1, paths::basename(style, path));
     memo.last = Some(known);
     long
 }
 
-/// [`long_path`] of a directory. A path resolves only when its parent does (each name is
-/// looked up in its parent, and a normal path has no `..`), so the ancestors that resolve are
-/// the shallow ones, and the deepest of them, which 1.x's walk up finds first, is found by
-/// bisection: a few `real_path` asks however deep the directory is.
+/// [`long_path`] of a directory, as 1.x's walk up finds it: the directory itself, then its
+/// parent (from `last`, the directory related before, when that is the parent), and only
+/// past those the nearest ancestor that resolves ([`nearest_long`]).
+fn dir_long(
+    files: &impl Files,
+    style: PathStyle,
+    dir: &str,
+    last: Option<&(String, String)>,
+) -> String {
+    if let Some(real) = real_path(files, style, dir) {
+        return real;
+    }
+    let parent = paths::dirname(style, dir);
+    if parent == dir {
+        return dir.to_owned(); // a root that does not resolve
+    }
+    let name = paths::basename(style, dir);
+    if let Some((_, long)) = last.filter(|(p, _)| p == parent) {
+        return paths::join(style, long, name);
+    }
+    if let Some(real) = real_path(files, style, parent) {
+        return paths::join(style, &real, name);
+    }
+    nearest_long(files, style, dir)
+}
+
+/// The long path of a directory neither it nor its parent resolves in. A path resolves only
+/// when its parent does (each name is looked up in its parent, and a normal path has no
+/// `..`), so the ancestors that resolve are the shallow ones. The deepest of them, which
+/// 1.x's walk up finds first, is found by galloping up from the parent (2, 4, 8, ... names
+/// up) and bisecting within the step that found one: a few `real_path` asks per doubling of
+/// the distance, each about a path no longer than the directory (#202 re-review F1).
 fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
     // `dir` and its ancestors, deepest first; `dirname` is a prefix of its argument.
     let mut chain = vec![dir];
@@ -95,9 +126,21 @@ fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
         }
         chain.push(up);
     }
-    // The first index that resolves is in `lo..=hi`; `hi == chain.len()` when none does.
-    let (mut lo, mut hi) = (0, chain.len());
+    // `dir` (index 0) and its parent (1) are known not to resolve. The first index that
+    // resolves is in `lo..=hi`; `hi == chain.len()` when none does.
+    let (mut lo, mut hi) = (2, chain.len());
     let mut real = None;
+    let mut step = 2_usize;
+    while lo < hi {
+        let at = step.min(hi.saturating_sub(1));
+        if let Some(found) = chain.get(at).and_then(|p| real_path(files, style, p)) {
+            hi = at;
+            real = Some(found);
+            break;
+        }
+        lo = at.saturating_add(1);
+        step = step.saturating_mul(2);
+    }
     while lo < hi {
         let mid = lo.saturating_add(hi.saturating_sub(lo) >> 1);
         match chain.get(mid).and_then(|p| real_path(files, style, p)) {
@@ -287,16 +330,58 @@ mod tests {
             Some(2 + 2 * (n - 3) + 2),
             "in/a/.../y"
         );
-        // A bisection over at most 402 ancestors asks at most 9 times, plus the name itself.
-        assert!(
-            chain_calls <= 10 * n,
-            "{chain_calls} asks for {n} directories"
-        );
+        // The root, the name and its directory: a directory below the last one is related
+        // from that one's long path, without asking about the ancestors again.
+        assert_eq!(chain_calls, 3 * n, "asks for {n} directories");
         assert_eq!(
             same_dir_calls,
             2 * n,
             "the root and the name, per name in a directory already found"
         );
+    }
+
+    /// #202 re-review F1: a new name in a directory that resolves asks about the name and the
+    /// directory alone, and one in a new directory whose parent resolves about the parent
+    /// too, as 1.x's `longPath` does, however deep they are: a bisection from the middle of
+    /// a 1900-name chain asked about a dozen paths near its full length, each a `realpath`
+    /// that follows every link on the way (46.8 s where 1.x asks in 5.7 s). Only past those
+    /// does the walk up gallop, so it asks a few times per doubling of the distance.
+    #[test]
+    fn a_name_whose_directory_or_its_parent_resolves_asks_about_those_alone() {
+        let deep = format!("/o{}", "/d".repeat(1900));
+        let files = FakeFiles::new(Posix)
+            .with_file(&format!("{deep}/k"), "")
+            .with_file("/ws/Cargo.toml", "");
+        let env = PathEnv {
+            style: Posix,
+            cwd: "/",
+        };
+        let asked = |file: &str| {
+            let (calls, bytes) = (files.real_path_calls(), files.real_path_bytes());
+            let rel = rel_to(&files, env, "/ws", file);
+            let calls = files.real_path_calls().saturating_sub(calls);
+            (rel, calls, files.real_path_bytes().saturating_sub(bytes))
+        };
+        let len = deep.len();
+
+        let in_dir = asked(&format!("{deep}/x"));
+        assert_eq!(in_dir.0.len(), 2 + len + 2, "../o/d/.../x");
+        assert_eq!(
+            (in_dir.1, in_dir.2),
+            (3, 3 + (len + 2) + len),
+            "root, name, dir"
+        );
+        let in_new = asked(&format!("{deep}/n/x"));
+        assert_eq!(
+            (in_new.1, in_new.2),
+            (4, 3 + (len + 4) + (len + 2) + len),
+            "root, name, new dir, its parent"
+        );
+        // 1024 new names below the deepest that resolves: a gallop and a bisection.
+        let far = format!("{deep}{}/x", "/n".repeat(1 << 10));
+        let up = asked(&far);
+        assert!(up.0.ends_with("/n/x"));
+        assert!(up.1 <= 2 + 2 * 12, "{} asks", up.1);
     }
 
     /// A Windows path longer than Windows opens is not asked: `realpathSync.native` fails

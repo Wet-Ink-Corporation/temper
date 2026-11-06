@@ -336,11 +336,13 @@ fn past_the_budget_the_rules_fall_back_on_the_text_they_join_from_words() {
             "{each}"
         );
     }
+    // Room for `$X` itself (64 KiB, live while the line holds it, and the values it was
+    // doubled from until they are freed: #202 third review F2), and for no join of 40 words.
     let named = line("$X/a; ", "echo > .git/temper/x");
     assert!(
-        ws.rules_within(&named, 1 << 16).0,
+        ws.rules_within(&named, 1 << 18).0,
         "a command name joins nothing"
     );
     let named = line("$X/a; ", "echo > clippy.toml");
-    assert_eq!(ws.rules_within(&named, 1 << 16).1, clippy);
+    assert_eq!(ws.rules_within(&named, 1 << 18).1, clippy);
 }

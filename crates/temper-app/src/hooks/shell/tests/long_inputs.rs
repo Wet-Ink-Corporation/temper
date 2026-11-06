@@ -432,11 +432,13 @@ fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
 /// #202 F2: a word that holds an expansion among other text (`$X/a`) shares the value too,
 /// and its text is joined only when a rule reads it, as V8 joins strings: 1.x answers
 /// `: $X/a; ` x 140 with a 2^24-char `$X` in 0.16 s, where each word copied it (2.1 GB). No
-/// budget is spent on it until a word is read: the budget has room for the two walks and the
-/// one read below (#202 re-review M2 charges that read), and none for a copy per word.
+/// budget is spent on it until a word is read: the budget has room for the two walks, each
+/// holding `$X` (1 MiB, and the values it was doubled from until they are freed: #202 third
+/// review F2), and the one read below (#202 re-review M2 charges that read), and none for a
+/// copy per word (2 GiB).
 #[test]
 fn a_word_with_an_expansion_in_it_joins_its_text_only_when_read() {
-    let guard = Guard::with_budget(3 << 20);
+    let guard = Guard::with_budget(8 << 20);
     let opts = ParseOpts {
         paths: PathCx {
             guard: Some(&guard),
@@ -501,4 +503,36 @@ fn an_inner_script_is_charged_its_read_and_its_walk_and_keeps_no_join() {
         assert_eq!(within(&line, 6 << 20), Ok((commands + 1, 0)), "{each}");
         assert_eq!(within(&line, 4 << 20), Err(TooLong), "{each}");
     }
+}
+
+/// #202 third review F2: the values the variables keep alive are charged to the line's
+/// budget, net of the ones they drop, so many names each holding a long value stop at it:
+/// `A0=$X/a; A1=$X/a; ` ... x 300 with a 2^24-char `$X` reached 3.8 GB. A value one name
+/// grows (`a=$a/b`) replaces the one before, which is freed, so it stays well under: here
+/// 2^12 steps build 16 MiB of values in turn, but hold 8 KiB at the end.
+#[test]
+fn the_values_variables_keep_alive_are_held_to_the_budget_net_of_those_they_drop() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat(); // 64 KiB
+    let parsed = |line: &str, budget: usize| {
+        let guard = Guard::with_budget(budget);
+        let opts = ParseOpts {
+            paths: PathCx {
+                guard: Some(&guard),
+                ..cx()
+            },
+            ..super::opts()
+        };
+        parse_commands(line, opts).map(|ran| ran.len())
+    };
+    let names: Vec<String> = (0..300).map(|i| format!("A{i}=$X/a; ")).collect();
+    let names = names.concat();
+    let distinct = [x.as_str(), &names, "echo hi > o"].concat();
+    assert_eq!(
+        parsed(&distinct, 32 << 20),
+        Ok(1),
+        "300 values of 64 KiB: 19 MiB"
+    );
+    assert_eq!(parsed(&distinct, 8 << 20), Err(TooLong));
+    let grown = ["a=x; ", &"a=$a/b; ".repeat(1 << 12), "echo hi > o"].concat();
+    assert_eq!(parsed(&grown, 1 << 20), Ok(1), "one name, grown");
 }
