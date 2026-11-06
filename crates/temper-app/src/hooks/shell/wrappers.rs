@@ -272,7 +272,7 @@ impl Walker<'_> {
         if flag.opt == 'S' {
             // env -S splits its string into the command and runs it; env reads `\_`, `\t`,
             // `\n`, `\v`, `\f` and `\r` in it as whitespace.
-            // Each word is read once, charged and not kept (#202 re-review M2).
+            // Each word is read once, charged and not kept.
             let text = if let Some(value) = flag.value {
                 Cow::Borrowed(value)
             } else {
@@ -410,7 +410,7 @@ fn join_texts(words: &[Word], overflow: &Cell<bool>) -> Option<String> {
     let mut units = 0;
     for (k, w) in words.iter().enumerate() {
         let sep = if k > 0 { " " } else { "" };
-        // Read once, charged and not kept (#202 re-review M2); `None` past the budget.
+        // Read once, charged and not kept; `None` past the budget.
         let text = w.text_read()?;
         let fits = push_js(&mut out, &mut units, sep, overflow)
             && push_js(&mut out, &mut units, &text, overflow);
@@ -455,7 +455,7 @@ pub(super) fn shell_script(args: &[Word]) -> Script<'_> {
     let mut i = 0;
     while let Some(a) = args.get(i) {
         // Compared without joining a value that cannot match, and read whole only for an
-        // option, so the script operand keeps no joined copy (#202 re-review M2).
+        // option, so the script operand keeps no joined copy.
         if a.value_is("--version") || a.value_is("--help") {
             return Script::None;
         }

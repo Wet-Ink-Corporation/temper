@@ -1,10 +1,10 @@
 //! A word's text as the walker builds it: the pieces its parts show, shared with the values
-//! they expand, and joined the first time a rule reads the whole (#202 F2).
+//! they expand, and joined the first time a rule reads the whole.
 //!
 //! V8 joins strings the same way, lazily, so 1.x answers `: $X/a; ` repeated with a long `$X`
 //! at once. A word whose text no rule reads never copies its value; one with a single piece
-//! is that piece. Every join is charged to the line's [`Guard`], a kept one once, so what a
-//! line joins, and keeps, is held to its budget (#202 re-review M2).
+//! is that piece. Every join a rule reads is charged to the line's [`Guard`], a kept one
+//! once, so what the rules join, and keep, is held to its budget.
 
 use std::borrow::Cow;
 use std::cell::OnceCell;
@@ -92,7 +92,7 @@ impl Text {
     }
 
     /// The whole text, joined for this read alone when it has not been joined, so the word
-    /// keeps no copy (#202 re-review M2); `None` once the line's budget is spent, which stops
+    /// keeps no copy; `None` once the line's budget is spent, which stops
     /// the guard.
     pub(super) fn read(&self) -> Option<Cow<'_, str>> {
         if let Some(whole) = self.joined.get() {
@@ -101,10 +101,8 @@ impl Text {
         self.charged().then(|| Cow::Owned(self.join()))
     }
 
-    /// The whole text for the walker to store as a variable's value: joined for this read
-    /// alone and not charged here, since the variables charge the value they keep, net of
-    /// the ones they free ([`super::words::Vars`], #202 third review F2), so `a=$a/b`
-    /// repeated holds one value at a time to the budget.
+    /// The whole text for one read that keeps nothing of it (a `NAME+=` tail, a print):
+    /// joined for this read alone and not charged.
     pub(super) fn unkept(&self) -> Cow<'_, str> {
         match self.joined.get() {
             Some(whole) => Cow::Borrowed(whole),
@@ -252,7 +250,7 @@ impl Text {
 }
 
 /// Two texts are equal when their wholes are, however they were built. They are compared
-/// piece by piece, so neither keeps a join or charges the line's guard (#202 third review F5).
+/// piece by piece, so neither keeps a join or charges the line's guard.
 impl PartialEq for Text {
     fn eq(&self, other: &Self) -> bool {
         self.len == other.len && same_bytes(self.chunks(), other.chunks())
@@ -294,8 +292,7 @@ fn same_bytes(left: &[Rc<str>], right: &[Rc<str>]) -> bool {
     }
 }
 
-/// Prints the whole, joined for the print alone: neither kept nor charged (#202 third
-/// review F5).
+/// Prints the whole, joined for the print alone: neither kept nor charged.
 impl fmt::Debug for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&*self.unkept(), f)

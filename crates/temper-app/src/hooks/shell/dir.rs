@@ -18,19 +18,16 @@ use temper_domain::PathStyle;
 use super::words::{JS_MAX_STRING, js_len};
 use crate::paths;
 
-/// How many bytes of directory text one rule may build from a command line: to resolve
-/// relative names, and once per directory a word expands `$PWD` or `$OLDPWD` to. Past it the
-/// rule stops as it does at V8's longest string, and gives its fallback. Only a deeper
-/// directory's text is built and counted, once per name resolved from it: a root's is
-/// borrowed, and an absolute name reads none (#202 F1). Words share the values they expand
-/// (#202 F2), and each join of their text, a kept one once, is charged here too, as is each
-/// inner script read and walked (#202 re-review M2).
+/// How many bytes of text one rule may build, or keep alive, for a command line (D16(s) in
+/// the port plan). Past it the rule stops as it does at V8's longest string, and gives its
+/// fallback. Counted: a deeper directory's text, once per name resolved from it and once per
+/// directory a word expands `$PWD` or `$OLDPWD` to (a root's is borrowed, and an absolute
+/// name reads none); each join of a word's text a rule reads, a kept one once; each inner
+/// script read and walked; and the variables' values while the line holds them. Words share
+/// the values they expand, so naming one costs nothing.
 ///
-/// 1.x reads every byte of it several times in JavaScript: the state-dir rule takes about 20 s
-/// on 960 MiB of it, and the protected-config rule after it about 69 s, both past the hook's
-/// 15 s timeout, which answers nothing either. The budget is twice the 1 GiB where 1.x was
-/// measured to time out, so a line 1.x answers within its timeout on a machine up to twice as
-/// fast stays under it (port plan item 50).
+/// 1.x has no such bound, but times out on far less: the budget is twice the text where
+/// it was measured to pass the hook's 15 s timeout, which answers nothing either.
 const DIR_TEXT_BUDGET: usize = 2 << 30;
 
 /// A directory: absolute, and in Node's normal form when [`Dir::is_normal`].
@@ -311,7 +308,7 @@ impl fmt::Debug for Dir {
 ///
 /// A shared handle: the rule that reads a line, its walk, and every word the walk makes
 /// whose text is pieces ([`super::text::Text`]) charge one budget, so the joins a line keeps
-/// are held to it too (#202 re-review M2). The state is shared and mutable by design, and
+/// are held to it too. The state is shared and mutable by design, and
 /// single-threaded, so it is `Rc` of `Cell`s (OWN-11).
 #[derive(Debug, Clone)]
 pub(crate) struct Guard(Rc<Spend>);

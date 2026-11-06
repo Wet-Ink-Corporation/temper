@@ -51,7 +51,7 @@ pub(crate) fn js_len(s: &str) -> usize {
 ///
 /// The text shares each value it expands rather than copying it, and is joined only when a
 /// rule reads it ([`Text`]), as V8 joins strings: `: $X; ` or `: $X/a; ` repeated holds `$X`
-/// once (#202 F2).
+/// once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Word {
     pub(super) raw: String,
@@ -181,7 +181,7 @@ impl Word {
 
     /// The text for one read, which keeps no joined copy: a read that copies the pieces is
     /// charged to the line's guard, and is `None` once its budget is spent, which marks the
-    /// overflow (#202 re-review M2).
+    /// overflow.
     pub(crate) fn text_read(&self) -> Option<Cow<'_, str>> {
         self.text.read()
     }
@@ -208,11 +208,11 @@ impl Word {
 /// Shell variables, with a journal so a subshell's or a substitution's changes are undone in
 /// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). Each open scope
 /// journals a name once, with its value at the mark, which is all its rollback needs: `a=$a/b`
-/// repeated inside `( ... )` keeps one old value, not every earlier one (#201 F1). A change made
-/// while no scope is open is never undone, so it is not journaled.
+/// repeated inside `( ... )` keeps one old value, not every earlier one. A change made while
+/// no scope is open is never undone, so it is not journaled.
 ///
-/// The values it keeps alive are charged to the line's budget, net of those it drops (#202
-/// third review F2): each value set is charged, and refunded once it is freed. A dropped value
+/// The values it keeps alive are charged to the line's budget, net of those it drops: each
+/// value set is charged, and refunded once it is freed. A dropped value
 /// a word still shares (the `$a` in `a=$a/b`, until that word is gone) waits in `dropped`,
 /// which is swept every so many releases, so a name grown in place holds its last few, and
 /// many names holding long values stop at the budget.
@@ -826,7 +826,7 @@ impl PathCx<'_> {
     }
 
     /// Whether `a` and `b` joined with `extra` more units fit in a JS string; when not, marks
-    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws (#201 F2).
+    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws.
     pub(crate) fn joins(&self, a: &str, b: &str, extra: usize) -> bool {
         self.fits(js_len(a).saturating_add(js_len(b)).saturating_add(extra))
     }
@@ -862,7 +862,7 @@ pub(crate) fn resolve_path(
             .then(|| paths::resolve(style, cx.at.cwd, &t));
     }
     let base = base.filter(|b| !b.is_empty())?;
-    // Then `${base}/${t}/`, which throws past V8's longest string (#201 F2).
+    // Then `${base}/${t}/`, which throws past V8's longest string.
     cx.joins(base, &t, 2).then(|| resolve_from(cx.at, base, &t))
 }
 
@@ -895,7 +895,7 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
     // A relative name steps from a directory in normal form, as `cd` does ([`Dir::step`]):
     // the same path as the full resolve, for the cost of a copy.
     let style = cx.at.style;
-    // Read once, and charged when that copies the pieces (#202 re-review M2).
+    // Read once, and charged when that copies the pieces.
     let read = if word.known && word.text.len() > 0 {
         Some(word.text_read()?)
     } else {
@@ -907,7 +907,7 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
         (dir.is_normal() && !paths::is_absolute(style, &t)).then_some((dir, t))
     });
     if let Some((dir, t)) = relative {
-        // 1.x's `${base}/${t}/` past V8's longest string throws (#201 F2).
+        // 1.x's `${base}/${t}/` past V8's longest string throws.
         let units = dir.units().saturating_add(js_len(&t)).saturating_add(2);
         if !cx.fits(units) {
             return None;

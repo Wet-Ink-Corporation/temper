@@ -189,13 +189,13 @@ struct Reader<'a, 'c, P> {
     /// the checkout there, if any. A hit joins no path.
     owners: HashMap<String, Option<Owner>>,
     /// The owner of every name in a directory, by the directory relative to the root: the
-    /// walk up its ancestors is made once per directory, not once per name (#202 F3), and
+    /// walk up its ancestors is made once per directory, not once per name, and
     /// stops at the first ancestor in here.
     owner_in: HashMap<String, Owner>,
-    /// The long paths `rel_to` found, for the names outside the root (#202 re-review M1).
+    /// The long paths `rel_to` found, for the names outside the root.
     long: LongPaths,
     /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
-    /// the line repeats one, though the answer cannot change within a line (#201 F4).
+    /// the line repeats one, though the answer cannot change within a line.
     listed: HashMap<(String, String, String), Listed>,
     changes: Changes,
 }
@@ -243,7 +243,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         if word.glob() || !word.value_is_known() {
             return None;
         }
-        // Read for this resolve alone and charged, keeping no copy (#202 re-review M2).
+        // Read for this resolve alone and charged, keeping no copy.
         let value = word.text_read()?;
         resolve_path(self.cx, Some(&value), base)
     }
@@ -261,7 +261,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         // A delete takes the file, or with -r a whole directory and the protected files in it.
         for d in command_deletes(c, self.cx) {
             // An absolute name reads no directory, as 1.x's resolve stops at it, so its
-            // directory is not built, and one base stands for all (#202 F1).
+            // directory is not built, and one base stands for all.
             let absolute = names_absolute(self.cx, &d.word);
             let cwd = if absolute {
                 None
@@ -342,7 +342,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     }
 
     /// A plain write to an absolute name. It reads no directory, as 1.x's resolve stops at
-    /// the name, so the command's directory is not built (#202 F1).
+    /// the name, so the command's directory is not built.
     fn write_absolute(&mut self, word: &Word) -> Result<(), GlobError> {
         match self.word_abs(word, None) {
             Some(dest) => self.check(&dest, false, List::Written),
@@ -556,8 +556,8 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
 
     /// [`Self::owner_of`]'s walk up `rel`'s ancestors. It stops at the first ancestor whose
     /// names' owner is known: that answer already weighs the ancestor and everything above
-    /// it, so a directory one level below a known one looks at itself alone (#202 re-review
-    /// m1: `cd a; > o; ` x 8192 walked every ancestor for each name).
+    /// it, so a directory one level below a known one looks at itself alone, and a line of
+    /// names in ever deeper directories does not walk every ancestor for each name.
     fn owner_up(&mut self, rel: &str) -> Result<Owner, GlobError> {
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).

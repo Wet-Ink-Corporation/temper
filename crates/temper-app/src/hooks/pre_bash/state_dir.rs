@@ -73,7 +73,7 @@ pub(super) fn state_dir_write_in(
     };
     // 1.x lists every target with its path (`writeTargets`) before it checks one, so a path
     // past V8's longest string anywhere in the line throws, and `readerRule` falls back
-    // (#201 F2). Once one has, nothing after it is read. Past the budget of directory text,
+    // Once one has, nothing after it is read. Past the budget of directory text,
     // a target's check stops, and so does the rule.
     let targets: Vec<Target<'_>> = commands
         .iter()
@@ -88,7 +88,7 @@ pub(super) fn state_dir_write_in(
 
 /// The directory a target's relative names are read from: its command's, else the start. A
 /// command's directory is built the first time a relative name needs it, and an absolute name
-/// never builds it, as 1.x's `path.resolve` never reads it then (#202 F1).
+/// never builds it, as 1.x's `path.resolve` never reads it then.
 struct Base<'d> {
     dir: Option<&'d Dir>,
     start: &'d str,
@@ -124,7 +124,7 @@ impl Probe<'_> {
             built: OnceCell::new(),
         };
         let base = &base;
-        // Read once and charged, keeping no copy (#202 re-review M2); `None` once the line's
+        // Read once and charged, keeping no copy; `None` once the line's
         // budget is spent, which stops the rule.
         let Some(text) = t.word.text_read() else {
             return false;
@@ -177,7 +177,7 @@ impl Probe<'_> {
             let Some(base) = base.text(self.cx) else {
                 return false;
             };
-            // 1.x's `${slash(base)}/${p}` throws past V8's longest string (#201 F2).
+            // 1.x's `${slash(base)}/${p}` throws past V8's longest string.
             if !self.cx.joins(base, &p, 1) {
                 return false;
             }

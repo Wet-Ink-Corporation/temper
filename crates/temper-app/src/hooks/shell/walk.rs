@@ -402,7 +402,7 @@ impl Walker<'_> {
     }
 
     /// Charges the walk of a joined script to the line's budget, since the words it makes
-    /// copy its text and the line keeps them (#202 re-review M2); `false` once the budget is
+    /// copy its text and the line keeps them; `false` once the budget is
     /// spent, which stops the walk. The line's own text and an `awk` program, which is a
     /// literal on the line, are not charged.
     pub(super) fn charge_script(&self, src: &str) -> bool {
