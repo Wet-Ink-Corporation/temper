@@ -342,23 +342,31 @@ impl Vars {
             self.refund(&old.text);
         }
         // Swept once per twice as many releases as the last sweep left held, and at least
-        // 16: O(1) per release, amortised.
+        // 16: O(log n) per release, amortised.
         self.since = self.since.saturating_add(1);
         if self.since > self.kept.saturating_mul(2).max(16) {
             self.sweep();
         }
     }
 
-    /// Refunds every dropped value that nothing else holds now.
+    /// Refunds every dropped value that nothing else holds now. One that several names
+    /// shared is dropped once per name, so the handles here are counted out first.
     fn sweep(&mut self) {
-        let mut dropped = std::mem::take(&mut self.dropped);
-        dropped.retain(|text| {
-            let held = Rc::strong_count(text) > 1;
-            if !held {
-                self.refund(text);
+        let mut all = std::mem::take(&mut self.dropped);
+        all.sort_unstable_by_key(|text| Rc::as_ptr(text).cast::<u8>().addr());
+        let mut dropped = Vec::with_capacity(all.len());
+        for same in all.chunk_by(Rc::ptr_eq) {
+            let held = same
+                .first()
+                .is_some_and(|text| Rc::strong_count(text) > same.len());
+            if held {
+                dropped.extend(same.iter().map(Rc::clone)); // handles, moved from `all`
+            } else {
+                for text in same {
+                    self.refund(text);
+                }
             }
-            held
-        });
+        }
         self.since = 0;
         self.kept = dropped.len();
         self.dropped = dropped;
@@ -1093,6 +1101,29 @@ mod tests {
             guard.spent()
         );
         assert!(!guard.overflowed());
+    }
+
+    /// A value two names share (`a=$X` shares `$X`'s string) is freed, and refunded, once
+    /// both have dropped it, though each dropped copy of the handle counts the other.
+    #[test]
+    fn a_value_two_names_share_is_refunded_once_both_drop_it() {
+        let guard = Guard::with_budget(1 << 20);
+        let mut vars = Vars::metered(&guard);
+        vars.set("x", Some("x".repeat(1000)));
+        let shared = vars.shared("x").cloned();
+        vars.set_shared("a", shared);
+        assert_eq!(guard.spent(), 2000, "each name's hold is charged");
+        vars.set("x", Some("1".to_owned()));
+        vars.set("a", Some("2".to_owned()));
+        for i in 0..64 {
+            vars.set("e", Some(i.to_string()));
+        }
+        assert!(guard.spent() < 1000, "still charged: {}", guard.spent());
+        assert!(
+            vars.dropped.is_empty(),
+            "still held: {}",
+            vars.dropped.len()
+        );
     }
 
     #[test]
