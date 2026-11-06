@@ -23,7 +23,8 @@ use crate::paths;
 /// rule stops as it does at V8's longest string, and gives its fallback. Only a deeper
 /// directory's text is built and counted, once per name resolved from it: a root's is
 /// borrowed, and an absolute name reads none (#202 F1). Words share the values they expand
-/// and copy nothing (#202 F2).
+/// (#202 F2), and each join of their text, a kept one once, is charged here too, as is each
+/// inner script read and walked (#202 re-review M2).
 ///
 /// 1.x reads every byte of it several times in JavaScript: the state-dir rule takes about 20 s
 /// on 960 MiB of it, and the protected-config rule after it about 69 s, both past the hook's

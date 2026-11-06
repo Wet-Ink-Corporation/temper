@@ -14,7 +14,8 @@
 //! 1.x. A directory is a parent handle plus the names a `cd` added ([`dir::Dir`]), so a `cd`
 //! costs the value it reads and a line of `cd a` or `pushd a` holds each name once; the whole
 //! path is built only where a rule resolves a name from it, and a rule builds at most
-//! [`dir::Guard`]'s budget of that text per line. The variables a subshell restores are
+//! [`dir::Guard`]'s budget of that text per line, which also counts each join of a word's
+//! text and each inner script it reads and walks (#202 re-review M2). The variables a subshell restores are
 //! journaled once per name per scope, and its directories are shared handles; each string is
 //! held to V8's longest (see [`walk::TooLong`]), and so is each path joined from them.
 

@@ -406,7 +406,10 @@ impl Walker<'_> {
     /// spent, which stops the walk. The line's own text and an `awk` program, which is a
     /// literal on the line, are not charged.
     pub(super) fn charge_script(&self, src: &str) -> bool {
-        self.opts.paths.guard.is_none_or(|guard| guard.charge(src.len()))
+        self.opts
+            .paths
+            .guard
+            .is_none_or(|guard| guard.charge(src.len()))
     }
 
     /// 1.x `simple(words, meta, { ...env, cwd, vars: new Map(env.vars), dirs: [] })`, as
