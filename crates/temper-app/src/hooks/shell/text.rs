@@ -207,18 +207,63 @@ impl Text {
     }
 }
 
-/// Two texts are equal when their wholes are, however they were built.
+impl Text {
+    /// What the whole is made of, in order: the kept join, or the pieces.
+    fn chunks(&self) -> &[Rc<str>] {
+        self.joined
+            .get()
+            .map_or(&self.pieces, |whole| std::slice::from_ref(whole))
+    }
+}
+
+/// Two texts are equal when their wholes are, however they were built. They are compared
+/// piece by piece, so neither keeps a join or charges the line's guard (#202 third review F5).
 impl PartialEq for Text {
     fn eq(&self, other: &Self) -> bool {
-        self.get() == other.get()
+        self.len == other.len && same_bytes(self.chunks(), other.chunks())
     }
 }
 
 impl Eq for Text {}
 
+/// Whether two runs of chunks hold the same bytes, read without joining either.
+fn same_bytes(left: &[Rc<str>], right: &[Rc<str>]) -> bool {
+    let mut left = left.iter().map(|c| c.as_bytes());
+    let mut right = right.iter().map(|c| c.as_bytes());
+    let (mut a, mut b): (&[u8], &[u8]) = (&[], &[]);
+    loop {
+        if a.is_empty() {
+            match left.next() {
+                Some(next) => a = next,
+                None => return b.is_empty() && right.all(<[u8]>::is_empty),
+            }
+            continue;
+        }
+        if b.is_empty() {
+            match right.next() {
+                Some(next) => b = next,
+                None => return false,
+            }
+            continue;
+        }
+        let n = a.len().min(b.len());
+        let (Some((a_head, a_rest)), Some((b_head, b_rest))) =
+            (a.split_at_checked(n), b.split_at_checked(n))
+        else {
+            return false;
+        };
+        if a_head != b_head {
+            return false;
+        }
+        (a, b) = (a_rest, b_rest);
+    }
+}
+
+/// Prints the whole, joined for the print alone: neither kept nor charged (#202 third
+/// review F5).
 impl fmt::Debug for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self.get(), f)
+        fmt::Debug::fmt(&*self.unkept(), f)
     }
 }
 
@@ -299,5 +344,24 @@ mod tests {
             (1 << 10) + 2,
             "a kept join still reads whole"
         );
+    }
+
+    /// #202 third review F5: comparing or printing a text reads its pieces and neither
+    /// keeps a join nor charges the line's guard.
+    #[test]
+    fn comparing_or_printing_a_text_keeps_no_join_and_charges_nothing() {
+        let guard = Guard::with_budget(1 << 20);
+        let text = |p: &[&str]| {
+            let pieces = p.iter().map(|&s| Rc::from(s)).collect();
+            Text::of(pieces, 0, Some(&guard))
+        };
+        let (left, right) = (text(&["ab", "cd", "e"]), text(&["a", "bcde"]));
+        assert_eq!(left, right);
+        assert_ne!(left, text(&["ab", "cd", "f"]));
+        assert_ne!(left, text(&["ab", "cd"]));
+        assert_eq!(left, Text::whole(Rc::from("abcde")));
+        assert_eq!(format!("{left:?}"), "\"abcde\"");
+        assert!(left.copies() && right.copies(), "a join was kept");
+        assert_eq!(guard.spent(), 0);
     }
 }
