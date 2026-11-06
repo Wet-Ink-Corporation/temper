@@ -270,7 +270,10 @@ function mdText(s, max = 0) {
   if (parts.length % 2 === 0) return outside(str).replace(/`/g, '&#96;');
   return parts.map((p, i) => (i % 2 ? `\`${p}\`` : outside(p))).join('');
 }
-const mdCell = (s, max) => mdText(s, max).replace(/\|/g, '\\|');
+// A table cell also escapes `|` as `\|`, the one escape GFM table parsing knows; it applies
+// inside code spans too. Backslashes need nothing more here: mdText escapes them outside code
+// spans, and GFM reads `\\|` as a literal backslash before an escaped pipe.
+const mdCell = (s, max) => mdText(s, max).split('|').join('\\|');
 const mdCode = (s) => `\`${String(s ?? '').replace(/[`\r\n]/g, '')}\``;
 const loc = (f) => (f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : '(no file)');
 const ruleList = (rules) => (rules?.length ? rules.join(', ') : 'unmapped');
