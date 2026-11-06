@@ -392,7 +392,12 @@ fn a_word_of_one_expansion_shares_the_value_however_often_a_line_names_it() {
 #[test]
 fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
     let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
-    let line = [x.as_str(), &"$X/a; ".repeat(200), &"echo > $X/b; ".repeat(200)].concat();
+    let line = [
+        x.as_str(),
+        &"$X/a; ".repeat(200),
+        &"echo > $X/b; ".repeat(200),
+    ]
+    .concat();
     let ran = parse_with(&line, super::opts());
     let names: Vec<_> = ran.iter().filter_map(|c| c.name.as_deref()).collect();
     assert_eq!(names.iter().filter(|&&n| n == "a").count(), 200);
@@ -402,7 +407,11 @@ fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
         .filter_map(|t| path_of(&t))
         .collect();
     assert_eq!(paths.len(), 200);
-    assert!(paths.iter().all(|p| p.ends_with("a/b") && p.len() > 1 << 16));
+    assert!(
+        paths
+            .iter()
+            .all(|p| p.ends_with("a/b") && p.len() > 1 << 16)
+    );
     let joined = ran
         .iter()
         .flat_map(|c| std::iter::once(&c.argv0).chain(c.redirects.iter().map(|r| &r.word)))
@@ -414,10 +423,11 @@ fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
 /// #202 F2: a word that holds an expansion among other text (`$X/a`) shares the value too,
 /// and its text is joined only when a rule reads it, as V8 joins strings: 1.x answers
 /// `: $X/a; ` x 140 with a 2^24-char `$X` in 0.16 s, where each word copied it (2.1 GB). No
-/// budget is spent on it.
+/// budget is spent on it until a word is read: the budget has room for the two walks and the
+/// one read below (#202 re-review M2 charges that read), and none for a copy per word.
 #[test]
 fn a_word_with_an_expansion_in_it_joins_its_text_only_when_read() {
-    let guard = Guard::with_budget(1 << 20);
+    let guard = Guard::with_budget(3 << 20);
     let opts = ParseOpts {
         paths: PathCx {
             guard: Some(&guard),
@@ -442,4 +452,44 @@ fn a_word_with_an_expansion_in_it_joins_its_text_only_when_read() {
     assert_eq!(last.text().len(), (1 << 20) + 2);
     assert!(last.text().ends_with("a/a"));
     assert!(last.text.joined());
+}
+
+/// #202 re-review M2: an inner script (`bash -c`, `eval`, `watch`, `env -S`, `pwsh -c`) is
+/// read from its words once, charged and not kept, and its walk is charged the text its
+/// words copy, so a line of them is held to the budget: `bash -c $X/a; ` x 200 with a
+/// 2^24-char `$X` passed 3.7 GB. Here each of 40 scripts is 2^16 + 2 bytes: read alone they
+/// cost 2.5 MiB, read and walked 5 MiB.
+#[test]
+fn an_inner_script_is_charged_its_read_and_its_walk_and_keeps_no_join() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let within = |line: &str, budget: usize| {
+        let guard = Guard::with_budget(budget);
+        let opts = ParseOpts {
+            paths: PathCx {
+                guard: Some(&guard),
+                ..cx()
+            },
+            ..super::opts()
+        };
+        parse_commands(line, opts).map(|ran| {
+            let kept = ran
+                .iter()
+                .flat_map(|c| std::iter::once(&c.argv0).chain(&c.args))
+                .filter(|w| w.text.joined())
+                .count();
+            (ran.len(), kept)
+        })
+    };
+    for (each, commands) in [
+        ("bash -c $X/a; ", 80),
+        ("eval $X/a; ", 80),
+        // `watch` and `env -S` leave only the command they run.
+        ("watch $X/a; ", 40),
+        ("env -S $X/a; ", 40),
+        ("pwsh -c $X/a; ", 80),
+    ] {
+        let line = [x.as_str(), &each.repeat(40), "true"].concat();
+        assert_eq!(within(&line, 6 << 20), Ok((commands + 1, 0)), "{each}");
+        assert_eq!(within(&line, 4 << 20), Err(TooLong), "{each}");
+    }
 }

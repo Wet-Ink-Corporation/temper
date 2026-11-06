@@ -126,7 +126,7 @@ impl Probe<'_> {
         let base = &base;
         // Read once and charged, keeping no copy (#202 re-review M2); `None` once the line's
         // budget is spent, which stops the rule.
-        let Some(text) = t.word.text_read(self.cx.guard) else {
+        let Some(text) = t.word.text_read() else {
             return false;
         };
         let text = &*text;

@@ -244,7 +244,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             return None;
         }
         // Read for this resolve alone and charged, keeping no copy (#202 re-review M2).
-        let value = word.text_read(self.cx.guard)?;
+        let value = word.text_read()?;
         resolve_path(self.cx, Some(&value), base)
     }
 

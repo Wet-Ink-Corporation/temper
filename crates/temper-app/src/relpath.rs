@@ -117,10 +117,9 @@ fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
             None => (dir.to_owned(), &[][..]),
         },
     };
-    below
-        .iter()
-        .rev()
-        .fold(base, |long, p| paths::join(style, &long, paths::basename(style, p)))
+    below.iter().rev().fold(base, |long, p| {
+        paths::join(style, &long, paths::basename(style, p))
+    })
 }
 
 /// Past this many bytes a Windows path is longer than Windows opens: 32,767 UTF-16 units with
@@ -283,9 +282,16 @@ mod tests {
 
         let short: Vec<&str> = got.iter().take(4).map(String::as_str).collect();
         assert_eq!(short, ["../o/a/x", "../o/a/a/x", "in/x", "in/a/x"]);
-        assert_eq!(got.last().map(String::len), Some(2 + 2 * (n - 3) + 2), "in/a/.../y");
+        assert_eq!(
+            got.last().map(String::len),
+            Some(2 + 2 * (n - 3) + 2),
+            "in/a/.../y"
+        );
         // A bisection over at most 402 ancestors asks at most 9 times, plus the name itself.
-        assert!(chain_calls <= 10 * n, "{chain_calls} asks for {n} directories");
+        assert!(
+            chain_calls <= 10 * n,
+            "{chain_calls} asks for {n} directories"
+        );
         assert_eq!(
             same_dir_calls,
             2 * n,
@@ -309,7 +315,11 @@ mod tests {
 
         let rel = rel_to(&files, env, r"C:\ws", &format!(r"{chain}\w\clippy.toml"));
 
-        assert!(rel.starts_with("../o/ddd"), "{}", rel.get(..40).unwrap_or(""));
+        assert!(
+            rel.starts_with("../o/ddd"),
+            "{}",
+            rel.get(..40).unwrap_or("")
+        );
     }
 
     /// `realpathSync.native` failing for another reason than a missing path (a permission

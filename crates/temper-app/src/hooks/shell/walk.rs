@@ -6,6 +6,7 @@
 //! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
 //! never a copy or a re-read of the whole path ([`word_dir`]).
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -392,6 +393,22 @@ impl Walker<'_> {
         self.env.prev = saved_prev;
     }
 
+    /// [`Self::sub_in`] of a script a command joined from its words (`bash -c`, `watch`,
+    /// `env -S`, `pwsh -c`), once [`Self::charge_script`] has room for it.
+    pub(super) fn script_in(&mut self, src: &str, cwd: Option<Dir>, ps: bool) {
+        if self.charge_script(src) {
+            self.sub_in(src, cwd, ps);
+        }
+    }
+
+    /// Charges the walk of a joined script to the line's budget, since the words it makes
+    /// copy its text and the line keeps them (#202 re-review M2); `false` once the budget is
+    /// spent, which stops the walk. The line's own text and an `awk` program, which is a
+    /// literal on the line, are not charged.
+    pub(super) fn charge_script(&self, src: &str) -> bool {
+        self.opts.paths.guard.is_none_or(|guard| guard.charge(src.len()))
+    }
+
     /// 1.x `simple(words, meta, { ...env, cwd, vars: new Map(env.vars), dirs: [] })`, as
     /// `find -exec` runs one: nothing it sets outlives it.
     pub(super) fn simple_apart(&mut self, words: Vec<Word>, meta: Meta, cwd: Option<Dir>) {
@@ -415,8 +432,8 @@ impl Walker<'_> {
         let Some(name) = word.assign() else {
             return;
         };
-        let value = word.value();
-        let tail = value.and_then(|v| v.get(name.len()..));
+        let value = word.value_to_store();
+        let tail = value.as_deref().and_then(|v| v.get(name.len()..));
         let value = match tail.and_then(|t| t.strip_prefix("+=")) {
             Some(more) => self.env.vars.get(name).and_then(|old| {
                 let mut value = old.to_owned();
@@ -510,7 +527,7 @@ impl Walker<'_> {
             && eq.raw == "="
         {
             let name = var.raw.get(1..).unwrap_or("").to_owned();
-            let value = value.value().map(str::to_owned);
+            let value = value.value_to_store().map(Cow::into_owned);
             self.env.vars.set(&name, value);
             return;
         }
@@ -581,8 +598,9 @@ impl Walker<'_> {
     /// What a command runs inside it, in `cwd`, one level deeper.
     fn inner(&mut self, inner: Inner, cwd: Option<Dir>, meta: &Meta) {
         match inner {
-            Inner::Sub { src, ps } => self.sub_in(&src, cwd, ps),
-            Inner::Run(src) => self.run(&src),
+            Inner::Sub { src, ps } => self.script_in(&src, cwd, ps),
+            Inner::Run(src) if self.charge_script(&src) => self.run(&src),
+            Inner::Run(_) => {}
             Inner::Awk(srcs) => {
                 for src in srcs {
                     self.sub_in(&src, cwd.clone(), false); // a shared `Rc` handle
@@ -618,7 +636,7 @@ impl Walker<'_> {
         } else {
             let a: Vec<&Word> = args
                 .iter()
-                .filter(|x| x.value().is_none() || !is_cd_option(&x.raw))
+                .filter(|x| !x.value_is_known() || !is_cd_option(&x.raw))
                 .collect();
             if name == "pushd" {
                 let cwd = self.env.cwd.clone();
@@ -627,7 +645,7 @@ impl Walker<'_> {
             self.env.cwd = match a.as_slice() {
                 [] if name == "pushd" => None,
                 [] => Some(Dir::given(self.opts.home)),
-                [only] if only.value() == Some("-") => self.env.prev.clone(),
+                [only] if only.value_is("-") => self.env.prev.clone(),
                 [only] => self.capped(self.cd_into(only)),
                 _ => None,
             };

@@ -313,11 +313,22 @@ fn past_the_budget_the_rules_fall_back_on_the_text_they_join_from_words() {
         let config = line(each, "echo > clippy.toml");
         assert!(ws.rules_within(&state, 16 << 20).0, "{each}");
         assert_eq!(ws.rules_within(&config, 16 << 20).1, clippy, "{each}");
-        assert_eq!(ws.rules_within(&state, 1 << 20), (false, Vec::new()), "{each}");
-        assert_eq!(ws.rules_within(&config, 1 << 20), (false, Vec::new()), "{each}");
+        assert_eq!(
+            ws.rules_within(&state, 1 << 20),
+            (false, Vec::new()),
+            "{each}"
+        );
+        assert_eq!(
+            ws.rules_within(&config, 1 << 20),
+            (false, Vec::new()),
+            "{each}"
+        );
     }
     let named = line("$X/a; ", "echo > .git/temper/x");
-    assert!(ws.rules_within(&named, 1 << 16).0, "a command name joins nothing");
+    assert!(
+        ws.rules_within(&named, 1 << 16).0,
+        "a command name joins nothing"
+    );
     let named = line("$X/a; ", "echo > clippy.toml");
     assert_eq!(ws.rules_within(&named, 1 << 16).1, clippy);
 }

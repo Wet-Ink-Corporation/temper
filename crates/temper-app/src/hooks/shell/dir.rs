@@ -307,8 +307,17 @@ impl fmt::Debug for Dir {
 /// What stops the reader and the rules that read its paths, for one command line: a string
 /// past V8's longest, where 1.x throws and its rule falls back, or more text built than
 /// [`DIR_TEXT_BUDGET`].
+///
+/// A shared handle: the rule that reads a line, its walk, and every word the walk makes
+/// whose text is pieces ([`super::text::Text`]) charge one budget, so the joins a line keeps
+/// are held to it too (#202 re-review M2). The state is shared and mutable by design, and
+/// single-threaded, so it is `Rc` of `Cell`s (OWN-11).
+#[derive(Debug, Clone)]
+pub(crate) struct Guard(Rc<Spend>);
+
+/// What a [`Guard`] has seen.
 #[derive(Debug)]
-pub(crate) struct Guard {
+struct Spend {
     overflow: Cell<bool>,
     spent: Cell<usize>,
     budget: usize,
@@ -316,33 +325,34 @@ pub(crate) struct Guard {
 
 impl Default for Guard {
     fn default() -> Self {
-        Self {
-            overflow: Cell::new(false),
-            spent: Cell::new(0),
-            budget: DIR_TEXT_BUDGET,
-        }
+        Self::within(DIR_TEXT_BUDGET)
     }
 }
 
 impl Guard {
+    fn within(budget: usize) -> Self {
+        Self(Rc::new(Spend {
+            overflow: Cell::new(false),
+            spent: Cell::new(0),
+            budget,
+        }))
+    }
+
     /// A guard whose budget is `bytes`, for a test to reach it with a short line.
     #[cfg(test)]
     pub(crate) fn with_budget(bytes: usize) -> Self {
-        Self {
-            budget: bytes,
-            ..Self::default()
-        }
+        Self::within(bytes)
     }
 
     /// Whether the line went past a bound; the rule then gives its fallback, as 1.x's
     /// `readerRule` does when the reader throws.
     pub(crate) fn overflowed(&self) -> bool {
-        self.overflow.get()
+        self.0.overflow.get()
     }
 
     /// Marks the overflow.
     pub(super) fn stop(&self) {
-        self.overflow.set(true);
+        self.0.overflow.set(true);
     }
 
     /// Whether `units` UTF-16 units fit in a JS string; when not, marks the overflow.
@@ -364,12 +374,12 @@ impl Guard {
         Some(dir.text())
     }
 
-    /// Charges `bytes` of directory text built to the line's budget; `false` once it is
-    /// spent, which marks the overflow.
+    /// Charges `bytes` of text built (a directory's, or a word's joined) to the line's
+    /// budget; `false` once it is spent, which marks the overflow.
     pub(super) fn charge(&self, bytes: usize) -> bool {
-        let spent = self.spent.get().saturating_add(bytes);
-        self.spent.set(spent);
-        if spent > self.budget {
+        let spent = self.0.spent.get().saturating_add(bytes);
+        self.0.spent.set(spent);
+        if spent > self.0.budget {
             self.stop();
             return false;
         }
