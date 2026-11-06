@@ -144,10 +144,34 @@ impl Word {
         self.known.then(|| self.text.get())
     }
 
-    /// The value for an assignment to store, which keeps no joined copy; [`Vars::set`]
-    /// charges what it keeps (see [`Text::unkept`]). `None` when a part is unknown.
-    pub(super) fn value_to_store(&self) -> Option<Cow<'_, str>> {
-        self.known.then(|| self.text.unkept())
+    /// What a `NAME=value` or `NAME+=value` word stores, read without keeping a join on the
+    /// word; `None` when it is no assignment.
+    pub(super) fn assigned(&self) -> Option<Assigned<'_>> {
+        let name = self.assign()?.len();
+        if !self.known {
+            return Some(Assigned::Unknown);
+        }
+        let head = self.text.head(name.saturating_add(2));
+        if !head.get(name..).is_some_and(|op| op.starts_with("+=")) {
+            return Some(Assigned::Set(name.saturating_add(1)));
+        }
+        let after = name.saturating_add(2);
+        let more = match self.text.unkept() {
+            Cow::Borrowed(all) => all.get(after..).map(Cow::Borrowed),
+            Cow::Owned(all) => all.get(after..).map(|more| Cow::Owned(more.to_owned())),
+        };
+        Some(more.map_or(Assigned::Unknown, Assigned::Append))
+    }
+
+    /// The value after its first `skip` bytes, which are ASCII (a name and `=`, so as many
+    /// UTF-16 units), as one shared string for a variable to keep: the piece itself when the
+    /// rest is one, else joined once through `scratch`. `None` when a part is unknown.
+    fn shared_after(&self, skip: usize, scratch: &mut String) -> Option<Shared> {
+        if !self.known {
+            return None;
+        }
+        let text = self.text.tail_shared(skip, scratch)?;
+        Some(Shared::new(text, self.text.units().saturating_sub(skip)))
     }
 
     /// Whether every part's value is known, so [`Self::value`] is `Some`.
@@ -209,6 +233,9 @@ pub(super) struct Vars {
     since: usize,
     /// How many the last sweep left in `dropped`.
     kept: usize,
+    /// Where a value of several pieces is joined before it is shared, kept so its pages are
+    /// reused; its capacity is charged as it grows.
+    scratch: String,
 }
 
 /// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
@@ -216,6 +243,17 @@ pub(super) struct Vars {
 pub(super) struct Mark {
     journal: usize,
     depth: usize,
+}
+
+/// What an assignment word stores ([`Word::assigned`]).
+#[derive(Debug)]
+pub(super) enum Assigned<'w> {
+    /// A part's value is unknown, so the name is deleted.
+    Unknown,
+    /// `NAME=value`: the value is the word's text after this many bytes ([`Vars::set_word`]).
+    Set(usize),
+    /// `NAME+=more`: the text to append to a known value.
+    Append(Cow<'w, str>),
 }
 
 /// A value words may share: its text and its length in UTF-16 units, counted once.
@@ -261,6 +299,23 @@ impl Vars {
             let units = js_len(&text);
             Shared::new(Rc::from(text), units)
         });
+        self.set_shared(name, value);
+    }
+
+    /// [`Self::set`] with `word`'s value after its first `skip` bytes (ASCII): the piece it
+    /// names shared when the value is one, else joined once; deleted when it is unknown.
+    pub(super) fn set_word(&mut self, name: &str, word: &Word, skip: usize) {
+        let held = self.scratch.capacity();
+        let value = word.shared_after(skip, &mut self.scratch);
+        let grown = self.scratch.capacity().saturating_sub(held);
+        if let Some(meter) = self.meter.as_ref().filter(|_| grown > 0) {
+            meter.charge(grown);
+        }
+        self.set_shared(name, value);
+    }
+
+    /// [`Self::set`] with a value already shared, whose units are known.
+    fn set_shared(&mut self, name: &str, value: Option<Shared>) {
         if let (Some(meter), Some(value)) = (&self.meter, &value) {
             // `charge` stops the guard when the budget is spent; the walk then stops.
             meter.charge(value.text.len());
