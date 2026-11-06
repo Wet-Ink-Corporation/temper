@@ -9,13 +9,16 @@
 //! Node's path algebra, and is crate-private (port plan OC-1 B, wi-30e6a5).
 //!
 //! Each scan reads its input forward once per nesting level the walker follows (at most
-//! [`walk::MAX_DEPTH`] deep). On top of that, each value a line builds costs its length once:
-//! an assignment copies its value, so `a=$a/b` repeated n times copies O(n^2) bytes, as in
+//! [`walk::MAX_DEPTH`] deep). On top of that, the work per assignment or command name is
+//! linear in the value, as in 1.x: an assignment copies its value once unless it names a
+//! single value, which it shares, so `a=$a/b` repeated n times copies O(n^2) bytes, as in
 //! 1.x. A directory is a parent handle plus the names a `cd` added ([`dir::Dir`]), so a `cd`
 //! costs the value it reads and a line of `cd a` or `pushd a` holds each name once; the whole
-//! path is built only where a rule resolves a name from it, and a rule builds at most
-//! [`dir::Guard`]'s budget of that text per line, which also counts each join of a word's
-//! text and each inner script it reads and walks (#202 re-review M2). The variables a subshell restores are
+//! path is built only where a rule resolves a name from it. [`dir::Guard`]'s budget per line
+//! bounds the memory the line keeps alive and the text the rules build: the directory text,
+//! each join of a word's text a rule reads, each inner script read and walked, and the
+//! variables' live values; the copies an assignment or a command name makes are not counted
+//! as work. The variables a subshell restores are
 //! journaled once per name per scope, and its directories are shared handles; each string is
 //! held to V8's longest (see [`walk::TooLong`]), and so is each path joined from them.
 

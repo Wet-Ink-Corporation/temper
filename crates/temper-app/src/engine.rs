@@ -56,7 +56,8 @@ impl<P: Ports> Engine<P> {
     }
 
     /// `temper hook <event>` with the parsed hook input: the handler's answer. So far
-    /// `post-tool`, `user-prompt` and `pre-edit` are ported.
+    /// `post-tool`, `user-prompt`, `pre-edit` and `pre-bash` are ported; `pre-edit` and
+    /// `pre-bash` are not yet in the launcher's `RUST_READY`, so 1.x still answers them.
     ///
     /// # Errors
     ///

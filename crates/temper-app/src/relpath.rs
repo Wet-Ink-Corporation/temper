@@ -115,7 +115,7 @@ fn dir_long(
 /// `..`), so the ancestors that resolve are the shallow ones. The deepest of them, which
 /// 1.x's walk up finds first, is found by galloping up from the parent (2, 4, 8, ... names
 /// up) and bisecting within the step that found one: a few `real_path` asks per doubling of
-/// the distance, each about a path no longer than the directory (#202 re-review F1).
+/// the distance, each about a path no longer than the directory.
 fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
     // `dir` and its ancestors, deepest first; `dirname` is a prefix of its argument.
     let mut chain = vec![dir];
@@ -168,7 +168,7 @@ fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
 /// Past this many bytes a Windows path is longer than Windows opens: 32,767 UTF-16 units with
 /// a verbatim prefix, each at most three bytes of UTF-8. There `realpathSync.native` fails on
 /// it, so it is not asked. A POSIX path has no such bound: glibc's `realpath` resolves any
-/// length whose links keep each prefix it builds under `PATH_MAX` (#202 re-review M1).
+/// length whose links keep each prefix it builds under `PATH_MAX`.
 const LONGEST_WINDOWS_PATH: usize = 3 * 32_767;
 
 /// 1.x `realpathSync.native(path)` inside `longPath`'s `try`.
@@ -381,7 +381,15 @@ mod tests {
         let far = format!("{deep}{}/x", "/n".repeat(1 << 10));
         let up = asked(&far);
         assert!(up.0.ends_with("/n/x"));
-        assert!(up.1 <= 2 + 2 * 12, "{} asks", up.1);
+        // Root, name, directory, parent, a gallop up from the parent (2, 4, ..., 1024) and a
+        // bisection within its last step. The whole-path bisection this replaced asks
+        // (13, 47,449) here, fewer this far up, but a dozen near-full paths for a name close
+        // to one that resolves (the cases above).
+        assert_eq!(
+            (up.1, up.2),
+            (23, 107_201),
+            "root, name, a gallop and a bisection"
+        );
     }
 
     /// A Windows path longer than Windows opens is not asked: `realpathSync.native` fails

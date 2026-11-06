@@ -1,10 +1,10 @@
 //! A word's text as the walker builds it: the pieces its parts show, shared with the values
-//! they expand, and joined the first time a rule reads the whole (#202 F2).
+//! they expand, and joined the first time a rule reads the whole.
 //!
 //! V8 joins strings the same way, lazily, so 1.x answers `: $X/a; ` repeated with a long `$X`
 //! at once. A word whose text no rule reads never copies its value; one with a single piece
-//! is that piece. Every join is charged to the line's [`Guard`], a kept one once, so what a
-//! line joins, and keeps, is held to its budget (#202 re-review M2).
+//! is that piece. Every join a rule reads is charged to the line's [`Guard`], a kept one
+//! once, so what the rules join, and keep, is held to its budget.
 
 use std::borrow::Cow;
 use std::cell::OnceCell;
@@ -92,7 +92,7 @@ impl Text {
     }
 
     /// The whole text, joined for this read alone when it has not been joined, so the word
-    /// keeps no copy (#202 re-review M2); `None` once the line's budget is spent, which stops
+    /// keeps no copy; `None` once the line's budget is spent, which stops
     /// the guard.
     pub(super) fn read(&self) -> Option<Cow<'_, str>> {
         if let Some(whole) = self.joined.get() {
@@ -101,14 +101,47 @@ impl Text {
         self.charged().then(|| Cow::Owned(self.join()))
     }
 
-    /// The whole text for the walker to store as a variable's value: joined for this read
-    /// alone and not charged here, since the variables charge the value they keep, net of
-    /// the ones they free ([`super::words::Vars`], #202 third review F2), so `a=$a/b`
-    /// repeated holds one value at a time to the budget.
+    /// The whole text for one read that keeps nothing of it (a `NAME+=` tail, a print):
+    /// joined for this read alone and not charged.
     pub(super) fn unkept(&self) -> Cow<'_, str> {
         match self.joined.get() {
             Some(whole) => Cow::Borrowed(whole),
             None => Cow::Owned(self.join()),
+        }
+    }
+
+    /// The text after its first `skip` bytes, for a variable to keep: the piece itself when
+    /// the rest is one whole piece, else the rest joined once, neither kept here nor charged
+    /// (the variables charge what they keep). `None` when `skip` is past the end or not on a
+    /// char boundary.
+    pub(super) fn tail_shared(&self, skip: usize, scratch: &mut String) -> Option<Rc<str>> {
+        let mut rest = skip;
+        let mut tail: Vec<&str> = Vec::new();
+        let mut whole_piece = None;
+        for chunk in self.chunks() {
+            if tail.is_empty() && rest >= chunk.len() {
+                rest = rest.saturating_sub(chunk.len());
+                continue;
+            }
+            if tail.is_empty() && rest == 0 {
+                whole_piece = Some(chunk);
+            }
+            tail.push(chunk.get(rest..)?);
+            rest = 0;
+        }
+        if rest > 0 {
+            return None;
+        }
+        match (whole_piece, tail.as_slice()) {
+            (Some(piece), [_]) => Some(Rc::clone(piece)),
+            (_, [one]) => Some(Rc::from(*one)),
+            _ => {
+                scratch.clear();
+                for part in tail {
+                    scratch.push_str(part);
+                }
+                Some(Rc::from(scratch.as_str()))
+            }
         }
     }
 
@@ -217,7 +250,7 @@ impl Text {
 }
 
 /// Two texts are equal when their wholes are, however they were built. They are compared
-/// piece by piece, so neither keeps a join or charges the line's guard (#202 third review F5).
+/// piece by piece, so neither keeps a join or charges the line's guard.
 impl PartialEq for Text {
     fn eq(&self, other: &Self) -> bool {
         self.len == other.len && same_bytes(self.chunks(), other.chunks())
@@ -259,8 +292,7 @@ fn same_bytes(left: &[Rc<str>], right: &[Rc<str>]) -> bool {
     }
 }
 
-/// Prints the whole, joined for the print alone: neither kept nor charged (#202 third
-/// review F5).
+/// Prints the whole, joined for the print alone: neither kept nor charged.
 impl fmt::Debug for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&*self.unkept(), f)
@@ -344,6 +376,41 @@ mod tests {
             (1 << 10) + 2,
             "a kept join still reads whole"
         );
+    }
+
+    /// The text after a prefix, for a variable to keep: a tail that is one whole piece is
+    /// that piece, shared; any other is joined once, through a buffer it reuses. Neither
+    /// keeps a join on the text.
+    #[test]
+    fn the_text_after_a_prefix_is_its_piece_shared_or_joined_once() {
+        let long: Rc<str> = Rc::from("é".repeat(1 << 10));
+        let (name, slash): (Rc<str>, Rc<str>) = (Rc::from("a="), Rc::from("/b"));
+        let units = 2 + (1 << 10) + 2;
+        let mut scratch = String::new();
+        let one = Text::of(vec![Rc::clone(&name), Rc::clone(&long)], units - 2, None);
+        let shared = one.tail_shared(2, &mut scratch);
+        assert!(shared.as_ref().is_some_and(|s| Rc::ptr_eq(s, &long)));
+        assert_eq!(scratch.capacity(), 0, "a whole piece is not joined");
+        let two = Text::of(vec![Rc::clone(&name), Rc::clone(&long), slash], units, None);
+        let joined = two.tail_shared(2, &mut scratch).map(|s| s.len());
+        assert_eq!(joined, Some((2 << 10) + 2));
+        let held = scratch.capacity();
+        assert_eq!(
+            two.tail_shared(1, &mut scratch)
+                .as_deref()
+                .map(|s| s.get(..3)),
+            Some(Some("=é"))
+        );
+        assert_eq!(scratch.capacity(), held, "the buffer is reused");
+        assert!(two.copies(), "a join was kept");
+        assert_eq!(
+            two.tail_shared(3, &mut scratch),
+            None,
+            "not a char boundary"
+        );
+        let whole = Text::whole(Rc::from("a=xy"));
+        assert_eq!(whole.tail_shared(2, &mut scratch).as_deref(), Some("xy"));
+        assert_eq!(whole.tail_shared(9, &mut scratch), None, "past the end");
     }
 
     /// #202 third review F5: comparing or printing a text reads its pieces and neither

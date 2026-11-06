@@ -6,7 +6,6 @@
 //! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
 //! never a copy or a re-read of the whole path ([`word_dir`]).
 
-use std::borrow::Cow;
 use std::cell::{Cell, OnceCell};
 use std::rc::Rc;
 
@@ -14,8 +13,8 @@ use temper_domain::{InterpreterCode, js_trim};
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
-    Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len, make_word,
-    name_of, push_js, word_dir,
+    Assigned, Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len,
+    make_word, name_of, push_js, word_dir,
 };
 use super::wrappers::{Run, Xargs, inner_script};
 
@@ -518,7 +517,7 @@ impl Walker<'_> {
     }
 
     /// Charges the walk of a joined script to the line's budget, since the words it makes
-    /// copy its text and the line keeps them (#202 re-review M2); `false` once the budget is
+    /// copy its text and the line keeps them; `false` once the budget is
     /// spent, which stops the walk. The line's own text and an `awk` program, which is a
     /// literal on the line, are not charged.
     pub(super) fn charge_script(&self, src: &str) -> bool {
@@ -548,21 +547,21 @@ impl Walker<'_> {
 
     /// 1.x `assignTo(env, w)`: `NAME=value` sets, `NAME+=value` appends to a known value.
     pub(super) fn assign(&mut self, word: &Word) {
-        let Some(name) = word.assign() else {
+        let (Some(name), Some(assigned)) = (word.assign(), word.assigned()) else {
             return;
         };
-        let value = word.value_to_store();
-        let tail = value.as_deref().and_then(|v| v.get(name.len()..));
-        let value = match tail.and_then(|t| t.strip_prefix("+=")) {
-            Some(more) => self.env.vars.get(name).and_then(|old| {
-                let mut value = old.to_owned();
-                let mut units = js_len(old);
-                push_js(&mut value, &mut units, more, &self.overflow).then_some(value)
-            }),
-            None => tail.and_then(|t| t.get(1..)).map(str::to_owned),
-        };
-        let name = name.to_owned();
-        self.env.vars.set(&name, value);
+        match assigned {
+            Assigned::Unknown => self.env.vars.set(name, None),
+            Assigned::Set(skip) => self.env.vars.set_word(name, word, skip),
+            Assigned::Append(more) => {
+                let value = self.env.vars.get(name).and_then(|old| {
+                    let mut value = old.to_owned();
+                    let mut units = js_len(old);
+                    push_js(&mut value, &mut units, &more, &self.overflow).then_some(value)
+                });
+                self.env.vars.set(name, value);
+            }
+        }
     }
 
     /// Pushes the command `run` leaves, named `name`.
@@ -650,9 +649,8 @@ impl Walker<'_> {
             && is_ps_var(&var.raw)
             && eq.raw == "="
         {
-            let name = var.raw.get(1..).unwrap_or("").to_owned();
-            let value = value.value_to_store().map(Cow::into_owned);
-            self.env.vars.set(&name, value);
+            let name = var.raw.get(1..).unwrap_or("");
+            self.env.vars.set_word(name, value, 0);
             return;
         }
         let Some(run) = self.wrappers(w, k) else {

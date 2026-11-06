@@ -51,7 +51,7 @@ pub(crate) fn js_len(s: &str) -> usize {
 ///
 /// The text shares each value it expands rather than copying it, and is joined only when a
 /// rule reads it ([`Text`]), as V8 joins strings: `: $X; ` or `: $X/a; ` repeated holds `$X`
-/// once (#202 F2).
+/// once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Word {
     pub(super) raw: String,
@@ -184,10 +184,34 @@ impl Word {
         self.known.then(|| self.text.get())
     }
 
-    /// The value for an assignment to store, which keeps no joined copy; [`Vars::set`]
-    /// charges what it keeps (see [`Text::unkept`]). `None` when a part is unknown.
-    pub(super) fn value_to_store(&self) -> Option<Cow<'_, str>> {
-        self.known.then(|| self.text.unkept())
+    /// What a `NAME=value` or `NAME+=value` word stores, read without keeping a join on the
+    /// word; `None` when it is no assignment.
+    pub(super) fn assigned(&self) -> Option<Assigned<'_>> {
+        let name = self.assign()?.len();
+        if !self.known {
+            return Some(Assigned::Unknown);
+        }
+        let head = self.text.head(name.saturating_add(2));
+        if !head.get(name..).is_some_and(|op| op.starts_with("+=")) {
+            return Some(Assigned::Set(name.saturating_add(1)));
+        }
+        let after = name.saturating_add(2);
+        let more = match self.text.unkept() {
+            Cow::Borrowed(all) => all.get(after..).map(Cow::Borrowed),
+            Cow::Owned(all) => all.get(after..).map(|more| Cow::Owned(more.to_owned())),
+        };
+        Some(more.map_or(Assigned::Unknown, Assigned::Append))
+    }
+
+    /// The value after its first `skip` bytes, which are ASCII (a name and `=`, so as many
+    /// UTF-16 units), as one shared string for a variable to keep: the piece itself when the
+    /// rest is one, else joined once through `scratch`. `None` when a part is unknown.
+    fn shared_after(&self, skip: usize, scratch: &mut String) -> Option<Shared> {
+        if !self.known {
+            return None;
+        }
+        let text = self.text.tail_shared(skip, scratch)?;
+        Some(Shared::new(text, self.text.units().saturating_sub(skip)))
     }
 
     /// Whether every part's value is known, so [`Self::value`] is `Some`.
@@ -197,7 +221,7 @@ impl Word {
 
     /// The text for one read, which keeps no joined copy: a read that copies the pieces is
     /// charged to the line's guard, and is `None` once its budget is spent, which marks the
-    /// overflow (#202 re-review M2).
+    /// overflow.
     pub(crate) fn text_read(&self) -> Option<Cow<'_, str>> {
         self.text.read()
     }
@@ -224,11 +248,11 @@ impl Word {
 /// Shell variables, with a journal so a subshell's or a substitution's changes are undone in
 /// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). Each open scope
 /// journals a name once, with its value at the mark, which is all its rollback needs: `a=$a/b`
-/// repeated inside `( ... )` keeps one old value, not every earlier one (#201 F1). A change made
-/// while no scope is open is never undone, so it is not journaled.
+/// repeated inside `( ... )` keeps one old value, not every earlier one. A change made while
+/// no scope is open is never undone, so it is not journaled.
 ///
-/// The values it keeps alive are charged to the line's budget, net of those it drops (#202
-/// third review F2): each value set is charged, and refunded once it is freed. A dropped value
+/// The values it keeps alive are charged to the line's budget, net of those it drops: each
+/// value set is charged, and refunded once it is freed. A dropped value
 /// a word still shares (the `$a` in `a=$a/b`, until that word is gone) waits in `dropped`,
 /// which is swept every so many releases, so a name grown in place holds its last few, and
 /// many names holding long values stop at the budget.
@@ -254,6 +278,9 @@ pub(super) struct Vars {
     since: usize,
     /// How many the last sweep left in `dropped`.
     kept: usize,
+    /// Where a value of several pieces is joined before it is shared, kept so its pages are
+    /// reused; its capacity is charged as it grows.
+    scratch: String,
 }
 
 /// A name's place in [`Vars`]: absent, or set to a value that may be unknown.
@@ -268,6 +295,17 @@ enum Entry {
 pub(super) struct Mark {
     journal: usize,
     depth: usize,
+}
+
+/// What an assignment word stores ([`Word::assigned`]).
+#[derive(Debug)]
+pub(super) enum Assigned<'w> {
+    /// A part's value is unknown, so the name is deleted.
+    Unknown,
+    /// `NAME=value`: the value is the word's text after this many bytes ([`Vars::set_word`]).
+    Set(usize),
+    /// `NAME+=more`: the text to append to a known value.
+    Append(Cow<'w, str>),
 }
 
 /// A value words may share: its text and its length in UTF-16 units, counted once.
@@ -336,12 +374,34 @@ impl Vars {
     /// 1.x `setVar`: `None` deletes, and under `untracked` every value is unknown. Past the
     /// budget the guard is stopped, and the line falls back.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
+        let value = value.filter(|_| !self.untracked).map(|text| {
+            let units = js_len(&text);
+            Shared::new(Rc::from(text), units)
+        });
+        self.set_shared(name, value);
+    }
+
+    /// [`Self::set`] with `word`'s value after its first `skip` bytes (ASCII): the piece it
+    /// names shared when the value is one, else joined once; deleted when it is unknown, and
+    /// unknown under `untracked`.
+    pub(super) fn set_word(&mut self, name: &str, word: &Word, skip: usize) {
+        if self.untracked {
+            return self.set_shared(name, None);
+        }
+        let held = self.scratch.capacity();
+        let value = word.shared_after(skip, &mut self.scratch);
+        let grown = self.scratch.capacity().saturating_sub(held);
+        if let Some(meter) = self.meter.as_ref().filter(|_| grown > 0) {
+            meter.charge(grown);
+        }
+        self.set_shared(name, value);
+    }
+
+    /// [`Self::set`] with a value already shared, whose units are known.
+    fn set_shared(&mut self, name: &str, value: Option<Shared>) {
         let entry = match value {
             _ if self.untracked => Entry::Set(None),
-            Some(text) => {
-                let units = js_len(&text);
-                Entry::Set(Some(Shared::new(Rc::from(text), units)))
-            }
+            Some(value) => Entry::Set(Some(value)),
             None => Entry::Absent,
         };
         if let (Some(meter), Entry::Set(Some(value))) = (&self.meter, &entry) {
@@ -370,23 +430,31 @@ impl Vars {
             self.refund(&old.text);
         }
         // Swept once per twice as many releases as the last sweep left held, and at least
-        // 16: O(1) per release, amortised.
+        // 16: O(log n) per release, amortised.
         self.since = self.since.saturating_add(1);
         if self.since > self.kept.saturating_mul(2).max(16) {
             self.sweep();
         }
     }
 
-    /// Refunds every dropped value that nothing else holds now.
+    /// Refunds every dropped value that nothing else holds now. One that several names
+    /// shared is dropped once per name, so the handles here are counted out first.
     fn sweep(&mut self) {
-        let mut dropped = std::mem::take(&mut self.dropped);
-        dropped.retain(|text| {
-            let held = Rc::strong_count(text) > 1;
-            if !held {
-                self.refund(text);
+        let mut all = std::mem::take(&mut self.dropped);
+        all.sort_unstable_by_key(|text| Rc::as_ptr(text).cast::<u8>().addr());
+        let mut dropped = Vec::with_capacity(all.len());
+        for same in all.chunk_by(Rc::ptr_eq) {
+            let held = same
+                .first()
+                .is_some_and(|text| Rc::strong_count(text) > same.len());
+            if held {
+                dropped.extend(same.iter().map(Rc::clone)); // handles, moved from `all`
+            } else {
+                for text in same {
+                    self.refund(text);
+                }
             }
-            held
-        });
+        }
         self.since = 0;
         self.kept = dropped.len();
         self.dropped = dropped;
@@ -881,7 +949,7 @@ impl PathCx<'_> {
     }
 
     /// Whether `a` and `b` joined with `extra` more units fit in a JS string; when not, marks
-    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws (#201 F2).
+    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws.
     pub(crate) fn joins(&self, a: &str, b: &str, extra: usize) -> bool {
         self.fits(js_len(a).saturating_add(js_len(b)).saturating_add(extra))
     }
@@ -917,7 +985,7 @@ pub(crate) fn resolve_path(
             .then(|| paths::resolve(style, cx.at.cwd, &t));
     }
     let base = base.filter(|b| !b.is_empty())?;
-    // Then `${base}/${t}/`, which throws past V8's longest string (#201 F2).
+    // Then `${base}/${t}/`, which throws past V8's longest string.
     cx.joins(base, &t, 2).then(|| resolve_from(cx.at, base, &t))
 }
 
@@ -950,7 +1018,7 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
     // A relative name steps from a directory in normal form, as `cd` does ([`Dir::step`]):
     // the same path as the full resolve, for the cost of a copy.
     let style = cx.at.style;
-    // Read once, and charged when that copies the pieces (#202 re-review M2).
+    // Read once, and charged when that copies the pieces.
     let read = if word.known && word.text.len() > 0 {
         Some(word.text_read()?)
     } else {
@@ -962,7 +1030,7 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
         (dir.is_normal() && !paths::is_absolute(style, &t)).then_some((dir, t))
     });
     if let Some((dir, t)) = relative {
-        // 1.x's `${base}/${t}/` past V8's longest string throws (#201 F2).
+        // 1.x's `${base}/${t}/` past V8's longest string throws.
         let units = dir.units().saturating_add(js_len(&t)).saturating_add(2);
         if !cx.fits(units) {
             return None;
@@ -1152,6 +1220,33 @@ mod tests {
             guard.spent()
         );
         assert!(!guard.overflowed());
+    }
+
+    /// A value two names share (`a=$X` shares `$X`'s string) is freed, and refunded, once
+    /// both have dropped it, though each dropped copy of the handle counts the other.
+    #[test]
+    fn a_value_two_names_share_is_refunded_once_both_drop_it() {
+        let guard = Guard::with_budget(1 << 20);
+        let mut vars = Vars::default().metered(&guard);
+        vars.set("x", Some("x".repeat(1000)));
+        let shared = match vars.lookup("x") {
+            super::Lookup::Known(value) => Some(value.clone()),
+            super::Lookup::NotSet | super::Lookup::Unknown => None,
+        };
+        assert!(shared.is_some(), "`x` is known");
+        vars.set_shared("a", shared);
+        assert_eq!(guard.spent(), 2000, "each name's hold is charged");
+        vars.set("x", Some("1".to_owned()));
+        vars.set("a", Some("2".to_owned()));
+        for i in 0..64 {
+            vars.set("e", Some(i.to_string()));
+        }
+        assert!(guard.spent() < 1000, "still charged: {}", guard.spent());
+        assert!(
+            vars.dropped.is_empty(),
+            "still held: {}",
+            vars.dropped.len()
+        );
     }
 
     #[test]

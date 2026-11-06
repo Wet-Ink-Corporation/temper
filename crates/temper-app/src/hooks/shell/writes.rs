@@ -79,7 +79,7 @@ pub(crate) struct Target<'c> {
 impl Target<'_> {
     /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
     /// the directory is unknown, or the line went past a bound. Built when a rule reads it;
-    /// [`command_writes`] has already checked that it fits (#201 F2).
+    /// [`command_writes`] has already checked that it fits.
     pub(crate) fn path(&self, cx: PathCx<'_>) -> Option<String> {
         self.fits
             .then(|| super::words::word_path(cx, &self.word, self.cwd.as_ref()))
@@ -89,8 +89,8 @@ impl Target<'_> {
 
 /// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would, the
 /// files its interpreter code or PowerShell expression writes last. 1.x makes each target's
-/// path here, so a path past V8's longest string stops the rule wherever it is (#201 F2):
-/// this checks that each would fit, and builds none of them.
+/// path here, so a path past V8's longest string stops the rule wherever it is: this checks
+/// that each would fit, and builds none of them.
 pub(crate) fn command_writes<'c>(
     c: &'c Command,
     cx: PathCx<'_>,
