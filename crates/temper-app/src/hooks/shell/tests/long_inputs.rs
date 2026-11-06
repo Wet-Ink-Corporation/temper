@@ -527,3 +527,61 @@ fn the_values_variables_keep_alive_are_held_to_the_budget_net_of_those_they_drop
     let grown = ["a=x; ", &"a=$a/b; ".repeat(1 << 12), "echo hi > o"].concat();
     assert_eq!(parsed(&grown, 1 << 20), Ok(1), "one name, grown");
 }
+
+/// A value many names share is one string, charged once, as V8 holds it once: `A0=$X;` ...
+/// `A29=$X;` with a 64 MiB `$X` fell back where 1.x asks. `B=; B+=$X` shares it too. Here
+/// `$X` is 64 KiB and the 1 MiB budget has room for it, and none for 60 copies (3.75 MiB).
+#[test]
+fn a_value_many_names_share_is_charged_once() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let parsed = |line: &str| {
+        let guard = Guard::with_budget(1 << 20);
+        let opts = ParseOpts {
+            paths: PathCx {
+                guard: Some(&guard),
+                ..cx()
+            },
+            ..super::opts()
+        };
+        parse_commands(line, opts).map(|ran| ran.len())
+    };
+    let set: Vec<String> = (0..30).map(|i| format!("A{i}=$X; ")).collect();
+    let appended: Vec<String> = (0..30).map(|i| format!("B{i}=; B{i}+=$X; ")).collect();
+    let line = [x.as_str(), &set.concat(), &appended.concat(), "echo hi > o"].concat();
+    assert_eq!(parsed(&line), Ok(1));
+}
+
+/// `NAME+=` joins the old value and the word's text after `+=` once; an unset name, or an
+/// unknown part, deletes it, as 1.x appends only to a known value.
+#[test]
+fn an_append_joins_the_old_value_and_the_words_text() {
+    let target = |line: &str| {
+        let opts = ParseOpts {
+            cwd: Some("/r"),
+            ..super::opts()
+        };
+        parse_commands(line, opts).map(|c| {
+            let w: Vec<_> = c.iter().flat_map(|c| command_writes(c, cx())).collect();
+            w.first().and_then(|t| t.word.value()).map(str::to_owned)
+        })
+    };
+    let x = "X=é; X=$X$X; ";
+    assert_eq!(
+        target(&[x, "a=x; a+=$X/b; a+=; echo > $a"].concat()),
+        Ok(Some("xéé/b".to_owned()))
+    );
+    assert_eq!(
+        target(&[x, "a=; a+=$X; echo > $a/c"].concat()),
+        Ok(Some("éé/c".to_owned()))
+    );
+    assert_eq!(
+        target("a+=b; echo > $a/c"),
+        target("echo > $a/c"),
+        "an unset name is not appended to"
+    );
+    assert_eq!(
+        target("a=x; a+=$(pwd); echo > $a/c"),
+        target("echo > $a/c"),
+        "an unknown part deletes the name"
+    );
+}

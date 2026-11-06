@@ -13,8 +13,8 @@ use temper_domain::js_trim;
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
-    Assigned, Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, js_len,
-    make_word, name_of, push_js, word_dir,
+    Assigned, Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, make_word,
+    name_of, word_dir,
 };
 use super::wrappers::{Run, Xargs, inner_script};
 
@@ -438,13 +438,10 @@ impl Walker<'_> {
         match assigned {
             Assigned::Unknown => self.env.vars.set(name, None),
             Assigned::Set(skip) => self.env.vars.set_word(name, word, skip),
-            Assigned::Append(more) => {
-                let value = self.env.vars.get(name).and_then(|old| {
-                    let mut value = old.to_owned();
-                    let mut units = js_len(old);
-                    push_js(&mut value, &mut units, &more, &self.overflow).then_some(value)
-                });
-                self.env.vars.set(name, value);
+            Assigned::Append(skip) => {
+                if !self.env.vars.append_word(name, word, skip) {
+                    self.overflow.set(true);
+                }
             }
         }
     }
