@@ -1,7 +1,7 @@
 {
   "name": "temper-lens",
   "displayName": "Temper lens: gate and review status",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "A read-only view of temper's state for the current Rust tree: a band above the prompt with the gate, the reviewer's verdict and the baseline, and a /temper-lens pane with the findings and the rule behind each. Install it next to the temper plugin, in Claude Code (terminal and desktop Code tab).",
   "author": { "name": "Ryan Britton", "email": "ryan.britton@wet-ink.net" },
   "homepage": "https://github.com/Wet-Ink-Corporation/temper",
