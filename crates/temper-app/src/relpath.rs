@@ -109,15 +109,15 @@ fn nearest_long(files: &impl Files, style: PathStyle, dir: &str) -> String {
         }
     }
     // Nothing resolves: the root, as written, with every name below it.
-    let (base, below) = match real {
-        // A found index is below the length, so the slice is always there.
-        Some(found) => (found, chain.get(..hi).unwrap_or_default()),
-        None => match chain.split_last() {
-            Some((root, below)) => ((*root).to_owned(), below),
-            None => (dir.to_owned(), &[][..]),
-        },
+    // `chain` keeps the names below the base.
+    let base = match real {
+        Some(found) => {
+            chain.truncate(hi);
+            found
+        }
+        None => chain.pop().unwrap_or(dir).to_owned(),
     };
-    below.iter().rev().fold(base, |long, p| {
+    chain.iter().rev().fold(base, |long, p| {
         paths::join(style, &long, paths::basename(style, p))
     })
 }

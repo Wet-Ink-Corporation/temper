@@ -273,14 +273,13 @@ impl Walker<'_> {
             // env -S splits its string into the command and runs it; env reads `\_`, `\t`,
             // `\n`, `\v`, `\f` and `\r` in it as whitespace.
             // Each word is read once, charged and not kept (#202 re-review M2).
-            let text = match flag.value {
-                Some(value) => Cow::Borrowed(value),
-                None => {
-                    run.at = run.at.saturating_add(1);
-                    match words.get(run.at.saturating_sub(1)) {
-                        Some(next) => next.text_read()?,
-                        None => Cow::Borrowed(""),
-                    }
+            let text = if let Some(value) = flag.value {
+                Cow::Borrowed(value)
+            } else {
+                run.at = run.at.saturating_add(1);
+                match words.get(run.at.saturating_sub(1)) {
+                    Some(next) => next.text_read()?,
+                    None => Cow::Borrowed(""),
                 }
             };
             let mut script = env_split_spaces(&text);
