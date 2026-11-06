@@ -72,7 +72,7 @@ pub(super) fn state_dir_write_in(
         git: ws.git,
     };
     // 1.x lists every target with its path (`writeTargets`) before it checks one, so a path
-    // past V8's longest string anywhere in the line throws, and `readerRule` falls back
+    // past V8's longest string anywhere in the line throws, and `readerRule` falls back.
     // Once one has, nothing after it is read. Past the budget of directory text,
     // a target's check stops, and so does the rule.
     let targets: Vec<Target<'_>> = commands
