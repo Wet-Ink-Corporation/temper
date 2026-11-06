@@ -59,6 +59,11 @@ pub(super) fn reviewer_patch(
                     .find_map(|c| opaque_patch(c, cx, code).ok().flatten())
             })
             .flatten();
+        // A word read past the line's budget reads empty and stops the guard (#202 re-review
+        // M2): the reading then gives the fallback of a line it cannot read.
+        if guard.overflowed() {
+            return (false, None);
+        }
         (applies, opaque)
     };
     if parse(false).0 {

@@ -35,6 +35,8 @@ pub(crate) struct FakeFiles {
     unresolvable: Vec<String>,
     /// Paths at and below which every write fails, as in a read-only directory.
     read_only: Vec<String>,
+    /// How many times `real_path` was asked.
+    real_paths: Cell<usize>,
 }
 
 impl FakeFiles {
@@ -47,7 +49,13 @@ impl FakeFiles {
             links: Vec::new(),
             unresolvable: Vec::new(),
             read_only: Vec::new(),
+            real_paths: Cell::new(0),
         }
+    }
+
+    /// How many times `real_path` has been asked.
+    pub(crate) fn real_path_calls(&self) -> usize {
+        self.real_paths.get()
     }
 
     pub(crate) fn with_file(self, path: &str, text: &str) -> Self {
@@ -223,6 +231,7 @@ impl Files for FakeFiles {
     }
 
     fn real_path(&self, path: &Path) -> Result<Option<PathBuf>, FsError> {
+        self.real_paths.set(self.real_paths.get().saturating_add(1));
         let real = self.unlinked(&text_of(path));
         if self.unresolvable.contains(&real) {
             return Err(FsError::new(

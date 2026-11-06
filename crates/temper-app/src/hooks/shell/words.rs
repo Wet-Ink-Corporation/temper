@@ -184,6 +184,24 @@ impl Word {
         self.known.then(|| self.text.get())
     }
 
+    /// The value for an assignment to store, which keeps no joined copy and is not charged
+    /// to the line's budget (see [`Text::unkept`]); `None` when a part is unknown.
+    pub(super) fn value_to_store(&self) -> Option<Cow<'_, str>> {
+        self.known.then(|| self.text.unkept())
+    }
+
+    /// Whether every part's value is known, so [`Self::value`] is `Some`.
+    pub(crate) fn value_is_known(&self) -> bool {
+        self.known
+    }
+
+    /// The text for one read, which keeps no joined copy: a read that copies the pieces is
+    /// charged to the line's guard, and is `None` once its budget is spent, which marks the
+    /// overflow (#202 re-review M2).
+    pub(crate) fn text_read(&self) -> Option<Cow<'_, str>> {
+        self.text.read()
+    }
+
     /// Whether the value is `s` (`value() == Some(s)`), without joining a text that cannot
     /// be it.
     pub(super) fn value_is(&self, s: &str) -> bool {
@@ -417,12 +435,13 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
             }
         }
         // 1.x's `+=` throws past V8's longest string; the text stops before it.
-        units = units.saturating_add(piece.units);
-        if units > JS_MAX_STRING {
+        let more = units.saturating_add(piece.units);
+        if more > JS_MAX_STRING {
             env.overflow.set(true);
             known = false;
             break;
         }
+        units = more;
         pieces.push(piece.text);
     }
     if let Some(at) = bracket
@@ -434,7 +453,7 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     }
     Word {
         raw,
-        text: Text::of(pieces),
+        text: Text::of(pieces, units, env.guard),
         known,
         quoted: parts.iter().any(|p| p.quoted),
         assign: assign_len(parts),
@@ -862,7 +881,13 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
     // A relative name steps from a directory in normal form, as `cd` does ([`Dir::step`]):
     // the same path as the full resolve, for the cost of a copy.
     let style = cx.at.style;
-    let value = word.value().filter(|v| !v.is_empty());
+    // Read once, and charged when that copies the pieces (#202 re-review M2).
+    let read = if word.known && word.text.len() > 0 {
+        Some(word.text_read()?)
+    } else {
+        None
+    };
+    let value = read.as_deref();
     let relative = cwd.zip(value).and_then(|(dir, value)| {
         let t = msys_path(value, style, cx.os_tmp);
         (dir.is_normal() && !paths::is_absolute(style, &t)).then_some((dir, t))
@@ -890,25 +915,36 @@ pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Optio
 /// directory: a rule then need not build it.
 pub(crate) fn names_absolute(cx: PathCx<'_>, word: &Word) -> bool {
     let style = cx.at.style;
-    word.value()
-        .filter(|v| !v.is_empty() && !word.glob())
-        .is_some_and(|v| paths::is_absolute(style, &msys_path(v, style, cx.os_tmp)))
+    // The first three bytes decide it (`C:\`, `\\`, `/`), and a git-bash `/c/x` or `/tmp`
+    // stays absolute, so the value is not joined.
+    word.known
+        && word.text.len() > 0
+        && !word.glob()
+        && paths::is_absolute(style, &msys_path(&word.text.head(3), style, cx.os_tmp))
 }
 
 /// Whether [`word_path`] would stop the line, where 1.x's `wordPath` throws past V8's
 /// longest string, without building the path: 1.x makes every target's path before it
 /// checks one, so this marks the overflow for each, and a rule builds only the paths it reads.
 pub(super) fn word_path_fits(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> bool {
-    let Some(value) = word.value().filter(|v| !v.is_empty() && !word.glob()) else {
+    if !word.known || word.text.len() == 0 || word.glob() {
         return true;
-    };
+    }
     let style = cx.at.style;
-    let t = msys_path(value, style, cx.os_tmp);
-    if paths::is_absolute(style, &t) {
-        return cx.joins(&t, "", 1); // `${t}/`
+    // A git-bash path changes length on Windows only; elsewhere the units are known
+    // without joining the value.
+    let units = match style {
+        PathStyle::Posix => word.text.units(),
+        PathStyle::Windows => match word.text.read() {
+            Some(value) => js_len(&msys_path(&value, style, cx.os_tmp)),
+            None => return false, // past the line's budget, which stops the rule
+        },
+    };
+    if names_absolute(cx, word) {
+        return cx.fits(units.saturating_add(1)); // `${t}/`
     }
     // `${base}/${t}/`, for the full resolve and the step alike.
-    cwd.is_none_or(|dir| cx.fits(dir.units().saturating_add(js_len(&t)).saturating_add(2)))
+    cwd.is_none_or(|dir| cx.fits(dir.units().saturating_add(units).saturating_add(2)))
 }
 
 /// The directory `word` names from `cwd`, as a `cd`, `git -C` or `patch -d` enters it: a
@@ -943,7 +979,8 @@ pub(super) fn command_name(value: &str) -> String {
 
 /// 1.x `nameOf(w)`: the command name a word runs as, or `None` when it is unknown.
 pub(super) fn name_of(word: &Word) -> Option<String> {
-    word.value().map(command_name)
+    // The name is the value's last segment, read from the end without joining the value.
+    word.known.then(|| command_name(&word.text.last_segment()))
 }
 
 /// `^\$\w+$`: a PowerShell variable as a whole word.

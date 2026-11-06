@@ -303,6 +303,57 @@ fn a_restore_repeated_on_one_line_asks_git_about_it_once() {
     assert_eq!(calls(3), calls(1));
 }
 
+/// Not in 1.x's tests (#202 re-review m2): the owner of the names in a directory is looked up
+/// once per directory, and a directory whose parent's names belong to the project may still
+/// hold a checkout of its own. Answers probed from 1.x on disk, with git.
+#[test]
+fn a_nested_checkout_under_a_directory_shared_by_many_names_owns_only_the_names_below_it() {
+    let files = files()
+        .with_file("/ws/a/sub/.git/HEAD", "ref: refs/heads/main\n")
+        .with_file("/ws/a/sub/Cargo.toml", "[workspace]\nresolver = \"3\"\n")
+        .with_file(
+            "/ws/a/sub/.claude/temper.json",
+            r#"{"protected":["docs/policy/**"]}"#,
+        );
+    let mut ws = Ws::with(files);
+    ws.ports.process = FakeProcess::new()
+        .answering(
+            &["git", "rev-parse", "--show-toplevel"],
+            "/ws/a/sub",
+            Reply::Exit {
+                status: ExitKind::Code(0),
+                stdout: "/ws/a/sub\n".to_owned(),
+            },
+        )
+        .otherwise(Reply::Exit {
+            status: ExitKind::Code(128),
+            stdout: String::new(),
+        });
+    let ask = |names: &str| {
+        format!(
+            "temper: this shell command writes {names}. {names} are verification/agent configuration. Changing them can weaken the checks (H-05, H-12). Approve only if you asked for this change."
+        )
+    };
+    let cases = [
+        (
+            "> a/o; > a/p; > a/sub/clippy.toml; > a/sub/docs/policy/x; > a/q/clippy.toml",
+            ask("a/sub/docs/policy/x, a/q/clippy.toml"),
+        ),
+        (
+            "cd a; > o; > sub/docs/policy/y; cd sub; > clippy.toml; > docs/policy/z",
+            ask("a/sub/docs/policy/y, a/sub/docs/policy/z"),
+        ),
+    ];
+    for (cmd, want) in cases {
+        let json = format!(
+            r#"{{"tool_name":"Bash","cwd":"/ws","session_id":"s","tool_input":{{"command":{}}}}}"#,
+            JsValue::String(cmd.to_owned()).to_json()
+        );
+        let got = ws.run(HookEvent::PreBash, &json);
+        assert_eq!(answer(&got), ("ask", want.as_str()), "{cmd}");
+    }
+}
+
 #[test]
 fn a_protected_config_ask_does_not_hide_the_dependency_or_snapshot_ask_in_the_same_command() {
     replays(

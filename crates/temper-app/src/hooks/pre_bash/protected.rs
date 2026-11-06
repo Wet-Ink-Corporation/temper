@@ -26,7 +26,7 @@ use crate::hooks::shell::{
 use crate::paths::{self, PathEnv};
 use crate::ports::{EntryKind, FileMeta, Files, Ports};
 use crate::project::{Workspace, discover_at, exists};
-use crate::relpath::rel_to;
+use crate::relpath::{LongPaths, Relater};
 
 /// 1.x `PATH_MAX`: an ancestor longer than this, in UTF-16 units, cannot exist.
 const PATH_MAX: usize = 4096;
@@ -153,6 +153,7 @@ pub(super) fn protected_shell_writes_in(
         code,
         owners: HashMap::new(),
         owner_in: HashMap::new(),
+        long: LongPaths::default(),
         listed: HashMap::new(),
         changes: Changes::default(),
     };
@@ -190,11 +191,15 @@ struct Reader<'a, 'c, P> {
     start: &'a str,
     globs: Globs,
     code: &'a InterpreterCode,
-    /// 1.x `ownerOf`'s cache: each ancestor checked, and the checkout there, if any.
+    /// 1.x `ownerOf`'s cache: each ancestor checked, by its path relative to the root, and
+    /// the checkout there, if any. A hit joins no path.
     owners: HashMap<String, Option<Owner>>,
     /// The owner of every name in a directory, by the directory relative to the root: the
-    /// walk up its ancestors is made once per directory, not once per name (#202 F3).
+    /// walk up its ancestors is made once per directory, not once per name (#202 F3), and
+    /// stops at the first ancestor in here.
     owner_in: HashMap<String, Owner>,
+    /// The long paths `rel_to` found, for the names outside the root (#202 re-review M1).
+    long: LongPaths,
     /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
     /// the line repeats one, though the answer cannot change within a line (#201 F4).
     listed: HashMap<(String, String, String), Listed>,
@@ -225,6 +230,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         self.call.ports.files()
     }
 
+    /// 1.x `relTo(root, abs)`, through the long paths this line found before.
+    fn rel_to(&mut self, root: &str, abs: &str) -> String {
+        Relater::new(self.files(), &mut self.long).rel_to(self.cx.at, root, abs)
+    }
+
     fn stat(&self, path: &str) -> Option<FileMeta> {
         // 1.x's `stat` reads any failure as nothing there.
         self.files().stat(Path::new(path)).ok().flatten()
@@ -236,10 +246,12 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
 
     /// 1.x `w && !w.glob ? resolvePath(w.value, base) : null`.
     fn word_abs(&self, word: &Word, base: Option<&str>) -> Option<String> {
-        if word.glob() {
+        if word.glob() || !word.value_is_known() {
             return None;
         }
-        resolve_path(self.cx, word.value(), base)
+        // Read for this resolve alone and charged, keeping no copy (#202 re-review M2).
+        let value = word.text_read()?;
+        resolve_path(self.cx, Some(&value), base)
     }
 
     /// One command's patch, writes and deletes, in 1.x's order.
@@ -488,8 +500,8 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// directory written or deleted) the protected globs under it, into the deleted list or
     /// the written one.
     fn check(&mut self, abs: &str, tree: bool, into: List) -> Result<(), GlobError> {
-        let (files, at, ws) = (self.files(), self.cx.at, self.ws);
-        let rel = rel_to(files, at, &ws.root, abs);
+        let (at, ws) = (self.cx.at, self.ws);
+        let rel = self.rel_to(&ws.root, abs);
         if rel.starts_with("..") || paths::is_absolute(at.style, &rel) || (rel.is_empty() && !tree)
         {
             return Ok(());
@@ -511,7 +523,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                 }
             }
             Owner::Nested(nested) => {
-                let own = rel_to(files, at, &nested.ws.root, abs);
+                let own = self.rel_to(&nested.ws.root, abs);
                 if !own.is_empty() && nested.globs.any_match(&own) {
                     hits.push(rel.clone()); // as above
                 }
@@ -548,38 +560,46 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         Ok(owner)
     }
 
-    /// [`Self::owner_of`]'s walk up `rel`'s ancestors.
+    /// [`Self::owner_of`]'s walk up `rel`'s ancestors. It stops at the first ancestor whose
+    /// names' owner is known: that answer already weighs the ancestor and everything above
+    /// it, so a directory one level below a known one looks at itself alone (#202 re-review
+    /// m1: `cd a; > o; ` x 8192 walked every ancestor for each name).
     fn owner_up(&mut self, rel: &str) -> Result<Owner, GlobError> {
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).
         let mut units = js_len(rel);
         let mut after = rel.len();
-        let style = self.cx.at.style;
-        let ws = self.ws;
         for (end, _) in rel.rmatch_indices('/') {
             units = units.saturating_sub(js_len(rel.get(end..after).unwrap_or("")));
             after = end;
+            let dir = rel.get(..end).unwrap_or("");
+            if let Some(owner) = self.owner_in.get(dir) {
+                return Ok(owner.clone()); // an `Rc` handle
+            }
             if end == 0 || units > PATH_MAX {
                 continue;
             }
-            let dir = paths::join(style, &ws.root, rel.get(..end).unwrap_or(""));
-            let owner = if let Some(owner) = self.owners.get(&dir) {
-                owner.clone() // an `Rc` handle
-            } else {
-                let owner = self.checkout_at(&dir)?;
-                self.owners.insert(dir, owner.clone()); // an `Rc` handle for the cache
-                owner
-            };
-            if let Some(owner) = owner {
+            if let Some(owner) = self.checkout_in(dir)? {
                 return Ok(owner);
             }
         }
         Ok(Owner::Project)
     }
 
+    /// The checkout at `dir`, relative to the root, if any; each is looked at once per line.
+    fn checkout_in(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
+        if let Some(owner) = self.owners.get(dir) {
+            return Ok(owner.clone()); // an `Rc` handle
+        }
+        let abs = paths::join(self.cx.at.style, &self.ws.root, dir);
+        let owner = self.checkout_at(&abs)?;
+        self.owners.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
+        Ok(owner)
+    }
+
     /// The owner a `.git` in `dir` makes: its project, or this one when there is none
     /// (1.x `discover(dir) ?? proj`).
-    fn checkout_at(&self, dir: &str) -> Result<Option<Owner>, GlobError> {
+    fn checkout_at(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
         let files = self.files();
         if !exists(files, &paths::join(self.cx.at.style, dir, ".git")) {
             return Ok(None);
@@ -588,7 +608,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             return Ok(Some(Owner::Project));
         };
         let globs = Globs::new(ws.config.protected().iter().map(String::as_str))?;
-        let prefix = rel_to(files, self.cx.at, &self.ws.root, &ws.root);
+        let prefix = self.rel_to(&self.ws.root, &ws.root);
         Ok(Some(Owner::Nested(Rc::new(Nested { ws, globs, prefix }))))
     }
 
