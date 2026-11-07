@@ -65,5 +65,5 @@ pub use time::Timestamp;
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, VerdictContext,
     VerdictProblem, earlier_review, extract_verdict, problem_kinds, summarize_findings,
-    verdict_problems,
+    verdict_hash, verdict_problems,
 };

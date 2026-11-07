@@ -3,8 +3,8 @@
 use crate::js::Value;
 
 use super::super::{
-    ExtractedVerdict, GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds,
-    verdict_problems,
+    ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, VerdictContext,
+    VerdictProblem, problem_kinds, verdict_problems,
 };
 use super::{finding, scores, verdict, verdict_json};
 
@@ -366,23 +366,26 @@ fn files_read_covers_a_root_package_and_member_crates_each_by_its_own_path() {
     );
 }
 
+/// Only the named dimensions rated 3, every other one "n/a".
+fn rated(names: &[&str]) -> String {
+    let over: Vec<(&str, &str)> = DIMENSIONS
+        .iter()
+        .map(|d| (*d, if names.contains(d) { "3" } else { r#""n/a""# }))
+        .collect();
+    scores(&over)
+}
+
+/// The score-na message naming `na`.
+fn msg(na: &[&str]) -> String {
+    format!(
+        "scores must rate correctness, escape_hatches and craft 0-4: they apply to any change (\"n/a\" only where another dimension does not apply); \"n/a\": {}",
+        na.join(", ")
+    )
+}
+
 #[test]
 fn every_verdict_rates_correctness_escape_hatches_and_craft_with_an_integer_score() {
-    use super::super::{ALWAYS_SCORED, DIMENSIONS};
     assert_eq!(ALWAYS_SCORED, ["correctness", "escape_hatches", "craft"]);
-    let rated = |names: &[&str]| -> String {
-        let over: Vec<(&str, &str)> = DIMENSIONS
-            .iter()
-            .map(|d| (*d, if names.contains(d) { "3" } else { r#""n/a""# }))
-            .collect();
-        scores(&over)
-    };
-    let msg = |na: &[&str]| {
-        format!(
-            "scores must rate correctness, escape_hatches and craft 0-4: they apply to any change (\"n/a\" only where another dimension does not apply); \"n/a\": {}",
-            na.join(", ")
-        )
-    };
     assert_eq!(
         messages(&verdict(&[("scores", &rated(&[]))])),
         [msg(&ALWAYS_SCORED)]
@@ -422,7 +425,10 @@ fn every_verdict_rates_correctness_escape_hatches_and_craft_with_an_integer_scor
         messages(&verdict(&[("verdict", cr), ("scores", &zero)])),
         Vec::<String>::new()
     );
-    // a missing or malformed score reports that problem, not this one as well
+}
+
+#[test]
+fn a_missing_or_malformed_always_scored_dimension_reports_that_problem_only() {
     assert!(
         !messages(&verdict(&[("scores", "undefined")]))
             .iter()

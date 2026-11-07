@@ -19,6 +19,14 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Fingerprint([u8; 8]);
 
+impl Fingerprint {
+    /// The fingerprint of a SHA-256 digest: its first 8 bytes, as 1.x's `digest('hex').slice(0, 16)`.
+    pub(crate) fn from_sha256(digest: [u8; 32]) -> Self {
+        let [b0, b1, b2, b3, b4, b5, b6, b7, ..] = digest;
+        Self([b0, b1, b2, b3, b4, b5, b6, b7])
+    }
+}
+
 impl fmt::Display for Fingerprint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.iter().try_for_each(|byte| write!(f, "{byte:02x}"))

@@ -66,6 +66,11 @@ fn earlier_review_gives_the_earlier_verdict_when_its_serious_findings_and_how_to
         "{ok}"
     );
     assert!(ok.contains("Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not \"pass\", quoting the evidence"), "{ok}");
+}
+
+#[test]
+fn earlier_review_clips_to_ten_findings_and_names_low_scores_and_failing_gate_entries() {
+    let cr = r#""changes-requested""#;
     // clipped to ten findings
     let blockers: Vec<String> = (1..=14)
         .map(|i| finding(&[("severity", r#""blocker""#), ("line", &i.to_string())]))
