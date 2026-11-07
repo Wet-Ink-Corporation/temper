@@ -9,6 +9,9 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { vendorTool, temperVersion, VENDOR_DIR } from '../scripts/lib/vendor.mjs';
 
+/** Escape every regular-expression metacharacter in `s`. */
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 const PLUGIN = fileURLToPath(new URL('..', import.meta.url));
 const SCRIPTS = path.join(PLUGIN, 'scripts');
 const EXAMPLE = path.join(PLUGIN, 'templates', 'example-workspace');
@@ -26,7 +29,7 @@ test('vendor: creates .claude/temper with the CLI, every lib file and VERSION', 
     const res = vendorTool(root);
     assert.equal(res.drift, false);
     assert.equal(res.actions.length, 1);
-    assert.match(res.actions[0], new RegExp(`^create ${VENDOR_DIR}/ \\(temper ${VERSION.replace(/\./g, '\\.')}: `));
+    assert.match(res.actions[0], new RegExp(`^create ${VENDOR_DIR}/ \\(temper ${escapeRegExp(VERSION)}: `));
     const dest = path.join(root, '.claude', 'temper');
     assert.deepEqual(fs.readdirSync(path.join(dest, 'lib')).sort(), libFiles());
     assert.ok(libFiles().includes('report.mjs') && libFiles().includes('vendor.mjs'));
