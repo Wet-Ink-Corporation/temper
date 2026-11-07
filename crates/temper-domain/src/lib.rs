@@ -23,6 +23,7 @@
 //! ```
 
 mod config;
+mod fingerprint;
 mod glob;
 mod hooks;
 mod js;
@@ -34,6 +35,7 @@ mod time;
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
+pub use fingerprint::{Fingerprint, FingerprintParseError};
 pub use glob::{Glob, GlobError, Globs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
