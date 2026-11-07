@@ -69,7 +69,10 @@ pub use scan::{
     is_build_script, new_hits, render_scan_text,
 };
 pub use state::{BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, gate_progress};
-pub use status::{BaselineLine, STATUS_USAGE, StatusFacts, render_status_text, temper_base_note};
+pub use status::{
+    BaselineLine, STATUS_USAGE, StatusDoc, StatusFacts, render_no_project_json, render_status_json,
+    render_status_text, temper_base_note,
+};
 pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,

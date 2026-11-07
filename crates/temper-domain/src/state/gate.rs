@@ -33,6 +33,12 @@ impl GateRecord {
         self.0.is_truthy()
     }
 
+    /// The record as parsed, any JSON value.
+    #[must_use]
+    pub fn value(&self) -> &Value {
+        &self.0
+    }
+
     /// `g.ok` is truthy.
     #[must_use]
     pub fn ok(&self) -> bool {

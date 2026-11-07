@@ -1,4 +1,8 @@
-//! `temper status`'s text (1.x `scripts/temper.mjs` `status`).
+//! `temper status`'s text and JSON (1.x `scripts/temper.mjs` `status`, `statusJson`).
+
+mod json;
+
+pub use json::{StatusDoc, render_no_project_json, render_status_json};
 
 use std::borrow::Cow;
 
