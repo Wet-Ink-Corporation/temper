@@ -4,6 +4,8 @@
 
 mod baseline;
 mod gate;
+mod progress;
 
 pub use baseline::{BaselineParseError, BaselineSummary};
 pub use gate::GateRecord;
+pub use progress::{ProgressQuery, gate_progress};

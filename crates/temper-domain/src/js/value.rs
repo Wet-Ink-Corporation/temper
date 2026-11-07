@@ -44,6 +44,12 @@ impl Object {
         self.0.iter().map(|(k, v)| (k.as_str(), v))
     }
 
+    /// Takes the own property `key` out of the object, if it has one (keys are unique).
+    pub(crate) fn remove(&mut self, key: &str) -> Option<Value> {
+        let at = self.0.iter().position(|(k, _)| k == key)?;
+        Some(self.0.remove(at).1)
+    }
+
     /// `Object.keys(obj).length === 0`.
     #[must_use]
     pub fn is_empty(&self) -> bool {
