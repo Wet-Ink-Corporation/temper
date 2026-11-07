@@ -163,3 +163,11 @@ fn script_unread(args: &[Word]) -> Option<&Word> {
 /// (`readerRule`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Threw;
+
+/// 1.x's `globMatch` throws where `new RegExp` rejects a glob; `readerRule` catches it and
+/// reports nothing, so neither does the rule.
+impl From<temper_domain::GlobError> for Threw {
+    fn from(_: temper_domain::GlobError) -> Self {
+        Self
+    }
+}

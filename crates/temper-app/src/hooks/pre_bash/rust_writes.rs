@@ -793,11 +793,10 @@ impl<F: Files> Reader<'_, F> {
             },
             moved_from: lenient.then(|| node_basename(style, from)),
             // 1.x `globMatch`'s `new RegExp` throws, and `readerRule` catches it.
-            protected: self.protected.any_match(&rel).map_err(|_| Threw)?,
+            protected: self.protected.any_match(&rel)?,
         };
-        self.found
-            .check(&file, self.exempt, self.scanner)
-            .map_err(|_| Threw)
+        self.found.check(&file, self.exempt, self.scanner)?;
+        Ok(())
     }
 }
 

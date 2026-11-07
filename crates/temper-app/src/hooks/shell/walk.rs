@@ -353,7 +353,7 @@ impl Walker<'_> {
             return;
         }
         let lexed = lex::lex(src);
-        let outer = std::mem::replace(&mut self.line, Rc::default());
+        let outer = std::mem::take(&mut self.line);
         self.items(lexed.items);
         let line = std::mem::replace(&mut self.line, outer);
         // An inner script's copy is charged as its walk is; past the budget the parse stops,

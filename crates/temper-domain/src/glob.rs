@@ -149,9 +149,11 @@ impl Globs {
     }
 }
 
-/// Several globs, each compiled where 1.x's `globs.some((p) => globMatch(p, rel))` first
-/// builds its regex: a pattern after the first match is never compiled, so one that does not
-/// compile fails only a match that reaches it.
+/// Several globs, each compiled only when a match first tries it.
+///
+/// This is where 1.x's `globs.some((p) => globMatch(p, rel))` builds each regex: a pattern
+/// after the first match is never compiled, so one that does not compile fails only a match
+/// that reaches it.
 ///
 /// # Examples
 ///
@@ -185,12 +187,11 @@ impl<'a> LazyGlobs<'a> {
     /// the next call.
     pub fn any_match(&self, rel: &str) -> Result<bool, GlobError> {
         for (pattern, cell) in &self.0 {
-            let glob = match cell.get() {
-                Some(glob) => glob,
-                None => {
-                    let glob = Glob::new(pattern)?;
-                    cell.get_or_init(|| glob)
-                }
+            let glob = if let Some(glob) = cell.get() {
+                glob
+            } else {
+                let glob = Glob::new(pattern)?;
+                cell.get_or_init(|| glob)
             };
             if glob.is_match(rel) {
                 return Ok(true);
