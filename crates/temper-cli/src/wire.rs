@@ -33,6 +33,16 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
         pid: std::process::id(),
         plugin_version: var("TEMPER_PLUGIN_VERSION"),
         disabled: hooks_disabled(),
+        plugin_root: std::env::var_os("CLAUDE_PLUGIN_ROOT")
+            .or_else(|| non_empty("TEMPER_PLUGIN_ROOT"))
+            .map(PathBuf::from),
+        env_file: non_empty("CLAUDE_ENV_FILE").map(PathBuf::from),
+        temper_bin: match std::env::current_exe() {
+            Ok(exe) => Some(exe),
+            // The OS cannot say where this binary is: D17's exports are left out.
+            Err(_unknown) => None,
+        },
+        runtime_warnings: runtime_warnings(var("TEMPER_RUNTIME_WARNINGS").as_deref()),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
     Ok(Engine::new(HostPorts::default(), env, scanner))
@@ -41,6 +51,16 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
 /// `TEMPER_DISABLE=1`: every hook answers nothing.
 pub(crate) fn hooks_disabled() -> bool {
     std::env::var_os("TEMPER_DISABLE").is_some_and(|value| value == "1")
+}
+
+/// `TEMPER_RUNTIME_WARNINGS`, one warning per line, without empty lines (port plan 3-11).
+pub(crate) fn runtime_warnings(value: Option<&str>) -> Vec<String> {
+    value
+        .unwrap_or("")
+        .split('\n')
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The variable `name` unless it is unset or empty, as JS's `process.env[name] || ...` reads it.
@@ -122,7 +142,20 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{node_homedir, node_tmpdir};
+    use super::{node_homedir, node_tmpdir, runtime_warnings};
+
+    #[test]
+    fn runtime_warnings_are_the_non_empty_lines() {
+        assert_eq!(
+            [
+                runtime_warnings(None),
+                runtime_warnings(Some("")),
+                runtime_warnings(Some("a\n\nb\n")),
+            ],
+            [Vec::<String>::new(), vec![], vec!["a".to_owned(), "b".to_owned()]],
+            "the launcher's lines"
+        );
+    }
 
     fn homedir(windows: bool, vars: &[(&str, &str)]) -> PathBuf {
         let set = |name: &str| {

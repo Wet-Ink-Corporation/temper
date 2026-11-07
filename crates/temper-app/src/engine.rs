@@ -37,6 +37,18 @@ pub struct RunEnv {
     pub plugin_version: Option<String>,
     /// `TEMPER_DISABLE=1`: `status --json` says `"disabled": true`.
     pub disabled: bool,
+    /// The plugin's directory: `CLAUDE_PLUGIN_ROOT` as given, even empty (1.x's `??`), else
+    /// `TEMPER_PLUGIN_ROOT` (the launcher's). `None` when the binary runs on its own: the gate
+    /// command is then `temper gate` and no `TEMPER_CLI` is exported (OC-6 A).
+    pub plugin_root: Option<PathBuf>,
+    /// `CLAUDE_ENV_FILE` when it is set and not empty: where `SessionStart` exports variables.
+    pub env_file: Option<PathBuf>,
+    /// This executable, when the OS can say (`std::env::current_exe`): `SessionStart` exports
+    /// it as `TEMPER_BIN` and its directory on `PATH` (D17).
+    pub temper_bin: Option<PathBuf>,
+    /// The launcher's warnings about the runtime it ran on (`TEMPER_RUNTIME_WARNINGS`, one per
+    /// line, empty lines dropped), which `SessionStart` adds to its answer (#89, port plan 3-11).
+    pub runtime_warnings: Vec<String>,
 }
 
 /// The use cases, over the ports `P`.

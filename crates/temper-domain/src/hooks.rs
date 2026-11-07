@@ -6,6 +6,7 @@ mod edit;
 mod event;
 mod iron_rules;
 mod outcome;
+mod session;
 mod setup;
 mod skill;
 mod telemetry;
@@ -22,6 +23,7 @@ pub use edit::{
 pub use event::{HookEvent, UnknownHookEvent};
 pub use iron_rules::{IRON_RULES, skill_gate_denial};
 pub use outcome::{ContextEvent, HookOutcome};
+pub use session::{EnvExports, env_file_lines};
 pub use setup::PolicySetupError;
 pub use skill::{SKILL_NOT_LOADED, SkillVia, is_reviewer, skill_load_via, skill_preloaded};
 pub use telemetry::{

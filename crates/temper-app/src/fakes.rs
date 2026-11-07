@@ -579,6 +579,10 @@ impl RunEnv {
             pid: 4242,
             plugin_version: None,
             disabled: false,
+            plugin_root: None,
+            env_file: None,
+            temper_bin: None,
+            runtime_warnings: Vec::new(),
         }
     }
 }

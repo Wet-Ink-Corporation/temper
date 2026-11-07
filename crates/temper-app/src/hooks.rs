@@ -3,6 +3,7 @@
 mod input;
 mod pre_bash;
 mod pre_edit;
+mod session_start;
 mod shell;
 mod skill;
 
