@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use temper_domain::{Config, LibTarget, js_trim};
+use temper_domain::{Config, ConfigProblem, LibTarget, js_trim};
 
 use crate::engine::RunEnv;
 use crate::git;
@@ -28,8 +28,18 @@ pub(crate) struct Workspace {
     pub(crate) state_dir: String,
     /// `.claude/temper.json` under the root, or the defaults.
     pub(crate) config: Config,
+    /// What was wrong with the config file, when something was (D16(d)).
+    pub(crate) config_problem: Option<ConfigProblem>,
     /// The root is git's top level (1.x's `proj.gitRoot` is set).
     pub(crate) git: bool,
+}
+
+impl Workspace {
+    /// 1.x's `proj.gitRoot`: the root when it is git's top level, which 1.x's `discover` makes
+    /// the root whenever it finds one.
+    pub(crate) fn git_root(&self) -> Option<&str> {
+        self.git.then_some(self.root.as_str())
+    }
 }
 
 /// 1.x `discover(cwd)` for the working directory: the project root, or `None` when this is not
@@ -63,15 +73,16 @@ pub(crate) fn discover_at(ports: &impl Ports, env: &RunEnv, start: &str) -> Opti
     let git = matches!(located, Located::Git(_));
     let root = located.into_root();
     let config = paths::join(style, &paths::join(style, &root, ".claude"), "temper.json");
-    let config = match ports.files().read_text(Path::new(&config)) {
-        Ok(Some(text)) => Config::load(Some(&text)).config,
+    let load = match ports.files().read_text(Path::new(&config)) {
+        Ok(Some(text)) => Config::load(Some(&text)),
         // 1.x's `readText` turns any failure into null, which means the defaults.
-        Ok(None) | Err(_) => Config::defaults(),
+        Ok(None) | Err(_) => Config::load(None),
     };
     Some(Workspace {
         root,
         state_dir,
-        config,
+        config: load.config,
+        config_problem: load.problem,
         git,
     })
 }

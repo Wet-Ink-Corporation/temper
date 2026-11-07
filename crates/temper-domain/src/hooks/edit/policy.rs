@@ -3,7 +3,7 @@
 //! from `const denies = []` to its end).
 
 use crate::config::ExemptRule;
-use crate::glob::{GlobError, Globs, LazyGlobs};
+use crate::glob::{GlobError, LazyGlobs};
 use crate::hooks::{ContextEvent, HookOutcome, TelemetryEvent};
 use crate::manifest::{DepKind, DepName, ManifestFindings, dep_names, lint_config_changed};
 use crate::scan::{
@@ -35,8 +35,9 @@ pub struct EditFacts<'a> {
     pub before: &'a str,
     /// The text the edit leaves.
     pub after: &'a str,
-    /// The `protected` globs of `.claude/temper.json`.
-    pub protected: &'a Globs,
+    /// The `protected` globs of `.claude/temper.json`, each compiled where a match first
+    /// tries it.
+    pub protected: &'a LazyGlobs<'a>,
     /// What kind of file it is.
     pub target: EditTarget<'a>,
 }
@@ -58,7 +59,7 @@ pub struct RustEdit<'a> {
     /// How the file is scanned: its crate's classification.
     pub options: ScanOptions<'a>,
     /// The `scanner.exempt` entries.
-    pub exempt: &'a Exemptions<'a>,
+    pub exempt: &'a LazyExemptions<'a>,
 }
 
 /// The checks of a manifest edit.
@@ -90,35 +91,6 @@ pub struct PolicyDecision {
     pub outcome: HookOutcome,
     /// The row to log before answering.
     pub telemetry: Option<TelemetryEvent>,
-}
-
-/// The compiled `scanner.exempt` entries: rules the scanner does not report under some paths.
-#[derive(Debug, Clone, Default)]
-pub struct Exemptions<'a>(Vec<(&'a str, Globs)>);
-
-impl<'a> Exemptions<'a> {
-    /// Compiles each entry's globs.
-    ///
-    /// # Errors
-    ///
-    /// The first [`GlobError`].
-    pub fn new(rules: &'a [ExemptRule]) -> Result<Self, GlobError> {
-        rules
-            .iter()
-            .map(|rule| {
-                let paths = Globs::new(rule.paths().iter().map(String::as_str))?;
-                Ok((rule.rule(), paths))
-            })
-            .collect::<Result<_, _>>()
-            .map(Self)
-    }
-
-    /// Is `hit` exempt under `rel`? (`e.rule === h.id && e.paths.some(..)`.)
-    pub(crate) fn covers(&self, hit: &Hit, rel: &str) -> bool {
-        self.0
-            .iter()
-            .any(|(rule, paths)| *rule == hit.id().as_str() && paths.any_match(rel))
-    }
 }
 
 /// The `scanner.exempt` entries with their globs compiled as 1.x's `exempt(h, rel)` builds
@@ -172,8 +144,12 @@ pub(crate) struct Findings {
 /// exceptions, removed or ignored tests and new clones of a Rust edit. Any denial refuses the
 /// edit, else any ask asks (with the advisories as context), else the advisories (at most 8)
 /// are context.
-#[must_use]
-pub fn edit_policy(facts: EditFacts<'_>, scanner: &Scanner) -> PolicyDecision {
+///
+/// # Errors
+///
+/// The [`GlobError`] of a `protected` or `scanner.exempt` glob that a match tries and that
+/// does not compile, where 1.x's `globMatch` throws.
+pub fn edit_policy(facts: EditFacts<'_>, scanner: &Scanner) -> Result<PolicyDecision, GlobError> {
     let EditFacts {
         rel,
         tool,
@@ -189,16 +165,16 @@ pub fn edit_policy(facts: EditFacts<'_>, scanner: &Scanner) -> PolicyDecision {
         after,
     };
     let mut found = Findings::default();
-    if protected.any_match(rel) {
+    if protected.any_match(rel)? {
         found.asks.push(format!("{rel} is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."));
     }
     let manifest = matches!(target, EditTarget::Manifest(_));
     match target {
         EditTarget::Manifest(edit) => manifest_findings(&mut found, texts, edit),
-        EditTarget::Rust(edit) => rust_findings(&mut found, texts, &edit, scanner),
+        EditTarget::Rust(edit) => rust_findings(&mut found, texts, &edit, scanner)?,
         EditTarget::Other => {}
     }
-    decide(rel, found, manifest)
+    Ok(decide(rel, found, manifest))
 }
 
 /// The edit itself, shared by the checks.
@@ -250,7 +226,12 @@ fn short_name(dep: &DepName) -> &str {
     dep.name.split(':').next().unwrap_or(&dep.name)
 }
 
-fn rust_findings(found: &mut Findings, texts: Texts<'_>, edit: &RustEdit<'_>, scanner: &Scanner) {
+fn rust_findings(
+    found: &mut Findings,
+    texts: Texts<'_>,
+    edit: &RustEdit<'_>,
+    scanner: &Scanner,
+) -> Result<(), GlobError> {
     let Texts {
         rel,
         tool,
@@ -266,8 +247,13 @@ fn rust_findings(found: &mut Findings, texts: Texts<'_>, edit: &RustEdit<'_>, sc
     let b = scanner.scan(before, &edit.options);
     let a = scanner.scan(after, &edit.options);
     let (was, now) = (Counts::of(&b), Counts::of(&a));
-    let mut fresh = new_hits(b.hits(), a.into_hits());
-    fresh.retain(|hit| !edit.exempt.covers(hit, rel));
+    let new = new_hits(b.hits(), a.into_hits());
+    let mut fresh = Vec::with_capacity(new.len());
+    for hit in new {
+        if !edit.exempt.covers(&hit, rel)? {
+            fresh.push(hit);
+        }
+    }
     hit_findings(found, &fresh, rel);
     if now.tests < was.tests {
         found.asks.push(format!("{rel}: this edit removes {} test(s) (H-12). Approve only if the test is being moved or intentionally retired.", was.tests.saturating_sub(now.tests)));
@@ -283,6 +269,7 @@ fn rust_findings(found: &mut Findings, texts: Texts<'_>, edit: &RustEdit<'_>, sc
     if now.clones > was.clones {
         found.advice.push(format!("H-08 {rel}: {} new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).", now.clones.saturating_sub(was.clones)));
     }
+    Ok(())
 }
 
 /// A scan's counts of tests, `#[ignore]`s and clones.

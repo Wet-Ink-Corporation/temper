@@ -1,10 +1,14 @@
 //! The git commands the use cases run, over [`ProcessRunner`] (1.x `project.mjs` `git`).
 
 use std::ffi::OsString;
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::ports::{ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner};
+use temper_domain::{EXCLUDED_DIRS, js_trim};
+
+use crate::paths;
+use crate::ports::{ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink};
 
 /// Every git call's timeout. 1.x set none; 2.0 bounds every child (D16(f), H-13).
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -46,11 +50,11 @@ pub(crate) fn short(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> 
         program: "git",
         args: &args,
         cwd,
-        stdout_cap: CAP,
+        stdout: StdoutSink::Capture(CAP),
         stderr_cap: CAP,
         timeout: SHORT,
     };
-    match process.run(&request) {
+    match process.run(request) {
         Ok(ProcessOutput {
             status: ExitKind::Code(0),
             stdout,
@@ -75,16 +79,130 @@ fn lossy(bytes: Vec<u8>) -> String {
 }
 
 fn rev_parse(process: &impl ProcessRunner, cwd: &Path, flag: &str) -> Option<String> {
-    let args = [OsString::from("rev-parse"), OsString::from(flag)];
+    succeeded(process, cwd, &["rev-parse", flag])
+}
+
+/// 1.x `resolveRev(proj, rev)`: `rev` as a commit sha of the repository at `git_root`, trimmed,
+/// or `None` when it does not resolve or resolves to nothing.
+pub(crate) fn resolve_rev(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    rev: &str,
+) -> Option<String> {
+    let commit = format!("{rev}^{{commit}}");
+    let sha = succeeded(
+        process,
+        git_root,
+        &["rev-parse", "--verify", "--quiet", &commit],
+    )?;
+    Some(js_trim(&sha).to_owned()).filter(|sha| !sha.is_empty())
+}
+
+/// 1.x `headRev(proj)`: `git rev-parse HEAD`, trimmed (an empty answer stays empty), or
+/// `None` when git fails.
+pub(crate) fn head_rev(process: &impl ProcessRunner, git_root: &Path) -> Option<String> {
+    succeeded(process, git_root, &["rev-parse", "HEAD"]).map(|sha| js_trim(&sha).to_owned())
+}
+
+/// How a streamed git call ended. Either way, what reached the sink counts, as 1.x's
+/// `fingerprint` hashes `git diff`'s stdout without looking at the exit code, and `spawnSync`
+/// returns the output read before an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Streamed {
+    /// git ran to an exit (any code), a signal or its timeout.
+    Ran,
+    /// git did not start, or its output could not be read to the end.
+    Lost,
+}
+
+/// `git <args>` at `git_root`, with its stdout streamed into `sink`.
+pub(crate) fn stream_into(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    args: &[&str],
+    sink: &mut (dyn Write + Send),
+) -> Streamed {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let request = ProcessRequest {
+        program: "git",
+        args: &args,
+        cwd: git_root,
+        stdout: StdoutSink::Stream(sink),
+        stderr_cap: CAP,
+        timeout: TIMEOUT,
+    };
+    match process.run(request) {
+        Ok(_) => Streamed::Ran,
+        // 1.x's `r.stdout ?? ''`: a git that did not start wrote nothing to hash.
+        Err(_) => Streamed::Lost,
+    }
+}
+
+/// 1.x `untracked(proj)`: `git ls-files --others --exclude-standard -z`, split on NUL, without
+/// empty names and without anything in the excluded directories; none when git fails.
+pub(crate) fn untracked(process: &impl ProcessRunner, git_root: &Path) -> Vec<String> {
+    let args = ["ls-files", "--others", "--exclude-standard", "-z"];
+    succeeded(process, git_root, &args).map_or_else(Vec::new, |out| {
+        out.split('\0')
+            .filter(|name| !name.is_empty() && !excluded(name))
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+/// The tracked half of 1.x `changedFiles`: `git diff --name-only -z [base] -- . :(exclude)..`,
+/// split on NUL without empty names; none when git fails.
+pub(crate) fn diff_names(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    base: Option<&str>,
+) -> Vec<String> {
+    let excludes = EXCLUDED_DIRS.map(|dir| format!(":(exclude){dir}"));
+    let mut args = vec!["diff", "--name-only", "-z"];
+    args.extend(base);
+    args.extend(["--", "."]);
+    args.extend(excludes.iter().map(String::as_str));
+    succeeded(process, git_root, &args).map_or_else(Vec::new, |out| {
+        out.split('\0')
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+/// 1.x `showAt(proj, rev, rel)`: the file `rel` (with `\` read as `/`) at `rev`, or `None`
+/// when git fails.
+pub(crate) fn show_at(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    rev: &str,
+    rel: &str,
+) -> Option<String> {
+    let spec = format!("{rev}:{}", paths::norm(rel));
+    succeeded(process, git_root, &["show", &spec])
+}
+
+/// A name in one of the directories git's change lists leave out: 1.x's
+/// `EXCLUDE.some((x) => f === x || f.startsWith(`${x}/`))`.
+fn excluded(name: &str) -> bool {
+    EXCLUDED_DIRS.iter().any(|dir| {
+        name.strip_prefix(dir)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// `git <args>` in `cwd`: stdout as lossy UTF-8 when it exits 0, else `None`.
+fn succeeded(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> Option<String> {
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
     let request = ProcessRequest {
         program: "git",
         args: &args,
         cwd,
-        stdout_cap: CAP,
+        stdout: StdoutSink::Capture(CAP),
         stderr_cap: CAP,
         timeout: TIMEOUT,
     };
-    match process.run(&request) {
+    match process.run(request) {
         Ok(ProcessOutput {
             status: ExitKind::Code(0),
             stdout,

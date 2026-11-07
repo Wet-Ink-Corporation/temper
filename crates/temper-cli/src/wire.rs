@@ -29,6 +29,7 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
         // With the variable unset, `home_dir` asks the OS (passwd, or the user profile).
         home: node_homedir(windows, |name| std::env::var_os(name), std::env::home_dir),
         remote_session: var("CLAUDE_CODE_REMOTE_SESSION_ID"),
+        temper_base: var("TEMPER_BASE"),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
     Ok(Engine::new(HostPorts::default(), env, scanner))

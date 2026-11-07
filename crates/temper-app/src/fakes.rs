@@ -12,7 +12,7 @@ use temper_domain::{PathStyle, Timestamp};
 use crate::engine::RunEnv;
 use crate::ports::{
     Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports, ProcessError,
-    ProcessOutput, ProcessRequest, ProcessRunner, Stream,
+    ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
 };
 
 /// A file tree held as text paths in one [`PathStyle`]. A directory exists when a file is below
@@ -35,6 +35,8 @@ pub(crate) struct FakeFiles {
     unresolvable: Vec<String>,
     /// Paths at and below which every write fails, as in a read-only directory.
     read_only: Vec<String>,
+    /// Paths that hold something other than a file or directory: a FIFO, a socket, a device.
+    specials: Vec<String>,
     /// How many times `real_path` was asked.
     real_paths: Cell<usize>,
     /// How many bytes of path `real_path` was asked about, which a real `realpath` reads.
@@ -51,6 +53,7 @@ impl FakeFiles {
             links: Vec::new(),
             unresolvable: Vec::new(),
             read_only: Vec::new(),
+            specials: Vec::new(),
             real_paths: Cell::new(0),
             real_path_bytes: Cell::new(0),
         }
@@ -110,6 +113,12 @@ impl FakeFiles {
     /// Every write at or below `dir` fails with a permission error.
     pub(crate) fn with_read_only(mut self, dir: &str) -> Self {
         self.read_only.push(dir.to_owned());
+        self
+    }
+
+    /// `path` holds a FIFO, a socket or a device: it exists, and is neither file nor directory.
+    pub(crate) fn with_special(mut self, path: &str) -> Self {
+        self.specials.push(path.to_owned());
         self
     }
 
@@ -318,6 +327,34 @@ impl Files for FakeFiles {
         files.insert(to, text);
         Ok(())
     }
+
+    fn read_into(
+        &self,
+        path: &Path,
+        limit: u64,
+        sink: &mut dyn io::Write,
+    ) -> Result<ReadInto, FsError> {
+        let real = self.unlinked(&text_of(path));
+        if self.specials.contains(&real) {
+            return Ok(ReadInto::NotAFile);
+        }
+        match self.files.borrow().get(&real) {
+            Some(Some(text)) if u64::try_from(text.len()).unwrap_or(u64::MAX) > limit => {
+                Ok(ReadInto::TooLarge)
+            }
+            Some(Some(text)) => sink
+                .write_all(text.as_bytes())
+                .map(|()| ReadInto::Read)
+                .map_err(|source| FsError::new(FsOp::ReadInto, path, source)),
+            Some(None) => Err(failure(
+                FsOp::ReadInto,
+                &real,
+                io::ErrorKind::PermissionDenied,
+            )),
+            None if self.is_dir(&real) => Ok(ReadInto::NotAFile),
+            None => Ok(ReadInto::NotFound),
+        }
+    }
 }
 
 /// What a [`FakeProcess`] answers to one request.
@@ -369,7 +406,7 @@ impl FakeProcess {
 }
 
 impl ProcessRunner for FakeProcess {
-    fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+    fn run(&self, request: ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
         self.calls.set(self.calls.get().saturating_add(1));
         let program = request.program.to_owned();
         let reply = self
@@ -380,21 +417,38 @@ impl ProcessRunner for FakeProcess {
                     .then_some(reply)
             })
             .or(self.otherwise.as_ref());
-        match reply {
-            Some(Reply::Exit { status, stdout }) => Ok(ProcessOutput {
+        match (reply, request.stdout) {
+            (Some(Reply::Exit { status, stdout }), StdoutSink::Capture(_)) => Ok(ProcessOutput {
                 status: *status,
-                stdout: stdout.clone().into_bytes(),
+                stdout: stdout.as_bytes().to_vec(),
                 stderr: Vec::new(),
             }),
-            Some(Reply::Overflows(stream)) => Err(ProcessError::Overflow {
+            (Some(Reply::Exit { status, stdout }), StdoutSink::Stream(sink)) => {
+                // Two writes, so a sink sees its input split as a pipe splits it.
+                let (head, tail) = stdout.as_bytes().split_at(stdout.len() / 2);
+                sink.write_all(head)
+                    .and_then(|()| sink.write_all(tail))
+                    .map_err(|source| ProcessError::Io {
+                        program: program.clone(),
+                        source,
+                    })?;
+                Ok(ProcessOutput {
+                    status: *status,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            }
+            (Some(Reply::Overflows(stream)), stdout) => Err(ProcessError::Overflow {
                 program,
                 stream: *stream,
-                cap: match stream {
-                    Stream::Stdout => request.stdout_cap.get(),
-                    Stream::Stderr => request.stderr_cap.get(),
+                cap: match (stream, stdout) {
+                    (Stream::Stdout, StdoutSink::Capture(cap)) => cap.get(),
+                    // A streamed stdout has no cap; the fake reports none.
+                    (Stream::Stdout, StdoutSink::Stream(_)) => usize::MAX,
+                    (Stream::Stderr, _) => request.stderr_cap.get(),
                 },
             }),
-            Some(Reply::SpawnFails) | None => Err(ProcessError::Spawn {
+            (Some(Reply::SpawnFails) | None, _) => Err(ProcessError::Spawn {
                 program,
                 source: io::Error::from(io::ErrorKind::NotFound),
             }),
@@ -473,6 +527,7 @@ impl RunEnv {
             temp_dir: PathBuf::from(temp),
             home: PathBuf::from(home),
             remote_session: None,
+            temper_base: None,
         }
     }
 }

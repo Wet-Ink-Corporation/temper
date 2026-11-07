@@ -18,6 +18,7 @@ fn workspace() -> Workspace {
         root: "/ws".to_owned(),
         state_dir: "/s".to_owned(),
         config: Config::defaults(),
+        config_problem: None,
         git: false,
     }
 }

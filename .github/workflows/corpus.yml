@@ -94,6 +94,9 @@ jobs:
       - name: Hook parity cases
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.engine.outcome == 'success' }}
         run: node --test tests/parity/hooks.test.mjs
+      - name: Status parity cases
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.engine.outcome == 'success' }}
+        run: node --test tests/parity/status.test.mjs
       # Runs even when the parity cases fail, so one run gives both results, but only once its
       # inputs exist.
       - name: Scanner corpus

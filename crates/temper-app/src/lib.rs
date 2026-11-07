@@ -8,6 +8,7 @@
 //! roots, over the [`Files`], [`ProcessRunner`] and [`Clock`] ports, with 1.x's project
 //! discovery (the git top level first, the state dir, the config) and path rules.
 
+mod changes;
 mod engine;
 #[cfg(test)]
 mod fakes;
@@ -19,14 +20,17 @@ mod ports;
 mod project;
 mod relpath;
 mod scan;
+mod session;
+mod state;
+mod status;
 mod telemetry;
 
 pub use engine::{
     CommandError, CommandOutput, Engine, Exit, HookError, OutputFormat, RunEnv, ScanArgs,
-    ScanTargets,
+    ScanTargets, StatusArgs,
 };
 pub use hooks::{HookInput, HookInputError};
 pub use ports::{
     ByteCap, Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports,
-    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, Stream,
+    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
 };

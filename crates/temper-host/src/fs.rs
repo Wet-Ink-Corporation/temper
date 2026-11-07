@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use temper_app::{DirEntry, EntryKind, FileMeta, Files, FsError, FsOp};
+use temper_app::{DirEntry, EntryKind, FileMeta, Files, FsError, FsOp, ReadInto};
 
 /// The longest JS string, in UTF-16 code units: V8's `String::kMaxLength` on 64-bit targets,
 /// Node 22's `buffer.constants.MAX_STRING_LENGTH`. `readFileSync(path, 'utf8')` throws past it.
@@ -101,6 +101,55 @@ impl Files for StdFiles {
 
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError> {
         fs::rename(from, to).map_err(|error| FsError::new(FsOp::Rename, from, error))
+    }
+
+    /// The metadata is read before the open, so a FIFO is never opened (its `open` would wait
+    /// for a writer), and again from the open handle, in case the path changed in between.
+    /// A FIFO swapped in during that window can still block the open; nothing else can.
+    fn read_into(
+        &self,
+        path: &Path,
+        limit: u64,
+        sink: &mut dyn Write,
+    ) -> Result<ReadInto, FsError> {
+        let failed = |error| FsError::new(FsOp::ReadInto, path, error);
+        let regular = |meta: &fs::Metadata| {
+            if !meta.is_file() {
+                Some(ReadInto::NotAFile)
+            } else if meta.len() > limit {
+                Some(ReadInto::TooLarge)
+            } else {
+                None
+            }
+        };
+        match fs::metadata(path) {
+            Ok(meta) => {
+                if let Some(answer) = regular(&meta) {
+                    return Ok(answer);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(ReadInto::NotFound);
+            }
+            Err(error) => return Err(failed(error)),
+        }
+        let file = match fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(ReadInto::NotFound);
+            }
+            Err(error) => return Err(failed(error)),
+        };
+        if let Some(answer) = regular(&file.metadata().map_err(failed)?) {
+            return Ok(answer);
+        }
+        // One byte past the limit tells a file that grew since its metadata was read.
+        let copied = io::copy(&mut file.take(limit.saturating_add(1)), sink).map_err(failed)?;
+        Ok(if copied > limit {
+            ReadInto::TooLarge
+        } else {
+            ReadInto::Read
+        })
     }
 }
 

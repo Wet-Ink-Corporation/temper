@@ -76,6 +76,28 @@ fn an_uncompilable_protected_glob_stops_the_scan_at_the_first_copy_read() {
     }
 }
 
+/// 1.x's protected-write reader matches `globs.some(...)` lazily: a glob after the first match
+/// is never compiled, so `src/x.rs` matches `src/**` and keeps the second ask reason, the
+/// shell write. Probed against 1.x on the same workspace.
+#[test]
+fn a_protected_glob_after_the_first_match_is_never_compiled() {
+    let glob = temper_domain::JsValue::String(uncompilable()).to_json();
+    let ws = ws_with(&format!(r#"{{"protected":["src/**",{glob}]}}"#));
+
+    let outcome = ws.bash("cp ok.rs src/x.rs");
+
+    let HookOutcome::Ask { reason, .. } = &outcome else {
+        panic!("an ask: {outcome:?}");
+    };
+    let config = "src/x.rs is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.";
+    assert_eq!(
+        reason,
+        &format!(
+            "temper needs your approval:\n- {config}\ntemper: this shell command writes src/x.rs. {config}"
+        )
+    );
+}
+
 #[test]
 fn an_uncompilable_exempt_glob_is_compiled_only_for_a_new_hit_of_its_rule() {
     let unwrap_rule = exempt_ws("H-02");

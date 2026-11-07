@@ -56,23 +56,83 @@ export function treeContents(root, roots, { prefix = '', maskFile = (_rel, text)
 
 const jsonEscaped = (s) => JSON.stringify(s).slice(1, -1);
 
+/** A pid no process has: the largest int32 but one, which `kill(pid, 0)` finds dead. */
+export const DEAD_PID = 2147483646;
+
+/**
+ * The placeholders of a case (port-phase-3 "Parity harness"), expanded in `text`: `<ROOT>` (the
+ * copy's path), `<PID>` (this harness's pid, alive through both runs), `<DEADPID>`, and
+ * `<ISO:-n>` and `<MS:-n>` (the case's `now` minus `n` ms, as an ISO time or epoch ms). `now` is
+ * taken once per case, so both engines see the same times.
+ */
+export function expandPlaceholders(text, { root, now }) {
+  return text
+    .replaceAll('<ROOT>', root)
+    .replaceAll('<PID>', String(process.pid))
+    .replaceAll('<DEADPID>', String(DEAD_PID))
+    .replace(/<ISO:-(\d+)>/g, (_, n) => new Date(now - Number(n)).toISOString())
+    .replace(/<MS:-(\d+)>/g, (_, n) => String(now - Number(n)));
+}
+
+/** The fixed author and committer time of a case's `n`th git call: one second apart. */
+const gitDate = (n) => `${1767225600 + n} +0000`;
+
+/**
+ * Applies a case's setup actions to `copy`, the same way for both engines, before the snapshot:
+ * `{ git: [args] }` (run with a fixed identity, no signing, `core.autocrlf` off and dates one
+ * second apart per git call, so both copies get the same commit ids), `{ write: { rel: text |
+ * { base64 } } }` (parents created), `{ remove: [rel] }` and `{ age: { rel: ms } }` (mtime and
+ * atime set to `now - ms`). Strings go through `expandPlaceholders`. A failing action is a
+ * HarnessError.
+ */
+export function applySetup(copy, actions = [], { now, ceiling }) {
+  const expand = (s) => expandPlaceholders(s, { root: copy, now });
+  let calls = 0;
+  for (const action of actions) {
+    if (action.git) {
+      calls += 1;
+      const env = { ...hermeticEnv(), GIT_AUTHOR_DATE: gitDate(calls), GIT_COMMITTER_DATE: gitDate(calls), GIT_CEILING_DIRECTORIES: ceiling };
+      const args = ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...action.git.map(expand)];
+      const r = spawnSync('git', args, { cwd: copy, env, stdio: ['ignore', 'pipe', 'pipe'], timeout: 60_000 });
+      if (r.error || r.status !== 0) throw new HarnessError(`setup git ${args.join(' ')} failed: ${r.error?.message ?? r.stderr}`);
+    } else if (action.write) {
+      for (const [rel, value] of Object.entries(action.write)) {
+        const file = path.join(copy, rel);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, typeof value === 'string' ? expand(value) : Buffer.from(value.base64, 'base64'));
+      }
+    } else if (action.remove) {
+      for (const rel of action.remove) fs.rmSync(path.join(copy, rel), { recursive: true, force: true });
+    } else if (action.age) {
+      for (const [rel, ms] of Object.entries(action.age)) {
+        const t = new Date(now - ms);
+        fs.utimesSync(path.join(copy, rel), t, t);
+      }
+    } else {
+      throw new HarnessError(`unknown setup action ${JSON.stringify(action)}`);
+    }
+  }
+}
+
 /**
  * One hook case (port-phase-2 "Parity harness"): `steps` (`{ event, stdin, env }`, run in order
  * in one fresh copy of `src`, so a marker one step writes is seen by the next; a null `event` runs
  * a bare `hook`) from `cwd`. Stdin is the null device when `stdin` is not a string. Beside the
  * copy is a scratch directory whose `tmp/` is TMPDIR, TMP and TEMP. `pluginData` is `true`
  * for a fresh CLAUDE_PLUGIN_DATA (`<scratch>/data`), a path relative to the copy, or absent for
- * none (the tmpdir fallback). In `stdin` and `env` values, `<ROOT>` is the copy's path, JSON-escaped
- * in `stdin`. Returns `{ steps: [{ exit, stdout, stderr, ms }], files }`: the streams decoded as
+ * none (the tmpdir fallback). `setup` actions are applied first (`applySetup`), and a step with
+ * `args` runs `temper <args>` instead of a hook. In `stdin`, `env` and `args`, the placeholders
+ * of `expandPlaceholders` are expanded (with `now`), `<ROOT>` JSON-escaped in `stdin`. Returns `{ steps: [{ exit, stdout, stderr, ms }], files }`: the streams decoded as
  * UTF-8 with the copy and scratch roots masked, and `files` the copy's changed files as
  * `tree/<rel>` and everything in the scratch directory as `scratch/<rel>`, with `maskFile` applied
  * as in `treeContents`.
  */
-export function runHookCase(engine, src, { steps, cwd = '.', git = false, pluginData, env = {}, maskFile }) {
+export function runHookCase(engine, src, { steps, cwd = '.', git = false, pluginData, env = {}, maskFile, setup = [], now = Date.now() }) {
   const copy = freshCopy(src, { skip: [] });
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-parity-scratch-'));
   try {
     if (git) gitInit(copy);
+    applySetup(copy, setup, { now, ceiling: path.dirname(copy) });
     const tmp = path.join(scratch, 'tmp');
     fs.mkdirSync(tmp);
     const base = { TMPDIR: tmp, TMP: tmp, TEMP: tmp, ...env };
@@ -84,9 +144,12 @@ export function runHookCase(engine, src, { steps, cwd = '.', git = false, plugin
     const roots = [copy, scratch];
     const mask = (buf) => maskRoots(buf.toString('utf8'), roots);
     const out = steps.map((step) => {
-      const stepEnv = Object.fromEntries(Object.entries({ ...base, ...step.env }).map(([k, v]) => [k, v.replaceAll('<ROOT>', copy)]));
-      const input = typeof step.stdin === 'string' ? step.stdin.replaceAll('<ROOT>', jsonEscaped(copy)) : undefined;
-      const r = runEngine(engine, step.event == null ? ['hook'] : ['hook', step.event], path.join(copy, cwd), { ceiling: path.dirname(copy), input, env: stepEnv, timeoutMs: 60_000 });
+      const stepEnv = Object.fromEntries(Object.entries({ ...base, ...step.env }).map(([k, v]) => [k, expandPlaceholders(v, { root: copy, now })]));
+      const input = typeof step.stdin === 'string' ? expandPlaceholders(step.stdin, { root: jsonEscaped(copy), now }) : undefined;
+      // A CLI step (`args`) runs `temper <args>`; a hook step runs `temper hook <event>`.
+      const args = step.args ? step.args.map((a) => expandPlaceholders(a, { root: copy, now }))
+        : step.event == null ? ['hook'] : ['hook', step.event];
+      const r = runEngine(engine, args, path.join(copy, cwd), { ceiling: path.dirname(copy), input, env: stepEnv, timeoutMs: 60_000 });
       return { exit: r.exit, stdout: mask(r.stdout), stderr: mask(r.stderr), ms: r.ms };
     });
     const tree = treeContents(copy, roots, { prefix: 'tree/', maskFile });

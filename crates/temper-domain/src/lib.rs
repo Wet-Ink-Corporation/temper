@@ -31,24 +31,30 @@ mod js;
 mod manifest;
 mod paths;
 mod scan;
+mod state;
+mod status;
 mod time;
 mod verdict;
 
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
-pub use fingerprint::{Fingerprint, FingerprintParseError};
+pub use fingerprint::{
+    BASELINE_FILE, ContentSink, DiffSink, EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, Fingerprint,
+    FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, gate_config,
+    in_fingerprint, is_rust_relevant,
+};
 pub use glob::{Glob, GlobError, Globs, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
-    EditOp, EditStep, EditTarget, EditTool, Exemptions, HookEvent, HookOutcome, IRON_RULES,
-    InterpreterCode, LazyExemptions, ManifestEdit, OpaqueKind, PolicyDecision, PolicySetupError,
-    ProtectedChange, RaiseFlag, Replacements, RustEdit, RustWrites, SKILL_NOT_LOADED,
-    STATE_DIR_DENIAL, ShellAskVia, ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent,
-    TelemetryRow, UnknownHookEvent, Unread, apply_edit, edit_policy, is_reviewer, lockfile_denial,
-    skill_gate_denial, skill_load_via, skill_preloaded,
+    EditOp, EditStep, EditTarget, EditTool, HookEvent, HookOutcome, IRON_RULES, InterpreterCode,
+    LazyExemptions, ManifestEdit, OpaqueKind, PolicyDecision, PolicySetupError, ProtectedChange,
+    RaiseFlag, Replacements, RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, ShellAskVia,
+    ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent, Unread,
+    apply_edit, edit_policy, is_reviewer, lockfile_denial, skill_gate_denial, skill_load_via,
+    skill_preloaded,
 };
-pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_trim};
+pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
@@ -62,6 +68,8 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
+pub use state::{BaselineParseError, BaselineSummary, GateRecord};
+pub use status::{BaselineLine, STATUS_USAGE, StatusFacts, render_status_text, temper_base_note};
 pub use time::Timestamp;
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,

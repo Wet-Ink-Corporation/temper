@@ -1722,6 +1722,19 @@
           ]
         }
       ]
+    },
+    {
+      "source": "tests/status-json.test.mjs",
+      "pending": "port Phase 3c (status --json and its --session form), Phase 7 (stats)",
+      "tests": [
+        {
+          "node": "status: the text output keeps its lines",
+          "crate": "temper-cli",
+          "rust": [
+            "status::the_text_output_keeps_its_lines"
+          ]
+        }
+      ]
     }
   ]
 }

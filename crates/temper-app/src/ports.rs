@@ -72,6 +72,37 @@ pub trait Files {
     ///
     /// [`FsError`] (on `from`) when the rename fails, `from` missing included.
     fn rename(&self, from: &Path, to: &Path) -> Result<(), FsError>;
+
+    /// Streams the bytes of the regular file at `path`, after symlinks, into `sink`, as Node's
+    /// `readFileSync(path)` reads them, when it holds at most `limit` bytes.
+    ///
+    /// Anything that is not a regular file (a directory, a FIFO, a socket, a device) is
+    /// [`ReadInto::NotAFile`] and is never opened, so a FIFO cannot block and a device cannot
+    /// stream forever (OC-1 A (b)). Only after [`ReadInto::Read`] does `sink` hold the file;
+    /// after any other answer, or an error, what it holds must be discarded.
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when the file cannot be inspected, opened or read, or `sink` fails.
+    fn read_into(
+        &self,
+        path: &Path,
+        limit: u64,
+        sink: &mut dyn io::Write,
+    ) -> Result<ReadInto, FsError>;
+}
+
+/// What [`Files::read_into`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadInto {
+    /// The whole file went to the sink.
+    Read,
+    /// Nothing is at the path.
+    NotFound,
+    /// Something is there, but not a regular file after symlinks.
+    NotAFile,
+    /// The file holds more than the limit (Node's `ERR_FS_FILE_TOO_LARGE`).
+    TooLarge,
 }
 
 /// What [`Files::stat`] reports about a path. Fields arrive with their readers.
@@ -158,12 +189,14 @@ pub enum FsOp {
     CreateDir,
     /// [`Files::rename`].
     Rename,
+    /// [`Files::read_into`].
+    ReadInto,
 }
 
 impl fmt::Display for FsOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Read => "read",
+            Self::Read | Self::ReadInto => "read",
             Self::ReadDir => "read directory",
             Self::RealPath => "resolve",
             Self::Stat => "stat",
@@ -181,18 +214,18 @@ impl fmt::Display for FsOp {
 /// when its timeout expires.
 pub trait ProcessRunner {
     /// Runs `request` and returns how the child ended and what it wrote. A timeout or a
-    /// failing exit code is an outcome ([`ExitKind`]), not an error.
+    /// failing exit code is an outcome ([`ExitKind`]), not an error. The request is consumed,
+    /// since a streamed stdout writes through its sink.
     ///
     /// # Errors
     ///
     /// [`ProcessError::Spawn`] when the program cannot be started, [`ProcessError::Io`] when
-    /// the child cannot be waited for or its output read, and [`ProcessError::Overflow`] when
-    /// it writes more than a stream's cap.
-    fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError>;
+    /// the child cannot be waited for, its output read or a sink written, and
+    /// [`ProcessError::Overflow`] when it writes more than a captured stream's cap.
+    fn run(&self, request: ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError>;
 }
 
-/// One child process to run. Phase 4 replaces `stdout_cap` with a sink that can stream to a
-/// file, and adds the environment (OC-8 B).
+/// One child process to run. Phase 4 adds a file sink and the environment (OC-8 B).
 #[derive(Debug)]
 pub struct ProcessRequest<'a> {
     /// The program, found on `PATH` as the OS finds it.
@@ -201,12 +234,32 @@ pub struct ProcessRequest<'a> {
     pub args: &'a [OsString],
     /// The directory it runs in.
     pub cwd: &'a Path,
-    /// The most stdout may hold.
-    pub stdout_cap: ByteCap,
+    /// Where stdout goes.
+    pub stdout: StdoutSink<'a>,
     /// The most stderr may hold.
     pub stderr_cap: ByteCap,
     /// How long the child may run before it is killed.
     pub timeout: Duration,
+}
+
+/// Where a child's stdout goes.
+pub enum StdoutSink<'a> {
+    /// Into [`ProcessOutput::stdout`], up to the cap; past it the run is
+    /// [`ProcessError::Overflow`] (OC-3 A).
+    Capture(ByteCap),
+    /// Written to the sink as it arrives, whole and uncapped, so a large output takes constant
+    /// memory (OC-1 A (a), wi-50fc9a); [`ProcessOutput::stdout`] is then empty. It is written
+    /// from another thread, hence `Send`.
+    Stream(&'a mut (dyn io::Write + Send)),
+}
+
+impl fmt::Debug for StdoutSink<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Capture(cap) => f.debug_tuple("Capture").field(cap).finish(),
+            Self::Stream(_) => f.write_str("Stream(..)"),
+        }
+    }
 }
 
 /// The most bytes a captured stream may hold.
@@ -232,7 +285,7 @@ impl ByteCap {
 pub struct ProcessOutput {
     /// How it ended.
     pub status: ExitKind,
-    /// Its stdout, at most the request's cap.
+    /// Its stdout, at most the request's cap; empty when it was streamed.
     pub stdout: Vec<u8>,
     /// Its stderr, at most the request's cap.
     pub stderr: Vec<u8>,

@@ -1,12 +1,15 @@
 //! Child processes on the standard library, with timeouts and capped output (H-13).
 
-use std::io::{self, Read};
+use std::ffi::OsString;
+use std::io::{self, Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread::{self, Scope, ScopedJoinHandle};
 use std::time::Duration;
 
 use temper_app::{
-    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, Stream,
+    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink,
+    Stream,
 };
 use wait_timeout::ChildExt;
 
@@ -23,26 +26,30 @@ use wait_timeout::ChildExt;
 pub struct StdProcess;
 
 impl ProcessRunner for StdProcess {
-    fn run(&self, request: &ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
-        let program = || request.program.to_owned();
-        let mut command = Command::new(request.program);
-        command
-            .args(request.args)
-            .current_dir(request.cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        hide_window(&mut command);
-        let mut child = command.spawn().map_err(|source| ProcessError::Spawn {
-            program: program(),
-            source,
-        })?;
+    fn run(&self, request: ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
+        let ProcessRequest {
+            program: name,
+            args,
+            cwd,
+            stdout: sink,
+            stderr_cap,
+            timeout,
+        } = request;
+        let program = || name.to_owned();
+        let mut child = spawn(name, args, cwd)?;
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+        let stdout_cap = match &sink {
+            StdoutSink::Capture(cap) => Some(*cap),
+            StdoutSink::Stream(_) => None,
+        };
         let (status, out, err) = thread::scope(|scope| {
-            let out = spawn_reader(scope, "temper-stdout", stdout, request.stdout_cap);
-            let err = spawn_reader(scope, "temper-stderr", stderr, request.stderr_cap);
+            let out = match sink {
+                StdoutSink::Capture(cap) => spawn_reader(scope, "temper-stdout", stdout, cap),
+                StdoutSink::Stream(sink) => spawn_streamer(scope, "temper-stdout", stdout, sink),
+            };
+            let err = spawn_reader(scope, "temper-stderr", stderr, stderr_cap);
             let status = if out.is_ok() && err.is_ok() {
-                wait(&mut child, request.timeout)
+                wait(&mut child, timeout)
             } else {
                 // A reader that never started dropped its pipe; stop the child, so the other
                 // reader meets the end of its pipe, and report the reader's failure below.
@@ -58,10 +65,11 @@ impl ProcessRunner for StdProcess {
         let (out, err) = (out.map_err(lost)?, err.map_err(lost)?);
         let status = status.map_err(lost)?;
         for (captured, stream, cap) in [
-            (&out, Stream::Stdout, request.stdout_cap),
-            (&err, Stream::Stderr, request.stderr_cap),
+            (&out, Stream::Stdout, stdout_cap),
+            (&err, Stream::Stderr, Some(stderr_cap)),
         ] {
-            if captured.overflowed {
+            // A streamed stdout has no cap and never overflows.
+            if let (true, Some(cap)) = (captured.overflowed, cap) {
                 return Err(ProcessError::Overflow {
                     program: program(),
                     stream,
@@ -75,6 +83,22 @@ impl ProcessRunner for StdProcess {
             stderr: err.bytes,
         })
     }
+}
+
+/// Starts `program` in `cwd` with stdin null and both outputs piped.
+fn spawn(program: &str, args: &[OsString], cwd: &Path) -> Result<Child, ProcessError> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_window(&mut command);
+    command.spawn().map_err(|source| ProcessError::Spawn {
+        program: program.to_owned(),
+        source,
+    })
 }
 
 /// At most a cap's worth of one output stream.
@@ -97,6 +121,24 @@ fn spawn_reader<'scope, R: Read + Send + 'scope>(
         .name(name.to_owned())
         .spawn_scoped(scope, move || {
             pipe.map_or_else(|| Ok(Captured::default()), |pipe| read_capped(pipe, cap))
+        })
+}
+
+/// Starts a named thread in `scope` that copies `pipe` to `sink` as it arrives, uncapped
+/// (OC-1 A (a)); its [`Captured`] holds nothing.
+fn spawn_streamer<'scope, R: Read + Send + 'scope>(
+    scope: &'scope Scope<'scope, '_>,
+    name: &str,
+    pipe: Option<R>,
+    sink: &'scope mut (dyn Write + Send),
+) -> io::Result<ScopedJoinHandle<'scope, io::Result<Captured>>> {
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn_scoped(scope, move || {
+            if let Some(mut pipe) = pipe {
+                io::copy(&mut pipe, sink)?;
+            }
+            Ok(Captured::default())
         })
 }
 

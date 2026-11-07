@@ -3,6 +3,17 @@
 use std::fmt;
 use std::str::FromStr;
 
+mod gate_config;
+mod hasher;
+mod relevant;
+
+pub use gate_config::gate_config;
+pub use hasher::{ContentSink, DiffSink, FingerprintHasher};
+pub use relevant::{
+    BASELINE_FILE, EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE,
+    in_fingerprint, is_rust_relevant,
+};
+
 /// A tree fingerprint, as 1.x writes it into gate, verdict and session files: 16 lowercase hex
 /// digits, the first 8 bytes of a SHA-256.
 ///

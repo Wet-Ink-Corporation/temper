@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 
-use temper_app::{OutputFormat, ScanArgs, ScanTargets};
+use temper_app::{OutputFormat, ScanArgs, ScanTargets, StatusArgs};
 use temper_domain::{HookEvent, UnknownHookEvent};
 
 /// The 1.x usage text, verbatim from `scripts/temper.mjs`, so a script that matches it keeps
@@ -21,9 +21,15 @@ pub(crate) enum Command {
     Scan(ScanArgs),
     /// `temper hook <event>` for a ported event, or a name that is no event at all.
     Hook(Result<HookEvent, UnknownHookEvent>),
+    /// `temper status` in text, or its usage error.
+    Status(Result<StatusArgs, StatusUsage>),
     /// Print the usage text, as asked for or because the command line is not understood.
     Usage(UsageExit),
 }
+
+/// `temper status --session` without a usable id: 1.x prints `STATUS_USAGE` and exits 2.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct StatusUsage;
 
 /// Why the usage text is printed, which decides the exit code.
 #[derive(Debug, PartialEq, Eq)]
@@ -50,6 +56,9 @@ pub(crate) fn parse<I: IntoIterator<Item = OsString>>(args: I) -> Command {
     }
     if first == "hook" {
         return hook(args.next());
+    }
+    if first == "status" {
+        return status(args);
     }
     match args.peek() {
         None if first == "--version" => Command::Version,
@@ -86,6 +95,31 @@ fn scan(args: impl Iterator<Item = OsString>) -> Command {
     Command::Scan(ScanArgs { targets, format })
 }
 
+/// `status`'s arguments, read as 1.x's `statusArgs` reads them: the first `--session` takes the
+/// argument after it, which must be there, not empty and not start with `--`; `--json`
+/// anywhere asks for the JSON form, which waits for port Phase 3c (an unported subcommand
+/// until then, 2b-1); anything else is ignored. The session check comes first, as in 1.x.
+fn status(args: impl Iterator<Item = OsString>) -> Command {
+    let args: Vec<String> = args
+        .map(|arg| {
+            arg.into_string()
+                .unwrap_or_else(|raw| raw.to_string_lossy().into_owned())
+        })
+        .collect();
+    let json = args.iter().any(|arg| arg == "--json");
+    let session = match args.iter().position(|arg| arg == "--session") {
+        None => None,
+        Some(at) => match args.into_iter().nth(at.saturating_add(1)) {
+            Some(sid) if !sid.is_empty() && !sid.starts_with("--") => Some(sid),
+            Some(_) | None => return Command::Status(Err(StatusUsage)),
+        },
+    };
+    if json {
+        return Command::Usage(UsageExit::Unknown);
+    }
+    Command::Status(Ok(StatusArgs { session }))
+}
+
 /// `hook`'s event, decoded lossily, with a missing one read as JS's `undefined`, as 1.x's
 /// `HOOKS[argv[1]]` sees it. 1.x ignores any further argument. An event whose handler is not
 /// ported yet is an unported subcommand, like any other (port plan 2b-1).
@@ -117,9 +151,9 @@ fn hook(event: Option<OsString>) -> Command {
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, UsageExit, parse};
+    use super::{Command, StatusUsage, UsageExit, parse};
     use std::ffi::OsString;
-    use temper_app::{OutputFormat, ScanArgs, ScanTargets};
+    use temper_app::{OutputFormat, ScanArgs, ScanTargets, StatusArgs};
     use temper_domain::HookEvent;
 
     fn parse_strs(args: &[&str]) -> Command {
@@ -253,6 +287,51 @@ mod tests {
                 format: OutputFormat::Text,
             }),
             "decoded as Node decodes its arguments"
+        );
+    }
+
+    fn status_of(args: &[&str]) -> Command {
+        parse(["status"].iter().chain(args).map(OsString::from))
+    }
+
+    /// 1.x `statusArgs`: `--session` and the argument after it, anything else ignored.
+    #[test]
+    fn status_reads_its_session_and_ignores_the_rest() {
+        let session = |sid: Option<&str>| {
+            Command::Status(Ok(StatusArgs {
+                session: sid.map(str::to_owned),
+            }))
+        };
+        assert_eq!(status_of(&[]), session(None));
+        assert_eq!(status_of(&["x", "--other"]), session(None));
+        assert_eq!(status_of(&["--session", "s1", "x"]), session(Some("s1")));
+        assert_eq!(
+            status_of(&["--session", "a", "--session", "b"]),
+            session(Some("a")),
+            "indexOf finds the first"
+        );
+    }
+
+    /// `--session` with no id, an empty one or one starting `--` is a usage error, checked
+    /// before `--json`, which waits for port Phase 3c.
+    #[test]
+    fn status_with_a_bad_session_is_a_usage_error_and_json_is_not_ported() {
+        for args in [
+            &["--session"][..],
+            &["--session", ""],
+            &["--session", "--json"],
+            &["--json", "--session"],
+        ] {
+            assert_eq!(
+                status_of(args),
+                Command::Status(Err(StatusUsage)),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            status_of(&["--json"]),
+            Command::Usage(UsageExit::Unknown),
+            "status --json waits for 3c"
         );
     }
 

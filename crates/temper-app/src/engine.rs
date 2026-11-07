@@ -1,12 +1,15 @@
 //! The engine: the ports and the run environment, wired once, and one method per command.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 
-use temper_domain::{GlobError, HookEvent, HookOutcome, PathStyle, PolicySetupError, Scanner};
+use temper_domain::{
+    GlobError, HookEvent, HookOutcome, JsTypeError, PathStyle, PolicySetupError, Scanner,
+};
 
 use crate::hooks::{self, HookCall, HookInput};
 use crate::ports::{FsError, Ports};
-use crate::scan;
+use crate::{scan, status};
 
 /// What a command reads from the process it runs in, captured once by the composition root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +27,9 @@ pub struct RunEnv {
     /// `CLAUDE_CODE_REMOTE_SESSION_ID` when it is set and not empty: the cloud session that
     /// telemetry rows name.
     pub remote_session: Option<String>,
+    /// `TEMPER_BASE` when it is set and not empty: the base a command run outside a hook
+    /// compares with, when it is a commit here.
+    pub temper_base: Option<String>,
 }
 
 /// The use cases, over the ports `P`.
@@ -32,6 +38,9 @@ pub struct Engine<P> {
     ports: P,
     env: RunEnv,
     scanner: Scanner,
+    /// Whether this process has printed the note on an unusable `TEMPER_BASE` (1.x's
+    /// module-level `baseNoted`).
+    base_noted: Cell<bool>,
 }
 
 impl<P: Ports> Engine<P> {
@@ -41,7 +50,21 @@ impl<P: Ports> Engine<P> {
             ports,
             env,
             scanner,
+            base_noted: Cell::new(false),
         }
+    }
+
+    /// `temper status`: the project, base, fingerprint, Rust changes, cached gate, recorded
+    /// review, baseline and config, as 1.x's nine lines. A `TEMPER_BASE` that is not a commit
+    /// here is noted on stderr once per engine. `--json` arrives in port Phase 3c.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project, and
+    /// [`CommandError::Unconvertible`] for a recorded review verdict that 1.x's `String()`
+    /// throws on (wi-32d7c9); nothing else fails, as in 1.x.
+    pub fn status(&self, args: &StatusArgs) -> Result<CommandOutput, CommandError> {
+        status::run(&self.ports, &self.env, &self.base_noted, args)
     }
 
     /// `temper scan --all` or `temper scan FILES..`: scans the targets and reports their hits
@@ -106,6 +129,13 @@ pub enum HookError {
         /// The event.
         event: HookEvent,
     },
+}
+
+/// The arguments of `temper status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusArgs {
+    /// `--session ID`: compare with that session's base instead of `TEMPER_BASE` or HEAD.
+    pub session: Option<String>,
 }
 
 /// The arguments of `temper scan`.
@@ -175,4 +205,8 @@ pub enum CommandError {
     /// The result could not be written as JSON.
     #[error("cannot write the results as JSON")]
     Json(#[source] serde_json::Error),
+    /// A state file holds a value 1.x converts to a string outside any `try` and cannot, so
+    /// 1.x crashes there (exit 1).
+    #[error("a recorded value cannot be printed")]
+    Unconvertible(#[source] JsTypeError),
 }

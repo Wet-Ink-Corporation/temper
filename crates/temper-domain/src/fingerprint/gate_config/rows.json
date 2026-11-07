@@ -1,0 +1,90 @@
+[
+ {
+  "text": null,
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "not json",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "null",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "5",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "[]",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":\"ab\"}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":{\"doc\":null,\"colour\":1}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":null,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":{\"steps\":[{\"name\":\"x\",\"cmd\":[\"a\"],\"env\":{\"Z\":\"1\",\"A\":\"2\"}}]}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":[{\"cmd\":[\"a\"],\"env\":{\"A\":\"2\",\"Z\":\"1\"},\"name\":\"x\"}]},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"scanner\":{\"exempt\":[{\"rule\":\"H-01\",\"paths\":[\"b/**\",\"a/**\"]}]},\"review\":\"off\"}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[{\"paths\":[\"b/**\",\"a/**\"],\"rule\":\"H-01\"}]}}"
+ },
+ {
+  "text": "{\"gate\":{\"stepTimeoutSec\":1e21,\"doc\":0.1}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":0.1,\"scan\":true,\"stepTimeoutSec\":1e+21,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":[1,2]}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"manifests\":{\"ownLints\":[\"x\"],\"extra\":1}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[\"x\"]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":{\"steps\":{\"b\":1,\"a\":{\"d\":1,\"c\":2},\"10\":0,\"2\":0}}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":{\"2\":0,\"10\":0,\"a\":{\"c\":2,\"d\":1},\"b\":1}},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "\"str\"",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "true",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":null,\"scanner\":5}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":{\"doc\":false},\"gate\":{\"scan\":false}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":false,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"__proto__\":{\"x\":1},\"gate\":{\"__proto__\":1,\"doc\":\"\\u2028é\"}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":\" é\",\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"gate\":{\"steps\":[{\"\\ud83d\\ude00\":1,\"\\ue000\":2}]}}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":[{\"😀\":1,\"\":2}]},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": "{\"skillGate\":false,\"protected\":[]}",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ },
+ {
+  "text": " {} ",
+  "config": "{\"gate\":{\"allFeatures\":true,\"doc\":true,\"scan\":true,\"stepTimeoutSec\":900,\"steps\":null},\"manifests\":{\"ownLints\":[]},\"scanner\":{\"exempt\":[]}}"
+ }
+]

@@ -1,9 +1,9 @@
 use super::{
-    DependencyCheck, EditFacts, EditTarget, EditTool, Exemptions, ManifestEdit, PolicyDecision,
+    DependencyCheck, EditFacts, EditTarget, EditTool, LazyExemptions, ManifestEdit, PolicyDecision,
     RustEdit, edit_policy,
 };
 use crate::{
-    Before, CodeKind, Config, FileRole, Globs, GoverningRoot, HookOutcome, JsValue, Manifest,
+    Before, CodeKind, Config, FileRole, GoverningRoot, HookOutcome, JsValue, LazyGlobs, Manifest,
     ManifestEditFacts, ManifestFindings, OwnLints, RootRelation, ScanOptions, Scanner,
     TelemetryEvent, TelemetryRow, Timestamp, manifest_checks,
 };
@@ -54,9 +54,8 @@ fn root_findings(rel: &str, before: &str, after: &str) -> ManifestFindings {
 fn decide(case: &JsValue, scanner: &Scanner, config: &Config) -> PolicyDecision {
     let field = |key: &str| case.get(key).and_then(JsValue::as_str).unwrap_or("");
     let (rel, before, after) = (field("rel"), field("before"), field("after"));
-    let protected =
-        Globs::new(config.protected().iter().map(String::as_str)).expect("the globs compile");
-    let exempt = Exemptions::new(config.exempt()).expect("the globs compile");
+    let protected = LazyGlobs::new(config.protected().iter().map(String::as_str));
+    let exempt = LazyExemptions::new(config.exempt());
     // As 1.x's case-sensitive `rel.endsWith('.rs')`.
     let target = if rel.strip_suffix(".rs").is_some() {
         EditTarget::Rust(RustEdit {
@@ -92,6 +91,7 @@ fn decide(case: &JsValue, scanner: &Scanner, config: &Config) -> PolicyDecision 
         },
         scanner,
     )
+    .expect("the globs compile")
 }
 
 /// 1.x `preEdit` from `const denies = []` to the end, on the cases of `policy_cases.json`, which
@@ -141,7 +141,7 @@ fn edit_policy_gives_1x_s_answers_and_rows() {
 #[test]
 fn a_manifest_deny_lists_its_rules_without_the_expect_hint() {
     let scanner = Scanner::new().expect("every built-in pattern compiles");
-    let protected = Globs::default();
+    let protected = LazyGlobs::default();
     let deny = "MOD-09 crates/a/Cargo.toml: the package does not inherit the workspace lints.\n    fix: add it";
 
     let decision = edit_policy(
@@ -161,7 +161,8 @@ fn a_manifest_deny_lists_its_rules_without_the_expect_hint() {
             }),
         },
         &scanner,
-    );
+    )
+    .expect("no glob to compile");
 
     assert_eq!(
         decision.outcome,
