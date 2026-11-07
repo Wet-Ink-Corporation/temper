@@ -262,6 +262,9 @@ fn next_break(text: &str, from: usize) -> Option<(usize, usize)> {
 }
 
 /// Where `[breaks]+\s*` starting at `at` ends.
+///
+/// `at` comes from `char_indices` and each `find` offset is a char boundary of its slice, so
+/// every `get` below succeeds and the empty fallbacks are never taken.
 fn tail_end(text: &str, at: usize) -> usize {
     let rest = text.get(at..).unwrap_or_default();
     let breaks = rest.find(|c| !is_break(c)).unwrap_or(rest.len());
