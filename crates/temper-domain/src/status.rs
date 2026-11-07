@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use crate::js::{Value, truncate_utf16};
+use crate::js::{JsTypeError, Value, js_string_checked, truncate_utf16};
 use crate::state::{BaselineParseError, BaselineSummary, GateRecord};
 use crate::{BASELINE_FILE, Config, ConfigProblem, Fingerprint, ReviewMode};
 
@@ -59,11 +59,16 @@ pub struct StatusFacts<'a> {
 ///     fingerprint: "0123456789abcdef".parse()?, changed: &[], gate: None, review: None,
 ///     baseline: BaselineLine::Absent, config: &config, config_problem: None,
 /// };
-/// assert!(render_status_text(&facts).starts_with("root:        /w\n"));
-/// # Ok::<(), temper_domain::FingerprintParseError>(())
+/// assert!(render_status_text(&facts)?.starts_with("root:        /w\n"));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[must_use]
-pub fn render_status_text(facts: &StatusFacts<'_>) -> String {
+///
+/// # Errors
+///
+/// [`JsTypeError`] when the review's `verdict` is a value 1.x's template literal cannot
+/// convert (an object with its own `toString` key, also inside an array): 1.x throws there,
+/// outside any `try`, and `status` fails.
+pub fn render_status_text(facts: &StatusFacts<'_>) -> Result<String, JsTypeError> {
     let changed = if facts.changed.is_empty() {
         "none".to_owned()
     } else {
@@ -76,9 +81,10 @@ pub fn render_status_text(facts: &StatusFacts<'_>) -> String {
     };
     let review = match facts.review.filter(|v| v.is_truthy()) {
         Some(v) => {
-            let verdict = v
-                .get("verdict")
-                .map_or(Cow::Borrowed("undefined"), Value::to_js_string);
+            let verdict = match v.get("verdict") {
+                Some(verdict) => js_string_checked(verdict)?,
+                None => Cow::Borrowed("undefined"),
+            };
             let stale = v.get("stale").is_some_and(Value::is_truthy);
             format!("{verdict}{}", if stale { " (stale)" } else { "" })
         }
@@ -88,7 +94,7 @@ pub fn render_status_text(facts: &StatusFacts<'_>) -> String {
     let problem = facts.config_problem.map_or(String::new(), |problem| {
         format!("; config unreadable ({problem}): defaults in use")
     });
-    [
+    Ok([
         format!("root:        {}", facts.root),
         format!("state:       {}", facts.state_dir),
         format!("base:        {}", facts.base.unwrap_or("none")),
@@ -104,7 +110,7 @@ pub fn render_status_text(facts: &StatusFacts<'_>) -> String {
         ),
         String::new(),
     ]
-    .join("\n")
+    .join("\n"))
 }
 
 /// The text after `baseline:`.
@@ -112,10 +118,16 @@ fn baseline_line(line: &BaselineLine<'_>) -> String {
     match line {
         BaselineLine::Absent => "none: the gate requires zero warnings".to_owned(),
         BaselineLine::Read(b) => {
-            let toolchain = b
-                .toolchain()
-                .filter(|t| **t != Value::Null)
-                .map_or(Cow::Borrowed("?"), Value::to_js_string);
+            // `${b.toolchain ?? '?'}` runs inside 1.x's `try`, so a throw there is unreadable.
+            let toolchain = match b.toolchain().filter(|t| **t != Value::Null) {
+                Some(t) => match js_string_checked(t) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        return format!("unreadable: {}", BaselineParseError::NoPrimitive(error));
+                    }
+                },
+                None => Cow::Borrowed("?"),
+            };
             format!(
                 "{BASELINE_FILE} ({} finding(s), toolchain {toolchain}): clippy and rustdoc ratchet",
                 b.total().to_js_string()

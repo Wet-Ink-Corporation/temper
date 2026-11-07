@@ -175,3 +175,41 @@ fn malformed_records_read_as_none_and_status_still_answers() {
     );
     assert_eq!(stderr, "");
 }
+
+/// A verdict whose `verdict` has its own `toString` key throws in 1.x's template literal,
+/// outside any `try`: status fails (exit 1) instead of answering. The same key in the
+/// baseline's toolchain is caught, and reads as unreadable.
+#[test]
+fn a_verdict_1x_cannot_convert_fails_status_and_a_toolchain_reads_as_unreadable() {
+    let fp_of = |files: FakeFiles| {
+        let (stdout, _) = text(&engine(repo(files, &[("HEAD", HEAD)]), None), None);
+        line(&stdout, "fingerprint:")
+            .trim_start_matches("fingerprint: ")
+            .to_owned()
+    };
+    let baseline = r#"{"temper_baseline":1,"totals":{},"toolchain":{"toString":"x"}}"#;
+    let fp = fp_of(FakeFiles::new(Posix).with_file("/w/.claude/temper-baseline.json", baseline));
+    let verdict = format!("/w/.git/temper/verdicts/{fp}.json");
+    let with = |json: &str| {
+        FakeFiles::new(Posix)
+            .with_file("/w/.claude/temper-baseline.json", baseline)
+            .with_file(&verdict, json)
+    };
+
+    let thrown = engine(repo(with(r#"{"verdict":{"toString":1}}"#), &[("HEAD", HEAD)]), None)
+        .status(&StatusArgs { session: None });
+    let (stdout, _) = text(
+        &engine(repo(with(r#"{"verdict":"approved"}"#), &[("HEAD", HEAD)]), None),
+        None,
+    );
+
+    assert!(
+        matches!(thrown, Err(CommandError::Unconvertible(_))),
+        "{thrown:?}"
+    );
+    assert_eq!(
+        line(&stdout, "baseline:"),
+        "baseline:    unreadable: Cannot convert object to primitive value"
+    );
+    assert_eq!(line(&stdout, "review:"), "review:      approved");
+}

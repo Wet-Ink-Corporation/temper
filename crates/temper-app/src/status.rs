@@ -60,7 +60,7 @@ pub(crate) fn run(
         config_problem: ws.config_problem.as_ref(),
     };
     Ok(CommandOutput {
-        stdout: render_status_text(&facts),
+        stdout: render_status_text(&facts).map_err(CommandError::Unconvertible)?,
         // No note is nothing on stderr.
         stderr: note.unwrap_or_default(),
         exit: Exit::Ok,

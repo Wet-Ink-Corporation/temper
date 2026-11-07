@@ -639,6 +639,70 @@
     ]
   },
   {
+    "name": "a baseline count 1.x cannot convert",
+    "fixture": "workspace",
+    "git": true,
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".claude/temper-baseline.json": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":[{\"toString\":1}]}},\"toolchain\":\"1\"}"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "args": [
+          "status"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "a baseline toolchain 1.x cannot convert",
+    "fixture": "workspace",
+    "git": true,
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".claude/temper-baseline.json": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":1,\"y\":{\"valueOf\":1}}},\"toolchain\":{\"toString\":\"x\"}}"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "args": [
+          "status"
+        ]
+      }
+    ]
+  },
+  {
     "name": "a baseline that is not JSON",
     "fixture": "workspace",
     "git": true,

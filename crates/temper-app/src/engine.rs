@@ -3,7 +3,9 @@
 use std::cell::Cell;
 use std::path::PathBuf;
 
-use temper_domain::{GlobError, HookEvent, HookOutcome, PathStyle, PolicySetupError, Scanner};
+use temper_domain::{
+    GlobError, HookEvent, HookOutcome, JsTypeError, PathStyle, PolicySetupError, Scanner,
+};
 
 use crate::hooks::{self, HookCall, HookInput};
 use crate::ports::{FsError, Ports};
@@ -202,4 +204,8 @@ pub enum CommandError {
     /// The result could not be written as JSON.
     #[error("cannot write the results as JSON")]
     Json(#[source] serde_json::Error),
+    /// A state file holds a value 1.x converts to a string outside any `try` and cannot, so
+    /// 1.x crashes there (exit 1).
+    #[error("a recorded value cannot be printed")]
+    Unconvertible(#[source] JsTypeError),
 }

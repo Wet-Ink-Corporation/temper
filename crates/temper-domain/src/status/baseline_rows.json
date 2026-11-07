@@ -74,5 +74,41 @@
  {
   "text": "{\"temper_baseline\":1,\"totals\":{},\"targets\":{\"h\":5}}",
   "line": "unreadable: .claude/temper-baseline.json is not a temper baseline (\"targets\" must map each host to a section with a \"totals\" table)"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":{\"toString\":1}}}}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":\"s\",\"y\":{\"toString\":1}}}}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":[[{\"toString\":0}]]}}}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":[null,{\"a\":1}],\"y\":{\"valueOf\":1}}}}",
+  "line": ".claude/temper-baseline.json (00,[object Object][object Object] finding(s), toolchain ?): clippy and rustdoc ratchet"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":[{\"toString\":1}]}}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"toString\":{\"x\":1}}}",
+  "line": ".claude/temper-baseline.json (1 finding(s), toolchain ?): clippy and rustdoc ratchet"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{},\"toolchain\":{\"toString\":\"x\"}}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{},\"toolchain\":[1,[{\"toString\":\"x\"}]]}",
+  "line": "unreadable: Cannot convert object to primitive value"
+ },
+ {
+  "text": "{\"temper_baseline\":1,\"totals\":{\"a\":null},\"toolchain\":{\"toString\":1}}",
+  "line": "unreadable: Cannot convert undefined or null to object"
  }
 ]

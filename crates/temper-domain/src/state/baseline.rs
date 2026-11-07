@@ -30,7 +30,8 @@ impl BaselineSummary {
     /// [`BaselineParseError`] with 1.x's message where 1.x throws: text that is not JSON, a
     /// document without `"temper_baseline": 1` and a `totals` table, `targets` that are not a
     /// table of sections with `totals` tables, and a `null` in `totals`, whose
-    /// `Object.values(null)` throws a `TypeError`.
+    /// `Object.values(null)` throws a `TypeError`, and a count with its own `toString` key,
+    /// which `+` cannot convert.
     pub fn parse(text: &str) -> Result<Self, BaselineParseError> {
         let doc = Value::from_json(text).map_err(|source| BaselineParseError::NotJson {
             detail: source.detail(),
@@ -77,10 +78,18 @@ impl BaselineSummary {
 fn count_sum(counts: &Value) -> Result<Sum, BaselineParseError> {
     let zero = Sum::Number(0.0);
     Ok(match counts {
-        Value::Object(object) => object.iter().fold(zero, |sum, (_, v)| sum.add(v)),
-        Value::Array(items) => items.iter().fold(zero, Sum::add),
+        Value::Object(object) => object
+            .iter()
+            .try_fold(zero, |sum, (_, v)| sum.add(v))
+            .map_err(BaselineParseError::NoPrimitive)?,
+        Value::Array(items) => items
+            .iter()
+            .try_fold(zero, Sum::add)
+            .map_err(BaselineParseError::NoPrimitive)?,
         // A string's values are its characters, added one by one: the same as adding it whole.
-        Value::String(text) if !text.is_empty() => zero.add(counts),
+        Value::String(text) if !text.is_empty() => zero
+            .add(counts)
+            .map_err(BaselineParseError::NoPrimitive)?,
         Value::String(_) | Value::Number(_) | Value::Bool(_) => zero,
         Value::Null => {
             return Err(BaselineParseError::Throws(JsTypeError::new(
@@ -115,4 +124,9 @@ pub enum BaselineParseError {
     /// Adding up `totals` throws in 1.x; the message is V8's, which 1.x's `status` prints.
     #[error(transparent)]
     Throws(JsTypeError),
+    /// A value 1.x converts to a string (a count it adds, the toolchain it prints) is an
+    /// object with its own `toString` key, where V8's `ToPrimitive` throws; the message is
+    /// V8's, which 1.x's `status` prints.
+    #[error("Cannot convert object to primitive value")]
+    NoPrimitive(#[source] JsTypeError),
 }

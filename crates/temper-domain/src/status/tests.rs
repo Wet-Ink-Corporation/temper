@@ -36,7 +36,7 @@ fn render_with<'a>(config: &'a Config, edit: impl FnOnce(&mut StatusFacts<'a>)) 
         config_problem: None,
     };
     edit(&mut facts);
-    render_status_text(&facts)
+    render_status_text(&facts).expect("1.x prints these facts")
 }
 
 fn expected(name: &str) -> String {
@@ -101,6 +101,36 @@ fn the_review_line_prints_the_verdict_as_a_template_literal_does() {
     }
 }
 
+/// A verdict 1.x's template literal cannot convert (an object with its own `toString` key,
+/// also inside an array) throws outside any `try` in 1.x, so status fails; a `valueOf` key
+/// alone falls back to `[object Object]`.
+#[test]
+fn a_verdict_1x_cannot_convert_fails_the_status() {
+    for json in [
+        r#"{"verdict":{"toString":1}}"#,
+        r#"{"verdict":[null,[{"toString":"x"}]]}"#,
+    ] {
+        let value = record(json);
+        let mut facts = StatusFacts {
+            root: "/w",
+            state_dir: "/w/.git/temper",
+            base: None,
+            fingerprint: fp(),
+            changed: &[],
+            gate: None,
+            review: Some(&value),
+            baseline: BaselineLine::Absent,
+            config: &DEFAULTS,
+            config_problem: None,
+        };
+        assert!(render_status_text(&facts).is_err(), "{json}");
+        let fine = record(r#"{"verdict":{"valueOf":1}}"#);
+        facts.review = Some(&fine);
+        let text = render_status_text(&facts).expect("[object Object]");
+        assert!(text.contains("\nreview:      [object Object]\n"), "{text}");
+    }
+}
+
 #[test]
 fn the_baseline_and_config_lines() {
     let read = BaselineSummary::parse(
@@ -138,12 +168,14 @@ fn a_config_problem_is_appended_to_the_config_line() {
 /// Each row's `line` was printed by 1.x (`.temper/probe3b/baseline.mjs`): `parseBaseline`'s
 /// three refusals, `baselineTotal`'s JS `+` (numbers add, a string concatenates, arrays join,
 /// an object is `[object Object]`, `null` throws V8's `TypeError`), and `toolchain ?? '?'`.
+/// A count or toolchain with its own `toString` key, also inside an array, throws V8's
+/// `Cannot convert object to primitive value` inside 1.x's `try`.
 #[test]
 fn every_baseline_row_prints_1xs_line() {
     let Value::Array(all) = rows(include_str!("baseline_rows.json")) else {
         panic!("an array");
     };
-    assert_eq!(all.len(), 19, "rows");
+    assert_eq!(all.len(), 28, "rows");
     for row in &all {
         let text = row.get("text").and_then(Value::as_str).expect("text");
         let line = row.get("line").and_then(Value::as_str).expect("line");
