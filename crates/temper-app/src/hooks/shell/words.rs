@@ -685,22 +685,29 @@ fn form_of(parts: &[Part], glob: bool) -> Form {
     let literal = expanded == Expansions::Absent
         && !glob
         && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
+    if literal {
+        return Form::Literal;
+    }
     let fixed = !glob
         && parts
             .first()
             .is_some_and(|p| p.is_lit() && !p.text.is_empty())
         && parts
             .iter()
-            .all(|p| p.quoted || (p.is_lit() && !p.text.replace("{}", "").contains('{')));
-    if literal {
-        Form::Literal
-    } else {
-        Form::Made {
-            glob,
-            expanded,
-            fixed,
-        }
+            .all(|p| p.quoted || (p.is_lit() && !open_brace(&p.text)));
+    Form::Made {
+        glob,
+        expanded,
+        fixed,
     }
+}
+
+/// Does `text` hold a `{` that is not the start of a `{}`? (1.x
+/// `text.replace(/\{\}/g, '').includes('{')`: each `{` the replace removes is one followed by
+/// `}`, and no `{` it leaves can be.)
+fn open_brace(text: &str) -> bool {
+    text.match_indices('{')
+        .any(|(at, _)| text.as_bytes().get(at.saturating_add(1)) != Some(&b'}'))
 }
 
 /// The unquoted first part `s` with a leading `~` or `~/` read as the home directory; `None`
@@ -1206,7 +1213,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::{
-        Expansions, Form, Guard, Shared, Text, Vars, Word, brace_list, git_path,
+        Expansions, Form, Guard, Shared, Text, Vars, Word, brace_list, git_path, open_brace,
         without_path_format,
     };
 
@@ -1384,5 +1391,14 @@ mod tests {
         assert_eq!(git_path("--git-path 'temper/x' "), Some("temper/x"));
         assert_eq!(git_path("--git-path a b"), None);
         assert_eq!(git_path("--git-path x--git-path y"), Some("y"));
+    }
+
+    proptest::proptest! {
+        /// 1.x `fixedWord`'s `p.s.replace(/\{\}/g, '').includes('{')`, read without building
+        /// the string.
+        #[test]
+        fn an_open_brace_is_one_left_after_removing_each_pair(s in "[{}a]{0,12}") {
+            proptest::prop_assert_eq!(open_brace(&s), s.replace("{}", "").contains('{'));
+        }
     }
 }
