@@ -5,7 +5,8 @@
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
 //! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner
 //! with its lexer, test regions and all 60 rules, path classification and the new-hit difference
-//! (Phases 1a to 1d), and the manifest policy, the config and glob matching (Phase 2a).
+//! (Phases 1a to 1d), the manifest policy, the config and glob matching (Phase 2a), the hook
+//! policies (Phases 2b to 2f), and the review verdict rules with the tree fingerprint (Phase 3a).
 //!
 //! # Quick start
 //!
