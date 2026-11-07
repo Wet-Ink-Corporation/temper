@@ -70,7 +70,8 @@ impl<P: Ports> Engine<P> {
     ///
     /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project, in text only
     /// (the JSON says `project: null`); [`CommandError::Unconvertible`] where 1.x converts a
-    /// recorded value to a string outside any `try` and throws.
+    /// recorded value to a string outside any `try` and throws: the review verdict in text
+    /// (wi-32d7c9), a running gate's start time in JSON. Nothing else fails, as in 1.x.
     pub fn status(&self, args: &StatusArgs) -> Result<CommandOutput, CommandError> {
         status::run(&self.ports, &self.env, &self.base_noted, args)
     }

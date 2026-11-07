@@ -20,6 +20,13 @@ export function hermeticEnv(env = process.env, platform = process.platform) {
   const out = {};
   for (const [k, v] of Object.entries(env)) if (keep.has(win ? k.toUpperCase() : k)) out[k] = v;
   out.GIT_CONFIG_NOSYSTEM = '1';
+  // No background `git maintenance` or `gc` after a commit: on macOS runners it wrote
+  // `.git/objects/maintenance.lock` while the harness snapshotted the tree.
+  Object.assign(out, {
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0',
+  });
   return out;
 }
 
