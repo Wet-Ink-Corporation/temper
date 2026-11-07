@@ -2,7 +2,7 @@
 //! one-crate workspace): what passes, what is decided, and what fails as 1.x throws (the text
 //! after `failed: ` is the Rust error's, OC-3 (p)).
 
-use super::{Ws, decision, files, reason};
+use super::{Ws, decision, files, quoted, reason};
 use crate::engine::HookError;
 
 const LIB: &str = "/ws/crates/ledger-domain/src/lib.rs";
@@ -268,4 +268,48 @@ fn a_glob_that_does_not_compile_is_a_handler_error() {
     let got = ws.hook(r#"{"tool_name":"Write","cwd":"/ws","agent_type":"rust-implementer","tool_input":{"file_path":"/ws/notes.md","content":"x"}}"#);
 
     assert!(matches!(got, Err(HookError::Glob(_))), "{got:?}");
+}
+
+/// 1.x's `protected.some(...)` and `exempt(h)` build each glob where a match first tries it:
+/// a glob after the first match, or an exemption no fresh hit of its rule reaches, never
+/// compiles; a path the match carries to the glob fails as 1.x throws. Probed against 1.x.
+#[test]
+fn a_glob_compiles_only_when_a_match_first_tries_it() {
+    let bad = quoted(&"?".repeat(1 << 20));
+    let protected = Ws::new(files().with_file(
+        "/ws/.claude/temper.json",
+        &format!(r#"{{"protected":["notes/**",{bad}]}}"#),
+    ));
+    let exempt = Ws::new(files().with_file(
+        "/ws/.claude/temper.json",
+        &format!(r#"{{"scanner":{{"exempt":[{{"rule":"H-02","paths":[{bad}]}}]}}}}"#),
+    ));
+    let write = |file: &str, content: &str| {
+        format!(
+            r#"{{"file_path":"{file}","content":{}}}"#,
+            quoted(content)
+        )
+    };
+
+    let new = "/ws/crates/ledger-domain/src/new.rs";
+    let got = [
+        run(&protected, r#""Write""#, &write("/ws/notes/a.md", "x")),
+        run(&exempt, r#""Write""#, &write(new, "//! New.\n")),
+        run(&exempt, r#""Write""#, &write(new, "fn f() { dbg!(1); }\n")),
+    ];
+    let thrown = [
+        protected.hook(&format!(
+            r#"{{"tool_name":"Write","cwd":"/ws","agent_type":"rust-implementer","tool_input":{}}}"#,
+            write("/ws/other.md", "x")
+        )),
+        exempt.hook(&format!(
+            r#"{{"tool_name":"Write","cwd":"/ws","agent_type":"rust-implementer","tool_input":{}}}"#,
+            write(new, "fn f() { None::<u8>.unwrap(); }\n")
+        )),
+    ];
+
+    assert_eq!(got, [Ok("ask"), Ok("none"), Ok("deny")]);
+    for got in thrown {
+        assert!(matches!(got, Err(HookError::Glob(_))), "{got:?}");
+    }
 }

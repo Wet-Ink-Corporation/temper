@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
-use temper_domain::{ConfigChanges, Glob, GlobError, Globs, InterpreterCode};
+use temper_domain::{ConfigChanges, Glob, GlobError, InterpreterCode, LazyGlobs};
 
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
@@ -141,9 +141,8 @@ pub(super) fn protected_shell_writes_in(
     let Ok(commands) = parse_commands(cmd, opts) else {
         return Changes::default();
     };
-    let Ok(globs) = Globs::new(ws.config.protected().iter().map(String::as_str)) else {
-        return Changes::default();
-    };
+    // Each glob compiles where a match first tries it, as 1.x's `globs.some(...)` builds it.
+    let globs = LazyGlobs::new(ws.config.protected().iter().map(String::as_str));
     let mut reader = Reader {
         call,
         ws,
@@ -180,7 +179,8 @@ enum Owner {
 /// A nested checkout, its protected globs, and its root relative to the project's.
 struct Nested {
     ws: Workspace,
-    globs: Globs,
+    /// `ws`'s protected list, owned beside it.
+    globs: LazyGlobs<'static>,
     prefix: String,
 }
 
@@ -189,7 +189,7 @@ struct Reader<'a, 'c, P> {
     ws: &'a Workspace,
     cx: PathCx<'a>,
     start: &'a str,
-    globs: Globs,
+    globs: LazyGlobs<'a>,
     code: &'a InterpreterCode,
     /// 1.x `ownerOf`'s cache: each ancestor checked, by its path relative to the root, and
     /// the checkout there, if any. A hit joins no path.
@@ -514,7 +514,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let mut hits = Vec::new();
         match &owner {
             Owner::Project => {
-                if !rel.is_empty() && self.globs.any_match(&rel) {
+                if !rel.is_empty() && self.globs.any_match(&rel)? {
                     hits.push(rel.clone()); // `rel` is read again below
                 }
                 if tree {
@@ -524,7 +524,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             }
             Owner::Nested(nested) => {
                 let own = self.rel_to(&nested.ws.root, abs);
-                if !own.is_empty() && nested.globs.any_match(&own) {
+                if !own.is_empty() && nested.globs.any_match(&own)? {
                     hits.push(rel.clone()); // as above
                 }
                 if tree {
@@ -607,7 +607,9 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let Some(ws) = discover_at(self.call.ports, self.call.env, dir) else {
             return Ok(Some(Owner::Project));
         };
-        let globs = Globs::new(ws.config.protected().iter().map(String::as_str))?;
+        // A copy of the list, once per nested checkout (the owner is cached), so the lazy
+        // matcher can live beside the workspace it reads.
+        let globs = LazyGlobs::owned(ws.config.protected().to_vec());
         let prefix = self.rel_to(&self.ws.root, &ws.root);
         Ok(Some(Owner::Nested(Rc::new(Nested { ws, globs, prefix }))))
     }

@@ -12,8 +12,8 @@ mod edited;
 use std::path::Path;
 
 use temper_domain::{
-    Before, CodeKind, DependencyCheck, EditFacts, EditTarget, EditTool, Exemptions, FileRole,
-    Globs, GoverningRoot, HookOutcome, JsValue, Manifest, ManifestEdit, ManifestEditFacts,
+    Before, CodeKind, DependencyCheck, EditFacts, EditTarget, EditTool, FileRole, GoverningRoot,
+    HookOutcome, JsValue, LazyExemptions, LazyGlobs, Manifest, ManifestEdit, ManifestEditFacts,
     ManifestFindings, RootRelation, RustEdit, STATE_DIR_DENIAL, ScanOptions, Scanner,
     TelemetryEvent, classify_path, edit_policy, is_build_script, lockfile_denial, manifest_checks,
     skill_gate_denial, skill_preloaded,
@@ -148,12 +148,12 @@ fn checked(
         // Only the protected-config check runs, and it reads no text.
         After::NotText(_) => String::new(),
     };
-    let protected = Globs::new(config.protected().iter().map(String::as_str))?;
-    let exempt;
+    // Each glob compiles where a match first tries it, as 1.x's `globMatch` builds it.
+    let protected = LazyGlobs::new(config.protected().iter().map(String::as_str));
+    let exempt = LazyExemptions::new(config.exempt());
     let target = if manifest {
         EditTarget::Manifest(manifest_edit(files, edited, &after)?)
     } else if rust {
-        exempt = Exemptions::new(config.exempt())?;
         EditTarget::Rust(RustEdit {
             options: scan_options(files, edited),
             exempt: &exempt,
@@ -173,7 +173,7 @@ fn checked(
         protected: &protected,
         target,
     };
-    Ok(answered(call, workspace, edit_policy(facts, scanner)))
+    Ok(answered(call, workspace, edit_policy(facts, scanner)?))
 }
 
 /// Written manifest content that is not a string, as 1.x's checks read it: `parseToml` reads

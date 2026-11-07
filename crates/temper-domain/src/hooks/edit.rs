@@ -8,7 +8,7 @@ mod texts;
 
 pub(crate) use policy::{Counts, Findings, hit_findings, is_mod_rs};
 pub use policy::{
-    DependencyCheck, EditFacts, EditTarget, EditTool, Exemptions, LazyExemptions, ManifestEdit,
+    DependencyCheck, EditFacts, EditTarget, EditTool, LazyExemptions, ManifestEdit,
     PolicyDecision, RustEdit, edit_policy,
 };
 pub use texts::{STATE_DIR_DENIAL, lockfile_denial};

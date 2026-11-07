@@ -15,7 +15,7 @@ pub use bash::{
     RustWrites, Unread,
 };
 pub use edit::{
-    DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, Exemptions, LazyExemptions,
+    DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, LazyExemptions,
     ManifestEdit, PolicyDecision, Replacements, RustEdit, STATE_DIR_DENIAL, apply_edit,
     edit_policy, lockfile_denial,
 };

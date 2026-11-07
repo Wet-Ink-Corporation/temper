@@ -166,7 +166,7 @@ impl Globs {
 /// # Ok::<(), temper_domain::GlobError>(())
 /// ```
 #[derive(Debug, Default)]
-pub struct LazyGlobs<'a>(Vec<(&'a str, OnceCell<Glob>)>);
+pub struct LazyGlobs<'a>(Vec<(Cow<'a, str>, OnceCell<Glob>)>);
 
 impl<'a> LazyGlobs<'a> {
     /// Holds `patterns`, compiling none of them.
@@ -174,7 +174,18 @@ impl<'a> LazyGlobs<'a> {
         Self(
             patterns
                 .into_iter()
-                .map(|pattern| (pattern, OnceCell::new()))
+                .map(|pattern| (Cow::Borrowed(pattern), OnceCell::new()))
+                .collect(),
+        )
+    }
+
+    /// Owns `patterns`, compiling none of them: for a list kept beside its owner rather than
+    /// borrowed from it.
+    pub fn owned(patterns: impl IntoIterator<Item = String>) -> LazyGlobs<'static> {
+        LazyGlobs(
+            patterns
+                .into_iter()
+                .map(|pattern| (Cow::Owned(pattern), OnceCell::new()))
                 .collect(),
         )
     }
