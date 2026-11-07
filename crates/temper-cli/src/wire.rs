@@ -31,6 +31,8 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
         remote_session: var("CLAUDE_CODE_REMOTE_SESSION_ID"),
         temper_base: var("TEMPER_BASE"),
         pid: std::process::id(),
+        plugin_version: var("TEMPER_PLUGIN_VERSION"),
+        disabled: hooks_disabled(),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
     Ok(Engine::new(HostPorts::default(), env, scanner))

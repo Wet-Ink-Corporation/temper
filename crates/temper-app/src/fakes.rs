@@ -530,6 +530,8 @@ impl RunEnv {
             remote_session: None,
             temper_base: None,
             pid: 4242,
+            plugin_version: None,
+            disabled: false,
         }
     }
 }

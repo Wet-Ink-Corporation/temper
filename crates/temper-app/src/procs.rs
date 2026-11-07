@@ -66,15 +66,10 @@ fn int32_pid(pid: &JsValue) -> Option<u32> {
 /// lists this process (a `/proc` of another pid namespace, a `ps` without `-o`, a failure).
 pub(crate) fn live_pids(ports: &impl Ports, env: &RunEnv) -> LivePids {
     let listed = match env.style {
-        PathStyle::Posix => proc_pids(ports.files(), env.pid)
-            .or_else(|| probe(ports.process(), env, "ps", &["-A", "-o", "pid="], ps_pids)),
-        PathStyle::Windows => probe(
-            ports.process(),
-            env,
-            "tasklist",
-            &["/FO", "CSV", "/NH"],
-            tasklist_pids,
-        ),
+        PathStyle::Posix => {
+            proc_pids(ports.files(), env.pid).or_else(|| probe(ports.process(), env, &PS))
+        }
+        PathStyle::Windows => probe(ports.process(), env, &TASKLIST),
     };
     match listed {
         Some(pids) if pids.contains(&env.pid) => LivePids::Known(pids),
@@ -103,18 +98,33 @@ fn proc_pids(files: &impl Files, own: u32) -> Option<HashSet<u32>> {
     }
 }
 
-/// Runs `program args` in the working directory and reads its stdout with `parse`, when it
-/// exits 0; `None` when it does not start, fails, times out or overflows.
-fn probe(
-    process: &impl ProcessRunner,
-    env: &RunEnv,
-    program: &str,
-    args: &[&str],
+/// A program that lists the live pids, and how its stdout is read.
+struct Probe {
+    program: &'static str,
+    args: &'static [&'static str],
     parse: fn(&str) -> HashSet<u32>,
-) -> Option<HashSet<u32>> {
-    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+}
+
+/// Unix without `/proc` (macOS, the BSDs).
+const PS: Probe = Probe {
+    program: "ps",
+    args: &["-A", "-o", "pid="],
+    parse: ps_pids,
+};
+
+/// Windows.
+const TASKLIST: Probe = Probe {
+    program: "tasklist",
+    args: &["/FO", "CSV", "/NH"],
+    parse: tasklist_pids,
+};
+
+/// Runs the probe in the working directory and reads its stdout, when it exits 0; `None` when
+/// it does not start, fails, times out or overflows.
+fn probe(process: &impl ProcessRunner, env: &RunEnv, probe: &Probe) -> Option<HashSet<u32>> {
+    let args: Vec<OsString> = probe.args.iter().map(OsString::from).collect();
     let request = ProcessRequest {
-        program,
+        program: probe.program,
         args: &args,
         cwd: &env.cwd,
         stdout: StdoutSink::Capture(CAP),
@@ -126,7 +136,7 @@ fn probe(
             status: ExitKind::Code(0),
             stdout,
             ..
-        }) => Some(parse(&String::from_utf8_lossy(&stdout))),
+        }) => Some((probe.parse)(&String::from_utf8_lossy(&stdout))),
         // A probe that cannot answer is `LivePids::Unknown` (OC-2 A).
         Ok(_) | Err(_) => None,
     }

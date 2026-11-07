@@ -166,6 +166,8 @@ fn differs(case: &JsValue, cmd: &str, ports: &FakePorts, scanner: &Scanner) -> O
         remote_session: None,
         temper_base: None,
         pid: 4242,
+        plugin_version: None,
+        disabled: false,
     };
     let call = crate::hooks::HookCall {
         ports,
