@@ -18,7 +18,7 @@ fn each_row_gets_the_problems_1x_gives_or_fails_where_1x_throws() {
     let Value::Array(rows) = rows else {
         panic!("the fixture is an array");
     };
-    assert_eq!(rows.len(), 39, "every row is read");
+    assert_eq!(rows.len(), 49, "every row is read");
     for row in &rows {
         let name = row.get("name").and_then(Value::as_str).expect("a name");
         let text = row.get("text").and_then(Value::as_str).expect("a text");

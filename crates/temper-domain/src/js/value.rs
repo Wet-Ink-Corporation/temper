@@ -7,6 +7,8 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
+use super::JsTypeError;
+
 /// A JS value as `toml.mjs` or `JSON.parse` builds it. JS's `undefined` is the absence of a
 /// value (`None`).
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +162,31 @@ pub(crate) fn js_string(value: &Value) -> Cow<'_, str> {
             Cow::Owned(parts.join(","))
         }
         Value::Object(_) => Cow::Borrowed("[object Object]"),
+    }
+}
+
+/// JS `String(value)` (and a template literal's `${value}`) where V8 can throw: an object with
+/// its own `toString` key, which in JSON is never callable, so `valueOf` returns the object and
+/// V8 throws `Cannot convert object to primitive value`. `Array#join` converts each item, so the
+/// throw reaches through arrays; an object's properties are never converted.
+///
+/// It recurses once per array level, which `serde_json` stops at 128.
+pub(crate) fn js_string_checked(value: &Value) -> Result<Cow<'_, str>, JsTypeError> {
+    match value {
+        Value::Object(object) if object.get("toString").is_some() => Err(JsTypeError::new(
+            "an object with its own toString key, which 1.x cannot convert to a string",
+        )),
+        Value::Array(items) => {
+            let parts = items
+                .iter()
+                .map(|item| match item {
+                    Value::Null => Ok(Cow::Borrowed("")),
+                    item => js_string_checked(item),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Cow::Owned(parts.join(",")))
+        }
+        _ => Ok(js_string(value)),
     }
 }
 

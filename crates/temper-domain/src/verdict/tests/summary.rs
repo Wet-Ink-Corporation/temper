@@ -214,7 +214,7 @@ fn each_row_gets_1xs_text_or_fails_where_1x_throws() {
     let Value::Array(rows) = Value::from_json(ROWS).expect("the fixture is JSON") else {
         panic!("the fixture is an array");
     };
-    assert_eq!(rows.len(), 24, "every row is read");
+    assert_eq!(rows.len(), 37, "every row is read");
     for row in &rows {
         let name = row.get("name").and_then(Value::as_str).expect("a name");
         let text = row.get("text").and_then(Value::as_str).expect("a text");

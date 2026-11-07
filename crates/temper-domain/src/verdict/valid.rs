@@ -40,23 +40,18 @@ impl ValidVerdict {
             Ok(problems) => problems,
             Err(source) => return Err(VerdictRejected::Throws { source, verdict }),
         };
+        if !problems.is_empty() {
+            return Err(VerdictRejected::Problems { problems, verdict });
+        }
         // With no problem, the value is an object with a valid fingerprint and outcome, so
         // `parts` answers; a verdict it cannot read always has problems.
-        match (problems.is_empty(), parts(&verdict)) {
-            (true, Some((fingerprint, outcome))) => match verdict {
-                ExtractedVerdict::Parsed(value) => Ok(Self {
-                    value,
-                    fingerprint,
-                    outcome,
-                }),
-                unparseable @ ExtractedVerdict::Unparseable { .. } => {
-                    Err(VerdictRejected::Problems {
-                        problems,
-                        verdict: unparseable,
-                    })
-                }
-            },
-            _ => Err(VerdictRejected::Problems { problems, verdict }),
+        match (parts(&verdict), verdict) {
+            (Some((fingerprint, outcome)), ExtractedVerdict::Parsed(value)) => Ok(Self {
+                value,
+                fingerprint,
+                outcome,
+            }),
+            (_, verdict) => Err(VerdictRejected::Problems { problems, verdict }),
         }
     }
 

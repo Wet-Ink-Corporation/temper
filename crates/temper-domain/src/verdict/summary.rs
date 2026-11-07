@@ -2,8 +2,9 @@
 //! `oneLine`).
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 
-use crate::js::{JsTypeError, Value, is_js_space, js_string, js_trim};
+use crate::js::{JsTypeError, Value, is_js_space, js_string_checked, js_trim};
 
 use super::VerdictContext;
 use super::problems::{GateState, ProblemKind, VerdictField, is_serious, low_scores, problems_of};
@@ -25,12 +26,12 @@ fn findings_of(v: &Value) -> Result<&[Value], JsTypeError> {
     }
 }
 
-/// 1.x `oneLine(x)`: `String(x ?? '')` on one line.
-fn one_line_of(value: Option<&Value>) -> String {
-    match value {
+/// 1.x `oneLine(x)`: `String(x ?? '')` on one line. `Err` where `String()` throws.
+fn one_line_of(value: Option<&Value>) -> Result<String, JsTypeError> {
+    Ok(match value {
         None | Some(Value::Null) => String::new(),
-        Some(value) => one_line(&js_string(value)).into_owned(),
-    }
+        Some(value) => one_line(&js_string_checked(value)?).into_owned(),
+    })
 }
 
 /// 1.x `summarizeFindings(v, max)`: a line per blocker or major finding, at most `max`, then a
@@ -38,8 +39,10 @@ fn one_line_of(value: Option<&Value>) -> String {
 ///
 /// # Errors
 ///
-/// [`JsTypeError`] where 1.x throws: `v` is `null`, or its `findings` is present and neither
-/// an array nor `null`.
+/// [`JsTypeError`] where 1.x throws: `v` is `null`; its `findings` is present and neither an
+/// array nor `null`; or a listed finding's `rule`, `file`, `line` or `fix` is an object with
+/// its own `toString` key, alone or inside an array, which `String()` cannot convert. Only the
+/// first `max` serious findings are converted, as in 1.x.
 pub fn summarize_findings(verdict: &Value, max: usize) -> Result<String, JsTypeError> {
     let findings = findings_of(verdict)?;
     let mut serious = 0_usize;
@@ -47,7 +50,7 @@ pub fn summarize_findings(verdict: &Value, max: usize) -> Result<String, JsTypeE
     for f in findings.iter().filter(|f| is_serious(f)) {
         serious += 1;
         if lines.len() < max {
-            lines.push(finding_line(f));
+            lines.push(finding_line(f)?);
         }
     }
     let mut text = lines.join("\n");
@@ -60,24 +63,24 @@ pub fn summarize_findings(verdict: &Value, max: usize) -> Result<String, JsTypeE
     Ok(text)
 }
 
-/// `- [severity] rule file:line: fix`, each field on one line.
-fn finding_line(f: &Value) -> String {
+/// `- [severity] rule file:line: fix`, each field on one line. `Err` where 1.x's template
+/// throws on a field.
+fn finding_line(f: &Value) -> Result<String, JsTypeError> {
     let field = |key: &str| one_line_of(f.get(key));
     // Only serious findings are listed, so the severity is `blocker` or `major`.
     let severity = f
         .get("severity")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // 1.x's template evaluates rule, file, line, then fix; any throw fails the whole call.
+    let rule = field("rule")?;
+    let file = field("file")?;
     let line = match f.get("line") {
-        Some(line) if line.is_truthy() => format!(":{}", one_line_of(Some(line))),
+        Some(line) if line.is_truthy() => format!(":{}", one_line_of(Some(line))?),
         _ => String::new(),
     };
-    format!(
-        "- [{severity}] {} {}{line}: {}",
-        field("rule"),
-        field("file"),
-        field("fix")
-    )
+    let fix = field("fix")?;
+    Ok(format!("- [{severity}] {rule} {file}{line}: {fix}"))
 }
 
 /// 1.x `overturns(v)`: whether `v`, read as an approval, has a reason to overturn one.
@@ -97,26 +100,49 @@ fn overturns(v: &Value) -> Result<bool, JsTypeError> {
     }))
 }
 
-/// 1.x `failedGate(v)`: the keys of `Object.entries(v.gate ?? {})` whose value is neither
-/// `pass` nor `n/a`. A string's entries are its UTF-16 code units, none of which passes.
-fn failed_gate(v: &Value) -> Vec<String> {
+/// 1.x `failedGate(v).map(oneLine).join(', ')`: the keys of `Object.entries(v.gate ?? {})`
+/// whose value is neither `pass` nor `n/a`, written straight into one string (empty when
+/// none). A string's entries are its UTF-16 code units, none of which passes, so its keys are
+/// the indices `0, 1, …`.
+fn failed_gate(v: &Value) -> String {
     let fails = |x: &Value| !matches!(x.as_str(), Some("pass" | "n/a"));
+    let mut out = String::new();
     match v.get("gate") {
-        Some(Value::Object(gate)) => gate
-            .iter()
-            .filter(|(_, x)| fails(x))
-            .map(|(k, _)| one_line(k).into_owned())
-            .collect(),
-        Some(Value::Array(items)) => items
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| fails(x))
-            .map(|(i, _)| i.to_string())
-            .collect(),
-        Some(Value::String(s)) => (0..s.encode_utf16().count())
-            .map(|i| i.to_string())
-            .collect(),
-        _ => Vec::new(),
+        Some(Value::Object(gate)) => {
+            for (key, _) in gate.iter().filter(|(_, x)| fails(x)) {
+                separate(&mut out);
+                out.push_str(&one_line(key));
+            }
+        }
+        Some(Value::Array(items)) => {
+            for (i, _) in items.iter().enumerate().filter(|(_, x)| fails(x)) {
+                separate(&mut out);
+                push_index(&mut out, i);
+            }
+        }
+        Some(Value::String(s)) => {
+            for i in 0..s.encode_utf16().count() {
+                separate(&mut out);
+                push_index(&mut out, i);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// `, ` before every key but the first.
+fn separate(out: &mut String) {
+    if !out.is_empty() {
+        out.push_str(", ");
+    }
+}
+
+/// Writes the index `i` in decimal into `out`, with no `String` of its own.
+fn push_index(out: &mut String, i: usize) {
+    // Writing to a `String` cannot fail.
+    if write!(out, "{i}").is_err() {
+        out.push('?');
     }
 }
 
@@ -125,17 +151,24 @@ fn failed_gate(v: &Value) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// [`JsTypeError`] where 1.x throws: as [`summarize_findings`], and a `null` finding when no
-/// finding is serious, which 1.x's `overturns` reads the severity of.
+/// [`JsTypeError`] where 1.x throws: as [`summarize_findings`]; a `verdict` or `recorded_at`
+/// that `String()` cannot convert (an object with its own `toString` key, alone or inside an
+/// array); and, when no finding is serious, what 1.x's `overturns` throws on through
+/// [`verdict_problems`](super::verdict_problems) (a `null` finding, such a `rule` or
+/// `__parseError`).
 pub fn earlier_review(verdict: &Value, kept: usize) -> Result<String, JsTypeError> {
     let summary = summarize_findings(verdict, 10)?;
     let list = js_trim(&summary);
     let outcome = verdict.get("verdict");
+    // 1.x's head template converts `v.verdict`, then `v.recorded_at`.
+    let named = match outcome {
+        None => Cow::Borrowed("undefined"),
+        Some(outcome) => js_string_checked(outcome)?,
+    };
     let recorded_at = match verdict.get("recorded_at") {
         None | Some(Value::Null) => "an unknown time".to_owned(),
-        Some(at) => one_line(&js_string(at)).into_owned(),
+        Some(at) => one_line(&js_string_checked(at)?).into_owned(),
     };
-    let named = outcome.map_or(Cow::Borrowed("undefined"), js_string);
     let head =
         format!("- An earlier review of this same tree is recorded: {named} at {recorded_at}");
     let first = if findings_of(verdict)?.iter().any(is_serious) {
@@ -160,7 +193,7 @@ pub fn earlier_review(verdict: &Value, kept: usize) -> Result<String, JsTypeErro
     }
     let gate = failed_gate(verdict);
     if !gate.is_empty() {
-        lines.push(format!("  Gate entries not \"pass\": {}.", gate.join(", ")));
+        lines.push(format!("  Gate entries not \"pass\": {gate}."));
     }
     let approved = outcome.and_then(Value::as_str) == Some("approved");
     if approved && kept > 0 {
@@ -229,6 +262,9 @@ fn next_break(text: &str, from: usize) -> Option<(usize, usize)> {
 }
 
 /// Where `[breaks]+\s*` starting at `at` ends.
+///
+/// `at` comes from `char_indices` and each `find` offset is a char boundary of its slice, so
+/// every `get` below succeeds and the empty fallbacks are never taken.
 fn tail_end(text: &str, at: usize) -> usize {
     let rest = text.get(at..).unwrap_or_default();
     let breaks = rest.find(|c| !is_break(c)).unwrap_or(rest.len());

@@ -104,7 +104,7 @@ fn many_long_entries_against_many_changed_files_stay_linear() {
         .collect();
     let deep = format!("/{}crates/c1/src/lib.rs", "/".repeat(100_000));
     reads.extend((0..16).map(|_| Value::String(deep.clone())));
-    let missed = unreviewed(&changed, &reads);
+    let missed = unreviewed(&changed, &reads).expect("plain string entries");
     let expected: Vec<String> = (4000..1 << 12)
         .map(|i| format!("crates/c{i}/src/lib.rs"))
         .collect();

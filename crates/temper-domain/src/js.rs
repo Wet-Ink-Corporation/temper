@@ -20,7 +20,8 @@ pub(crate) use translate::{JsFlags, UnsupportedJs, translate};
 pub(crate) use utf8::LossyUtf8;
 pub use value::{Object, Value};
 pub(crate) use value::{
-    entries, integer_from_radix, js_json, js_string, json_string, number_from_text, truthy,
+    entries, integer_from_radix, js_json, js_string, js_string_checked, json_string,
+    number_from_text, truthy,
 };
 
 /// 1.x throws a `TypeError` on this value (a property read of `null`, a missing array method),
