@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use temper_domain::{
-    BashPolicy, CodeKind, CopiedFile, Exemptions, FileRole, Globs, InterpreterCode, PathStyle,
-    PolicyDecision, RustWrites, ScanOptions, Scanner, Severity, Unread, classify_path,
+    BashPolicy, CodeKind, CopiedFile, FileRole, InterpreterCode, LazyExemptions, LazyGlobs,
+    PathStyle, PolicyDecision, RustWrites, ScanOptions, Scanner, Severity, Unread, classify_path,
     is_build_script,
 };
 
@@ -74,8 +74,10 @@ pub(super) fn shell_rust_writes(
     };
     let commands = parse_commands(cmd, opts).ok()?;
     let config = &ws.config;
-    let protected = Globs::new(config.protected().iter().map(String::as_str)).ok()?;
-    let exempt = Exemptions::new(config.exempt()).ok()?;
+    // Compiled where 1.x's `checkFile` first tries each glob; one that does not compile there
+    // stops the scan as 1.x's throw does.
+    let protected = LazyGlobs::new(config.protected().iter().map(String::as_str));
+    let exempt = LazyExemptions::new(config.exempt());
     let mut reader = Reader {
         files: call.ports.files(),
         cx,
@@ -121,8 +123,8 @@ struct Reader<'a, F> {
     root: &'a str,
     code: &'a InterpreterCode,
     scanner: &'a Scanner,
-    protected: &'a Globs,
-    exempt: &'a Exemptions<'a>,
+    protected: &'a LazyGlobs<'a>,
+    exempt: &'a LazyExemptions<'a>,
     found: RustWrites,
     earlier: HashMap<String, Made>,
     /// Every path a command in the line writes, with the last step that wrote it.
@@ -498,7 +500,7 @@ impl<F: Files> Reader<'_, F> {
         };
         if meta.is_some_and(|m| m.kind == EntryKind::Dir) {
             if op_recursive(op.t) || matches!(op.how, How::Link { .. }) {
-                self.copy_tree(op.t, k, &holds);
+                self.copy_tree(op.t, k, &holds)?;
             }
             return Ok(());
         }
@@ -526,7 +528,7 @@ impl<F: Files> Reader<'_, F> {
                 moves: !holds.copied,
                 tree: None,
             };
-            self.check_file(&target, from);
+            self.check_file(&target, from)?;
         }
         Ok(())
     }
@@ -542,21 +544,21 @@ impl<F: Files> Reader<'_, F> {
     }
 
     /// A directory copied, moved or linked: each `.rs` file in it lands below the root.
-    fn copy_tree(&mut self, t: &Target<'_>, k: Known<'_>, holds: &Holds) {
+    fn copy_tree(&mut self, t: &Target<'_>, k: Known<'_>, holds: &Holds) -> Result<(), Threw> {
         let root = self.tree_root(t, k);
         // The map keeps the root; the checks below read it too.
         self.earlier.insert(root.clone(), self.made(holds));
         if !self.in_project(&root) || self.scratch(&root) {
-            return;
+            return Ok(());
         }
         if holds.stale {
             self.found.unread(k.s.raw().to_owned(), Unread::Stale);
-            return;
+            return Ok(());
         }
         let real = holds.real.as_str();
         let Some(files) = self.rust_files_under(real) else {
             self.found.unread(k.s.raw().to_owned(), Unread::Dynamic);
-            return;
+            return Ok(());
         };
         for f in files {
             let inner = paths::relative(self.style(), self.cx.at.cwd, real, &f);
@@ -567,9 +569,10 @@ impl<F: Files> Reader<'_, F> {
                     moves: !holds.copied,
                     tree: Some(real),
                 };
-                self.check_file(&target, from);
+                self.check_file(&target, from)?;
             }
         }
+        Ok(())
     }
 
     /// Where a copied directory lands: rsync's `src/` copies the contents, and a copy into a
@@ -742,8 +745,9 @@ impl<F: Files> Reader<'_, F> {
     }
 
     /// 1.x `checkFile(target, from, move, tree)`: the scan of `from`'s content landing at
-    /// `target`. `tree` is the copied directory when `from` came with one.
-    fn check_file(&mut self, target: &str, from: From<'_>) {
+    /// `target`. `tree` is the copied directory when `from` came with one. A `protected` or
+    /// `scanner.exempt` glob that does not compile where 1.x first tries it is a throw.
+    fn check_file(&mut self, target: &str, from: From<'_>) -> Result<(), Threw> {
         let From {
             path: from,
             moves,
@@ -754,12 +758,12 @@ impl<F: Files> Reader<'_, F> {
         if paths::resolve(style, cwd, target) == paths::resolve(style, cwd, from)
             || self.scratch(target)
         {
-            return;
+            return Ok(());
         }
         let Some(after) = self.text_of(from, MAX_SOURCE_BYTES) else {
             self.found
                 .unread(paths::norm(from).into_owned(), Unread::Dynamic);
-            return;
+            return Ok(());
         };
         let rel = self.rel(target);
         // 1.x `exists ? readText(target) ?? '' : ''`: a target it cannot read counts as empty.
@@ -789,9 +793,12 @@ impl<F: Files> Reader<'_, F> {
                 forbid: None,
             },
             moved_from: lenient.then(|| node_basename(style, from)),
-            protected: self.protected.any_match(&rel),
+            // 1.x `globMatch`'s `new RegExp` throws, and `readerRule` catches it.
+            protected: self.protected.any_match(&rel).map_err(|_| Threw)?,
         };
-        self.found.check(&file, self.exempt, self.scanner);
+        self.found
+            .check(&file, self.exempt, self.scanner)
+            .map_err(|_| Threw)
     }
 }
 

@@ -3,6 +3,7 @@
 //! the pattern and the path.
 
 use std::borrow::Cow;
+use std::cell::OnceCell;
 
 use regex::Regex;
 
@@ -145,6 +146,57 @@ impl Globs {
     #[must_use]
     pub fn any_match(&self, rel: &str) -> bool {
         self.0.iter().any(|glob| glob.is_match(rel))
+    }
+}
+
+/// Several globs, each compiled where 1.x's `globs.some((p) => globMatch(p, rel))` first
+/// builds its regex: a pattern after the first match is never compiled, so one that does not
+/// compile fails only a match that reaches it.
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::LazyGlobs;
+///
+/// let protected = LazyGlobs::new([".cargo/**", "AGENTS.md"]);
+/// assert!(protected.any_match(".cargo/config.toml")?);
+/// assert!(!protected.any_match("src/lib.rs")?);
+/// # Ok::<(), temper_domain::GlobError>(())
+/// ```
+#[derive(Debug, Default)]
+pub struct LazyGlobs<'a>(Vec<(&'a str, OnceCell<Glob>)>);
+
+impl<'a> LazyGlobs<'a> {
+    /// Holds `patterns`, compiling none of them.
+    pub fn new(patterns: impl IntoIterator<Item = &'a str>) -> Self {
+        Self(
+            patterns
+                .into_iter()
+                .map(|pattern| (pattern, OnceCell::new()))
+                .collect(),
+        )
+    }
+
+    /// Does any glob match `rel`? Each is compiled the first time it is tried.
+    ///
+    /// # Errors
+    ///
+    /// The [`GlobError`] of the first glob tried that does not compile; it is tried again on
+    /// the next call.
+    pub fn any_match(&self, rel: &str) -> Result<bool, GlobError> {
+        for (pattern, cell) in &self.0 {
+            let glob = match cell.get() {
+                Some(glob) => glob,
+                None => {
+                    let glob = Glob::new(pattern)?;
+                    cell.get_or_init(|| glob)
+                }
+            };
+            if glob.is_match(rel) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
