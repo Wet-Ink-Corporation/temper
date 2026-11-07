@@ -43,7 +43,10 @@ test('route: 1.x runs everything until a subcommand graduates; --version goes to
   assert.equal(route(['hook', 'user-prompt'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 2b');
   assert.equal(route(['hook', 'pre-bash'], {}), 'node', 'graduated, but not opted in');
   assert.equal(route(['hook', 'pre-bash'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 2f');
-  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash');
+  assert.equal(route(['status', '--json'], {}), 'node', 'graduated, but not opted in');
+  assert.equal(route(['status', '--json'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3c');
+  assert.equal(route(['status'], { TEMPER_ENGINE: 'rust', TEMPER_DISABLE: '1' }), 'engine', 'TEMPER_DISABLE marks the document; it does not skip status');
+  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash, 3c status');
 });
 
 test('route: TEMPER_DISABLE=1 on a hook exits without an engine', () => {
