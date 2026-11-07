@@ -71,14 +71,30 @@ fn blocks_are_found_where_1x_finds_them() {
             format!("```rust\nfn x() {{}}\n```\nprose\n```json\n{V}\n```\n"),
             None,
         ),
-        ("four backticks match from the second", format!("````json\n{V}\n````"), Some(V)),
-        ("spaces and tabs before the newline", format!("```json  \t\n{V}\n```"), Some(V)),
+        (
+            "four backticks match from the second",
+            format!("````json\n{V}\n````"),
+            Some(V),
+        ),
+        (
+            "spaces and tabs before the newline",
+            format!("```json  \t\n{V}\n```"),
+            Some(V),
+        ),
         ("another language tag", format!("```json5\n{V}\n```"), None),
         ("no closing fence", format!("```json\n{V}\n"), None),
         ("CRLF", format!("```json\r\n{V}\r\n```"), Some(V)),
         ("an empty block", "```\n```".to_owned(), None),
-        ("NBSP is JS whitespace", format!("```json\u{a0}\n{V}\n```"), Some(V)),
-        ("NEL is not JS whitespace", format!("```json\u{85}\n{V}\n```"), None),
+        (
+            "NBSP is JS whitespace",
+            format!("```json\u{a0}\n{V}\n```"),
+            Some(V),
+        ),
+        (
+            "NEL is not JS whitespace",
+            format!("```json\u{85}\n{V}\n```"),
+            None,
+        ),
         (
             "a later non-verdict block does not hide the verdict",
             format!("```\n{V}\n```\n```\n{{}}\n```"),
@@ -95,7 +111,9 @@ fn blocks_are_found_where_1x_finds_them() {
 fn any_json_value_is_parsed_with_json_parse_key_semantics() {
     assert_eq!(
         parsed("```\n[\"temper_verdict\"]\n```"),
-        Some(Value::Array(vec![Value::String("temper_verdict".to_owned())]))
+        Some(Value::Array(vec![Value::String(
+            "temper_verdict".to_owned()
+        )]))
     );
     let dup = parsed(
         "```\n{\"temper_verdict\":1,\"verdict\":\"a\",\"verdict\":\"approved\",\"__proto__\":{\"x\":1}}\n```",
@@ -110,10 +128,7 @@ fn any_json_value_is_parsed_with_json_parse_key_semantics() {
 #[test]
 fn field_reads_a_parsed_objects_own_property_and_nothing_of_an_unparseable_one() {
     let v = extract_verdict(&format!("```\n{V}\n```")).expect("a block");
-    assert_eq!(
-        v.field("verdict").and_then(Value::as_str),
-        Some("approved")
-    );
+    assert_eq!(v.field("verdict").and_then(Value::as_str), Some("approved"));
     assert_eq!(v.field("fingerprint"), None);
     let bad = ExtractedVerdict::Unparseable {
         message: "x".to_owned(),
@@ -124,8 +139,10 @@ fn field_reads_a_parsed_objects_own_property_and_nothing_of_an_unparseable_one()
 #[test]
 fn a_report_of_many_fences_is_read_in_one_pass() {
     // P2: 2^16 small blocks and an opening fence with no close; linear in the text.
-    let mut text = "```\n{}\n```\n".repeat(1 << 16);
-    text.push_str(&format!("```\n{V}\n```\n"));
-    text.push_str(&format!("```json\n{}", "x".repeat(1 << 20)));
+    let text = format!(
+        "{}```\n{V}\n```\n```json\n{}",
+        "```\n{}\n```\n".repeat(1 << 16),
+        "x".repeat(1 << 20)
+    );
     assert_eq!(parsed(&text), Some(Value::from_json(V).expect("JSON")));
 }

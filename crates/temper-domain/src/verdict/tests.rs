@@ -5,6 +5,7 @@
 mod extract;
 mod js_semantics;
 mod problems;
+mod summary;
 
 use crate::js::Value;
 
@@ -14,8 +15,10 @@ use super::DIMENSIONS;
 /// already in `base` keeps its place, a new key goes last, and the text `undefined` drops the
 /// key, as `JSON.stringify` drops an `undefined` property.
 fn object(base: &[(&str, String)], over: &[(&str, &str)]) -> String {
-    let mut props: Vec<(String, String)> =
-        base.iter().map(|(k, v)| ((*k).to_owned(), v.clone())).collect();
+    let mut props: Vec<(String, String)> = base
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect();
     for (key, text) in over {
         match props.iter_mut().find(|(k, _)| k == key) {
             Some(prop) => prop.1 = (*text).to_owned(),

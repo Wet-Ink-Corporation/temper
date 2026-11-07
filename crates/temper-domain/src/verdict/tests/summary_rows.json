@@ -1,0 +1,170 @@
+[
+ {
+  "name": "separators around a newline",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"a ﻿\\n﻿ b\\u000b\\n\\u000bc de   f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:3: a b c d e  f",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:3: a b c d e  f\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "NEL between spaces only",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"x  y\",\"severity\":\"major\",\"file\":\"\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] x  y  :3: f",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] x  y  :3: f\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "findings a string",
+  "text": "{\"verdict\":\"approved\",\"findings\":\"x\",\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "findings an object",
+  "text": "{\"verdict\":\"approved\",\"findings\":{},\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "findings null",
+  "text": "{\"verdict\":\"approved\",\"findings\":null,\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: approved at 2026-10-18T08:37:00.000Z, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.\n  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not \"pass\", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval."
+ },
+ {
+  "name": "a null finding, none serious",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[null],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "\n(1 minor/nit finding(s) in the full verdict)",
+  "earlier": null
+ },
+ {
+  "name": "a null finding beside a major",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[null,{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:3: f\n(1 minor/nit finding(s) in the full verdict)",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:3: f\n(1 minor/nit finding(s) in the full verdict)\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "no verdict and a null time",
+  "text": "{\"findings\":[],\"recorded_at\":null}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: undefined at an unknown time, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "verdict an array, time a number",
+  "text": "{\"verdict\":[null,\"x\"],\"findings\":[],\"recorded_at\":5}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: ,x at 5, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "gate a string",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"gate\":\"ab\",\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Gate entries not \"pass\": 0, 1.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "gate an array",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"gate\":[\"pass\",\"fail\"],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Gate entries not \"pass\": 1.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "gate key with a newline",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"gate\":{\"a\\nb\":\"fail\",\"c\":\"n/a\",\"d\":null},\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Gate entries not \"pass\": a b, d.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "gate an astral string",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"gate\":\"𝒳\",\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Gate entries not \"pass\": 0, 1.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "scores of mixed types",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"scores\":{\"tests\":2.0,\"docs\":-1,\"api\":\"1\",\"errors\":2.5,\"craft\":-0},\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Scores below 3: tests, craft, docs.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "scores an array",
+  "text": "{\"verdict\":\"approved\",\"findings\":[],\"scores\":[1,2],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 3,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: approved at 2026-10-18T08:37:00.000Z, with no blocker or major finding.\n  3 later changes-requested verdict(s) gave no reason to overturn it and are kept as history beside it.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.\n  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not \"pass\", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval."
+ },
+ {
+  "name": "line falsy, a string, an array",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":0,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":\"7\",\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":[1,2],\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":null,\"severity\":\"major\",\"line\":null,\"evidence\":\"e\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs: f\n- [major] OWN-08 a.rs:7: f\n- [major] OWN-08 a.rs:1,2: f\n- [major]  : f",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs: f\n- [major] OWN-08 a.rs:7: f\n- [major] OWN-08 a.rs:1,2: f\n- [major]  : f\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "twelve serious and three minor",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":1,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":2,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":4,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":5,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":6,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":7,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":8,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":9,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":10,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":11,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":12,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"minor\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"nit\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},5],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:1: f\n- [major] OWN-08 a.rs:2: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:4: f\n- [major] OWN-08 a.rs:5: f\n- [major] OWN-08 a.rs:6: f\n- [major] OWN-08 a.rs:7: f\n- [major] OWN-08 a.rs:8: f\n- [major] OWN-08 a.rs:9: f\n- [major] OWN-08 a.rs:10: f\n(3 minor/nit finding(s) in the full verdict)",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:1: f\n- [major] OWN-08 a.rs:2: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:4: f\n- [major] OWN-08 a.rs:5: f\n- [major] OWN-08 a.rs:6: f\n- [major] OWN-08 a.rs:7: f\n- [major] OWN-08 a.rs:8: f\n- [major] OWN-08 a.rs:9: f\n- [major] OWN-08 a.rs:10: f\n(3 minor/nit finding(s) in the full verdict)\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "approval kept twice",
+  "text": "{\"verdict\":\"approved\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"minor\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 2,
+  "summary": "\n(1 minor/nit finding(s) in the full verdict)",
+  "earlier": "- An earlier review of this same tree is recorded: approved at 2026-10-18T08:37:00.000Z, with no blocker or major finding.\n(1 minor/nit finding(s) in the full verdict)\n  2 later changes-requested verdict(s) gave no reason to overturn it and are kept as history beside it.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence.\n  Overturn that approval only with a blocker or major finding, a score below 3 or a gate entry that is not \"pass\", quoting the evidence: a changes-requested verdict without one is kept as history and does not replace the approval."
+ },
+ {
+  "name": "changes requested kept twice",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 2,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "a parse error in the record",
+  "text": "{\"__parseError\":\"x\",\"verdict\":\"changes-requested\",\"findings\":[],\"scores\":{\"tests\":1},\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z, with no blocker or major finding.\n  Scores below 3: tests.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "a string record",
+  "text": "\"x\"",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: undefined at an unknown time, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "a number record",
+  "text": "5",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: undefined at an unknown time, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "an array record",
+  "text": "[1]",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: undefined at an unknown time, with no blocker or major finding.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "null",
+  "text": "null",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ }
+]

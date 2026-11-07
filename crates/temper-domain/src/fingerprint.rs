@@ -49,7 +49,9 @@ impl FromStr for Fingerprint {
         let refused = || FingerprintParseError {
             value: text.to_owned(),
         };
-        let digits: &[u8; 16] = text.as_bytes().try_into().map_err(|_| refused())?;
+        let Ok(digits) = <&[u8; 16]>::try_from(text.as_bytes()) else {
+            return Err(refused());
+        };
         let mut bytes = [0_u8; 8];
         for (byte, pair) in bytes.iter_mut().zip(digits.as_chunks::<2>().0) {
             let [high, low] = *pair;

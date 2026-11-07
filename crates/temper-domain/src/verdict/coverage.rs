@@ -102,7 +102,8 @@ pub(super) fn unreviewed<'c>(changed_rust: &'c [String], files_read: &[Value]) -
     changed_rust
         .iter()
         .zip(&changed)
-        .filter(|(f, norm)| f.ends_with(".rs") && !seen.contains(norm.as_str()))
+        // 1.x's `f.endsWith('.rs')` is case-sensitive, and so is a byte comparison.
+        .filter(|(f, norm)| f.as_bytes().ends_with(b".rs") && !seen.contains(norm.as_str()))
         .map(|(f, _)| f.as_str())
         .collect()
 }

@@ -4,11 +4,13 @@
 mod coverage;
 mod extract;
 mod problems;
+mod summary;
 
 pub use extract::{ExtractedVerdict, extract_verdict};
 pub use problems::{
     GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds, verdict_problems,
 };
+pub use summary::{earlier_review, summarize_findings};
 
 /// The review dimensions, in 1.x's order.
 pub const DIMENSIONS: [&str; 12] = [

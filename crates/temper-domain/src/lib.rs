@@ -64,5 +64,6 @@ pub use scan::{
 pub use time::Timestamp;
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, VerdictContext,
-    VerdictProblem, extract_verdict, problem_kinds, verdict_problems,
+    VerdictProblem, earlier_review, extract_verdict, problem_kinds, summarize_findings,
+    verdict_problems,
 };

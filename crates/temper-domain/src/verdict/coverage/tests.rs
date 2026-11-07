@@ -34,7 +34,10 @@ fn the_index_answers_as_1x_on_the_ported_rows() {
         ("src/lib.rs", Some("src/lib.rs")),
         ("lib.rs", None),
         ("core/src/lib.rs", None),
-        ("/repo/crates/core/src/lib.rs", Some("crates/core/src/lib.rs")),
+        (
+            "/repo/crates/core/src/lib.rs",
+            Some("crates/core/src/lib.rs"),
+        ),
         ("/repo/src/lib.rs", Some("src/lib.rs")),
         ("C:/repo/crates/core/build.rs", Some("build.rs")),
         ("/xa/b.rs", None),
@@ -43,7 +46,11 @@ fn the_index_answers_as_1x_on_the_ported_rows() {
     ];
     for (read, expected) in rows {
         assert_eq!(index.covers(read), expected, "{read:?}");
-        assert_eq!(covered_by_1x(read, &changed), expected, "oracle on {read:?}");
+        assert_eq!(
+            covered_by_1x(read, &changed),
+            expected,
+            "oracle on {read:?}"
+        );
     }
 }
 

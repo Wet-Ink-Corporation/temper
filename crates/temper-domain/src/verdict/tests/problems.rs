@@ -3,7 +3,8 @@
 use crate::js::Value;
 
 use super::super::{
-    ExtractedVerdict, GateState, ProblemKind, VerdictContext, problem_kinds, verdict_problems,
+    ExtractedVerdict, GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds,
+    verdict_problems,
 };
 use super::{finding, scores, verdict, verdict_json};
 
@@ -48,7 +49,11 @@ fn has_prefix(problems: &[String], prefix: &str) {
 fn a_well_formed_approval_has_no_problems() {
     assert_eq!(messages(&verdict(&[])), Vec::<String>::new());
     assert_eq!(
-        check(&verdict(&[]), &["crates/core/src/lib.rs"], GateState::NotRed),
+        check(
+            &verdict(&[]),
+            &["crates/core/src/lib.rs"],
+            GateState::NotRed
+        ),
         Vec::<String>::new()
     );
     // minor and nit findings, a "none" nit, and an "n/a" dimension or gate entry are consistent
@@ -66,7 +71,10 @@ fn a_well_formed_approval_has_no_problems() {
     // a changes-requested verdict may carry blockers and low scores
     let cr = verdict(&[
         ("verdict", r#""changes-requested""#),
-        ("findings", &format!("[{}]", finding(&[("severity", r#""blocker""#)]))),
+        (
+            "findings",
+            &format!("[{}]", finding(&[("severity", r#""blocker""#)])),
+        ),
         ("scores", &scores(&[("errors", "1")])),
         ("gate", r#"{"clippy":"fail"}"#),
     ]);
@@ -80,7 +88,7 @@ fn no_verdict_block() {
         gate: GateState::NotRed,
     };
     let problems = verdict_problems(None, &ctx).expect("1.x does not throw");
-    let messages: Vec<&str> = problems.iter().map(|p| p.message()).collect();
+    let messages: Vec<&str> = problems.iter().map(VerdictProblem::message).collect();
     assert_eq!(
         messages,
         [
@@ -99,7 +107,7 @@ fn json_that_does_not_parse_is_one_problem() {
         message: "expected value at line 1 column 31".to_owned(),
     };
     let problems = verdict_problems(Some(&bad), &ctx).expect("1.x does not throw");
-    let messages: Vec<&str> = problems.iter().map(|p| p.message()).collect();
+    let messages: Vec<&str> = problems.iter().map(VerdictProblem::message).collect();
     assert_eq!(
         messages,
         ["verdict JSON does not parse: expected value at line 1 column 31"]
@@ -163,7 +171,11 @@ fn each_finding_needs_a_rule_id_a_severity_a_file_evidence_and_a_fix() {
         &messages(&verdict(&[("findings", &one(&[("file", r#""""#)]))])),
         "findings[0].file is required",
     );
-    let second = format!("[{},{}]", finding(&[]), finding(&[("evidence", "undefined")]));
+    let second = format!(
+        "[{},{}]",
+        finding(&[]),
+        finding(&[("evidence", "undefined")])
+    );
     has(
         &messages(&verdict(&[("findings", &second)])),
         "findings[1].evidence is required (quote the code)",
@@ -229,7 +241,10 @@ fn a_changed_rs_file_missing_from_files_read_is_reported() {
         "evidence",
         r#"{"files_read":["crates\\core\\src\\lib.rs","crates/core/src/new.rs"],"commands_run":["gate"]}"#,
     )]);
-    assert_eq!(check(&win, &changed, GateState::NotRed), Vec::<String>::new());
+    assert_eq!(
+        check(&win, &changed, GateState::NotRed),
+        Vec::<String>::new()
+    );
 }
 
 /// The problems of a verdict that read `files_read` against `changed`.
@@ -239,7 +254,11 @@ fn read(changed: &[&str], files_read: &[&str]) -> Vec<String> {
         r#"{{"files_read":[{}],"commands_run":["gate"]}}"#,
         list.join(",")
     );
-    check(&verdict(&[("evidence", &evidence)]), changed, GateState::NotRed)
+    check(
+        &verdict(&[("evidence", &evidence)]),
+        changed,
+        GateState::NotRed,
+    )
 }
 
 #[test]
@@ -272,11 +291,22 @@ fn files_read_covers_a_changed_file_by_whole_path_components_not_by_a_bare_suffi
         "\\\\?\\C:\\proj\\crates\\core\\src\\lib.rs",
         "\\\\server\\share\\proj\\crates\\core\\src\\lib.rs",
     ] {
-        assert_eq!(read(&changed, &[entry]), Vec::<String>::new(), "files_read {entry:?}");
+        assert_eq!(
+            read(&changed, &[entry]),
+            Vec::<String>::new(),
+            "files_read {entry:?}"
+        );
     }
+}
+
+#[test]
+fn files_read_covers_a_root_package_and_member_crates_each_by_its_own_path() {
     // a crate at the repository root: the short path is the whole changed path
     let root = ["src/main.rs", "build.rs"];
-    assert_eq!(read(&root, &["src/main.rs", "/repo/build.rs"]), Vec::<String>::new());
+    assert_eq!(
+        read(&root, &["src/main.rs", "/repo/build.rs"]),
+        Vec::<String>::new()
+    );
     assert_eq!(
         read(&root, &["main.rs", "build.rs"]),
         ["changed files not reviewed: src/main.rs"]
@@ -290,24 +320,48 @@ fn files_read_covers_a_changed_file_by_whole_path_components_not_by_a_bare_suffi
     // a root package next to a member crate: a member's path does not cover the root file
     let nested = ["src/lib.rs", "crates/core/src/lib.rs", "build.rs"];
     let only_src = ["changed files not reviewed: src/lib.rs"];
-    assert_eq!(read(&nested, &["crates/core/src/lib.rs", "build.rs"]), only_src);
+    assert_eq!(
+        read(&nested, &["crates/core/src/lib.rs", "build.rs"]),
+        only_src
+    );
     assert_eq!(
         read(
             &nested,
-            &["/repo/crates/core/src/lib.rs", "C:\\repo\\crates\\core\\build.rs", "build.rs"]
+            &[
+                "/repo/crates/core/src/lib.rs",
+                "C:\\repo\\crates\\core\\build.rs",
+                "build.rs"
+            ]
         ),
         only_src
     );
     assert_eq!(
-        read(&nested, &["src/lib.rs", "crates/core/src/lib.rs", "crates/core/build.rs"]),
+        read(
+            &nested,
+            &[
+                "src/lib.rs",
+                "crates/core/src/lib.rs",
+                "crates/core/build.rs"
+            ]
+        ),
         ["changed files not reviewed: build.rs"]
     );
     assert_eq!(
-        read(&nested, &["src/lib.rs", "crates/core/src/lib.rs", "build.rs"]),
+        read(
+            &nested,
+            &["src/lib.rs", "crates/core/src/lib.rs", "build.rs"]
+        ),
         Vec::<String>::new()
     );
     assert_eq!(
-        read(&nested, &["/repo/src/lib.rs", "/repo/crates/core/src/lib.rs", "C:\\repo\\build.rs"]),
+        read(
+            &nested,
+            &[
+                "/repo/src/lib.rs",
+                "/repo/crates/core/src/lib.rs",
+                "C:\\repo\\build.rs"
+            ]
+        ),
         Vec::<String>::new()
     );
 }
@@ -329,9 +383,15 @@ fn every_verdict_rates_correctness_escape_hatches_and_craft_with_an_integer_scor
             na.join(", ")
         )
     };
-    assert_eq!(messages(&verdict(&[("scores", &rated(&[]))])), [msg(&ALWAYS_SCORED)]);
     assert_eq!(
-        messages(&verdict(&[("scores", &rated(&["correctness", "escape_hatches", "ownership"]))])),
+        messages(&verdict(&[("scores", &rated(&[]))])),
+        [msg(&ALWAYS_SCORED)]
+    );
+    assert_eq!(
+        messages(&verdict(&[(
+            "scores",
+            &rated(&["correctness", "escape_hatches", "ownership"])
+        )])),
         [msg(&["craft"])]
     );
     assert_eq!(
@@ -346,9 +406,15 @@ fn every_verdict_rates_correctness_escape_hatches_and_craft_with_an_integer_scor
         messages(&verdict(&[("scores", &rated(&[])), ("verdict", cr)])),
         [msg(&ALWAYS_SCORED)]
     );
-    assert_eq!(messages(&verdict(&[("scores", &rated(&ALWAYS_SCORED))])), Vec::<String>::new());
     assert_eq!(
-        messages(&verdict(&[("scores", &rated(&ALWAYS_SCORED)), ("verdict", cr)])),
+        messages(&verdict(&[("scores", &rated(&ALWAYS_SCORED))])),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        messages(&verdict(&[
+            ("scores", &rated(&ALWAYS_SCORED)),
+            ("verdict", cr)
+        ])),
         Vec::<String>::new()
     );
     let zero = rated(&ALWAYS_SCORED).replace(r#""correctness":3"#, r#""correctness":0"#);
@@ -387,7 +453,10 @@ fn approved_must_agree_with_the_findings_the_scores_and_the_gate() {
         r#""approved" is inconsistent with 2 blocker/major finding(s): use "changes-requested""#,
     );
     has(
-        &messages(&verdict(&[("scores", &scores(&[("tests", "2"), ("docs", "0")]))])),
+        &messages(&verdict(&[(
+            "scores",
+            &scores(&[("tests", "2"), ("docs", "0")]),
+        )])),
         r#""approved" requires every applicable dimension >= 3; low: tests, docs"#,
     );
     has(
@@ -415,8 +484,7 @@ fn a_stable_kind_per_problem_with_the_same_messages() {
         changed_rust: &changed,
         gate: GateState::NotRed,
     };
-    let problems =
-        verdict_problems(Some(&ExtractedVerdict::Parsed(v.clone())), &ctx).expect("no throw");
+    let problems = verdict_problems(Some(&ExtractedVerdict::Parsed(v)), &ctx).expect("no throw");
     let names: Vec<&str> = problem_kinds(&problems).iter().map(|k| k.name()).collect();
     assert_eq!(
         names,
@@ -434,6 +502,10 @@ fn a_stable_kind_per_problem_with_the_same_messages() {
             "approved-gate-entry",
         ]
     );
+}
+
+#[test]
+fn kinds_of_the_no_block_parse_and_red_gate_problems() {
     let none = VerdictContext {
         changed_rust: &[],
         gate: GateState::NotRed,
@@ -462,6 +534,12 @@ fn a_stable_kind_per_problem_with_the_same_messages() {
     let names: Vec<&str> = kinds(Some(&v), &red).iter().map(|k| k.name()).collect();
     assert_eq!(
         names,
-        ["fingerprint", "findings-array", "scores-missing", "files-read", "approved-red-gate"]
+        [
+            "fingerprint",
+            "findings-array",
+            "scores-missing",
+            "files-read",
+            "approved-red-gate"
+        ]
     );
 }

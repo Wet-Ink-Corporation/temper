@@ -202,16 +202,11 @@ pub(super) fn problems_of(
     };
     let mut p = Problems(Vec::new());
     header(&mut p, v, verdict);
-    let findings = match v.get("findings") {
-        Some(Value::Array(items)) => items.as_slice(),
-        _ => &[],
-    };
-    findings_problems(&mut p, findings);
-    let scores = v.get("scores").filter(|s| is_object(s));
-    scores_problems(&mut p, scores);
+    findings_problems(&mut p, findings_list(v));
+    scores_problems(&mut p, scores_object(v));
     evidence_problems(&mut p, v, ctx);
     if verdict == Some("approved") {
-        approval_problems(&mut p, v, findings, scores, ctx)?;
+        approval_problems(&mut p, v, ctx)?;
     }
     Ok(p.0)
 }
@@ -233,16 +228,32 @@ fn is_object(value: &Value) -> bool {
     matches!(value, Value::Object(_) | Value::Array(_))
 }
 
-/// `Number.isInteger(x)`.
+/// `Number.isInteger(x)`: a finite number with no fraction (`-0` and `4.0` are integers).
 fn integer(value: Option<&Value>) -> Option<f64> {
     match value {
-        Some(Value::Number(n)) if n.is_finite() && n.trunc() == *n => Some(*n),
+        Some(Value::Number(n)) if n.is_finite() && n.trunc().total_cmp(n).is_eq() => Some(*n),
         _ => None,
     }
 }
 
+/// The verdict's `findings` when it is an array (1.x reads none otherwise).
+fn findings_list(v: &Value) -> &[Value] {
+    match v.get("findings") {
+        Some(Value::Array(items)) => items,
+        _ => &[],
+    }
+}
+
+/// `v.scores && typeof v.scores === 'object' ? v.scores : null`.
+fn scores_object(v: &Value) -> Option<&Value> {
+    v.get("scores").filter(|s| is_object(s))
+}
+
 fn header(p: &mut Problems, v: &Value, verdict: Option<&str>) {
-    if !matches!(v.get("temper_verdict"), Some(Value::Number(n)) if *n == 1.0) {
+    // JS `=== 1`: exact, and `1.0` is the same number; `total_cmp` is exact away from zero.
+    let schema =
+        matches!(v.get("temper_verdict"), Some(Value::Number(n)) if n.total_cmp(&1.0).is_eq());
+    if !schema {
         p.add(ProblemKind::SchemaVersion, r#""temper_verdict" must be 1"#);
     }
     if !matches!(verdict, Some("approved" | "changes-requested")) {
@@ -268,8 +279,12 @@ fn header(p: &mut Problems, v: &Value, verdict: Option<&str>) {
 
 fn findings_problems(p: &mut Problems, findings: &[Value]) {
     for (i, f) in findings.iter().enumerate() {
-        if !truthy(f) || !is_object(f) {
-            p.add(ProblemKind::FindingObject, format!("findings[{i}] must be an object"));
+        // `!f || typeof f !== 'object'`: objects and arrays are always truthy.
+        if !is_object(f) {
+            p.add(
+                ProblemKind::FindingObject,
+                format!("findings[{i}] must be an object"),
+            );
             continue;
         }
         let rule = match f.get("rule") {
@@ -277,7 +292,8 @@ fn findings_problems(p: &mut Problems, findings: &[Value]) {
             Some(rule) => js_string(rule),
         };
         let severity = f.get("severity").and_then(Value::as_str);
-        if !is_rule_id(&rule) && !(rule == "none" && severity == Some("nit")) {
+        let none_nit = rule == "none" && severity == Some("nit");
+        if !(is_rule_id(&rule) || none_nit) {
             p.add(
                 ProblemKind::FindingRule,
                 format!("findings[{i}].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"),
@@ -286,12 +302,18 @@ fn findings_problems(p: &mut Problems, findings: &[Value]) {
         if !severity.is_some_and(|s| SEVERITIES.contains(&s)) {
             p.add(
                 ProblemKind::FindingSeverity,
-                format!("findings[{i}].severity must be one of {}", SEVERITIES.join("/")),
+                format!(
+                    "findings[{i}].severity must be one of {}",
+                    SEVERITIES.join("/")
+                ),
             );
         }
         let present = |key: &str| f.get(key).is_some_and(truthy);
         if !present("file") {
-            p.add(ProblemKind::FindingFile, format!("findings[{i}].file is required"));
+            p.add(
+                ProblemKind::FindingFile,
+                format!("findings[{i}].file is required"),
+            );
         }
         if !present("evidence") {
             p.add(
@@ -300,7 +322,10 @@ fn findings_problems(p: &mut Problems, findings: &[Value]) {
             );
         }
         if !present("fix") {
-            p.add(ProblemKind::FindingFix, format!("findings[{i}].fix is required"));
+            p.add(
+                ProblemKind::FindingFix,
+                format!("findings[{i}].fix is required"),
+            );
         }
     }
 }
@@ -403,10 +428,10 @@ pub(super) fn low_scores(scores: Option<&Value>) -> Vec<&'static str> {
 fn approval_problems(
     p: &mut Problems,
     v: &Value,
-    findings: &[Value],
-    scores: Option<&Value>,
     ctx: &VerdictContext<'_>,
 ) -> Result<(), JsTypeError> {
+    let findings = findings_list(v);
+    let scores = scores_object(v);
     if findings.iter().any(|f| matches!(f, Value::Null)) {
         return Err(JsTypeError::new(
             "an approval's findings hold a null, which 1.x reads the severity of",
@@ -424,7 +449,10 @@ fn approval_problems(
         if !low.is_empty() {
             p.add(
                 ProblemKind::ApprovedLowScore,
-                format!(r#""approved" requires every applicable dimension >= 3; low: {}"#, low.join(", ")),
+                format!(
+                    r#""approved" requires every applicable dimension >= 3; low: {}"#,
+                    low.join(", ")
+                ),
             );
         }
     }

@@ -23,7 +23,10 @@ fn anything_but_exactly_sixteen_lowercase_hex_digits_is_refused_with_the_value()
     ] {
         let err = bad.parse::<Fingerprint>().expect_err(bad);
         assert_eq!(err.value(), bad, "the error carries the value");
-        assert_eq!(err.to_string(), format!("{bad:?} is not a 16-hex fingerprint"));
+        assert_eq!(
+            err.to_string(),
+            format!("{bad:?} is not a 16-hex fingerprint")
+        );
     }
 }
 
