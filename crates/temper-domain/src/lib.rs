@@ -70,7 +70,7 @@ pub use scan::{
 };
 pub use state::{BaselineParseError, BaselineSummary, GateRecord};
 pub use status::{BaselineLine, STATUS_USAGE, StatusFacts, render_status_text, temper_base_note};
-pub use time::Timestamp;
+pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
     VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
