@@ -88,13 +88,13 @@ impl PartialEq for Line {
     }
 }
 
+impl Eq for Line {}
+
 /// 1.x `/^[[$]/.test(a0) && a0 !== '[' && a0 !== '[['`: a command word that is a PowerShell
 /// expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`), not a `[ -f x ]` test.
 pub(super) fn is_ps_expression(a0: &str) -> bool {
     a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[["
 }
-
-impl Eq for Line {}
 
 /// A redirection, with its target as a word.
 #[derive(Debug, Clone, PartialEq, Eq)]
