@@ -3,6 +3,13 @@
 use std::fmt;
 use std::str::FromStr;
 
+mod hasher;
+
+pub use hasher::{ContentSink, DiffSink, FingerprintHasher};
+
+/// temper's config, relative to the project root (1.x `TEMPER_CONFIG_FILE`).
+pub const TEMPER_CONFIG_FILE: &str = ".claude/temper.json";
+
 /// A tree fingerprint, as 1.x writes it into gate, verdict and session files: 16 lowercase hex
 /// digits, the first 8 bytes of a SHA-256.
 ///

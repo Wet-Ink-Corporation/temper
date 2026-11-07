@@ -37,7 +37,10 @@ mod verdict;
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
-pub use fingerprint::{Fingerprint, FingerprintParseError};
+pub use fingerprint::{
+    ContentSink, DiffSink, Fingerprint, FingerprintHasher, FingerprintParseError,
+    TEMPER_CONFIG_FILE,
+};
 pub use glob::{Glob, GlobError, Globs, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,

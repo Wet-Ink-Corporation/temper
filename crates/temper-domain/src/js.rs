@@ -6,6 +6,7 @@ mod json;
 mod map;
 mod replace;
 mod translate;
+mod utf8;
 mod value;
 
 pub(crate) use canonical::canonical;
@@ -13,6 +14,7 @@ pub use json::JsonParseError;
 pub(crate) use map::JsMap;
 pub(crate) use replace::{Replacement, next_boundary, replace_all};
 pub(crate) use translate::{JsFlags, UnsupportedJs, translate};
+pub(crate) use utf8::LossyUtf8;
 pub use value::{Object, Value};
 pub(crate) use value::{
     entries, integer_from_radix, js_json, js_string, json_string, number_from_text, truthy,
