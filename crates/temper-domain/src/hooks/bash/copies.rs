@@ -202,7 +202,7 @@ fn decide_found(found: Findings, redacted: impl Fn() -> String) -> Option<Policy
             rules,
             cmd: redacted(),
         };
-        return Some(deny(escape_hatches(&denies), row));
+        return Some(deny(escape_hatches(denies), row));
     }
     if !asks.is_empty() {
         let context = (!advice.is_empty())
@@ -287,12 +287,12 @@ fn patched_text(patched: &[String]) -> String {
     )
 }
 
-fn escape_hatches(denies: &[String]) -> String {
+fn escape_hatches(denies: Vec<String>) -> String {
     let n = denies.len();
     let mut lines = vec![format!(
         "temper: this command writes {n} escape hatch(es) into Rust sources, so it was not run. Rewrite the source without them, or make the change with the Edit or Write tools:"
     )];
-    lines.extend(denies.iter().take(DENIES_SHOWN).cloned()); // the answer owns its text
+    lines.extend(denies.into_iter().take(DENIES_SHOWN));
     if let Some(more) = n.checked_sub(DENIES_SHOWN).filter(|&more| more > 0) {
         lines.push(format!("... and {more} more."));
     }
