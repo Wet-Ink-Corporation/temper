@@ -509,7 +509,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let owner = if rel.is_empty() {
             Owner::Project
         } else {
-            self.owner_of(&rel)?
+            self.owner_of(&rel)
         };
         let mut hits = Vec::new();
         match &owner {
@@ -547,24 +547,24 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// `.git` in it, else the project. Each ancestor is looked at once per command line, and
     /// the walk is made once per directory: it reads only the ancestors, which the names in
     /// one directory share.
-    fn owner_of(&mut self, rel: &str) -> Result<Owner, GlobError> {
+    fn owner_of(&mut self, rel: &str) -> Owner {
         let Some(slash) = rel.rfind('/') else {
-            return Ok(Owner::Project); // no ancestor to look at
+            return Owner::Project; // no ancestor to look at
         };
         let dir = rel.get(..slash).unwrap_or("");
         if let Some(owner) = self.owner_in.get(dir) {
-            return Ok(owner.clone()); // an `Rc` handle
+            return owner.clone(); // an `Rc` handle
         }
-        let owner = self.owner_up(rel)?;
+        let owner = self.owner_up(rel);
         self.owner_in.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
-        Ok(owner)
+        owner
     }
 
     /// [`Self::owner_of`]'s walk up `rel`'s ancestors. It stops at the first ancestor whose
     /// names' owner is known: that answer already weighs the ancestor and everything above
     /// it, so a directory one level below a known one looks at itself alone, and a line of
     /// names in ever deeper directories does not walk every ancestor for each name.
-    fn owner_up(&mut self, rel: &str) -> Result<Owner, GlobError> {
+    fn owner_up(&mut self, rel: &str) -> Owner {
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).
         let mut units = js_len(rel);
@@ -574,44 +574,44 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             after = end;
             let dir = rel.get(..end).unwrap_or("");
             if let Some(owner) = self.owner_in.get(dir) {
-                return Ok(owner.clone()); // an `Rc` handle
+                return owner.clone(); // an `Rc` handle
             }
             if end == 0 || units > PATH_MAX {
                 continue;
             }
-            if let Some(owner) = self.checkout_in(dir)? {
-                return Ok(owner);
+            if let Some(owner) = self.checkout_in(dir) {
+                return owner;
             }
         }
-        Ok(Owner::Project)
+        Owner::Project
     }
 
     /// The checkout at `dir`, relative to the root, if any; each is looked at once per line.
-    fn checkout_in(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
+    fn checkout_in(&mut self, dir: &str) -> Option<Owner> {
         if let Some(owner) = self.owners.get(dir) {
-            return Ok(owner.clone()); // an `Rc` handle
+            return owner.clone(); // an `Rc` handle
         }
         let abs = paths::join(self.cx.at.style, &self.ws.root, dir);
-        let owner = self.checkout_at(&abs)?;
+        let owner = self.checkout_at(&abs);
         self.owners.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
-        Ok(owner)
+        owner
     }
 
     /// The owner a `.git` in `dir` makes: its project, or this one when there is none
-    /// (1.x `discover(dir) ?? proj`).
-    fn checkout_at(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
+    /// (1.x `discover(dir) ?? proj`). Its globs compile only when a match tries them.
+    fn checkout_at(&mut self, dir: &str) -> Option<Owner> {
         let files = self.files();
         if !exists(files, &paths::join(self.cx.at.style, dir, ".git")) {
-            return Ok(None);
+            return None;
         }
         let Some(ws) = discover_at(self.call.ports, self.call.env, dir) else {
-            return Ok(Some(Owner::Project));
+            return Some(Owner::Project);
         };
         // A copy of the list, once per nested checkout (the owner is cached), so the lazy
         // matcher can live beside the workspace it reads.
         let globs = LazyGlobs::owned(ws.config.protected().to_vec());
         let prefix = self.rel_to(&self.ws.root, &ws.root);
-        Ok(Some(Owner::Nested(Rc::new(Nested { ws, globs, prefix }))))
+        Some(Owner::Nested(Rc::new(Nested { ws, globs, prefix })))
     }
 
     /// 1.x `configFilesUnder(dir)`: the files under `dir`, relative to it with `/`, outside
