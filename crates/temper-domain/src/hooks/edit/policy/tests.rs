@@ -1,9 +1,9 @@
 use super::{
-    DependencyCheck, EditFacts, EditTarget, EditTool, LazyExemptions, ManifestEdit,
-    PolicyDecision, RustEdit, edit_policy,
+    DependencyCheck, EditFacts, EditTarget, EditTool, LazyExemptions, ManifestEdit, PolicyDecision,
+    RustEdit, edit_policy,
 };
 use crate::{
-    Before, CodeKind, Config, FileRole, GoverningRoot, LazyGlobs, HookOutcome, JsValue, Manifest,
+    Before, CodeKind, Config, FileRole, GoverningRoot, HookOutcome, JsValue, LazyGlobs, Manifest,
     ManifestEditFacts, ManifestFindings, OwnLints, RootRelation, ScanOptions, Scanner,
     TelemetryEvent, TelemetryRow, Timestamp, manifest_checks,
 };

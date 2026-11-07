@@ -87,9 +87,9 @@ fn count_sum(counts: &Value) -> Result<Sum, BaselineParseError> {
             .try_fold(zero, Sum::add)
             .map_err(BaselineParseError::NoPrimitive)?,
         // A string's values are its characters, added one by one: the same as adding it whole.
-        Value::String(text) if !text.is_empty() => zero
-            .add(counts)
-            .map_err(BaselineParseError::NoPrimitive)?,
+        Value::String(text) if !text.is_empty() => {
+            zero.add(counts).map_err(BaselineParseError::NoPrimitive)?
+        }
         Value::String(_) | Value::Number(_) | Value::Bool(_) => zero,
         Value::Null => {
             return Err(BaselineParseError::Throws(JsTypeError::new(

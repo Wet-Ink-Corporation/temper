@@ -196,10 +196,16 @@ fn a_verdict_1x_cannot_convert_fails_status_and_a_toolchain_reads_as_unreadable(
             .with_file(&verdict, json)
     };
 
-    let thrown = engine(repo(with(r#"{"verdict":{"toString":1}}"#), &[("HEAD", HEAD)]), None)
-        .status(&StatusArgs { session: None });
+    let thrown = engine(
+        repo(with(r#"{"verdict":{"toString":1}}"#), &[("HEAD", HEAD)]),
+        None,
+    )
+    .status(&StatusArgs { session: None });
     let (stdout, _) = text(
-        &engine(repo(with(r#"{"verdict":"approved"}"#), &[("HEAD", HEAD)]), None),
+        &engine(
+            repo(with(r#"{"verdict":"approved"}"#), &[("HEAD", HEAD)]),
+            None,
+        ),
         None,
     );
 

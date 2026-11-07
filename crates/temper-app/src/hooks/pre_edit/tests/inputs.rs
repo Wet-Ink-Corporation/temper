@@ -285,10 +285,7 @@ fn a_glob_compiles_only_when_a_match_first_tries_it() {
         &format!(r#"{{"scanner":{{"exempt":[{{"rule":"H-02","paths":[{bad}]}}]}}}}"#),
     ));
     let write = |file: &str, content: &str| {
-        format!(
-            r#"{{"file_path":"{file}","content":{}}}"#,
-            quoted(content)
-        )
+        format!(r#"{{"file_path":"{file}","content":{}}}"#, quoted(content))
     };
 
     let new = "/ws/crates/ledger-domain/src/new.rs";

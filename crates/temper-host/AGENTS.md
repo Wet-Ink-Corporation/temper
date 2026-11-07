@@ -12,10 +12,10 @@ adapter (OS: processes, files, clock).
 
 ## Public surface
 - `HostPorts` (`Default`, implements `Ports`).
-- `StdFiles`, the `Files` adapter: Node's `readFileSync(.., 'utf8')` (lossy, BOM kept, V8's length limit), `readdirSync` (libuv's order, `Dirent` kinds) and `realpathSync.native`; since 2b `statSync` (following links), 1.x's `writeAtomic` (make the parents, write `<file>.<pid>.<nanos>.tmp`, rename; a temporary file left by a failed rename stays, as in 1.x), `appendFileSync` (one `write_all` on an append handle), `mkdirSync(.., { recursive })` and `renameSync`.
+- `StdFiles`, the `Files` adapter: Node's `readFileSync(.., 'utf8')` (lossy, BOM kept, V8's length limit), `readdirSync` (libuv's order, `Dirent` kinds) and `realpathSync.native`; since 2b `statSync` (following links), 1.x's `writeAtomic` (make the parents, write `<file>.<pid>.<nanos>.tmp`, rename; a temporary file left by a failed rename stays, as in 1.x), `appendFileSync` (one `write_all` on an append handle), `mkdirSync(.., { recursive })` and `renameSync`. Since 3b `read_into`: it stats the path first, so a FIFO or device is never opened, checks the opened handle again, and streams a regular file of up to 2^31-1 bytes (Node's limit) into the writer (OC-1 A).
 - `SystemClock`, the `Clock` adapter: the system time in milliseconds since the epoch, saturating outside a JS `Date`'s range.
 
-- `StdProcess`, the `ProcessRunner` adapter: 1.x's `spawnSync` with stdin ignored, both streams piped and capped at the request's `ByteCap` (`Overflow` past it), a timeout through `wait-timeout`, and `CREATE_NO_WINDOW` on Windows (`windowsHide`).
+- `StdProcess`, the `ProcessRunner` adapter: 1.x's `spawnSync` with stdin ignored, both streams piped and capped at the request's `ByteCap` (`Overflow` past it), or, since 3b, stdout streamed whole into the request's writer (`StdoutSink::Stream`, OC-1 A), a timeout through `wait-timeout`, and `CREATE_NO_WINDOW` on Windows (`windowsHide`).
 
 ## Invariants
 - Every child process runs under a timeout and is killed and reaped when it expires (H-13).
@@ -43,3 +43,4 @@ Typed adapter errors carrying the path or command they concern (ERR-03, H-09): `
 | 2026-11-01 | `StdProcess` on `wait-timeout` with only what `discover` needs: stdin null, capped capture, a timeout, kill and reap, joined readers. `wait-timeout` 0.2.1 passes `cargo deny`'s licence check as `MIT/Apache-2.0`. | H-13, H-16 | two-way (1d-13 A, wi-f1bd32) |
 | 2026-11-01 | A reader past its cap reports `ProcessError::Overflow`; it stops reading, so the child fails its next write or meets its timeout. | H-10, H-13 | owner (OC-3 A, wi-129daa) |
 | 2026-11-02 | `append_line` is one `write_all` of the line and its newline on an `O_APPEND` handle, so two hooks appending at once do not interleave inside a row; two rotating at once may lose the older file, as in 1.x. | H-13 | two-way (port-phase-2 Concurrency) |
+| 2026-11-07 | `read_into` stats before it opens and checks the handle again, so a FIFO never blocks it and a link to a device or directory reads as not a file; a streamed stdout has no cap, only the timeout (OC-1 A, D16(t)). | H-13 | owner (wi-50fc9a) |

@@ -67,25 +67,32 @@ fn a_file_over_the_limit_is_too_large() -> TestResult {
 }
 
 /// A FIFO would block `open` until a writer came (1.x hangs there until the hook times out);
-/// a link to `/dev/zero` would stream forever. Both are refused from their metadata.
+/// a link to `/dev/zero` would stream forever, and a socket cannot be opened as a file. Each
+/// is refused from its metadata.
 #[cfg(unix)]
 #[test]
 #[cfg_attr(miri, ignore = "Miri cannot use the file system")]
-fn a_fifo_and_a_link_to_a_device_are_not_a_file() -> TestResult {
+fn a_fifo_a_socket_and_a_link_to_a_device_are_not_a_file() -> TestResult {
     let dir = tempfile::tempdir()?;
     let fifo = dir.path().join("fifo.rs");
     let made = std::process::Command::new("mkfifo").arg(&fifo).status()?;
     assert!(made.success(), "mkfifo");
     let zero = dir.path().join("zero.rs");
     std::os::unix::fs::symlink("/dev/zero", &zero)?;
+    let socket = dir.path().join("socket.rs");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket)?;
     let mut sink = Vec::new();
 
     let answers = [
         StdFiles.read_into(&fifo, NODE_LIMIT, &mut sink)?,
         StdFiles.read_into(&zero, NODE_LIMIT, &mut sink)?,
+        StdFiles.read_into(&socket, NODE_LIMIT, &mut sink)?,
     ];
 
-    assert_eq!(answers, [ReadInto::NotAFile, ReadInto::NotAFile]);
+    assert_eq!(
+        answers,
+        [ReadInto::NotAFile, ReadInto::NotAFile, ReadInto::NotAFile]
+    );
     assert!(sink.is_empty(), "nothing read");
     Ok(())
 }
