@@ -13,7 +13,7 @@ import { HarnessError } from './lib/error.mjs';
 import { firstDifference, hitDiff } from './lib/diff.mjs';
 import { hermeticEnv, runEngine, rustEngine } from './lib/engines.mjs';
 import { HOOK_FIXTURES, SCAN_FIXTURE, freshCopy, largeFile, snapshotTree, writeTree } from './lib/fixtures.mjs';
-import { runHookCase, runInFreshCopy, treeContents } from './lib/cases.mjs';
+import { DEAD_PID, applySetup, expandPlaceholders, runHookCase, runInFreshCopy, treeContents } from './lib/cases.mjs';
 import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from './lib/corpus.mjs';
 import { UsageError, parseArgs } from './corpus.mjs';
 import {
@@ -436,6 +436,40 @@ test('renderSummary: totals, slowest roots, a mismatch, a file over the bound (g
 |---|---|---:|
 | a | src/y.rs | 10500 |
 `);
+});
+
+test('expandPlaceholders: the root, the pids, and times before now as ISO text or epoch ms', () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 1, 500);
+  const text = expandPlaceholders('<ROOT>/x <ROOT> <PID> <DEADPID> <ISO:-1500> <MS:-500> <ISO:-x>', { root: '/r', now });
+  assert.equal(text, `/r/x /r ${process.pid} ${DEAD_PID} 2026-01-01T00:00:00.000Z ${now - 500} <ISO:-x>`);
+});
+
+test('applySetup: same commit ids in two copies, writes with parents, base64, removals, ages; an unknown action throws', () => {
+  const now = Date.now();
+  const heads = [0, 1].map(() => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-harness-setup-'));
+    try {
+      applySetup(dir, [
+        { git: ['init', '-q'] },
+        { write: { 'a/b.txt': '<MS:-0>', 'bin': { base64: '/wA=' }, 'gone': 'x' } },
+        { remove: ['gone'] },
+        { age: { 'a/b.txt': 60_000 } },
+        { git: ['add', '-A'] },
+        { git: ['commit', '-qm', 'one'] },
+      ], { now, ceiling: path.dirname(dir) });
+      assert.equal(fs.readFileSync(path.join(dir, 'a/b.txt'), 'utf8'), String(now));
+      assert.deepEqual([...fs.readFileSync(path.join(dir, 'bin'))], [0xff, 0]);
+      assert.equal(fs.existsSync(path.join(dir, 'gone')), false);
+      assert.ok(Math.abs(fs.statSync(path.join(dir, 'a/b.txt')).mtimeMs - (now - 60_000)) < 1_000);
+      assert.throws(() => applySetup(dir, [{ chmod: {} }], { now, ceiling: path.dirname(dir) }), HarnessError);
+      assert.throws(() => applySetup(dir, [{ git: ['no-such-command'] }], { now, ceiling: path.dirname(dir) }), HarnessError);
+      return spawnSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8', env: hermeticEnv() }).stdout.trim();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  assert.match(heads[0], /^[0-9a-f]{40}$/);
+  assert.equal(heads[1], heads[0]);
 });
 
 test('corpus CLI parseArgs: --bin is required, repeats keep their order, the budget is a positive integer', () => {

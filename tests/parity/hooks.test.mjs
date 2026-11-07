@@ -52,8 +52,8 @@ function maskFile(rel, text) {
 }
 
 /** One engine's run of a case, masked; `failures` counts OC-3 (p)'s masked texts. */
-function run(engine, c, steps) {
-  const r = runHookCase(engine, dirs[c.fixture], { steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile });
+function run(engine, c, steps, now) {
+  const r = runHookCase(engine, dirs[c.fixture], { steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile, setup: c.setup, now });
   let failures = 0;
   const out = r.steps.map((s) => {
     let { stdout } = s;
@@ -77,7 +77,9 @@ test('the hook cases: unique names, known fixtures, and the 2f floor of 129 (pro
 for (const c of cases) {
   test(`${c.file}: ${c.name}`, () => {
     const steps = c.steps ?? [{ event: c.event, stdin: c.stdin }];
-    const [node, rust] = engines.map((engine) => run(engine, c, steps));
+    // One `now` per case, so both engines see the same placeholder times.
+    const now = Date.now();
+    const [node, rust] = engines.map((engine) => run(engine, c, steps, now));
     assert.deepStrictEqual(rust.out, node.out, 'exit, stdout and stderr per step');
     assert.deepStrictEqual(rust.files, node.files, 'written files');
     assert.equal(rust.failures, node.failures, 'OC-3 (p) masks on each side');
