@@ -190,7 +190,8 @@ pub(super) fn problems_of(
     field: VerdictField,
     ctx: &VerdictContext<'_>,
 ) -> Result<Vec<VerdictProblem>, JsTypeError> {
-    if !truthy(v) {
+    // `{ ...v, verdict: 'approved' }` is an object, so always truthy.
+    if field == VerdictField::AsIs && !truthy(v) {
         return Ok(vec![no_block()]);
     }
     if let Some(error) = v.get("__parseError").filter(|e| truthy(e)) {
