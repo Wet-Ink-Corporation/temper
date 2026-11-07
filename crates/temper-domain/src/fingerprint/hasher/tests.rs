@@ -47,7 +47,9 @@ fn one_stream_of_every_frame_kind_hashes_as_sha256sum_says() {
     content.write_all(b"x").expect("the sink never fails");
     hasher.accept(content);
     let mut vanished = hasher.untracked("tests/b.rs");
-    vanished.write_all(b"half of it").expect("the sink never fails");
+    vanished
+        .write_all(b"half of it")
+        .expect("the sink never fails");
     drop(vanished);
     let mut walked = hasher.file("src/c.rs");
     walked.write_all(b"y").expect("the sink never fails");
@@ -63,7 +65,8 @@ fn the_diff_decodes_across_writes_and_flushes_a_dangling_sequence() {
     let split = {
         let mut hasher = FingerprintHasher::new();
         let mut diff = hasher.diff();
-        diff.write_all(&[b'd', 0xef, 0xbf]).expect("the sink never fails");
+        diff.write_all(&[b'd', 0xef, 0xbf])
+            .expect("the sink never fails");
         diff.write_all(&[0xbd]).expect("the sink never fails");
         diff.finish();
         fp(hasher)
@@ -71,14 +74,16 @@ fn the_diff_decodes_across_writes_and_flushes_a_dangling_sequence() {
     let dangling = {
         let mut hasher = FingerprintHasher::new();
         let mut diff = hasher.diff();
-        diff.write_all(&[b'd', 0xef, 0xbf]).expect("the sink never fails");
+        diff.write_all(&[b'd', 0xef, 0xbf])
+            .expect("the sink never fails");
         diff.finish();
         fp(hasher)
     };
     let whole = {
         let mut hasher = FingerprintHasher::new();
         let mut diff = hasher.diff();
-        diff.write_all("d\u{fffd}".as_bytes()).expect("the sink never fails");
+        diff.write_all("d\u{fffd}".as_bytes())
+            .expect("the sink never fails");
         diff.finish();
         fp(hasher)
     };

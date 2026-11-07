@@ -10,6 +10,7 @@ mod utf8;
 mod value;
 
 pub(crate) use canonical::canonical;
+pub use canonical::js_sort;
 pub use json::JsonParseError;
 pub(crate) use map::JsMap;
 pub(crate) use replace::{Replacement, next_boundary, replace_all};

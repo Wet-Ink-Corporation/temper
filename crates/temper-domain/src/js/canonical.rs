@@ -11,6 +11,22 @@ pub(crate) fn utf16_cmp(a: &str, b: &str) -> Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
+/// JS's `strings.sort()`: by UTF-16 code units ([`utf16_cmp`]), stable, without allocating per
+/// comparison (P5).
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::js_sort;
+///
+/// let mut names = ["\u{E000}", "\u{1F600}", "a"];
+/// js_sort(&mut names);
+/// assert_eq!(names, ["a", "\u{1F600}", "\u{E000}"]);
+/// ```
+pub fn js_sort(strings: &mut [impl AsRef<str>]) {
+    strings.sort_by(|a, b| utf16_cmp(a.as_ref(), b.as_ref()));
+}
+
 /// 1.x `canonical(x)`: arrays mapped, objects rebuilt by `Object.fromEntries` from their keys in
 /// `Object.keys(x).sort()` order, which puts integer-like keys first in ascending order again.
 ///

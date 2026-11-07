@@ -38,8 +38,9 @@ pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
 pub use fingerprint::{
-    ContentSink, DiffSink, Fingerprint, FingerprintHasher, FingerprintParseError,
-    TEMPER_CONFIG_FILE,
+    BASELINE_FILE, ContentSink, DiffSink, EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, Fingerprint,
+    FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, gate_config,
+    in_fingerprint, is_rust_relevant,
 };
 pub use glob::{Glob, GlobError, Globs, LazyGlobs};
 pub use hooks::{
@@ -51,7 +52,7 @@ pub use hooks::{
     TelemetryRow, UnknownHookEvent, Unread, apply_edit, edit_policy, is_reviewer, lockfile_denial,
     skill_gate_denial, skill_load_via, skill_preloaded,
 };
-pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_trim};
+pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
