@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use temper_domain::{EXCLUDED_DIRS, js_trim};
+use temper_domain::{EXCLUDED_DIRS, PathStyle, js_trim};
 
 use crate::paths;
 use crate::ports::{ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink};
@@ -80,6 +80,23 @@ fn lossy(bytes: Vec<u8>) -> String {
 
 fn rev_parse(process: &impl ProcessRunner, cwd: &Path, flag: &str) -> Option<String> {
     succeeded(process, cwd, &["rev-parse", flag])
+}
+
+/// 1.x `isLinked(proj)`: is the checkout at `git_root` a linked worktree, whose git dir is not
+/// the repository's common dir? `git rev-parse --git-dir --git-common-dir`, each line trimmed
+/// and resolved against the root; a failed call, or fewer than two lines, is not linked.
+pub(crate) fn is_linked(process: &impl ProcessRunner, style: PathStyle, git_root: &str) -> bool {
+    let args = ["rev-parse", "--git-dir", "--git-common-dir"];
+    let Some(out) = succeeded(process, Path::new(git_root), &args) else {
+        return false;
+    };
+    let mut dirs = js_trim(&out)
+        .split('\n')
+        .map(|line| paths::resolve(style, git_root, js_trim(line)));
+    match (dirs.next(), dirs.next()) {
+        (Some(git_dir), Some(common)) => git_dir != common,
+        (Some(_) | None, None) | (None, Some(_)) => false,
+    }
 }
 
 /// 1.x `resolveRev(proj, rev)`: `rev` as a commit sha of the repository at `git_root`, trimmed,

@@ -26,6 +26,7 @@ mod session;
 mod state;
 mod status;
 mod telemetry;
+mod trees;
 
 pub use engine::{
     CommandError, CommandOutput, Engine, Exit, HookError, OutputFormat, RunEnv, ScanArgs,

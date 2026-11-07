@@ -41,8 +41,8 @@ pub use config::{
 };
 pub use fingerprint::{
     BASELINE_FILE, ContentSink, DiffSink, EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, Fingerprint,
-    FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, gate_config,
-    in_fingerprint, is_rust_relevant,
+    FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, TreeId,
+    gate_config, in_fingerprint, is_rust_relevant, tree_id,
 };
 pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
