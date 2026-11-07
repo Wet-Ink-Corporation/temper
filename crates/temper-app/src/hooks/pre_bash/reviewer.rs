@@ -54,6 +54,8 @@ pub(super) fn reviewer_patch(
             .any(|c| matches!(patch_command(c, cx), Some(PatchCommand::Applies(_))));
         let opaque = untracked
             .then(|| {
+                // 1.x `readerRule(() => opaquePatch(c), null)`: a command it throws on is not
+                // opaque.
                 commands
                     .iter()
                     .find_map(|c| opaque_patch(c, cx, code).ok().flatten())

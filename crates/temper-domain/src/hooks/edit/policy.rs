@@ -3,7 +3,7 @@
 //! from `const denies = []` to its end).
 
 use crate::config::ExemptRule;
-use crate::glob::{GlobError, Globs};
+use crate::glob::{GlobError, Globs, LazyGlobs};
 use crate::hooks::{ContextEvent, HookOutcome, TelemetryEvent};
 use crate::manifest::{DepKind, DepName, ManifestFindings, dep_names, lint_config_changed};
 use crate::scan::{
@@ -118,6 +118,43 @@ impl<'a> Exemptions<'a> {
         self.0
             .iter()
             .any(|(rule, paths)| *rule == hit.id().as_str() && paths.any_match(rel))
+    }
+}
+
+/// The `scanner.exempt` entries with their globs compiled as 1.x's `exempt(h, rel)` builds
+/// them: an entry's globs only for a hit of its rule, each up to the first that matches.
+#[derive(Debug, Default)]
+pub struct LazyExemptions<'a>(Vec<(&'a str, LazyGlobs<'a>)>);
+
+impl<'a> LazyExemptions<'a> {
+    /// Holds `rules`, compiling no glob.
+    #[must_use]
+    pub fn new(rules: &'a [ExemptRule]) -> Self {
+        Self(
+            rules
+                .iter()
+                .map(|rule| {
+                    (
+                        rule.rule(),
+                        LazyGlobs::new(rule.paths().iter().map(String::as_str)),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// Is `hit` exempt under `rel`? (`e.rule === h.id && e.paths.some(..)`.)
+    ///
+    /// # Errors
+    ///
+    /// The [`GlobError`] of the first glob tried that does not compile.
+    pub(crate) fn covers(&self, hit: &Hit, rel: &str) -> Result<bool, GlobError> {
+        for (rule, paths) in &self.0 {
+            if *rule == hit.id().as_str() && paths.any_match(rel)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

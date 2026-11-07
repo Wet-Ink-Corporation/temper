@@ -34,15 +34,15 @@ mod time;
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
-pub use glob::{Glob, GlobError, Globs};
+pub use glob::{Glob, GlobError, Globs, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
     EditOp, EditStep, EditTarget, EditTool, Exemptions, HookEvent, HookOutcome, IRON_RULES,
-    InterpreterCode, ManifestEdit, OpaqueKind, PolicyDecision, PolicySetupError, ProtectedChange,
-    RaiseFlag, Replacements, RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, ShellAskVia,
-    ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent, Unread,
-    apply_edit, edit_policy, is_reviewer, lockfile_denial, skill_gate_denial, skill_load_via,
-    skill_preloaded,
+    InterpreterCode, LazyExemptions, ManifestEdit, OpaqueKind, PolicyDecision, PolicySetupError,
+    ProtectedChange, RaiseFlag, Replacements, RustEdit, RustWrites, SKILL_NOT_LOADED,
+    STATE_DIR_DENIAL, ShellAskVia, ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent,
+    TelemetryRow, UnknownHookEvent, Unread, apply_edit, edit_policy, is_reviewer, lockfile_denial,
+    skill_gate_denial, skill_load_via, skill_preloaded,
 };
 pub use js::{JsonParseError, Object as JsObject, Value as JsValue, js_trim};
 pub use manifest::{

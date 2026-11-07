@@ -3,9 +3,10 @@
 //! application reads the command and the files; this decides.
 
 use super::{telemetry_via, texts};
+use crate::glob::GlobError;
 use crate::hooks::edit::{Counts, Findings, hit_findings, is_mod_rs};
 use crate::hooks::telemetry::ShellDenyVia;
-use crate::hooks::{ContextEvent, Exemptions, HookOutcome, PolicyDecision, TelemetryEvent};
+use crate::hooks::{ContextEvent, HookOutcome, LazyExemptions, PolicyDecision, TelemetryEvent};
 use crate::js::truncate_utf16;
 use crate::scan::{CodeKind, ScanOptions, Scanner, new_hits};
 
@@ -65,8 +66,18 @@ pub struct RustWrites {
 impl RustWrites {
     /// 1.x `checkFile`: a protected target asks; a new `mod.rs` outside tests is denied; the
     /// new escape hatches, lint exceptions, removed or ignored tests and new clones of the
-    /// text the command leaves are what an Edit of it would find.
-    pub fn check(&mut self, file: &CopiedFile<'_>, exempt: &Exemptions<'_>, scanner: &Scanner) {
+    /// text the command leaves are what an Edit of it would find. An exemption's globs are
+    /// compiled only for a new hit of its rule, as 1.x's `exempt(h, rel)` builds them.
+    ///
+    /// # Errors
+    ///
+    /// The [`GlobError`] of an exemption glob tried that does not compile, where 1.x throws.
+    pub fn check(
+        &mut self,
+        file: &CopiedFile<'_>,
+        exempt: &LazyExemptions<'_>,
+        scanner: &Scanner,
+    ) -> Result<(), GlobError> {
         let CopiedFile { rel, before, .. } = *file;
         let found = &mut self.found;
         if file.protected {
@@ -84,7 +95,7 @@ impl RustWrites {
             ));
         }
         if lenient && before.is_none() {
-            return;
+            return Ok(());
         }
         let b = scanner.scan(before.unwrap_or(""), &file.options);
         let a = scanner.scan(file.after, &file.options);
@@ -98,8 +109,13 @@ impl RustWrites {
                 clones: was.clones.saturating_add(now.clones),
             };
         }
-        let mut fresh = new_hits(&was_hits, a.into_hits());
-        fresh.retain(|hit| !exempt.covers(hit, rel));
+        let new = new_hits(&was_hits, a.into_hits());
+        let mut fresh = Vec::with_capacity(new.len());
+        for hit in new {
+            if !exempt.covers(&hit, rel)? {
+                fresh.push(hit);
+            }
+        }
         hit_findings(found, &fresh, rel);
         if now.tests < was.tests {
             found.asks.push(format!("{rel}: this command removes {} test(s) (H-12). Approve only if the test is being moved or intentionally retired.", was.tests.saturating_sub(now.tests)));
@@ -114,6 +130,7 @@ impl RustWrites {
         if now.clones > was.clones {
             found.advice.push(format!("H-08 {rel}: {} new .clone() call(s). Each needs an ownership reason (callee stores it, cheap handle, or genuine duplication).", now.clones.saturating_sub(was.clones)));
         }
+        Ok(())
     }
 
     /// What the command writes to a `.rs` file, named by `text` as written, temper cannot read.
@@ -185,7 +202,7 @@ fn decide_found(found: Findings, redacted: impl Fn() -> String) -> Option<Policy
             rules,
             cmd: redacted(),
         };
-        return Some(deny(escape_hatches(&denies), row));
+        return Some(deny(escape_hatches(denies), row));
     }
     if !asks.is_empty() {
         let context = (!advice.is_empty())
@@ -270,12 +287,12 @@ fn patched_text(patched: &[String]) -> String {
     )
 }
 
-fn escape_hatches(denies: &[String]) -> String {
+fn escape_hatches(denies: Vec<String>) -> String {
     let n = denies.len();
     let mut lines = vec![format!(
         "temper: this command writes {n} escape hatch(es) into Rust sources, so it was not run. Rewrite the source without them, or make the change with the Edit or Write tools:"
     )];
-    lines.extend(denies.iter().take(DENIES_SHOWN).cloned()); // the answer owns its text
+    lines.extend(denies.into_iter().take(DENIES_SHOWN));
     if let Some(more) = n.checked_sub(DENIES_SHOWN).filter(|&more| more > 0) {
         lines.push(format!("... and {more} more."));
     }
