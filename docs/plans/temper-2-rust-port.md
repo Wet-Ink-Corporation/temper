@@ -310,13 +310,17 @@ impl Config { pub fn load(text: Option<&str>) -> ConfigLoad; pub fn defaults() -
 pub struct Glob(regex::Regex);
 impl Glob { pub fn new(pattern: &str) -> Result<Self, GlobError>; pub fn is_match(&self, rel: &str) -> bool; }
 
-// verdict
-pub fn extract_verdict(text: &str) -> Option<ExtractedVerdict>;   // enum { Parsed(serde_json::Value), Unparseable { message: String } }
-pub struct VerdictContext<'a> { pub changed_rust: &'a [RelPath], pub gate: GateState }   // GateState { Unknown, Green, Red }
-pub fn validate_verdict(verdict: Option<&ExtractedVerdict>, ctx: &VerdictContext<'_>) -> Vec<VerdictProblem>;   // Display = exact 1.x text
-pub struct ValidVerdict { value: serde_json::Value, fingerprint: Fingerprint, outcome: VerdictOutcome }
-impl ValidVerdict { pub fn new(v: ExtractedVerdict, ctx: &VerdictContext<'_>) -> Result<Self, VerdictRejected>; }   // ERR-14: hands the value back
-pub fn summarize_findings(verdict: &serde_json::Value, max: usize) -> String;
+// verdict (as built in Phase 3a; the JS value model JsValue, as 2-10 A)
+pub fn extract_verdict(text: &str) -> Option<ExtractedVerdict>;   // enum { Parsed(JsValue), Unparseable { message: String } }
+pub struct VerdictContext<'a> { pub changed_rust: &'a [String], pub gate: GateState }   // GateState { Red, NotRed }
+pub fn verdict_problems(verdict: Option<&ExtractedVerdict>, ctx: &VerdictContext<'_>) -> Result<Vec<VerdictProblem>, JsTypeError>;   // 1.x order and text; Err where 1.x throws
+pub fn problem_kinds(problems: &[VerdictProblem]) -> Vec<ProblemKind>;
+pub struct ValidVerdict { value: JsValue, fingerprint: Fingerprint, outcome: VerdictOutcome }
+impl ValidVerdict { pub fn check(v: ExtractedVerdict, ctx: &VerdictContext<'_>) -> Result<Self, VerdictRejected>; }   // ERR-14: VerdictRejected::{Problems, Throws} hand the value back
+pub fn summarize_findings(verdict: &JsValue, max: usize) -> Result<String, JsTypeError>;
+pub fn earlier_review(verdict: &JsValue, kept: usize) -> Result<String, JsTypeError>;
+pub fn verdict_hash(verdict: &JsValue) -> String;   // sha256(JSON.stringify(canonical(v)))[..16]
+pub fn handback_denial(problems: &[VerdictProblem]) -> String; pub fn verdict_block(problems: &[VerdictProblem]) -> String;
 
 // fingerprint and time
 pub struct Fingerprint([u8; 8]);              // Display = 16 lowercase hex; FromStr validates ^[0-9a-f]{16}$
@@ -848,8 +852,8 @@ Phase 3: state, fingerprint, sessions, verdicts
 - [ ] session base: set on startup, clear and fork (forced), kept on resume; an unresolvable recorded base falls back to HEAD; start-fp recorded.
 - [ ] `TEMPER_BASE` from another repository falls back to HEAD with a single stderr note (CLI).
 - [ ] prune sessions (14 d) and markers (7 d) by mtime, and verdicts and gate runs by age, count and bytes with the start fingerprint and the 60-minute grace kept; startup only (fake clock and files; ported from `state-retention.test.mjs`).
-- [ ] `extract_verdict`: the last fenced json block containing `temper_verdict`; an unparseable one reports the parse problem.
-- [ ] `validate_verdict`: one test per problem message (schema, verdict, fingerprint, findings fields, scores, `correctness`, `escape_hatches` and `craft` always rated, evidence, unread changed files, approved-with-majors, approved-with-low-scores, approved-with-red-gate, gate entries); a `files_read` entry covers a changed file only as its repo-relative path or an absolute path ending in `/` plus that path, never a bare suffix (#86).
+- [x] `extract_verdict`: the last fenced json block containing `temper_verdict`; an unparseable one reports the parse problem. (3a)
+- [x] `validate_verdict` (as built, `verdict_problems`): one test per problem message (schema, verdict, fingerprint, findings fields, scores, `correctness`, `escape_hatches` and `craft` always rated, evidence, unread changed files, approved-with-majors, approved-with-low-scores, approved-with-red-gate, gate entries); a `files_read` entry covers a changed file only as its repo-relative path or an absolute path ending in `/` plus that path, never a bare suffix (#86).
 - [ ] `pre-handback`: non-reviewers pass (a `handback` telemetry row either way); an invalid verdict is denied with the problem list; a valid one is recorded (stale flag) with session `verdict-<agent>` written.
 - [ ] `subagent-stop` (reviewer): non-reviewers pass, after a `subagent-stop` telemetry row; a verdict already recorded by `pre-handback` passes; without `last_assistant_message` the report is read from `agent_transcript_path` (the last `SubagentHandback` message, else the last assistant text); a valid verdict is recorded (stale flag) with session `verdict-<agent>` written; invalid blocks, or passes with telemetry when `stop_hook_active`.
 - [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line; the Node-minimum warning line, in the context and as a `systemMessage` (#89).
@@ -858,6 +862,7 @@ Phase 3: state, fingerprint, sessions, verdicts
 - [ ] state cross-read: Rust reads 1.x-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
 
 Phase 4: gate and completion hooks
+- [ ] Phase 2's `String()` conversions of hook input fail where 1.x throws on an object with its own `toString` key, alone or inside an array, through `js_string_checked` as 3a's verdict sites do (PR #206 review F2): `agent_key` and `session_segment` (`String(agent_id)`, `String(session_id)`), `js_string_or_empty` in `skill`, `pre_edit` and `pre_bash`, `pre_edit`'s `manifest_text`, and the manifest feature items. Node-printed rows first; due before the Phase 2 handlers graduate (deferred, wi-f24942).
 - [ ] `StdProcess`: captures stdout and stderr; enforces the stderr cap; a timeout kills the child and returns `TimedOut` (test uses the test binary itself as the child via `std::env::current_exe` with a "hang" argument handled in `tests/it/main.rs`, so no `sleep` is needed: it blocks on reading stdin that never closes); spawn failure gives `ProcessError::Spawn`; stdin is null.
 - [ ] `StdProcess` bounds `run` by its timeout even when the child spawns a grandchild that holds a pipe: each child gets its own process group (Unix, `CommandExt::process_group(0)`) or job object (Windows), and the timeout kills the whole group. Test: a child whose grandchild holds stdout returns `TimedOut` (cli/it, the test binary as the child; no wall clock). std cannot signal a group or create a job object, and H-01 rules out FFI here, so the plan must choose between spawning `kill -- -PGID` or `taskkill /T /F` and a new dependency (`process-wrap` or the like, H-16). A child that cannot be signalled at all stays a documented limit (the group signal needs the same permission). The Phase 4 plan decides whether anything more is possible without abandoning a blocked reader (H-13). From the 1d.2b review (F1, F4).
 - [ ] `default_steps` with and without nextest, `allFeatures`, `doc`; `ratchet_steps` with and without scan (domain).

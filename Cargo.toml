@@ -32,6 +32,7 @@ proptest = { version = "1.12", default-features = false, features = ["std"] }   
 regex = { version = "1.13", default-features = false, features = ["std", "perf", "unicode"] }   # D10; the default set spelled out (wi-466849)
 serde = { version = "1.0", default-features = false, features = ["std"] }                       # pre-approved; no derive (1d-12)
 serde_json = { version = "1.0", default-features = false, features = ["std", "float_roundtrip"] }   # float_roundtrip: numbers as JSON.parse reads them (2b)
+sha2 = { version = "0.11", default-features = false }                                           # D10; no alloc or oid (3a)
 tempfile = { version = "3", default-features = false }
 thiserror = { version = "2.0", default-features = false, features = ["std"] }                  # wi-5eed96
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "preserve_order"] }   # D10; `Table: FromStr`, document order

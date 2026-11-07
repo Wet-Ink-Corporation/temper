@@ -5,7 +5,8 @@
 //! application layer (`temper-app`) supplies those through ports. The port of the 1.x Node
 //! engine is under way (`docs/plans/temper-2-rust-port.md`); so far the crate has the scanner
 //! with its lexer, test regions and all 60 rules, path classification and the new-hit difference
-//! (Phases 1a to 1d), and the manifest policy, the config and glob matching (Phase 2a).
+//! (Phases 1a to 1d), the manifest policy, the config and glob matching (Phase 2a), the hook
+//! policies (Phases 2b to 2f), and the review verdict rules with the tree fingerprint (Phase 3a).
 //!
 //! # Quick start
 //!
@@ -23,6 +24,7 @@
 //! ```
 
 mod config;
+mod fingerprint;
 mod glob;
 mod hooks;
 mod js;
@@ -30,10 +32,12 @@ mod manifest;
 mod paths;
 mod scan;
 mod time;
+mod verdict;
 
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
 };
+pub use fingerprint::{Fingerprint, FingerprintParseError};
 pub use glob::{Glob, GlobError, Globs, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
@@ -44,7 +48,7 @@ pub use hooks::{
     TelemetryRow, UnknownHookEvent, Unread, apply_edit, edit_policy, is_reviewer, lockfile_denial,
     skill_gate_denial, skill_load_via, skill_preloaded,
 };
-pub use js::{JsonParseError, Object as JsObject, Value as JsValue, js_trim};
+pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_trim};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
@@ -59,3 +63,9 @@ pub use scan::{
     is_build_script, new_hits, render_scan_text,
 };
 pub use time::Timestamp;
+pub use verdict::{
+    ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
+    VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
+    extract_verdict, handback_denial, problem_kinds, summarize_findings, verdict_block,
+    verdict_hash, verdict_problems,
+};

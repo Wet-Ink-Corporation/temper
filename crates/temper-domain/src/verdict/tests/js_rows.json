@@ -1,0 +1,622 @@
+[
+ {
+  "name": "temper_verdict 1.0",
+  "text": "{\"temper_verdict\":1.0,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "temper_verdict \"1\"",
+  "text": "{\"temper_verdict\":\"1\",\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "schema-version",
+    "\"temper_verdict\" must be 1"
+   ]
+  ]
+ },
+ {
+  "name": "score 4.0",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4.0,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "score -0",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":-0,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-low-score",
+    "\"approved\" requires every applicable dimension >= 3; low: api"
+   ]
+  ]
+ },
+ {
+  "name": "score 1e0",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":1e0,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-low-score",
+    "\"approved\" requires every applicable dimension >= 3; low: api"
+   ]
+  ]
+ },
+ {
+  "name": "score 4.5",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4.5,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "score-range",
+    "scores.api must be 0-4 or \"n/a\""
+   ]
+  ]
+ },
+ {
+  "name": "score \"4\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":\"4\",\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "score-range",
+    "scores.api must be 0-4 or \"n/a\""
+   ]
+  ]
+ },
+ {
+  "name": "score null",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":null,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "score-range",
+    "scores.api must be 0-4 or \"n/a\""
+   ]
+  ]
+ },
+ {
+  "name": "score 2.0 approved",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":2.0,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-low-score",
+    "\"approved\" requires every applicable dimension >= 3; low: api"
+   ]
+  ]
+ },
+ {
+  "name": "scores []",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":[],\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "score-missing",
+    "scores.correctness is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.escape_hatches is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.ownership is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.errors is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.api is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.architecture is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.tests is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.performance is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.concurrency is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.observability is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.craft is missing (0-4 or \"n/a\")"
+   ],
+   [
+    "score-missing",
+    "scores.docs is missing (0-4 or \"n/a\")"
+   ]
+  ]
+ },
+ {
+  "name": "scores null",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":null,\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "scores-missing",
+    "\"scores\" object is required"
+   ]
+  ]
+ },
+ {
+  "name": "scores \"x\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":\"x\",\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "scores-missing",
+    "\"scores\" object is required"
+   ]
+  ]
+ },
+ {
+  "name": "scores own __proto__ only",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"__proto__\":{\"api\":4},\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "score-missing",
+    "scores.api is missing (0-4 or \"n/a\")"
+   ]
+  ]
+ },
+ {
+  "name": "findings \"x\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":\"x\",\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "findings-array",
+    "\"findings\" must be an array (empty if none)"
+   ]
+  ]
+ },
+ {
+  "name": "findings mixed, changes requested",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"changes-requested\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[null,5,[],{}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "finding-object",
+    "findings[0] must be an object"
+   ],
+   [
+    "finding-object",
+    "findings[1] must be an object"
+   ],
+   [
+    "finding-rule",
+    "findings[2].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ],
+   [
+    "finding-severity",
+    "findings[2].severity must be one of blocker/major/minor/nit"
+   ],
+   [
+    "finding-file",
+    "findings[2].file is required"
+   ],
+   [
+    "finding-evidence",
+    "findings[2].evidence is required (quote the code)"
+   ],
+   [
+    "finding-fix",
+    "findings[2].fix is required"
+   ],
+   [
+    "finding-rule",
+    "findings[3].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ],
+   [
+    "finding-severity",
+    "findings[3].severity must be one of blocker/major/minor/nit"
+   ],
+   [
+    "finding-file",
+    "findings[3].file is required"
+   ],
+   [
+    "finding-evidence",
+    "findings[3].evidence is required (quote the code)"
+   ],
+   [
+    "finding-fix",
+    "findings[3].fix is required"
+   ]
+  ]
+ },
+ {
+  "name": "findings mixed, approved",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[null,5,[],{}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "findings [[]], approved",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[[],false,\"\"],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "finding-rule",
+    "findings[0].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ],
+   [
+    "finding-severity",
+    "findings[0].severity must be one of blocker/major/minor/nit"
+   ],
+   [
+    "finding-file",
+    "findings[0].file is required"
+   ],
+   [
+    "finding-evidence",
+    "findings[0].evidence is required (quote the code)"
+   ],
+   [
+    "finding-fix",
+    "findings[0].fix is required"
+   ],
+   [
+    "finding-object",
+    "findings[1] must be an object"
+   ],
+   [
+    "finding-object",
+    "findings[2] must be an object"
+   ]
+  ]
+ },
+ {
+  "name": "rule as an array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":[\"OWN-08\"],\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "rule none with nit",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":\"none\",\"severity\":\"nit\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "rule none without nit",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":\"none\",\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "finding-rule",
+    "findings[0].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ]
+  ]
+ },
+ {
+  "name": "rule null and five letters",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":null,\"severity\":\"minor\",\"file\":0,\"evidence\":[],\"fix\":{}},{\"rule\":\"ABCDE-01\",\"severity\":\"Major\",\"file\":\"a\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "finding-rule",
+    "findings[0].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ],
+   [
+    "finding-file",
+    "findings[0].file is required"
+   ],
+   [
+    "finding-rule",
+    "findings[1].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ],
+   [
+    "finding-severity",
+    "findings[1].severity must be one of blocker/major/minor/nit"
+   ]
+  ]
+ },
+ {
+  "name": "rule with a trailing newline",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":\"OWN-08\\n\",\"severity\":\"minor\",\"file\":\"a\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "finding-rule",
+    "findings[0].rule must be a rule ID like OWN-08 (\"none\" is allowed only for a nit no rule covers)"
+   ]
+  ]
+ },
+ {
+  "name": "evidence \"x\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":\"x\"}",
+  "changed": [],
+  "problems": [
+   [
+    "files-read",
+    "evidence.files_read must list the files you actually read"
+   ],
+   [
+    "commands-run",
+    "evidence.commands_run must list the commands you ran (at least the gate)"
+   ]
+  ]
+ },
+ {
+  "name": "evidence null",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":null}",
+  "changed": [],
+  "problems": [
+   [
+    "files-read",
+    "evidence.files_read must list the files you actually read"
+   ],
+   [
+    "commands-run",
+    "evidence.commands_run must list the commands you ran (at least the gate)"
+   ]
+  ]
+ },
+ {
+  "name": "files_read odd entries",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[5,null,\" ./a.rs \"],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs",
+   "b.rs",
+   "5",
+   "null.rs",
+   "c.txt"
+  ],
+  "problems": [
+   [
+    "files-unreviewed",
+    "changed files not reviewed: b.rs, null.rs"
+   ]
+  ]
+ },
+ {
+  "name": "gate \"ab\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":\"ab\",\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-gate-entry",
+    "\"approved\" requires every gate entry to be \"pass\""
+   ]
+  ]
+ },
+ {
+  "name": "gate \"\"",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":\"\",\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "gate 5",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":5,\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "gate null",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":null,\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "gate []",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":[],\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "gate [\"fail\"]",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":[\"pass\",\"fail\"],\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-gate-entry",
+    "\"approved\" requires every gate entry to be \"pass\""
+   ]
+  ]
+ },
+ {
+  "name": "gate {\"x\":null}",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"x\":null},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-gate-entry",
+    "\"approved\" requires every gate entry to be \"pass\""
+   ]
+  ]
+ },
+ {
+  "name": "fingerprint with a newline",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\\n\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "fingerprint",
+    "\"fingerprint\" must be the 16-hex fingerprint given in your review ticket"
+   ]
+  ]
+ },
+ {
+  "name": "duplicate keys",
+  "text": "{\"verdict\":\"lgtm\",\"temper_verdict\":1,\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"verdict\":\"approved\"}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "__proto__ key",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "__parseError falsy",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":\"\"}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "__parseError array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":[1,\"a\"]}",
+  "changed": [],
+  "problems": [
+   [
+    "json-parse",
+    "verdict JSON does not parse: 1,a"
+   ]
+  ]
+ },
+ {
+  "name": "a verdict that is an array",
+  "text": "[\"temper_verdict\"]",
+  "changed": [],
+  "problems": [
+   [
+    "schema-version",
+    "\"temper_verdict\" must be 1"
+   ],
+   [
+    "verdict-value",
+    "\"verdict\" must be \"approved\" or \"changes-requested\""
+   ],
+   [
+    "fingerprint",
+    "\"fingerprint\" must be the 16-hex fingerprint given in your review ticket"
+   ],
+   [
+    "findings-array",
+    "\"findings\" must be an array (empty if none)"
+   ],
+   [
+    "scores-missing",
+    "\"scores\" object is required"
+   ],
+   [
+    "files-read",
+    "evidence.files_read must list the files you actually read"
+   ],
+   [
+    "commands-run",
+    "evidence.commands_run must list the commands you ran (at least the gate)"
+   ]
+  ]
+ },
+ {
+  "name": "twelve unreviewed files",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [
+   "f0.rs",
+   "f1.rs",
+   "f2.rs",
+   "f3.rs",
+   "f4.rs",
+   "f5.rs",
+   "f6.rs",
+   "f7.rs",
+   "f8.rs",
+   "f9.rs",
+   "f10.rs",
+   "f11.rs"
+  ],
+  "problems": [
+   [
+    "files-unreviewed",
+    "changed files not reviewed: f0.rs, f1.rs, f2.rs, f3.rs, f4.rs, f5.rs, f6.rs, f7.rs, f8.rs, f9.rs"
+   ]
+  ]
+ },
+ {
+  "name": "files_read entry with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"toString\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": null
+ },
+ {
+  "name": "files_read entry wrapping own toString in an array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",[{\"toString\":1}]],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": null
+ },
+ {
+  "name": "files_read own toString without changed files",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"toString\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "files_read entry with own valueOf",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"valueOf\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": []
+ },
+ {
+  "name": "rule with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":{\"toString\":1},\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "rule wrapping own toString in an array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":[{\"toString\":\"x\"}],\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "file, evidence and fix with own toString are only truth-tested",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"changes-requested\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":{\"toString\":1},\"evidence\":{\"toString\":1},\"fix\":{\"toString\":1}}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "__parseError with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":{\"toString\":1}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "__parseError with own valueOf",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":{\"valueOf\":1}}",
+  "changed": [],
+  "problems": [
+   [
+    "json-parse",
+    "verdict JSON does not parse: [object Object]"
+   ]
+  ]
+ },
+ {
+  "name": "a gate entry with own toString is compared, not converted",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":{\"toString\":1}},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-gate-entry",
+    "\"approved\" requires every gate entry to be \"pass\""
+   ]
+  ]
+ }
+]
