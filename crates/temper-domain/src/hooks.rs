@@ -15,9 +15,9 @@ pub use bash::{
     RustWrites, Unread,
 };
 pub use edit::{
-    DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, Exemptions, ManifestEdit,
-    PolicyDecision, Replacements, RustEdit, STATE_DIR_DENIAL, apply_edit, edit_policy,
-    lockfile_denial,
+    DependencyCheck, EditFacts, EditOp, EditStep, EditTarget, EditTool, Exemptions, LazyExemptions,
+    ManifestEdit, PolicyDecision, Replacements, RustEdit, STATE_DIR_DENIAL, apply_edit,
+    edit_policy, lockfile_denial,
 };
 pub use event::{HookEvent, UnknownHookEvent};
 pub use iron_rules::{IRON_RULES, skill_gate_denial};

@@ -84,3 +84,24 @@ proptest! {
         prop_assert!(!glob.is_match(&longer), "{text:?} does not match {longer:?}");
     }
 }
+
+#[test]
+fn lazy_globs_compile_each_pattern_only_when_it_is_first_tried() {
+    let bad = format!("**/{}/x", "a*?".repeat(40_000));
+    let globs = LazyGlobs::new(["src/**", bad.as_str()]);
+    assert!(
+        globs
+            .any_match("src/lib.rs")
+            .expect("the first glob matches first")
+    );
+    assert!(globs.any_match("src/a.rs").expect("the first glob is kept"));
+    let err = globs
+        .any_match("tests/a.rs")
+        .expect_err("the second glob is tried");
+    assert_eq!(err.pattern(), bad);
+    assert!(
+        !LazyGlobs::new([])
+            .any_match("x")
+            .expect("no glob to compile")
+    );
+}
