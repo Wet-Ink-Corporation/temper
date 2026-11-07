@@ -69,9 +69,11 @@ impl fmt::Display for Timestamp {
     }
 }
 
-/// A file's modification time as Node's `fs.statSync(p).mtimeMs` gives it: a fractional count
-/// of milliseconds since the epoch, computed from the `timespec` as `sec * 1e3 + nsec / 1e6`
-/// in doubles (Node's `msFromTimeSpec`), so it compares with `Date.now()` as 1.x's does.
+/// A file's modification time as Node's `fs.statSync(p).mtimeMs` gives it.
+///
+/// That is a fractional count of milliseconds since the epoch, computed from the `timespec` as
+/// `sec * 1e3 + nsec / 1e6` in doubles (Node's `msFromTimeSpec`), so it compares with
+/// `Date.now()` as 1.x's does.
 ///
 /// # Examples
 ///

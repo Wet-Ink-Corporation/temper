@@ -17,6 +17,7 @@ mod hooks;
 mod manifests;
 mod paths;
 mod ports;
+mod procs;
 mod project;
 mod relpath;
 mod scan;

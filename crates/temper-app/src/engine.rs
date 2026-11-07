@@ -30,6 +30,8 @@ pub struct RunEnv {
     /// `TEMPER_BASE` when it is set and not empty: the base a command run outside a hook
     /// compares with, when it is a commit here.
     pub temper_base: Option<String>,
+    /// This process's id: the pid probe checks that it sees this process (OC-2 A).
+    pub pid: u32,
 }
 
 /// The use cases, over the ports `P`.

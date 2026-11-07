@@ -30,6 +30,7 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
         home: node_homedir(windows, |name| std::env::var_os(name), std::env::home_dir),
         remote_session: var("CLAUDE_CODE_REMOTE_SESSION_ID"),
         temper_base: var("TEMPER_BASE"),
+        pid: std::process::id(),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
     Ok(Engine::new(HostPorts::default(), env, scanner))

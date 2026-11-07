@@ -514,7 +514,8 @@ impl Ports for FakePorts {
 
 impl RunEnv {
     /// A run in `cwd` with `style`'s rules, no plugin data dir, no cloud session, the system
-    /// temporary directory `/tmp` (or `C:\Temp`) and the home `/home/u` (or `C:\Users\u`).
+    /// temporary directory `/tmp` (or `C:\Temp`), the home `/home/u` (or `C:\Users\u`) and
+    /// the pid 4242.
     pub(crate) fn at(cwd: &str, style: PathStyle) -> Self {
         let (temp, home) = match style {
             PathStyle::Posix => ("/tmp", "/home/u"),
@@ -528,6 +529,7 @@ impl RunEnv {
             home: PathBuf::from(home),
             remote_session: None,
             temper_base: None,
+            pid: 4242,
         }
     }
 }
