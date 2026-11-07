@@ -44,6 +44,7 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | Parity harness library and test-map checker (no binary) | `node --test tests/parity/harness.test.mjs`, `python3 tests/parity/check_test_map.py --self-test` |
 | Scan parity cases (Rust engine against 1.x) | `cargo build -p temper-cli && TEMPER_BIN=target/debug/temper node --test tests/parity/scan.test.mjs` |
 | Hook parity cases (Rust engine against 1.x) | `cargo build -p temper-cli && TEMPER_BIN=target/debug/temper node --test tests/parity/hooks.test.mjs` |
+| Status parity cases (Rust engine against 1.x: the fingerprint corpus and `status --json`) | `cargo build -p temper-cli && TEMPER_BIN=target/debug/temper node --test tests/parity/status.test.mjs` |
 | 1.x engine tests are mapped to Rust tests | `python3 tests/parity/check_test_map.py` |
 | Scanner corpus (release build; add `--root "$DIR"` after `python3 tests/doc_examples.py --extract "$DIR"` for the skill's blocks) | `node tests/parity/corpus.mjs --bin target/release/temper --lock Cargo.toml --lock templates/example-workspace/Cargo.toml --root templates/example-workspace` |
 | Release check: `plugin.json`, the CHANGELOG heading, the vendored `VERSION` and the tag agree | `bash tests/release-check.sh [--tag vX.Y.Z]` |

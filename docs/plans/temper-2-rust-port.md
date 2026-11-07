@@ -862,6 +862,8 @@ Phase 3: state, fingerprint, sessions, verdicts
 - [ ] `session-start` context text (loaded vs not, changes vs none, gate and review states); `CLAUDE_ENV_FILE` exports `TEMPER_CLI`, `TEMPER_BASE`, plus `TEMPER_BIN` and `PATH` (D17); the 1.x vendored-copy notice line; the config-problem line; the Node-minimum warning line, in the context and as a `systemMessage` (#89).
 - [ ] `subagent-start` context for implementer and reviewer (the reviewer runs `cargo fmt --all` first, gets the fingerprint instruction and the diff stat last 25 lines); the 5 newest plans by mtime.
 - [ ] `status` lines (root, state, base, fingerprint, changed, gate, review, baseline variants, config); the `status --json` and `stats --json` documents, `--session` and the no-project form (#108).
+  - [x] 3b: the text lines, `TEMPER_BASE` and `--session` (`temper_app::status::tests`, `temper-cli/tests/it/status.rs`, 41 parity cases).
+  - [x] 3c: `status --json`, with `--session`, the no-project form and a running gate (OC-2 A, D16(u)): `temper_app::status::tests::json`, `temper-cli/tests/it/status_json.rs`, 24 more parity cases; `status` is in `RUST_READY`. `stats --json` waits for Phase 7.
 - [ ] state cross-read: Rust reads 1.x-written `gate/<fp>.json`, `verdicts/<fp>.json` and `sessions/*` (committed fixtures), and 1.x reads Rust-written ones (parity harness).
 
 Phase 4: gate and completion hooks
