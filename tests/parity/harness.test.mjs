@@ -121,13 +121,15 @@ test('dropLoneSurrogateTail (D16(e)): only a lone high surrogate ending a string
   assert.deepEqual(dropLoneSurrogateTail('  "text": "a\\\\\\ud83d",\n'), { text: '  "text": "a\\\\",\n', count: 1 });
 });
 
-test('hermeticEnv: keeps what the engines need, drops TEMPER_*, CLAUDE* and git redirects', () => {
+test('hermeticEnv: keeps what the engines need, drops TEMPER_*, CLAUDE* and git redirects, and turns off background maintenance', () => {
   const env = { PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', TEMPER_BASE: 'abc', CLAUDE_PLUGIN_ROOT: '/p',
     GIT_DIR: '/g', GIT_WORK_TREE: '/w', RUSTFLAGS: '-D x', SystemRoot: 'C:\\Windows' };
-  assert.deepEqual(hermeticEnv(env, 'linux'), { PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1' });
+  assert.deepEqual(hermeticEnv(env, 'linux'), { PATH: '/bin', HOME: '/h', LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0' });
   const win = { Path: 'C:\\bin', SystemRoot: 'C:\\Windows', PATHEXT: '.EXE', ComSpec: 'cmd.exe', TEMPER_X: '1' };
   assert.deepEqual(hermeticEnv(win, 'win32'),
-    { Path: 'C:\\bin', SystemRoot: 'C:\\Windows', PATHEXT: '.EXE', ComSpec: 'cmd.exe', GIT_CONFIG_NOSYSTEM: '1' });
+    { Path: 'C:\\bin', SystemRoot: 'C:\\Windows', PATHEXT: '.EXE', ComSpec: 'cmd.exe', GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0' });
 });
 
 const stub = (script) => ({ name: 'stub', cmd: process.execPath, pre: ['-e', script] });

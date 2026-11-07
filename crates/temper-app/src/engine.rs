@@ -60,8 +60,9 @@ impl<P: Ports> Engine<P> {
     ///
     /// # Errors
     ///
-    /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project; nothing else
-    /// fails, as in 1.x.
+    /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project, and
+    /// [`CommandError::Unconvertible`] for a recorded review verdict that 1.x's `String()`
+    /// throws on (wi-32d7c9); nothing else fails, as in 1.x.
     pub fn status(&self, args: &StatusArgs) -> Result<CommandOutput, CommandError> {
         status::run(&self.ports, &self.env, &self.base_noted, args)
     }

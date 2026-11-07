@@ -13,8 +13,9 @@ use crate::state::{cached_gate, read_baseline, verdict_for};
 
 /// `temper status` in text, in 1.x's order: the project, the base (the session's with
 /// `--session`, else `TEMPER_BASE` or HEAD, with its note on stderr), the Rust changes, the
-/// fingerprint, then the gate, review and baseline records for it. Nothing past discovery can
-/// fail, as in 1.x: every unreadable record reads as none (F6).
+/// fingerprint, then the gate, review and baseline records for it. Past discovery, only a
+/// review verdict that 1.x's `String()` throws on fails (wi-32d7c9); every unreadable record
+/// reads as none (F6).
 pub(crate) fn run(
     ports: &impl Ports,
     env: &RunEnv,
