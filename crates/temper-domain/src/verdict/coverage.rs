@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::js::{Value, js_string, js_trim};
+use crate::js::{JsTypeError, Value, js_string_checked, js_trim};
 
 /// 1.x `normPath`: `String(f).trim()`, `\` as `/`, and no leading `./`.
 fn norm_path(path: &str) -> String {
@@ -91,21 +91,30 @@ impl<'c> SuffixIndex<'c> {
 
 /// The changed `.rs` files that no `files_read` entry covers, in `changed` order, as 1.x
 /// lists them.
-pub(super) fn unreviewed<'c>(changed_rust: &'c [String], files_read: &[Value]) -> Vec<&'c str> {
+///
+/// # Errors
+///
+/// [`JsTypeError`] where 1.x's `normPath(String(r))` throws on an entry: an object with its
+/// own `toString` key, alone or inside an array (#206 review F1). 1.x converts every entry, so
+/// any such entry fails the check.
+pub(super) fn unreviewed<'c>(
+    changed_rust: &'c [String],
+    files_read: &[Value],
+) -> Result<Vec<&'c str>, JsTypeError> {
     let changed: Vec<String> = changed_rust.iter().map(|f| norm_path(f)).collect();
     let index = SuffixIndex::new(&changed);
-    let reads: Vec<String> = files_read
+    let reads = files_read
         .iter()
-        .map(|r| norm_path(&js_string(r)))
-        .collect();
+        .map(|r| js_string_checked(r).map(|text| norm_path(&text)))
+        .collect::<Result<Vec<String>, _>>()?;
     let seen: HashSet<&str> = reads.iter().filter_map(|r| index.covers(r)).collect();
-    changed_rust
+    Ok(changed_rust
         .iter()
         .zip(&changed)
         // 1.x's `f.endsWith('.rs')` is case-sensitive, and so is a byte comparison.
         .filter(|(f, norm)| f.as_bytes().ends_with(b".rs") && !seen.contains(norm.as_str()))
         .map(|(f, _)| f.as_str())
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]

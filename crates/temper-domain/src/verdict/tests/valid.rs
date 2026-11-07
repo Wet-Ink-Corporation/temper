@@ -76,6 +76,28 @@ fn an_approval_with_a_null_finding_fails_as_1x_throws_and_is_handed_back() {
 }
 
 #[test]
+fn a_files_read_entry_1x_cannot_convert_is_never_valid() {
+    // #206 review F1: 1.x's `normPath(String(r))` throws on an own `toString` key, so the
+    // hand-back fails rather than being accepted.
+    let changed = vec!["a.rs".to_owned()];
+    let ctx = VerdictContext {
+        changed_rust: &changed,
+        gate: GateState::NotRed,
+    };
+    for files_read in [r#"["a.rs",{"toString":1}]"#, r#"["a.rs",[{"toString":1}]]"#] {
+        let evidence = format!(r#"{{"files_read":{files_read},"commands_run":["g"]}}"#);
+        let v = ExtractedVerdict::Parsed(verdict(&[("evidence", &evidence)]));
+        let Err(rejected) = ValidVerdict::check(v, &ctx) else {
+            panic!("{files_read}: 1.x throws, so the verdict is not valid");
+        };
+        assert!(
+            matches!(rejected, VerdictRejected::Throws { .. }),
+            "{files_read}: {rejected}"
+        );
+    }
+}
+
+#[test]
 fn the_debug_form_leaves_the_verdict_out() {
     let v = ExtractedVerdict::Parsed(verdict(&[("verdict", r#""secret-value""#)]));
     let Err(rejected) = ValidVerdict::check(v, &NONE) else {

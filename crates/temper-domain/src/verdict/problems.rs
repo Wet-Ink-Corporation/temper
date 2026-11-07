@@ -1,7 +1,7 @@
 //! What is wrong with a verdict (1.x `verdictProblems`), in 1.x's order and words.
 
 use crate::Fingerprint;
-use crate::js::{JsTypeError, Value, js_string, truthy};
+use crate::js::{JsTypeError, Value, js_string_checked, truthy};
 
 use super::coverage::unreviewed;
 use super::{ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict};
@@ -149,8 +149,12 @@ pub fn problem_kinds(problems: &[VerdictProblem]) -> Vec<ProblemKind> {
 ///
 /// # Errors
 ///
-/// [`JsTypeError`] where 1.x throws: an approval whose `findings` holds a `null`, which 1.x's
-/// `findings.filter((f) => f.severity …)` reads a property of.
+/// [`JsTypeError`] where 1.x throws:
+/// - an approval whose `findings` holds a `null`, which 1.x's
+///   `findings.filter((f) => f.severity …)` reads a property of;
+/// - a value `String()` or a template literal cannot convert (an object with its own
+///   `toString` key, alone or inside an array): a truthy `__parseError`, a finding's `rule`,
+///   or, when there are changed files, any `evidence.files_read` entry (#206 review F1, F2).
 pub fn verdict_problems(
     verdict: Option<&ExtractedVerdict>,
     ctx: &VerdictContext<'_>,
@@ -195,7 +199,8 @@ pub(super) fn problems_of(
         return Ok(vec![no_block()]);
     }
     if let Some(error) = v.get("__parseError").filter(|e| truthy(e)) {
-        return Ok(vec![parse_problem(&js_string(error))]);
+        // 1.x's `${v.__parseError}` throws where `String()` does.
+        return Ok(vec![parse_problem(&js_string_checked(error)?)]);
     }
     let verdict = match field {
         VerdictField::AsIs => v.get("verdict").and_then(Value::as_str),
@@ -203,9 +208,9 @@ pub(super) fn problems_of(
     };
     let mut p = Problems(Vec::new());
     header(&mut p, v, verdict);
-    findings_problems(&mut p, findings_list(v));
+    findings_problems(&mut p, findings_list(v))?;
     scores_problems(&mut p, scores_object(v));
-    evidence_problems(&mut p, v, ctx);
+    evidence_problems(&mut p, v, ctx)?;
     if verdict == Some("approved") {
         approval_problems(&mut p, v, ctx)?;
     }
@@ -278,7 +283,8 @@ fn header(p: &mut Problems, v: &Value, verdict: Option<&str>) {
     }
 }
 
-fn findings_problems(p: &mut Problems, findings: &[Value]) {
+/// The per-finding problems. `Err` where 1.x's `String(f.rule ?? '')` throws.
+fn findings_problems(p: &mut Problems, findings: &[Value]) -> Result<(), JsTypeError> {
     for (i, f) in findings.iter().enumerate() {
         // `!f || typeof f !== 'object'`: objects and arrays are always truthy.
         if !is_object(f) {
@@ -290,7 +296,7 @@ fn findings_problems(p: &mut Problems, findings: &[Value]) {
         }
         let rule = match f.get("rule") {
             None | Some(Value::Null) => "".into(),
-            Some(rule) => js_string(rule),
+            Some(rule) => js_string_checked(rule)?,
         };
         let severity = f.get("severity").and_then(Value::as_str);
         let none_nit = rule == "none" && severity == Some("nit");
@@ -329,6 +335,7 @@ fn findings_problems(p: &mut Problems, findings: &[Value]) {
             );
         }
     }
+    Ok(())
 }
 
 /// 1.x `/^[A-Z]{1,4}-\d{2}$/`.
@@ -384,7 +391,13 @@ fn evidence_list<'v>(v: &'v Value, key: &str) -> Option<&'v [Value]> {
     }
 }
 
-fn evidence_problems(p: &mut Problems, v: &Value, ctx: &VerdictContext<'_>) {
+/// The evidence problems. `Err` where 1.x's `normPath(String(r))` throws on a `files_read`
+/// entry, which it converts only when there are changed files.
+fn evidence_problems(
+    p: &mut Problems,
+    v: &Value,
+    ctx: &VerdictContext<'_>,
+) -> Result<(), JsTypeError> {
     let files_read = evidence_list(v, "files_read");
     if files_read.is_none_or(<[Value]>::is_empty) {
         p.add(
@@ -399,7 +412,7 @@ fn evidence_problems(p: &mut Problems, v: &Value, ctx: &VerdictContext<'_>) {
         );
     }
     if let Some(read) = files_read.filter(|_| !ctx.changed_rust.is_empty()) {
-        let missed = unreviewed(ctx.changed_rust, read);
+        let missed = unreviewed(ctx.changed_rust, read)?;
         if !missed.is_empty() {
             let shown: Vec<&str> = missed.into_iter().take(10).collect();
             p.add(
@@ -408,6 +421,7 @@ fn evidence_problems(p: &mut Problems, v: &Value, ctx: &VerdictContext<'_>) {
             );
         }
     }
+    Ok(())
 }
 
 /// `f.severity === 'blocker' || f.severity === 'major'`.

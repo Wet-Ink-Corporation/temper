@@ -542,5 +542,81 @@
     "changed files not reviewed: f0.rs, f1.rs, f2.rs, f3.rs, f4.rs, f5.rs, f6.rs, f7.rs, f8.rs, f9.rs"
    ]
   ]
+ },
+ {
+  "name": "files_read entry with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"toString\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": null
+ },
+ {
+  "name": "files_read entry wrapping own toString in an array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",[{\"toString\":1}]],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": null
+ },
+ {
+  "name": "files_read own toString without changed files",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"toString\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "files_read entry with own valueOf",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\",{\"valueOf\":1}],\"commands_run\":[\"g\"]}}",
+  "changed": [
+   "a.rs"
+  ],
+  "problems": []
+ },
+ {
+  "name": "rule with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":{\"toString\":1},\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "rule wrapping own toString in an array",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":[{\"toString\":\"x\"}],\"severity\":\"minor\",\"file\":\"a.rs\",\"evidence\":\"e\",\"fix\":\"f\"}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "file, evidence and fix with own toString are only truth-tested",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"changes-requested\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":{\"toString\":1},\"evidence\":{\"toString\":1},\"fix\":{\"toString\":1}}],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": []
+ },
+ {
+  "name": "__parseError with own toString",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":{\"toString\":1}}",
+  "changed": [],
+  "problems": null
+ },
+ {
+  "name": "__parseError with own valueOf",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":\"pass\",\"clippy\":\"pass\",\"test\":\"pass\",\"doc\":\"pass\"},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]},\"__parseError\":{\"valueOf\":1}}",
+  "changed": [],
+  "problems": [
+   [
+    "json-parse",
+    "verdict JSON does not parse: [object Object]"
+   ]
+  ]
+ },
+ {
+  "name": "a gate entry with own toString is compared, not converted",
+  "text": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"findings\":[],\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"ownership\":4,\"errors\":4,\"api\":4,\"architecture\":4,\"tests\":4,\"performance\":4,\"concurrency\":4,\"observability\":4,\"craft\":4,\"docs\":4},\"gate\":{\"fmt\":{\"toString\":1}},\"evidence\":{\"files_read\":[\"a.rs\"],\"commands_run\":[\"gate\"]}}",
+  "changed": [],
+  "problems": [
+   [
+    "approved-gate-entry",
+    "\"approved\" requires every gate entry to be \"pass\""
+   ]
+  ]
  }
 ]

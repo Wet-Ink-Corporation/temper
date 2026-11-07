@@ -166,5 +166,96 @@
   "kept": 0,
   "summary": null,
   "earlier": null
+ },
+ {
+  "name": "a listed file with own toString",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":{\"toString\":1},\"line\":3,\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "a listed fix with own toString",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"blocker\",\"file\":\"a.rs\",\"fix\":{\"toString\":1}}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "a listed line with own toString",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":{\"toString\":1},\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "a listed rule wrapping own toString",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":[{\"toString\":1}],\"severity\":\"major\",\"file\":\"a.rs\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": null,
+  "earlier": null
+ },
+ {
+  "name": "an unlisted minor finding with own toString, beside a major",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"minor\",\"file\":{\"toString\":1},\"fix\":{\"toString\":1}}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:3: f\n(1 minor/nit finding(s) in the full verdict)",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:3: f\n(1 minor/nit finding(s) in the full verdict)\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "an eleventh serious finding with own toString is not listed",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"},{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":{\"toString\":1},\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n- [major] OWN-08 a.rs:3: f\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "recorded_at with own toString",
+  "text": "{\"verdict\":\"approved\",\"findings\":[],\"recorded_at\":{\"toString\":1}}",
+  "kept": 0,
+  "summary": "",
+  "earlier": null
+ },
+ {
+  "name": "verdict with own toString",
+  "text": "{\"verdict\":{\"toString\":1},\"findings\":[],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": null
+ },
+ {
+  "name": "verdict wrapping own toString in an array",
+  "text": "{\"verdict\":[{\"toString\":1}],\"findings\":[],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": null
+ },
+ {
+  "name": "__parseError with own toString and no serious finding",
+  "text": "{\"__parseError\":{\"toString\":1},\"verdict\":\"changes-requested\",\"findings\":[],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": null
+ },
+ {
+  "name": "__parseError with own toString beside a major",
+  "text": "{\"__parseError\":{\"toString\":1},\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":\"OWN-08\",\"severity\":\"major\",\"file\":\"a.rs\",\"line\":3,\"evidence\":\"e\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "- [major] OWN-08 a.rs:3: f",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n- [major] OWN-08 a.rs:3: f\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
+ },
+ {
+  "name": "an unlisted minor rule with own toString reaches overturns",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[{\"rule\":{\"toString\":1},\"severity\":\"minor\",\"file\":\"a.rs\",\"fix\":\"f\"}],\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "\n(1 minor/nit finding(s) in the full verdict)",
+  "earlier": null
+ },
+ {
+  "name": "a gate key is a string, a gate value with own toString is compared",
+  "text": "{\"verdict\":\"changes-requested\",\"findings\":[],\"gate\":{\"toString\":\"fail\"},\"recorded_at\":\"2026-10-18T08:37:00.000Z\"}",
+  "kept": 0,
+  "summary": "",
+  "earlier": "- An earlier review of this same tree is recorded: changes-requested at 2026-10-18T08:37:00.000Z.\n  Gate entries not \"pass\": toString.\n  Re-check each earlier finding, and say in your summary which still hold and which no longer do, with evidence."
  }
 ]

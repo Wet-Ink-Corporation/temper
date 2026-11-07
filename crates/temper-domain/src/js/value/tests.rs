@@ -372,3 +372,42 @@ proptest! {
         prop_assert_eq!(back, s);
     }
 }
+
+#[test]
+fn checked_string_throws_where_node_22_cannot_convert_to_a_primitive() {
+    // Each row was printed by Node 22 (`String(JSON.parse(text))`): an own `toString` key is
+    // never callable in JSON, so `valueOf` returns the object and V8 throws a `TypeError`;
+    // `Array#join` converts each item, so the throw reaches through arrays, not objects.
+    let rows: [(&str, Option<&str>); 11] = [
+        (r#"{"toString":1}"#, None),
+        (r#"{"toString":null}"#, None),
+        (r#"{"valueOf":1}"#, Some("[object Object]")),
+        (r#"{"toString":1,"valueOf":1}"#, None),
+        (r#"[{"toString":1}]"#, None),
+        (r#"[[{"toString":1}]]"#, None),
+        (r#"[null,{"toString":1}]"#, None),
+        (r#"{"__proto__":{"toString":1}}"#, Some("[object Object]")),
+        (r#"{"a":{"toString":1}}"#, Some("[object Object]")),
+        (
+            r#"[{"a":{"toString":1}},null,1.5]"#,
+            Some("[object Object],,1.5"),
+        ),
+        (r#"{"TOSTRING":1}"#, Some("[object Object]")),
+    ];
+    for (json, expected) in rows {
+        let value = Value::from_json(json).expect("JSON");
+        let checked = js_string_checked(&value).ok();
+        assert_eq!(checked.as_deref(), expected, "{json}");
+    }
+}
+
+proptest! {
+    #[test]
+    fn checked_string_agrees_with_js_string_wherever_it_answers(n in any::<f64>(), s in ".{0,8}", b: bool) {
+        let items = Value::Array(vec![Value::Number(n), text(&s), Value::Bool(b), Value::Null]);
+        for value in [Value::Number(n), text(&s), Value::Bool(b), Value::Null, object(&[("a", text(&s))]), items] {
+            let checked = js_string_checked(&value).expect("no own toString key");
+            prop_assert_eq!(checked, js_string(&value));
+        }
+    }
+}
