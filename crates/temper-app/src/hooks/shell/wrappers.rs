@@ -191,7 +191,7 @@ impl Walker<'_> {
                     && let Some(script) = join_texts(rest, &self.overflow)
                 {
                     let cwd = run.cwd.take();
-                    self.deeper(|walker| walker.sub_in(&script, cwd, false));
+                    self.deeper(|walker| walker.script_in(&script, cwd, false));
                 }
                 return None;
             }
@@ -236,7 +236,7 @@ impl Walker<'_> {
             }
             if name == "sudo" && (opt == "-C" || opt == "--chdir") {
                 let value = words.get(run.at).and_then(Word::value);
-                run.cwd = self.option_dir(value, run.cwd.as_deref());
+                run.cwd = self.option_dir(value, run.cwd.as_ref());
                 run.at = run.at.saturating_add(1);
                 continue;
             }
@@ -272,23 +272,28 @@ impl Walker<'_> {
         if flag.opt == 'S' {
             // env -S splits its string into the command and runs it; env reads `\_`, `\t`,
             // `\n`, `\v`, `\f` and `\r` in it as whitespace.
-            let text = flag.value.unwrap_or_else(|| {
+            // Each word is read once, charged and not kept.
+            let text = if let Some(value) = flag.value {
+                Cow::Borrowed(value)
+            } else {
                 run.at = run.at.saturating_add(1);
-                words
-                    .get(run.at.saturating_sub(1))
-                    .map_or("", |next| next.text.as_str())
-            });
-            let mut script = env_split_spaces(text);
+                match words.get(run.at.saturating_sub(1)) {
+                    Some(next) => next.text_read()?,
+                    None => Cow::Borrowed(""),
+                }
+            };
+            let mut script = env_split_spaces(&text);
             let mut units = js_len(&script);
             for rest in words.get(run.at..).unwrap_or(&[]) {
+                let rest = rest.text_read()?;
                 let fits = push_js(&mut script, &mut units, " ", &self.overflow)
-                    && push_js(&mut script, &mut units, &rest.text, &self.overflow);
+                    && push_js(&mut script, &mut units, &rest, &self.overflow);
                 if !fits {
                     return None;
                 }
             }
             let cwd = run.cwd.take();
-            self.deeper(|walker| walker.sub_in(&script, cwd, false));
+            self.deeper(|walker| walker.script_in(&script, cwd, false));
             return None;
         }
         let value = flag.value.or_else(|| {
@@ -296,14 +301,16 @@ impl Walker<'_> {
             words.get(run.at.saturating_sub(1)).and_then(Word::value)
         });
         if flag.opt == 'C' {
-            run.cwd = self.option_dir(value, run.cwd.as_deref());
+            run.cwd = self.option_dir(value, run.cwd.as_ref());
         }
         Some(())
     }
 
     /// The directory a wrapper's `-C value` runs its command in, from `cwd`.
-    fn option_dir(&self, value: Option<&str>, cwd: Option<&str>) -> Option<Dir> {
-        self.capped(resolve_path(self.opts.paths, value, cwd).map(Dir::from))
+    fn option_dir(&self, value: Option<&str>, cwd: Option<&Dir>) -> Option<Dir> {
+        let paths = self.opts.paths;
+        let base = paths.dir_text(cwd);
+        self.capped(resolve_path(paths, value, base.as_deref()).map(Dir::resolved))
     }
 }
 
@@ -351,7 +358,7 @@ pub(super) fn inner_script(
         "bash" | "sh" | "zsh" | "dash" | "ksh" => {
             // The script is walked after the command is pushed, which takes its words.
             let script = match shell_script(args) {
-                Script::Arg(word) => word.map(|w| w.text.clone()),
+                Script::Arg(word) => word.and_then(Word::text_read).map(Cow::into_owned),
                 Script::Stdin => meta
                     .stdin
                     .as_ref()
@@ -365,14 +372,15 @@ pub(super) fn inner_script(
         }
         "eval" => {
             let args = match args.first() {
-                Some(first) if first.value() == Some("--") => args.get(1..).unwrap_or(&[]),
+                Some(first) if first.value_is("--") => args.get(1..).unwrap_or(&[]),
                 _ => args,
             };
             join_texts(args, overflow).map(Inner::Run)
         }
         "trap" => trap_action(args)
-            .filter(|a| !a.text.is_empty())
-            .map(|a| Inner::Run(a.text.clone())),
+            .and_then(Word::text_read) // read once, charged and not kept
+            .filter(|action| !action.is_empty())
+            .map(|action| Inner::Run(action.into_owned())),
         "awk" | "gawk" | "mawk" | "nawk" => {
             let systems: Vec<String> = awk_programs(args)
                 .into_iter()
@@ -402,8 +410,10 @@ fn join_texts(words: &[Word], overflow: &Cell<bool>) -> Option<String> {
     let mut units = 0;
     for (k, w) in words.iter().enumerate() {
         let sep = if k > 0 { " " } else { "" };
+        // Read once, charged and not kept; `None` past the budget.
+        let text = w.text_read()?;
         let fits = push_js(&mut out, &mut units, sep, overflow)
-            && push_js(&mut out, &mut units, &w.text, overflow);
+            && push_js(&mut out, &mut units, &text, overflow);
         if !fits {
             return None;
         }
@@ -444,10 +454,21 @@ pub(super) fn shell_script(args: &[Word]) -> Script<'_> {
     let mut flags = ShellFlags::default();
     let mut i = 0;
     while let Some(a) = args.get(i) {
-        match a.value() {
-            Some("--version" | "--help") => return Script::None,
-            Some("--" | "-") => return flags.operand(args.get(i.saturating_add(1))),
-            Some(v) if a.raw.starts_with(['-', '+']) => {
+        // Compared without joining a value that cannot match, and read whole only for an
+        // option, so the script operand keeps no joined copy.
+        if a.value_is("--version") || a.value_is("--help") {
+            return Script::None;
+        }
+        if a.value_is("--") || a.value_is("-") {
+            return flags.operand(args.get(i.saturating_add(1)));
+        }
+        let option = if a.raw.starts_with(['-', '+']) {
+            a.value()
+        } else {
+            None
+        };
+        match option {
+            Some(v) => {
                 if ["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].contains(&v) {
                     i = i.saturating_add(2);
                     continue;
@@ -492,7 +513,7 @@ impl ShellFlags {
 /// `trap -p`, `trap -l`, `trap - SIG` and a lone argument.
 fn trap_action(args: &[Word]) -> Option<&Word> {
     let a = match args.first() {
-        Some(first) if first.value() == Some("--") => args.get(1..).unwrap_or(&[]),
+        Some(first) if first.value_is("--") => args.get(1..).unwrap_or(&[]),
         _ => args,
     };
     let first = a.first()?;
@@ -500,7 +521,7 @@ fn trap_action(args: &[Word]) -> Option<&Word> {
         .raw
         .strip_prefix('-')
         .is_some_and(|f| f.starts_with(['l', 'p']));
-    (a.len() >= 2 && first.value() != Some("-") && !listing).then_some(first)
+    (a.len() >= 2 && !first.value_is("-") && !listing).then_some(first)
 }
 
 /// An awk program: its text, and whether its word is literal.
@@ -527,7 +548,7 @@ fn awk_programs(args: &[Word]) -> Vec<AwkProgram<'_>> {
         && !found.main
         && let Some(a) = args.get(operand)
     {
-        found.progs.push(AwkProgram::of(a, a.text.as_str()));
+        found.progs.push(AwkProgram::of(a, a.text()));
     }
     found.progs
 }
@@ -575,7 +596,7 @@ impl<'w> AwkArgs<'w> {
         };
         // awk sees the word's value: `'-f/dev/stdin'` is still `-f`.
         let r = if a.is_literal() {
-            a.text.as_str()
+            a.text()
         } else {
             a.raw.as_str()
         };
@@ -606,7 +627,7 @@ impl<'w> AwkArgs<'w> {
             if let Some(v) = args.get(next)
                 && (r == "-e" || r == "--source")
             {
-                self.progs.push(AwkProgram::of(v, v.text.as_str()));
+                self.progs.push(AwkProgram::of(v, v.text()));
             }
             self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
             return stop_if(r == "-E" || r == "--exec", next.saturating_add(1));

@@ -19,14 +19,14 @@ use temper_domain::{ConfigChanges, Glob, GlobError, Globs};
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
-    Command, CopyDest, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target, Verb,
-    Word, command_deletes, command_writes, js_len, landing, parse_commands, patch_command,
-    patch_files, pathspec_pattern, resolve_path,
+    Command, CopyDest, Guard, ParseOpts, Patch, PatchCommand, PatchTool, PathCx, Stdin, Target,
+    Verb, Word, command_deletes, command_writes, js_len, landing, names_absolute, parse_commands,
+    patch_command, patch_files, pathspec_pattern, resolve_path,
 };
 use crate::paths::{self, PathEnv};
 use crate::ports::{EntryKind, FileMeta, Files, Ports};
 use crate::project::{Workspace, discover_at, exists};
-use crate::relpath::rel_to;
+use crate::relpath::{LongPaths, Relater};
 
 /// 1.x `PATH_MAX`: an ancestor longer than this, in UTF-16 units, cannot exist.
 const PATH_MAX: usize = 4096;
@@ -94,6 +94,16 @@ pub(super) fn protected_shell_writes(
     ws: &Workspace,
     cmd: &str,
 ) -> Changes {
+    protected_shell_writes_in(call, ws, cmd, &Guard::default())
+}
+
+/// [`protected_shell_writes`] within `guard`'s bounds, which a test may set lower.
+pub(super) fn protected_shell_writes_in(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    cmd: &str,
+    guard: &Guard,
+) -> Changes {
     let env_cwd = call.env.cwd.to_string_lossy();
     let temp = call.env.temp_dir.to_string_lossy();
     let home = call.env.home.to_string_lossy();
@@ -111,7 +121,11 @@ pub(super) fn protected_shell_writes(
         .map(|dir| paths::resolve(at.style, at.cwd, dir))
         .filter(|dir| exists(files, dir))
         .unwrap_or_else(|| ws.root.clone());
-    let cx = PathCx { at, os_tmp: &temp };
+    let cx = PathCx {
+        at,
+        os_tmp: &temp,
+        guard: Some(guard),
+    };
     let opts = ParseOpts {
         paths: cx,
         cwd: Some(&start),
@@ -133,10 +147,19 @@ pub(super) fn protected_shell_writes(
         start: &start,
         globs,
         owners: HashMap::new(),
+        owner_in: HashMap::new(),
+        long: LongPaths::default(),
         listed: HashMap::new(),
         changes: Changes::default(),
     };
-    match commands.iter().try_for_each(|c| reader.command(c)) {
+    // Once a path has gone past V8's longest string, 1.x has thrown: the rest is not read.
+    let read = commands
+        .iter()
+        .take_while(|_| !guard.overflowed())
+        .try_for_each(|c| reader.command(c));
+    match read {
+        // A path joined past V8's longest string throws in 1.x, and `readerRule` falls back.
+        Ok(()) if guard.overflowed() => Changes::default(),
         Ok(()) => reader.changes,
         Err(_) => Changes::default(),
     }
@@ -162,10 +185,17 @@ struct Reader<'a, 'c, P> {
     cx: PathCx<'a>,
     start: &'a str,
     globs: Globs,
-    /// 1.x `ownerOf`'s cache: each ancestor checked, and the checkout there, if any.
+    /// 1.x `ownerOf`'s cache: each ancestor checked, by its path relative to the root, and
+    /// the checkout there, if any. A hit joins no path.
     owners: HashMap<String, Option<Owner>>,
+    /// The owner of every name in a directory, by the directory relative to the root: the
+    /// walk up its ancestors is made once per directory, not once per name, and
+    /// stops at the first ancestor in here.
+    owner_in: HashMap<String, Owner>,
+    /// The long paths `rel_to` found, for the names outside the root.
+    long: LongPaths,
     /// What git said of each restore, by directory, source and pathspec: 1.x asks each time
-    /// the line repeats one, though the answer cannot change within a line (#201 F4).
+    /// the line repeats one, though the answer cannot change within a line.
     listed: HashMap<(String, String, String), Listed>,
     changes: Changes,
 }
@@ -194,6 +224,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         self.call.ports.files()
     }
 
+    /// 1.x `relTo(root, abs)`, through the long paths this line found before.
+    fn rel_to(&mut self, root: &str, abs: &str) -> String {
+        Relater::new(self.files(), &mut self.long).rel_to(self.cx.at, root, abs)
+    }
+
     fn stat(&self, path: &str) -> Option<FileMeta> {
         // 1.x's `stat` reads any failure as nothing there.
         self.files().stat(Path::new(path)).ok().flatten()
@@ -205,10 +240,12 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
 
     /// 1.x `w && !w.glob ? resolvePath(w.value, base) : null`.
     fn word_abs(&self, word: &Word, base: Option<&str>) -> Option<String> {
-        if word.glob() {
+        if word.glob() || !word.value_is_known() {
             return None;
         }
-        resolve_path(self.cx, word.value(), base)
+        // Read for this resolve alone and charged, keeping no copy.
+        let value = word.text_read()?;
+        resolve_path(self.cx, Some(&value), base)
     }
 
     /// One command's patch, writes and deletes, in 1.x's order.
@@ -223,10 +260,23 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         let style = self.cx.at.style;
         // A delete takes the file, or with -r a whole directory and the protected files in it.
         for d in command_deletes(c, self.cx) {
-            for base in bases(d.cwd.as_deref(), start, &ws.root)
-                .into_iter()
-                .flatten()
-            {
+            // An absolute name reads no directory, as 1.x's resolve stops at it, so its
+            // directory is not built, and one base stands for all.
+            let absolute = names_absolute(self.cx, &d.word);
+            let cwd = if absolute {
+                None
+            } else {
+                self.cx.dir_text(d.cwd.as_ref())
+            };
+            if self.cx.stopped() {
+                return Ok(()); // 1.x has thrown: the rule falls back
+            }
+            let dir = if absolute {
+                Some(start)
+            } else {
+                cwd.as_deref()
+            };
+            for base in bases(dir, start, &ws.root).into_iter().flatten() {
                 let Some(abs) = self.word_abs(&d.word, Some(base)) else {
                     continue;
                 };
@@ -266,10 +316,11 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             .collect();
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(p.cwd.as_deref(), start, &ws.root)
-            .into_iter()
-            .flatten()
-        {
+        let cwd = self.cx.dir_text(p.cwd.as_ref());
+        if self.cx.stopped() {
+            return Ok(()); // 1.x has thrown: the rule falls back
+        }
+        for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
             for v in &named {
                 if let Some(abs) = resolve_path(self.cx, *v, Some(base)) {
                     self.check(&abs, false, List::Written)?;
@@ -290,6 +341,15 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         Ok(())
     }
 
+    /// A plain write to an absolute name. It reads no directory, as 1.x's resolve stops at
+    /// the name, so the command's directory is not built.
+    fn write_absolute(&mut self, word: &Word) -> Result<(), GlobError> {
+        match self.word_abs(word, None) {
+            Some(dest) => self.check(&dest, false, List::Written),
+            None => Ok(()),
+        }
+    }
+
     /// One write: a file, a copy's landing places, or a restore from another revision.
     fn write(&mut self, t: &Target<'_>) -> Result<(), GlobError> {
         let source = match &t.verb {
@@ -304,12 +364,16 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             source,
             pathspec: t.word.raw(),
         });
+        if t.copy.is_none() && restore.is_none() && names_absolute(self.cx, &t.word) {
+            return self.write_absolute(&t.word);
+        }
         let (start, ws) = (self.start, self.ws);
         let style = self.cx.at.style;
-        for base in bases(t.cwd.as_deref(), start, &ws.root)
-            .into_iter()
-            .flatten()
-        {
+        let cwd = self.cx.dir_text(t.cwd.as_ref());
+        if self.cx.stopped() {
+            return Ok(()); // 1.x has thrown: the rule falls back
+        }
+        for base in bases(cwd.as_deref(), start, &ws.root).into_iter().flatten() {
             if let Some(restore) = restore
                 && pathspec_pattern(t.word.raw())
             {
@@ -430,8 +494,8 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     /// directory written or deleted) the protected globs under it, into the deleted list or
     /// the written one.
     fn check(&mut self, abs: &str, tree: bool, into: List) -> Result<(), GlobError> {
-        let (files, at, ws) = (self.files(), self.cx.at, self.ws);
-        let rel = rel_to(files, at, &ws.root, abs);
+        let (at, ws) = (self.cx.at, self.ws);
+        let rel = self.rel_to(&ws.root, abs);
         if rel.starts_with("..") || paths::is_absolute(at.style, &rel) || (rel.is_empty() && !tree)
         {
             return Ok(());
@@ -453,7 +517,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                 }
             }
             Owner::Nested(nested) => {
-                let own = rel_to(files, at, &nested.ws.root, abs);
+                let own = self.rel_to(&nested.ws.root, abs);
                 if !own.is_empty() && nested.globs.any_match(&own) {
                     hits.push(rel.clone()); // as above
                 }
@@ -474,10 +538,27 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
     }
 
     /// 1.x `ownerOf(proj, rel, cache)`: the checkout of the deepest ancestor of `rel` with a
-    /// `.git` in it, else the project. Each ancestor is looked at once per command line.
+    /// `.git` in it, else the project. Each ancestor is looked at once per command line, and
+    /// the walk is made once per directory: it reads only the ancestors, which the names in
+    /// one directory share.
     fn owner_of(&mut self, rel: &str) -> Result<Owner, GlobError> {
-        let style = self.cx.at.style;
-        let ws = self.ws;
+        let Some(slash) = rel.rfind('/') else {
+            return Ok(Owner::Project); // no ancestor to look at
+        };
+        let dir = rel.get(..slash).unwrap_or("");
+        if let Some(owner) = self.owner_in.get(dir) {
+            return Ok(owner.clone()); // an `Rc` handle
+        }
+        let owner = self.owner_up(rel)?;
+        self.owner_in.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
+        Ok(owner)
+    }
+
+    /// [`Self::owner_of`]'s walk up `rel`'s ancestors. It stops at the first ancestor whose
+    /// names' owner is known: that answer already weighs the ancestor and everything above
+    /// it, so a directory one level below a known one looks at itself alone, and a line of
+    /// names in ever deeper directories does not walk every ancestor for each name.
+    fn owner_up(&mut self, rel: &str) -> Result<Owner, GlobError> {
         // The UTF-16 length of `rel` up to each `/`, counted down from the end, so the
         // PATH_MAX test does not count the prefix again for each part (#155).
         let mut units = js_len(rel);
@@ -485,27 +566,34 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         for (end, _) in rel.rmatch_indices('/') {
             units = units.saturating_sub(js_len(rel.get(end..after).unwrap_or("")));
             after = end;
+            let dir = rel.get(..end).unwrap_or("");
+            if let Some(owner) = self.owner_in.get(dir) {
+                return Ok(owner.clone()); // an `Rc` handle
+            }
             if end == 0 || units > PATH_MAX {
                 continue;
             }
-            let dir = paths::join(style, &ws.root, rel.get(..end).unwrap_or(""));
-            let owner = if let Some(owner) = self.owners.get(&dir) {
-                owner.clone() // an `Rc` handle
-            } else {
-                let owner = self.checkout_at(&dir)?;
-                self.owners.insert(dir, owner.clone()); // an `Rc` handle for the cache
-                owner
-            };
-            if let Some(owner) = owner {
+            if let Some(owner) = self.checkout_in(dir)? {
                 return Ok(owner);
             }
         }
         Ok(Owner::Project)
     }
 
+    /// The checkout at `dir`, relative to the root, if any; each is looked at once per line.
+    fn checkout_in(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
+        if let Some(owner) = self.owners.get(dir) {
+            return Ok(owner.clone()); // an `Rc` handle
+        }
+        let abs = paths::join(self.cx.at.style, &self.ws.root, dir);
+        let owner = self.checkout_at(&abs)?;
+        self.owners.insert(dir.to_owned(), owner.clone()); // an `Rc` handle for the cache
+        Ok(owner)
+    }
+
     /// The owner a `.git` in `dir` makes: its project, or this one when there is none
     /// (1.x `discover(dir) ?? proj`).
-    fn checkout_at(&self, dir: &str) -> Result<Option<Owner>, GlobError> {
+    fn checkout_at(&mut self, dir: &str) -> Result<Option<Owner>, GlobError> {
         let files = self.files();
         if !exists(files, &paths::join(self.cx.at.style, dir, ".git")) {
             return Ok(None);
@@ -514,7 +602,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
             return Ok(Some(Owner::Project));
         };
         let globs = Globs::new(ws.config.protected().iter().map(String::as_str))?;
-        let prefix = rel_to(files, self.cx.at, &self.ws.root, &ws.root);
+        let prefix = self.rel_to(&self.ws.root, &ws.root);
         Ok(Some(Owner::Nested(Rc::new(Nested { ws, globs, prefix }))))
     }
 
@@ -586,14 +674,16 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
                     texts.push(Some(body.to_string()));
                 }
                 (Some(Stdin::File(word)), false) => {
-                    let abs = self.word_abs(word, c.cwd.as_deref());
+                    let cwd = self.cx.dir_text(c.cwd.as_ref());
+                    let abs = self.word_abs(word, cwd.as_deref());
                     texts.push(self.patch_text(abs.as_deref()));
                 }
                 _ => return None,
             }
         }
         for w in &p.inputs {
-            let abs = self.word_abs(w, p.cwd.as_deref());
+            let cwd = self.cx.dir_text(p.cwd.as_ref());
+            let abs = self.word_abs(w, cwd.as_deref());
             texts.push(self.patch_text(abs.as_deref()));
         }
         for text in texts {

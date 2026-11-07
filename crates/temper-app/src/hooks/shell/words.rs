@@ -8,14 +8,16 @@ use std::rc::Rc;
 
 use temper_domain::{PathStyle, js_trim};
 
+pub(crate) use super::dir::{Dir, Guard};
 use super::lex::{Part, PartKind, name_len};
+use super::text::Text;
 use crate::paths::{self, PathEnv};
 use crate::project::is_js_space;
 
 /// V8's `String::kMaxLength` on a 64-bit host, in UTF-16 units: 1.x throws `RangeError:
 /// Invalid string length` when a word's text would grow past it (`X=$X$X` repeated), and its
 /// rule then falls back.
-const JS_MAX_STRING: usize = (1 << 29) - 24;
+pub(super) const JS_MAX_STRING: usize = (1 << 29) - 24;
 
 /// Appends `more` to `text`, whose length in UTF-16 units is `units`, unless the result
 /// would be longer than a JS string can be: then it marks `overflow` and leaves `text`.
@@ -35,15 +37,6 @@ pub(super) fn push_js(
     true
 }
 
-/// Whether `s` fits in a JS string; when it does not, marks `overflow`, where 1.x throws.
-pub(super) fn fits_js(s: &str, overflow: &Cell<bool>) -> bool {
-    let fits = js_len(s) <= JS_MAX_STRING;
-    if !fits {
-        overflow.set(true);
-    }
-    fits
-}
-
 /// A string's length in UTF-16 units, as JS counts it.
 pub(crate) fn js_len(s: &str) -> usize {
     if s.is_ascii() {
@@ -55,10 +48,14 @@ pub(crate) fn js_len(s: &str) -> usize {
 
 /// A word: `raw` (quotes removed, expansions as written), `text` (known expansions replaced,
 /// unknown ones as written) and whether every part is known, which makes `text` its value.
+///
+/// The text shares each value it expands rather than copying it, and is joined only when a
+/// rule reads it ([`Text`]), as V8 joins strings: `: $X; ` or `: $X/a; ` repeated holds `$X`
+/// once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Word {
     pub(super) raw: String,
-    pub(super) text: String,
+    pub(super) text: Text,
     pub(super) known: bool,
     pub(super) quoted: bool,
     /// The length of the name a `NAME=` or `NAME+=` word assigns, or 0.
@@ -87,7 +84,7 @@ impl Word {
     pub(super) fn literal(s: &str) -> Self {
         Self {
             raw: s.to_owned(),
-            text: s.to_owned(),
+            text: Text::whole(Rc::from(s)),
             known: true,
             quoted: false,
             assign: 0,
@@ -139,12 +136,76 @@ impl Word {
     }
 
     pub(crate) fn text(&self) -> &str {
-        &self.text
+        self.text.get()
     }
 
     /// The value, or `None` when a part is unknown.
     pub(crate) fn value(&self) -> Option<&str> {
-        self.known.then_some(self.text.as_str())
+        self.known.then(|| self.text.get())
+    }
+
+    /// What a `NAME=value` or `NAME+=value` word stores, read without keeping a join on the
+    /// word; `None` when it is no assignment.
+    pub(super) fn assigned(&self) -> Option<Assigned> {
+        let name = self.assign()?.len();
+        if !self.known {
+            return Some(Assigned::Unknown);
+        }
+        let head = self.text.head(name.saturating_add(2));
+        Some(if head.get(name..).is_some_and(|op| op.starts_with("+=")) {
+            Assigned::Append(name.saturating_add(2))
+        } else {
+            Assigned::Set(name.saturating_add(1))
+        })
+    }
+
+    /// `before`'s value, then this word's after its first `skip` bytes, which are ASCII (a
+    /// name and `=` or `+=`, so as many UTF-16 units), as one string for a variable to keep:
+    /// shared when one side is all of it, else joined once through `scratch` (and then
+    /// charged when set). `None` when a part is unknown.
+    fn shared_after(
+        &self,
+        before: Option<&Shared>,
+        skip: usize,
+        scratch: &mut String,
+    ) -> Option<Shared> {
+        if !self.known {
+            return None;
+        }
+        let (text, made) = self.text.after(before.map(|b| &b.text), skip, scratch)?;
+        let units = self
+            .text
+            .units()
+            .saturating_sub(skip)
+            .saturating_add(before.map_or(0, |b| b.units));
+        Some(if made {
+            Shared::made(text, units)
+        } else {
+            Shared::new(text, units)
+        })
+    }
+
+    /// The UTF-16 units this word's text has after its first `skip` bytes (ASCII).
+    fn units_after(&self, skip: usize) -> usize {
+        self.text.units().saturating_sub(skip)
+    }
+
+    /// Whether every part's value is known, so [`Self::value`] is `Some`.
+    pub(crate) fn value_is_known(&self) -> bool {
+        self.known
+    }
+
+    /// The text for one read, which keeps no joined copy: a read that copies the pieces is
+    /// charged to the line's guard, and is `None` once its budget is spent, which marks the
+    /// overflow.
+    pub(crate) fn text_read(&self) -> Option<Cow<'_, str>> {
+        self.text.read()
+    }
+
+    /// Whether the value is `s` (`value() == Some(s)`), without joining a text that cannot
+    /// be it.
+    pub(super) fn value_is(&self, s: &str) -> bool {
+        self.known && self.text.is(s)
     }
 
     /// An unquoted `*`, `?`, `[...]` or brace list.
@@ -163,17 +224,35 @@ impl Word {
 /// Shell variables, with a journal so a subshell's or a substitution's changes are undone in
 /// time proportional to them (1.x copies the whole `Map` at each `(` and `$(`). Each open scope
 /// journals a name once, with its value at the mark, which is all its rollback needs: `a=$a/b`
-/// repeated inside `( ... )` keeps one old value, not every earlier one (#201 F1). A change made
-/// while no scope is open is never undone, so it is not journaled.
+/// repeated inside `( ... )` keeps one old value, not every earlier one. A change made while
+/// no scope is open is never undone, so it is not journaled.
+///
+/// The values it keeps alive are charged to the line's budget, net of those it drops: each
+/// string it makes is charged once, however many names then share it (`a=$X`), and refunded
+/// once it is freed. A dropped value
+/// a word still shares (the `$a` in `a=$a/b`, until that word is gone) waits in `dropped`,
+/// which is swept every so many releases, so a name grown in place holds its last few, and
+/// many names holding long values stop at the budget.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
-    map: HashMap<String, String>,
-    journal: Vec<(String, Option<String>)>,
+    map: HashMap<String, Shared>,
+    journal: Vec<(String, Option<Shared>)>,
     /// Per open mark, innermost last, the names it has journaled. A scope the line leaves
     /// unclosed is closed by the rollback of the one outside it, or never.
     saved: Vec<HashSet<String>>,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
+    /// The line's budget; `None` charges nothing.
+    meter: Option<Guard>,
+    /// Values dropped while something else still held them, still charged.
+    dropped: Vec<Rc<str>>,
+    /// How many values were released since `dropped` was last swept.
+    since: usize,
+    /// How many the last sweep left in `dropped`.
+    kept: usize,
+    /// Where a value of several pieces is joined before it is shared, kept so its pages are
+    /// reused; its capacity is charged as it grows.
+    scratch: String,
 }
 
 /// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
@@ -183,23 +262,189 @@ pub(super) struct Mark {
     depth: usize,
 }
 
-impl Vars {
-    pub(super) fn get(&self, name: &str) -> Option<&str> {
-        self.map.get(name).map(String::as_str)
+/// What an assignment word stores ([`Word::assigned`]).
+#[derive(Debug)]
+pub(super) enum Assigned {
+    /// A part's value is unknown, so the name is deleted.
+    Unknown,
+    /// `NAME=value`: the value is the word's text after this many bytes ([`Vars::set_word`]).
+    Set(usize),
+    /// `NAME+=more`: what to append is the word's text after this many bytes
+    /// ([`Vars::append_word`]).
+    Append(usize),
+}
+
+/// A value words may share: its text and its length in UTF-16 units, counted once. It is not
+/// `Clone`: [`Self::hold`] gives another handle, never charged, so each string [`Vars`] made
+/// has one charged handle, and is refunded once.
+#[derive(Debug)]
+pub(super) struct Shared {
+    text: Rc<str>,
+    units: usize,
+    /// Whether [`Vars`] made this string, and charged it, when it set the value; a value
+    /// shared with what already held it (`a=$X`) is not charged again.
+    charged: bool,
+}
+
+impl Shared {
+    fn new(text: Rc<str>, units: usize) -> Self {
+        Self {
+            text,
+            units,
+            charged: false,
+        }
     }
 
-    /// 1.x `setVar`: `None` deletes.
+    /// A string [`Vars`] made, charged when it is set.
+    fn made(text: Rc<str>, units: usize) -> Self {
+        Self {
+            charged: true,
+            ..Self::new(text, units)
+        }
+    }
+
+    /// A copy of `s`, counted.
+    fn of(s: &str) -> Self {
+        Self::new(Rc::from(s), js_len(s))
+    }
+
+    /// Another handle on the same string, not charged: what holds it did not make it.
+    fn hold(&self) -> Self {
+        Self::new(Rc::clone(&self.text), self.units) // a shared handle on the value
+    }
+}
+
+impl Vars {
+    /// A name's value, for the tests.
+    #[cfg(test)]
+    pub(super) fn get(&self, name: &str) -> Option<&str> {
+        self.map.get(name).map(|v| &*v.text)
+    }
+
+    /// The value of `name`, for a word to share.
+    fn shared(&self, name: &str) -> Option<&Shared> {
+        self.map.get(name)
+    }
+
+    /// Variables whose values are charged to `guard`, the line's budget.
+    pub(super) fn metered(guard: &Guard) -> Self {
+        Self {
+            meter: Some(guard.clone()), // a shared handle on the line's budget
+            ..Self::default()
+        }
+    }
+
+    /// 1.x `setVar`: `None` deletes. Past the budget the guard is stopped, and the line
+    /// falls back.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
+        let value = value.map(|text| {
+            let units = js_len(&text);
+            Shared::made(Rc::from(text), units)
+        });
+        self.set_shared(name, value);
+    }
+
+    /// [`Self::set`] with `word`'s value after its first `skip` bytes (ASCII): the piece it
+    /// names shared when the value is one, else joined once; deleted when it is unknown.
+    pub(super) fn set_word(&mut self, name: &str, word: &Word, skip: usize) {
+        let value = self.joined(None, word, skip);
+        self.set_shared(name, value);
+    }
+
+    /// 1.x `NAME+=more`: the value of `name` with `word`'s text after its first `skip`
+    /// bytes (ASCII) appended, built as [`Self::set_word`] builds a value, so an empty old
+    /// value shares the piece the word names. A name unset, or set to an unknown value, is
+    /// deleted, as 1.x appends only to a known value; so is one that would pass V8's longest
+    /// string, where 1.x throws, which gives `false`.
+    pub(super) fn append_word(&mut self, name: &str, word: &Word, skip: usize) -> bool {
+        let old = self.map.get(name).map(Shared::hold); // for the join to read
+        let units = old
+            .as_ref()
+            .map(|old| old.units.saturating_add(word.units_after(skip)));
+        let fits = units.is_none_or(|units| units <= JS_MAX_STRING);
+        let value = match old {
+            // The hold drops with the arm, before the old value is released, so that is
+            // refunded at once unless the new value shares it.
+            Some(old) if fits => self.joined(Some(&old), word, skip),
+            _ => None,
+        };
+        self.set_shared(name, value);
+        fits
+    }
+
+    /// `before`, then `word`'s text after its first `skip` bytes, as one value; the
+    /// buffer's growth is charged to the line's budget.
+    fn joined(&mut self, before: Option<&Shared>, word: &Word, skip: usize) -> Option<Shared> {
+        let held = self.scratch.capacity();
+        let value = word.shared_after(before, skip, &mut self.scratch);
+        let grown = self.scratch.capacity().saturating_sub(held);
+        if let Some(meter) = self.meter.as_ref().filter(|_| grown > 0) {
+            meter.charge(grown);
+        }
+        value
+    }
+
+    /// [`Self::set`] with a value already built. Only a string these variables made is
+    /// charged: a value shared with what already held it costs nothing more.
+    fn set_shared(&mut self, name: &str, value: Option<Shared>) {
+        if let (Some(meter), Some(value)) = (&self.meter, value.as_ref().filter(|v| v.charged)) {
+            // `charge` stops the guard when the budget is spent; the walk then stops.
+            meter.charge(value.text.len());
+        }
         let old = self.put(name, value);
         if let Some(saved) = self.saved.last_mut()
             && !saved.contains(name)
         {
             saved.insert(name.to_owned());
             self.journal.push((name.to_owned(), old));
+        } else {
+            self.release(old);
         }
     }
 
-    fn put(&mut self, name: &str, value: Option<String>) -> Option<String> {
+    /// Refunds a value these variables made, and no longer hold, once nothing else holds it
+    /// either; a shared one was never charged here.
+    fn release(&mut self, old: Option<Shared>) {
+        let Some(old) = old.filter(|old| old.charged) else {
+            return;
+        };
+        if Rc::strong_count(&old.text) > 1 {
+            self.dropped.push(old.text);
+        } else {
+            self.refund(&old.text);
+        }
+        // Swept once per twice as many releases as the last sweep left held, and at least
+        // 16: O(1) per release, amortised.
+        self.since = self.since.saturating_add(1);
+        if self.since > self.kept.saturating_mul(2).max(16) {
+            self.sweep();
+        }
+    }
+
+    /// Refunds every dropped value that nothing else holds now. Only the string's one
+    /// charged handle is released here ([`Shared`] is not `Clone`), so each string is here
+    /// at most once, and is free when this is its last handle.
+    fn sweep(&mut self) {
+        let mut dropped = std::mem::take(&mut self.dropped);
+        dropped.retain(|text| {
+            let held = Rc::strong_count(text) > 1;
+            if !held {
+                self.refund(text);
+            }
+            held
+        });
+        self.since = 0;
+        self.kept = dropped.len();
+        self.dropped = dropped;
+    }
+
+    fn refund(&self, text: &str) {
+        if let Some(meter) = &self.meter {
+            meter.refund(text.len());
+        }
+    }
+
+    fn put(&mut self, name: &str, value: Option<Shared>) -> Option<Shared> {
         let old = match value {
             Some(value) => self.map.insert(name.to_owned(), value),
             None => self.map.remove(name),
@@ -231,7 +476,8 @@ impl Vars {
     pub(super) fn rollback(&mut self, mark: Mark) {
         while self.journal.len() > mark.journal {
             if let Some((name, old)) = self.journal.pop() {
-                self.put(&name, old);
+                let undone = self.put(&name, old);
+                self.release(undone);
             }
         }
         self.saved.truncate(mark.depth);
@@ -248,8 +494,8 @@ impl Vars {
 pub(super) struct WordEnv<'e> {
     pub(super) ps: bool,
     pub(super) home: &'e str,
-    pub(super) cwd: Option<&'e str>,
-    pub(super) prev: Option<&'e str>,
+    pub(super) cwd: Option<&'e Dir>,
+    pub(super) prev: Option<&'e Dir>,
     pub(super) tmp: Option<&'e str>,
     pub(super) top: Option<&'e str>,
     pub(super) git_dir: &'e str,
@@ -257,13 +503,31 @@ pub(super) struct WordEnv<'e> {
     pub(super) style: PathStyle,
     /// Set when a word grows past [`JS_MAX_STRING`].
     pub(super) overflow: &'e Cell<bool>,
+    /// The line's budget of text built, which a directory's text is charged to the first time
+    /// a word expands `$PWD` or `$OLDPWD` to it.
+    pub(super) guard: Option<&'e Guard>,
+}
+
+/// What one part of a word shows, as a piece of its text: an expansion's value, shared with
+/// what holds it; a leading `~` as the home directory; or the part as written. With it, its
+/// length in UTF-16 units and whether it is the part's value.
+fn part_piece(part: &Part, first: bool, env: &WordEnv<'_>) -> (Shared, bool) {
+    let s = part.text.as_str();
+    let found = if !part.is_lit() {
+        part_value(part, env)
+    } else if !part.quoted && first {
+        tilde(s, env.home).map(|t| Shared::of(&t))
+    } else {
+        Some(Shared::of(s))
+    };
+    found.map_or_else(|| (Shared::of(s), false), |piece| (piece, true))
 }
 
 /// 1.x `makeWord(parts, env)`.
 pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     let mut raw = String::new();
-    let mut text = String::new();
-    let mut units = 0;
+    let mut pieces = Vec::new();
+    let mut units = 0_usize;
     let mut known = true;
     let mut glob = false;
     // Where an unquoted `[` is in raw: a glob when a `]` follows it.
@@ -275,31 +539,25 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
         }
         raw.push_str(&part.text);
         let s = part.text.as_str();
-        let shown = if !part.is_lit() {
-            part_value(part, env).unwrap_or_else(|| {
-                known = false;
-                Cow::Borrowed(s)
-            })
-        } else if !part.quoted && k == 0 {
-            tilde(s, env.home).unwrap_or_else(|| {
-                known = false;
-                Cow::Borrowed(s)
-            })
-        } else {
-            Cow::Borrowed(s)
-        };
+        let (piece, part_known) = part_piece(part, k == 0, env);
+        known &= part_known;
         if part.is_lit() && !part.quoted {
-            glob |= shown.contains(['*', '?']) || brace_list(&shown);
+            glob |= piece.text.contains(['*', '?']) || brace_list(&piece.text);
             if bracket.is_none()
                 && let Some(at) = s.find('[')
             {
                 bracket = Some(raw.len().saturating_sub(s.len()).saturating_add(at));
             }
         }
-        if !push_js(&mut text, &mut units, &shown, env.overflow) {
+        // 1.x's `+=` throws past V8's longest string; the text stops before it.
+        let more = units.saturating_add(piece.units);
+        if more > JS_MAX_STRING {
+            env.overflow.set(true);
             known = false;
             break;
         }
+        units = more;
+        pieces.push(piece.text);
     }
     if let Some(at) = bracket
         && raw
@@ -313,7 +571,7 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     let literal = !expanded && !glob && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
     Word {
         raw,
-        text,
+        text: Text::of(pieces, units, env.guard),
         known,
         quoted: parts.iter().any(|p| p.quoted),
         assign: assign_len(parts),
@@ -399,24 +657,28 @@ fn is_temp_var(name: &str) -> bool {
 }
 
 /// 1.x `partValue(p, env)`: an expansion's value, or `None` when temper does not know it.
-fn part_value<'e>(part: &Part, env: &WordEnv<'e>) -> Option<Cow<'e, str>> {
+/// A variable's value is shared with the variable, and a directory's with the directory.
+fn part_value(part: &Part, env: &WordEnv<'_>) -> Option<Shared> {
+    let dir_value = |dir: &Dir| {
+        let text = dir.shared_text(env.guard)?;
+        Some(Shared::new(text, dir.units()))
+    };
     match &part.kind {
         PartKind::Var(name) => {
-            if let Some(value) = env.vars.get(name) {
-                return Some(Cow::Borrowed(value));
+            if let Some(value) = env.vars.shared(name) {
+                return Some(value.hold());
             }
             match name.as_str() {
-                "HOME" => Some(env.home),
-                "PWD" => env.cwd,
-                "OLDPWD" => env.prev,
-                _ if is_temp_var(name) => env.tmp,
+                "HOME" => Some(Shared::of(env.home)),
+                "PWD" => env.cwd.and_then(dir_value),
+                "OLDPWD" => env.prev.and_then(dir_value),
+                _ if is_temp_var(name) => env.tmp.map(Shared::of),
                 _ => None,
             }
-            .map(Cow::Borrowed)
         }
         PartKind::Sub(src) => git_rev_parse(src, env)
             .or_else(|| mktemp(src, env))
-            .map(Cow::Owned),
+            .map(|value| Shared::of(&value)),
         PartKind::Lit
         | PartKind::Escape
         | PartKind::Param
@@ -622,6 +884,39 @@ pub(crate) fn msys_path<'t>(t: &'t str, style: PathStyle, os_tmp: &str) -> Cow<'
 pub(crate) struct PathCx<'a> {
     pub(crate) at: PathEnv<'a>,
     pub(crate) os_tmp: &'a str,
+    /// What stops the line's reading where 1.x throws. Every rule passes its own; `None`
+    /// (the reader's unit tests) records nothing and sets no budget.
+    pub(crate) guard: Option<&'a Guard>,
+}
+
+impl PathCx<'_> {
+    /// A directory's whole path, for a resolve (see [`Guard::dir_text`]).
+    pub(crate) fn dir_text<'d>(&self, dir: Option<&'d Dir>) -> Option<Cow<'d, str>> {
+        let dir = dir?;
+        match self.guard {
+            Some(guard) => guard.dir_text(dir),
+            None => Some(dir.text()),
+        }
+    }
+
+    /// Whether `a` and `b` joined with `extra` more units fit in a JS string; when not, marks
+    /// the overflow where 1.x's `+`, `path.resolve` or `path.join` throws.
+    pub(crate) fn joins(&self, a: &str, b: &str, extra: usize) -> bool {
+        self.fits(js_len(a).saturating_add(js_len(b)).saturating_add(extra))
+    }
+
+    /// Whether the line has gone past a bound, where 1.x has thrown: the rule reads no more.
+    pub(crate) fn stopped(&self) -> bool {
+        self.guard.is_some_and(Guard::overflowed)
+    }
+
+    /// Whether `units` UTF-16 units fit in a JS string; when not, marks the overflow.
+    pub(crate) fn fits(&self, units: usize) -> bool {
+        match self.guard {
+            Some(guard) => guard.fits(units),
+            None => units <= JS_MAX_STRING,
+        }
+    }
 }
 
 /// 1.x `resolvePath(value, base)`: the absolute path `value` names from `base`, or `None`
@@ -635,10 +930,14 @@ pub(crate) fn resolve_path(
     let style = cx.at.style;
     let t = msys_path(value, style, cx.os_tmp);
     if paths::is_absolute(style, &t) {
-        return Some(paths::resolve(style, cx.at.cwd, &t));
+        // Node's resolve builds `${t}/` first.
+        return cx
+            .joins(&t, "", 1)
+            .then(|| paths::resolve(style, cx.at.cwd, &t));
     }
     let base = base.filter(|b| !b.is_empty())?;
-    Some(resolve_from(cx.at, base, &t))
+    // Then `${base}/${t}/`, which throws past V8's longest string.
+    cx.joins(base, &t, 2).then(|| resolve_from(cx.at, base, &t))
 }
 
 /// Node's `path.resolve(base, t)` for an absolute `base`: a drive-relative `t` on another
@@ -663,11 +962,95 @@ pub(crate) fn resolve_from(at: PathEnv<'_>, base: &str, t: &str) -> String {
 
 /// 1.x `wordPath(w, cwd)`: the absolute path a word names when the command runs in `cwd`;
 /// `None` for a glob or an unknown word.
-pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&str>) -> Option<String> {
+pub(crate) fn word_path(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Option<String> {
     if word.glob() {
         return None;
     }
-    resolve_path(cx, word.value(), cwd)
+    // A relative name steps from a directory in normal form, as `cd` does ([`Dir::step`]):
+    // the same path as the full resolve, for the cost of a copy.
+    let style = cx.at.style;
+    // Read once, and charged when that copies the pieces.
+    let read = if word.known && word.text.len() > 0 {
+        Some(word.text_read()?)
+    } else {
+        None
+    };
+    let value = read.as_deref();
+    let relative = cwd.zip(value).and_then(|(dir, value)| {
+        let t = msys_path(value, style, cx.os_tmp);
+        (dir.is_normal() && !paths::is_absolute(style, &t)).then_some((dir, t))
+    });
+    if let Some((dir, t)) = relative {
+        // 1.x's `${base}/${t}/` past V8's longest string throws.
+        let units = dir.units().saturating_add(js_len(&t)).saturating_add(2);
+        if !cx.fits(units) {
+            return None;
+        }
+        if let Some(to) = dir.step(style, &t) {
+            // The path is built here, and that is what the budget counts.
+            let charged = cx.guard.is_none_or(|guard| guard.charge(to.len()));
+            return charged.then(|| to.text().into_owned());
+        }
+    }
+    if names_absolute(cx, word) {
+        return resolve_path(cx, value, None); // no directory to read
+    }
+    let base = cx.dir_text(cwd);
+    resolve_path(cx, value, base.as_deref())
+}
+
+/// Whether `word` names an absolute path, which Node's `path.resolve` reads without the
+/// directory: a rule then need not build it.
+pub(crate) fn names_absolute(cx: PathCx<'_>, word: &Word) -> bool {
+    let style = cx.at.style;
+    // The first three bytes decide it (`C:\`, `\\`, `/`), and a git-bash `/c/x` or `/tmp`
+    // stays absolute, so the value is not joined.
+    word.known
+        && word.text.len() > 0
+        && !word.glob()
+        && paths::is_absolute(style, &msys_path(&word.text.head(3), style, cx.os_tmp))
+}
+
+/// Whether [`word_path`] would stop the line, where 1.x's `wordPath` throws past V8's
+/// longest string, without building the path: 1.x makes every target's path before it
+/// checks one, so this marks the overflow for each, and a rule builds only the paths it reads.
+pub(super) fn word_path_fits(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> bool {
+    if !word.known || word.text.len() == 0 || word.glob() {
+        return true;
+    }
+    let style = cx.at.style;
+    // A git-bash path changes length on Windows only; elsewhere the units are known
+    // without joining the value.
+    let units = match style {
+        PathStyle::Posix => word.text.units(),
+        PathStyle::Windows => match word.text.read() {
+            Some(value) => js_len(&msys_path(&value, style, cx.os_tmp)),
+            None => return false, // past the line's budget, which stops the rule
+        },
+    };
+    if names_absolute(cx, word) {
+        return cx.fits(units.saturating_add(1)); // `${t}/`
+    }
+    // `${base}/${t}/`, for the full resolve and the step alike.
+    cwd.is_none_or(|dir| cx.fits(dir.units().saturating_add(units).saturating_add(2)))
+}
+
+/// The directory `word` names from `cwd`, as a `cd`, `git -C` or `patch -d` enters it: a
+/// relative name steps from a directory in normal form, which builds no path, and any other
+/// is resolved whole.
+pub(super) fn word_dir(cx: PathCx<'_>, word: &Word, cwd: Option<&Dir>) -> Option<Dir> {
+    let style = cx.at.style;
+    let step = cwd.zip(word.value().filter(|v| !v.is_empty() && !word.glob()));
+    if let Some((base, value)) = step {
+        let t = msys_path(value, style, cx.os_tmp);
+        if !word_path_fits(cx, word, cwd) {
+            return None;
+        }
+        if let Some(dir) = base.step(style, &t) {
+            return Some(dir);
+        }
+    }
+    word_path(cx, word, cwd).map(Dir::resolved)
 }
 
 /// 1.x `commandName(v)`: the basename, lower case, without `.exe`; `gpatch` is `patch`.
@@ -684,11 +1067,9 @@ pub(super) fn command_name(value: &str) -> String {
 
 /// 1.x `nameOf(w)`: the command name a word runs as, or `None` when it is unknown.
 pub(super) fn name_of(word: &Word) -> Option<String> {
-    word.value().map(command_name)
+    // The name is the value's last segment, read from the end without joining the value.
+    word.known.then(|| command_name(&word.text.last_segment()))
 }
-
-/// A shared directory, as the walker carries it.
-pub(super) type Dir = Rc<str>;
 
 /// `^\$\w+$`: a PowerShell variable as a whole word.
 pub(super) fn is_ps_var(raw: &str) -> bool {
@@ -699,7 +1080,9 @@ pub(super) fn is_ps_var(raw: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Vars, brace_list, git_path, without_path_format};
+    use std::rc::Rc;
+
+    use super::{Form, Guard, Shared, Text, Vars, Word, brace_list, git_path, without_path_format};
 
     /// A top-level assignment keeps no undo record; a scope's are undone, nested or not.
     #[test]
@@ -751,6 +1134,104 @@ mod tests {
         assert_eq!(vars.journal.len(), 0);
         vars.set("a", Some("w".to_owned()));
         assert_eq!(vars.journal.len(), 0);
+    }
+
+    /// #202 third review F2: the guard is charged each value set and refunded each value the
+    /// variables drop that nothing else holds; a journaled value stays charged until its
+    /// scope closes, and one a word still shares until the word is gone.
+    #[test]
+    fn variables_charge_the_values_they_keep_alive_net_of_those_they_drop() {
+        let guard = Guard::with_budget(1 << 20);
+        let mut vars = Vars::metered(&guard);
+        let long = "x".repeat(1000);
+        vars.set("a", Some(long.clone()));
+        assert_eq!(guard.spent(), 1000);
+        vars.set("a", Some("y".to_owned()));
+        assert_eq!(guard.spent(), 1, "the old value was freed");
+        let mark = vars.mark();
+        vars.set("a", Some(long.clone()));
+        vars.set("b", Some(long.clone()));
+        assert_eq!(guard.spent(), 2001, "the journal holds `y`");
+        vars.rollback(mark);
+        assert_eq!(guard.spent(), 1, "both long values freed");
+        vars.set("c", Some(long));
+        let shared = vars.shared("c").map(|s| Rc::clone(&s.text));
+        vars.set("c", None);
+        assert_eq!(guard.spent(), 1001, "a word still holds it");
+        drop(shared);
+        vars.set("d", Some("z".to_owned()));
+        for i in 0..64 {
+            vars.set("e", Some(i.to_string()));
+        }
+        assert!(
+            guard.spent() < 1000,
+            "freed once nothing holds it: {}",
+            guard.spent()
+        );
+        assert!(!guard.overflowed());
+    }
+
+    /// A value two names share (`a=$X` shares `$X`'s string) is charged once, to the name
+    /// that made it, and refunded once both have dropped it, in either order.
+    #[test]
+    fn a_value_two_names_share_is_charged_once_and_refunded_once_both_drop_it() {
+        for maker_first in [true, false] {
+            let guard = Guard::with_budget(1 << 20);
+            let mut vars = Vars::metered(&guard);
+            vars.set("x", Some("x".repeat(1000)));
+            let text = vars.shared("x").map(|x| Rc::clone(&x.text));
+            vars.set_shared("a", text.map(|text| Shared::new(text, 1000)));
+            assert_eq!(guard.spent(), 1000, "the shared hold costs nothing");
+            let order = if maker_first { ["x", "a"] } else { ["a", "x"] };
+            for name in order {
+                vars.set(name, Some("1".to_owned()));
+            }
+            for i in 0..64 {
+                vars.set("e", Some(i.to_string()));
+            }
+            assert!(guard.spent() < 1000, "still charged: {}", guard.spent());
+            assert!(vars.dropped.is_empty(), "held: {}", vars.dropped.len());
+        }
+    }
+
+    /// #202 fifth review F2: `a=$x` shares `$x`'s string, so setting it charges nothing, and
+    /// nor does `b+=$x` on an empty `b`; `c+=$x` on `c=y` joins once and charges the value
+    /// and the buffer's growth.
+    #[test]
+    fn a_value_a_word_shares_is_not_charged_again() {
+        let guard = Guard::with_budget(1 << 20);
+        let mut vars = Vars::metered(&guard);
+        vars.set("x", Some("x".repeat(1000)));
+        vars.set("b", Some(String::new()));
+        vars.set("c", Some("y".to_owned()));
+        let x = vars.shared("x").map(|x| Rc::clone(&x.text)).expect("set");
+        let word = |name: &str| Word {
+            raw: [name, "$x"].concat(),
+            text: Text::of(vec![Rc::from(name), Rc::clone(&x)], name.len() + 1000, None),
+            known: true,
+            quoted: false,
+            assign: 1,
+            form: Form::Made {
+                glob: false,
+                expanded: true,
+            },
+        };
+        let spent = guard.spent();
+        vars.set_word("a", &word("a="), 2);
+        assert_eq!(guard.spent(), spent, "a=$x charges nothing");
+        assert!(vars.append_word("b", &word("b+="), 3));
+        assert_eq!(guard.spent(), spent, "b+=$x on an empty b charges nothing");
+        for name in ["a", "b"] {
+            let held = vars.shared(name).map(|v| Rc::ptr_eq(&v.text, &x));
+            assert_eq!(held, Some(true), "{name} shares $x");
+        }
+        assert!(vars.append_word("c", &word("c+="), 3));
+        assert_eq!(vars.get("c").map(str::len), Some(1001));
+        assert_eq!(
+            guard.spent(),
+            spent - 1 + 1001 + 1001,
+            "the value and the buffer"
+        );
     }
 
     #[test]

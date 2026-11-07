@@ -51,8 +51,7 @@ pub(crate) fn dirname(style: PathStyle, path: &str) -> &str {
         .get(root..)
         .and_then(|rest| {
             // Node passes over trailing separators before it looks for the last one.
-            rest.trim_end_matches(|c| is_sep(style, c))
-                .rfind(|c| is_sep(style, c))
+            last_sep(style, rest.trim_end_matches(|c| is_sep(style, c)))
         })
         .map_or(root, |at| root.saturating_add(at).max(root));
     // The cut is at a separator or after the root, both ASCII, so it is a char boundary.
@@ -62,7 +61,19 @@ pub(crate) fn dirname(style: PathStyle, path: &str) -> &str {
 /// `path.basename(path)` of a resolved, absolute path: the last name, or `""` for a root.
 pub(crate) fn basename(style: PathStyle, path: &str) -> &str {
     let rest = path.get(root_len(style, path)..).unwrap_or("");
-    rest.rsplit(|c| is_sep(style, c)).next().unwrap_or(rest)
+    last_sep(style, rest)
+        .and_then(|at| rest.get(at.saturating_add(1)..))
+        .unwrap_or(rest)
+}
+
+/// Where the last separator in `s` is. Separators are ASCII, so a search over the bytes
+/// finds them at char boundaries, in one tight pass from the end.
+fn last_sep(style: PathStyle, s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    match style {
+        PathStyle::Posix => bytes.iter().rposition(|&b| b == b'/'),
+        PathStyle::Windows => bytes.iter().rposition(|&b| b == b'/' || b == b'\\'),
+    }
 }
 
 /// `path.join(dir, name)` for a resolved, absolute `dir` and a plain `name` (no separator, not
@@ -152,6 +163,10 @@ fn posix_resolve(cwd: &str, path: &str) -> String {
     if (path.is_empty() || path == ".") && cwd.starts_with('/') {
         return cwd.to_owned();
     }
+    if is_posix_normal(path) {
+        // What normalising it gives back; the rules resolve each path more than once.
+        return path.to_owned();
+    }
     let full = if path.starts_with('/') {
         [path, "/"].concat()
     } else {
@@ -166,6 +181,20 @@ fn posix_resolve(cwd: &str, path: &str) -> String {
     } else {
         normal
     }
+}
+
+/// An absolute posix path in the form `path.resolve` gives: `/`, or `/` and names, with no
+/// empty name, `.` or `..`. The substring searches are vectorised, where normalising reads
+/// a name at a time.
+fn is_posix_normal(path: &str) -> bool {
+    path == "/"
+        || (path.starts_with('/')
+            && !path.ends_with('/')
+            && !path.ends_with("/.")
+            && !path.ends_with("/..")
+            && !path.contains("//")
+            && !path.contains("/./")
+            && !path.contains("/../"))
 }
 
 /// Node's posix `relative`.
@@ -234,67 +263,54 @@ fn normalize_string(
     path: &str,
     allow_above_root: bool,
     sep: char,
-    is_sep: fn(u8) -> bool,
+    is_sep: impl Fn(u8) -> bool,
 ) -> String {
-    let bytes = path.as_bytes();
     let mut res = String::with_capacity(path.len());
     let mut last_segment_len = 0_usize;
-    // Node's `lastSlash + 1`: where the current segment starts.
+    // Node walks the text a code unit at a time; the segments between separators are what it
+    // acts on, so this splits the bytes once, and reads a segment as Node's `dots` count does:
+    // `.` and `..` are special, anything else a name. Every separator is ASCII, so each
+    // segment's offsets are char boundaries.
     let mut seg_start = 0_usize;
-    // Node's `dots`, with -1 (a segment that is not all dots) as `None`.
-    let mut dots = Some(0_usize);
-    let mut code = 0_u8;
-    for i in 0..=bytes.len() {
-        match bytes.get(i) {
-            Some(&b) => code = b,
-            None if is_sep(code) => break,
-            None => code = b'/',
-        }
-        if !is_sep(code) {
-            dots = match (code, dots) {
-                (b'.', Some(n)) => Some(n.saturating_add(1)),
-                _ => None,
-            };
-            continue;
-        }
-        if seg_start == i || dots == Some(1) {
+    for piece in path.as_bytes().split(|&b| is_sep(b)) {
+        let end = seg_start.saturating_add(piece.len());
+        let segment = path.get(seg_start..end).unwrap_or("");
+        seg_start = end.saturating_add(1);
+        match segment {
             // An empty or `.` segment: nothing to add.
-        } else if dots == Some(2) {
-            let ends_in_dots = res.len() >= 2 && last_segment_len == 2 && res.ends_with("..");
-            if !ends_in_dots && !res.is_empty() {
-                // Drop the last segment (all of `res` when it has one).
-                match res.rfind(sep) {
-                    Some(at) if res.len() > 2 => {
-                        res.truncate(at);
-                        last_segment_len = res
-                            .rfind(sep)
-                            .map_or(res.len(), |j| res.len().saturating_sub(j).saturating_sub(1));
+            "" | "." => {}
+            ".." => {
+                let ends_in_dots = res.len() >= 2 && last_segment_len == 2 && res.ends_with("..");
+                if !ends_in_dots && !res.is_empty() {
+                    // Drop the last segment (all of `res` when it has one).
+                    match res.rfind(sep) {
+                        Some(at) if res.len() > 2 => {
+                            res.truncate(at);
+                            last_segment_len = res.rfind(sep).map_or(res.len(), |j| {
+                                res.len().saturating_sub(j).saturating_sub(1)
+                            });
+                        }
+                        Some(_) | None => {
+                            res.clear();
+                            last_segment_len = 0;
+                        }
                     }
-                    Some(_) | None => {
-                        res.clear();
-                        last_segment_len = 0;
+                } else if allow_above_root {
+                    if !res.is_empty() {
+                        res.push(sep);
                     }
+                    res.push_str("..");
+                    last_segment_len = 2;
                 }
-                seg_start = i.saturating_add(1);
-                dots = Some(0);
-                continue;
             }
-            if allow_above_root {
+            name => {
                 if !res.is_empty() {
                     res.push(sep);
                 }
-                res.push_str("..");
-                last_segment_len = 2;
+                res.push_str(name);
+                last_segment_len = name.len();
             }
-        } else {
-            if !res.is_empty() {
-                res.push(sep);
-            }
-            res.push_str(path.get(seg_start..i).unwrap_or(""));
-            last_segment_len = i.saturating_sub(seg_start);
         }
-        seg_start = i.saturating_add(1);
-        dots = Some(0);
     }
     res
 }

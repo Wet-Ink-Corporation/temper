@@ -28,6 +28,7 @@ fn cx() -> PathCx<'static> {
             cwd: "/work",
         },
         os_tmp: "/tmp",
+        guard: None,
     }
 }
 
@@ -73,7 +74,12 @@ fn verb(t: &Target<'_>) -> String {
 
 /// 1.x `t.path`: `wordPath(w, t.cwd)`.
 fn path_of(t: &Target<'_>) -> Option<String> {
-    word_path(cx(), &t.word, t.cwd.as_deref())
+    word_path(cx(), &t.word, t.cwd.as_ref())
+}
+
+/// A directory's text, owned.
+fn dir_text(dir: Option<&Dir>) -> Option<String> {
+    dir.map(|d| d.text().into_owned())
 }
 
 /// 1.x `writeTargets(cmd, opts)` as `[verb, path]` pairs.
@@ -230,7 +236,7 @@ fn cd_pushd_popd_subshells_and_pipelines_set_the_directory_each_command_runs_in(
         parse_with(cmd, opts_home(&at("home")))
             .into_iter()
             .filter(|c| c.name.as_deref() == Some("touch"))
-            .map(|c| c.cwd.as_deref().map(str::to_owned))
+            .map(|c| dir_text(c.cwd.as_ref()))
             .collect()
     };
     assert_eq!(
@@ -285,6 +291,7 @@ fn a_cd_of_one_segment_lands_where_the_full_resolve_does() {
             cwd: r"C:\work",
         },
         os_tmp: r"C:\Temp",
+        guard: None,
     };
     let win = |cmd: &str| -> Vec<Option<String>> {
         let opts = ParseOpts {
@@ -295,7 +302,7 @@ fn a_cd_of_one_segment_lands_where_the_full_resolve_does() {
         parse_with(cmd, opts)
             .iter()
             .flat_map(|c| command_writes(c, windows))
-            .map(|t| word_path(windows, &t.word, t.cwd.as_deref()))
+            .map(|t| word_path(windows, &t.word, t.cwd.as_ref()))
             .collect()
     };
     // `path.win32.resolve('C:\\r', 'a', '..', '..', 'b', 'o')` and the like.
@@ -315,6 +322,7 @@ fn a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands() {
             cwd: r"C:\work",
         },
         os_tmp: r"C:\Temp",
+        guard: None,
     };
     let cases: [(PathCx<'_>, &[&str], &[&str]); 2] = [
         (
@@ -345,19 +353,80 @@ fn a_relative_cd_steps_from_the_directory_to_where_the_full_resolve_lands() {
         let style = cx.at.style;
         for base in bases {
             for value in values {
-                let stepped = walk::cd_step(style, &Dir::from(*base), value);
+                let stepped = Dir::resolved(*base).step(style, value);
                 let full = resolve_path(cx, Some(value), Some(base));
+                let stepped = stepped.as_ref().map(Dir::text);
                 assert_eq!(stepped.as_deref(), full.as_deref(), "{base:?} + {value:?}");
             }
         }
     }
-    let base = Dir::from("/r");
+    let base = Dir::resolved("/r");
     for value in ["/x", ""] {
-        assert_eq!(walk::cd_step(PathStyle::Posix, &base, value), None);
+        assert_eq!(base.step(PathStyle::Posix, value), None);
     }
-    let base = Dir::from(r"C:\r");
+    let base = Dir::resolved(r"C:\r");
     for value in [r"\x", "/c/x", "D:x", r"D:\x"] {
-        assert_eq!(walk::cd_step(PathStyle::Windows, &base, value), None);
+        assert_eq!(base.step(PathStyle::Windows, value), None);
+    }
+}
+
+/// Not in 1.x's tests (#202 F4): a chain of Windows `cd`s steps from the directories earlier
+/// steps made, through `..`s that cut a node short or climb past it, under a drive root and a
+/// UNC share, and lands at each step where Node's `path.win32.resolve` does (the expected
+/// values are Node 22's).
+#[test]
+fn a_chain_of_windows_cds_lands_where_path_win32_resolve_does_at_each_step() {
+    let cases: [(&str, &[&str], &[&str]); 8] = [
+        (r"C:\r", &[r"a\b", ".."], &[r"C:\r\a\b", r"C:\r\a"]),
+        (
+            r"C:\r",
+            &[r"a\b\c", "d", r"..\..", "..", "x"],
+            &[
+                r"C:\r\a\b\c",
+                r"C:\r\a\b\c\d",
+                r"C:\r\a\b",
+                r"C:\r\a",
+                r"C:\r\a\x",
+            ],
+        ),
+        (
+            r"C:\r",
+            &[r"a\b\c", r"..\..\..\..", "y"],
+            &[r"C:\r\a\b\c", r"C:\", r"C:\y"],
+        ),
+        (
+            r"C:\",
+            &["a", "..", "..", "b"],
+            &[r"C:\a", r"C:\", r"C:\", r"C:\b"],
+        ),
+        (r"C:\", &[r"a\b", r"..\c"], &[r"C:\a\b", r"C:\a\c"]),
+        (
+            r"\\h\s\x",
+            &["..", "..", "y"],
+            &[r"\\h\s\", r"\\h\s\", r"\\h\s\y"],
+        ),
+        (
+            r"\\h\s\",
+            &[r"a\b", "..", "c"],
+            &[r"\\h\s\a\b", r"\\h\s\a", r"\\h\s\a\c"],
+        ),
+        (
+            r"\\h\s\x",
+            &["a/b", "../../..", "z"],
+            &[r"\\h\s\x\a\b", r"\\h\s\", r"\\h\s\z"],
+        ),
+    ];
+    for (base, values, want) in cases {
+        let mut dir = Dir::resolved(base);
+        let mut landed = Vec::new();
+        for value in values {
+            let Some(next) = dir.step(PathStyle::Windows, value) else {
+                panic!("{base:?} + {value:?} did not step");
+            };
+            landed.push(next.text().into_owned());
+            dir = next;
+        }
+        assert_eq!(landed, want, "{base:?} + {values:?}");
     }
 }
 
@@ -497,7 +566,7 @@ impl Patched {
                     .iter()
                     .map(|w| w.value().map(str::to_owned))
                     .collect(),
-                cwd: p.cwd.as_deref().map(str::to_owned),
+                cwd: dir_text(p.cwd.as_ref()),
                 stored: p.stored,
                 guessed: p.guessed,
             },
@@ -898,6 +967,7 @@ fn resolve_path_reads_git_bash_paths_on_windows_only() {
             cwd: r"C:\work",
         },
         os_tmp: r"C:\Users\u\AppData\Local\Temp",
+        guard: None,
     };
     assert_eq!(
         resolve_path(windows, Some("/c/x"), Some(r"D:\r")),
@@ -1162,7 +1232,7 @@ fn deletes(cmd: &str) -> Vec<(String, Option<String>, bool)> {
                 name => name.unwrap_or("").to_owned(),
             };
             command_deletes(c, cx()).into_iter().map(move |d| {
-                let path = word_path(cx(), &d.word, d.cwd.as_deref());
+                let path = word_path(cx(), &d.word, d.cwd.as_ref());
                 (verb.clone(), path, d.recursive)
             })
         })

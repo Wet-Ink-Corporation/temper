@@ -9,17 +9,26 @@
 //! Node's path algebra, and is crate-private (port plan OC-1 B, wi-30e6a5).
 //!
 //! Each scan reads its input forward once per nesting level the walker follows (at most
-//! [`walk::MAX_DEPTH`] deep). On top of that, each value or directory the line builds costs
-//! its length once: an assignment copies its value and a `cd` its directory, so `a=$a/b` or
-//! `cd a` repeated n times costs O(n^2) bytes copied, as in 1.x, though no step re-reads a
-//! path. The variables a subshell restores are journaled once per name per scope, and its
-//! directories by stack length, not copied; each string is held to V8's longest (see
-//! [`walk::TooLong`]).
+//! [`walk::MAX_DEPTH`] deep). On top of that, the work per assignment or command name is
+//! linear in the value, as in 1.x: an assignment, `NAME=` or `NAME+=`, joins its value once
+//! in a reused buffer and copies that into the string the name keeps, unless the value is
+//! one string already (`a=$X`, or `a+=$X` on an empty `a`), which it shares; so `a=$a/b` or
+//! `a+=/b` repeated n times copies O(n^2) bytes, as in 1.x. A directory is a parent handle plus the names a `cd` added ([`dir::Dir`]), so a `cd`
+//! costs the value it reads and a line of `cd a` or `pushd a` holds each name once; the whole
+//! path is built only where a rule resolves a name from it. [`dir::Guard`]'s budget per line
+//! bounds the memory the line keeps alive and the text the rules build: the directory text,
+//! each join of a word's text a rule reads, each inner script read and walked, and the
+//! variables' live values; the copies an assignment or a command name makes are not counted
+//! as work. The variables a subshell restores are
+//! journaled once per name per scope, and its directories are shared handles; each string is
+//! held to V8's longest (see [`walk::TooLong`]), and so is each path joined from them.
 
 mod deletes;
+mod dir;
 mod git;
 mod lex;
 mod patch;
+mod text;
 mod walk;
 mod words;
 mod wrappers;
@@ -28,7 +37,7 @@ mod writes;
 pub(crate) use deletes::command_deletes;
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
-pub(crate) use words::{PathCx, Word, js_len, msys_path, resolve_path};
+pub(crate) use words::{Dir, Guard, PathCx, Word, js_len, msys_path, names_absolute, resolve_path};
 pub(crate) use writes::{CopyDest, Target, Verb, command_writes, landing, pathspec_pattern};
 
 #[cfg(test)]

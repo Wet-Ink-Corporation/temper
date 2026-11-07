@@ -3,19 +3,18 @@
 //!
 //! Variables live in a journal ([`Vars`]) and directories are shared [`Dir`]s, so opening and
 //! closing a subshell or a substitution costs the names it changes, not the variables before
-//! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the directory it
-//! builds, never a re-read of the whole path ([`cd_step`]).
+//! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
+//! never a copy or a re-read of the whole path ([`word_dir`]).
 
-use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
 
-use temper_domain::{PathStyle, js_trim};
+use temper_domain::js_trim;
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
-    Dir, Mark, PathCx, Vars, Word, WordEnv, fits_js, git_rev_parse, is_ps_var, js_len, make_word,
-    name_of, push_js, word_path,
+    Assigned, Dir, Guard, Mark, PathCx, Vars, Word, WordEnv, git_rev_parse, is_ps_var, make_word,
+    name_of, word_dir,
 };
 use super::wrappers::{Run, Xargs, inner_script};
 
@@ -114,25 +113,32 @@ pub(crate) struct TooLong;
 /// 1.x `parseCommands(cmd, opts)`.
 pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Command>, TooLong> {
     let cwd = opts.cwd.map(|dir| {
-        Dir::from(crate::paths::resolve(
+        Dir::resolved(crate::paths::resolve(
             opts.paths.at.style,
             opts.paths.at.cwd,
             dir,
         ))
     });
+    // A resolve past V8's longest string stops the walk whoever asked for it.
+    let own = Guard::default();
+    let guard = opts.paths.guard.unwrap_or(&own);
+    let paths = PathCx {
+        guard: Some(guard),
+        ..opts.paths
+    };
     let mut walker = Walker {
-        opts,
-        normal: cwd.clone(), // a second handle on the start directory, which is resolved
+        opts: ParseOpts { paths, ..opts },
         overflow: Cell::new(false),
         env: Env {
             cwd,
+            vars: Vars::metered(guard),
             ..Env::default()
         },
         out: Vec::new(),
         depth: 0,
     };
     walker.run(cmd);
-    if walker.overflow.get() {
+    if walker.overflow.get() || guard.overflowed() {
         return Err(TooLong);
     }
     Ok(walker.out)
@@ -164,10 +170,6 @@ pub(super) struct Meta {
 
 pub(super) struct Walker<'o> {
     pub(super) opts: ParseOpts<'o>,
-    /// The last directory `cd` resolved, which is in Node's normal form: a relative `cd` from
-    /// it steps the value's names instead of normalising the whole path again, so a line of
-    /// `cd a/b;` costs a copy of the directory per `cd` (1.x normalises it each time).
-    normal: Option<Dir>,
     /// A word, directory or joined script grew past V8's longest string (see [`TooLong`]).
     pub(super) overflow: Cell<bool>,
     pub(super) env: Env,
@@ -205,26 +207,33 @@ impl Walker<'_> {
         WordEnv {
             ps,
             home: self.opts.home,
-            cwd: self.env.cwd.as_deref(),
-            prev: self.env.prev.as_deref(),
+            cwd: self.env.cwd.as_ref(),
+            prev: self.env.prev.as_ref(),
             tmp: self.opts.tmp,
             top: self.opts.top,
             git_dir: self.opts.git_dir,
             vars: &self.env.vars,
             style: self.opts.paths.at.style,
             overflow: &self.overflow,
+            guard: self.opts.paths.guard,
         }
-    }
-
-    /// 1.x `wordPath(w, cwd)`.
-    pub(super) fn word_path(&self, word: &Word, cwd: Option<&str>) -> Option<String> {
-        word_path(self.opts.paths, word, cwd)
     }
 
     /// `dir`, unless it is longer than a JS string can be: 1.x's `path.resolve` throws there,
     /// so this marks the overflow that stops the reader (see [`TooLong`]).
     pub(super) fn capped(&self, dir: Option<Dir>) -> Option<Dir> {
-        dir.filter(|d| fits_js(d, &self.overflow))
+        dir.filter(|d| {
+            let fits = self.opts.paths.fits(d.units());
+            if !fits {
+                self.overflow.set(true);
+            }
+            fits
+        })
+    }
+
+    /// A string grew past V8's longest, where 1.x throws (see [`TooLong`]).
+    fn stopped(&self) -> bool {
+        self.overflow.get() || self.opts.paths.guard.is_some_and(Guard::overflowed)
     }
 
     /// Runs `walk` one level deeper (1.x's `depth + 1`).
@@ -243,6 +252,10 @@ impl Walker<'_> {
         let mut scopes: Vec<Scope> = Vec::new();
         let mut prev_body: Option<Rc<str>> = None;
         for item in lex::lex(src) {
+            // 1.x has thrown by now: nothing after it is read.
+            if self.stopped() {
+                return;
+            }
             match item {
                 Item::Open => scopes.push(Scope {
                     cwd: self.env.cwd.clone(),
@@ -309,7 +322,7 @@ impl Walker<'_> {
                     Some(Stdin::Heredoc { body, literal })
                 }
                 (RedirectOp::HereString, _) => Some(Stdin::Str {
-                    body: Rc::from(redirect.word.text.as_str()),
+                    body: redirect.word.text.shared(),
                     literal: redirect.word.is_literal(),
                 }),
                 _ => stdin,
@@ -352,7 +365,7 @@ impl Walker<'_> {
         };
         let words = words
             .into_iter()
-            .filter(|w| !(w.value() == Some("") && !w.quoted && w.expanded()))
+            .filter(|w| !(w.value_is("") && !w.quoted && w.expanded()))
             .collect();
         CommandWords { words, ps }
     }
@@ -380,6 +393,25 @@ impl Walker<'_> {
         self.env.prev = saved_prev;
     }
 
+    /// [`Self::sub_in`] of a script a command joined from its words (`bash -c`, `watch`,
+    /// `env -S`, `pwsh -c`), once [`Self::charge_script`] has room for it.
+    pub(super) fn script_in(&mut self, src: &str, cwd: Option<Dir>, ps: bool) {
+        if self.charge_script(src) {
+            self.sub_in(src, cwd, ps);
+        }
+    }
+
+    /// Charges the walk of a joined script to the line's budget, since the words it makes
+    /// copy its text and the line keeps them; `false` once the budget is
+    /// spent, which stops the walk. The line's own text and an `awk` program, which is a
+    /// literal on the line, are not charged.
+    pub(super) fn charge_script(&self, src: &str) -> bool {
+        self.opts
+            .paths
+            .guard
+            .is_none_or(|guard| guard.charge(src.len()))
+    }
+
     /// 1.x `simple(words, meta, { ...env, cwd, vars: new Map(env.vars), dirs: [] })`, as
     /// `find -exec` runs one: nothing it sets outlives it.
     pub(super) fn simple_apart(&mut self, words: Vec<Word>, meta: Meta, cwd: Option<Dir>) {
@@ -400,21 +432,18 @@ impl Walker<'_> {
 
     /// 1.x `assignTo(env, w)`: `NAME=value` sets, `NAME+=value` appends to a known value.
     pub(super) fn assign(&mut self, word: &Word) {
-        let Some(name) = word.assign() else {
+        let (Some(name), Some(assigned)) = (word.assign(), word.assigned()) else {
             return;
         };
-        let value = word.value();
-        let tail = value.and_then(|v| v.get(name.len()..));
-        let value = match tail.and_then(|t| t.strip_prefix("+=")) {
-            Some(more) => self.env.vars.get(name).and_then(|old| {
-                let mut value = old.to_owned();
-                let mut units = js_len(old);
-                push_js(&mut value, &mut units, more, &self.overflow).then_some(value)
-            }),
-            None => tail.and_then(|t| t.get(1..)).map(str::to_owned),
-        };
-        let name = name.to_owned();
-        self.env.vars.set(&name, value);
+        match assigned {
+            Assigned::Unknown => self.env.vars.set(name, None),
+            Assigned::Set(skip) => self.env.vars.set_word(name, word, skip),
+            Assigned::Append(skip) => {
+                if !self.env.vars.append_word(name, word, skip) {
+                    self.overflow.set(true);
+                }
+            }
+        }
     }
 
     /// Pushes the command `run` leaves, named `name`.
@@ -497,9 +526,8 @@ impl Walker<'_> {
             && is_ps_var(&var.raw)
             && eq.raw == "="
         {
-            let name = var.raw.get(1..).unwrap_or("").to_owned();
-            let value = value.value().map(str::to_owned);
-            self.env.vars.set(&name, value);
+            let name = var.raw.get(1..).unwrap_or("");
+            self.env.vars.set_word(name, value, 0);
             return;
         }
         let Some(run) = self.wrappers(w, k) else {
@@ -569,8 +597,9 @@ impl Walker<'_> {
     /// What a command runs inside it, in `cwd`, one level deeper.
     fn inner(&mut self, inner: Inner, cwd: Option<Dir>, meta: &Meta) {
         match inner {
-            Inner::Sub { src, ps } => self.sub_in(&src, cwd, ps),
-            Inner::Run(src) => self.run(&src),
+            Inner::Sub { src, ps } => self.script_in(&src, cwd, ps),
+            Inner::Run(src) if self.charge_script(&src) => self.run(&src),
+            Inner::Run(_) => {}
             Inner::Awk(srcs) => {
                 for src in srcs {
                     self.sub_in(&src, cwd.clone(), false); // a shared `Rc` handle
@@ -606,7 +635,7 @@ impl Walker<'_> {
         } else {
             let a: Vec<&Word> = args
                 .iter()
-                .filter(|x| x.value().is_none() || !is_cd_option(&x.raw))
+                .filter(|x| !x.value_is_known() || !is_cd_option(&x.raw))
                 .collect();
             if name == "pushd" {
                 let cwd = self.env.cwd.clone();
@@ -614,13 +643,9 @@ impl Walker<'_> {
             }
             self.env.cwd = match a.as_slice() {
                 [] if name == "pushd" => None,
-                [] => Some(Dir::from(self.opts.home)),
-                [only] if only.value() == Some("-") => self.env.prev.clone(),
-                [only] => {
-                    let dir = self.capped(self.cd_into(only));
-                    self.normal.clone_from(&dir); // the handle the next `cd` compares with
-                    dir
-                }
+                [] => Some(Dir::given(self.opts.home)),
+                [only] if only.value_is("-") => self.env.prev.clone(),
+                [only] => self.capped(self.cd_into(only)),
                 _ => None,
             };
         }
@@ -628,62 +653,10 @@ impl Walker<'_> {
     }
 
     /// The directory `cd <word>` enters: Node's `path.resolve(cwd, value)`, stepping a relative
-    /// value's names from a directory already in normal form ([`cd_step`]).
+    /// value's names from a directory already in normal form ([`word_dir`]).
     fn cd_into(&self, word: &Word) -> Option<Dir> {
-        let normal = self.env.cwd.as_ref().filter(|cwd| {
-            self.normal
-                .as_ref()
-                .is_some_and(|normal| Rc::ptr_eq(normal, cwd))
-        });
-        let step = normal.zip(word.value().filter(|_| !word.glob()));
-        if let Some((base, value)) = step
-            && let Some(dir) = cd_step(self.opts.paths.at.style, base, value)
-        {
-            return Some(dir);
-        }
-        self.word_path(word, self.env.cwd.as_deref()).map(Dir::from)
+        word_dir(self.opts.paths, word, self.env.cwd.as_ref())
     }
-}
-
-/// `path.resolve(base, value)` for a `base` in normal form and a relative `value`, as Node's
-/// normalisation reads it: each name is appended and each `..` takes the parent, skipping
-/// empty names and `.`. That costs `base` once plus `value`, where the full resolve walks the
-/// whole joined path. `None` for an empty or absolute value, or on Windows one that names a
-/// drive (`D:x`), for the full resolve to read.
-pub(super) fn cd_step(style: PathStyle, base: &Dir, value: &str) -> Option<Dir> {
-    let windows = style == PathStyle::Windows;
-    let rooted = windows && (value.starts_with('\\') || value.contains(':'));
-    if value.is_empty() || value.starts_with('/') || rooted {
-        return None;
-    }
-    // Windows reads `\` as a separator too: as `/`, the split below finds both with `memchr`.
-    let value = if windows && value.contains('\\') {
-        Cow::Owned(value.replace('\\', "/"))
-    } else {
-        Cow::Borrowed(value)
-    };
-    let sep = if windows { '\\' } else { '/' };
-    let mut names = value
-        .split('/')
-        .filter(|name| !name.is_empty() && *name != ".")
-        .peekable();
-    if names.peek().is_none() {
-        return Some(Rc::clone(base));
-    }
-    let mut dir = String::with_capacity(base.len().saturating_add(value.len()).saturating_add(1));
-    dir.push_str(base);
-    for name in names {
-        if name == ".." {
-            let parent = crate::paths::dirname(style, &dir).len();
-            dir.truncate(parent);
-        } else {
-            if !dir.ends_with(sep) {
-                dir.push(sep);
-            }
-            dir.push_str(name);
-        }
-    }
-    Some(Dir::from(dir))
 }
 
 /// A command's words, and whether they were made as PowerShell's.
@@ -731,7 +704,7 @@ fn find_execs(args: &[Word], cwd: Option<&Dir>, depth: usize) -> Option<Inner> {
             .get(from..)
             .unwrap_or(&[])
             .iter()
-            .position(|a| matches!(a.value(), Some(";" | "+")))
+            .position(|a| a.value_is(";") || a.value_is("+"))
             .map(|j| from.saturating_add(j));
         let words: Vec<Word> = args
             .get(from..end.unwrap_or(args.len()))
