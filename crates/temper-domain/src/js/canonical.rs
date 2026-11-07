@@ -11,7 +11,7 @@ pub(crate) fn utf16_cmp(a: &str, b: &str) -> Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
-/// JS's `strings.sort()`: by UTF-16 code units ([`utf16_cmp`]), stable, without allocating per
+/// JS's `strings.sort()`: by UTF-16 code units, stable, without allocating per
 /// comparison (P5).
 ///
 /// # Examples
