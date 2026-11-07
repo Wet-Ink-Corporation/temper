@@ -63,7 +63,8 @@ pub use scan::{
 };
 pub use time::Timestamp;
 pub use verdict::{
-    ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, VerdictContext,
-    VerdictProblem, earlier_review, extract_verdict, problem_kinds, summarize_findings,
+    ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
+    VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
+    extract_verdict, handback_denial, problem_kinds, summarize_findings, verdict_block,
     verdict_hash, verdict_problems,
 };

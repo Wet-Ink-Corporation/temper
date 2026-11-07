@@ -7,6 +7,7 @@ mod hash;
 mod js_semantics;
 mod problems;
 mod summary;
+mod valid;
 
 use crate::js::Value;
 

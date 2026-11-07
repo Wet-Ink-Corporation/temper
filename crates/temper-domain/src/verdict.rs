@@ -5,12 +5,16 @@ mod coverage;
 mod extract;
 mod problems;
 mod summary;
+mod texts;
+mod valid;
 
 pub use extract::{ExtractedVerdict, extract_verdict};
 pub use problems::{
     GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds, verdict_problems,
 };
 pub use summary::{earlier_review, summarize_findings};
+pub use texts::{handback_denial, verdict_block};
+pub use valid::{ValidVerdict, VerdictOutcome, VerdictRejected};
 
 use sha2::{Digest, Sha256};
 
