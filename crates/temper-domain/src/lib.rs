@@ -47,7 +47,7 @@ pub use hooks::{
     apply_edit, edit_policy, is_reviewer, lockfile_denial, skill_gate_denial, skill_load_via,
     skill_preloaded,
 };
-pub use js::{JsonParseError, Object as JsObject, Value as JsValue, js_trim};
+pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_trim};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,
@@ -62,4 +62,7 @@ pub use scan::{
     is_build_script, new_hits, render_scan_text,
 };
 pub use time::Timestamp;
-pub use verdict::{DIMENSIONS, ExtractedVerdict, extract_verdict};
+pub use verdict::{
+    ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, VerdictContext,
+    VerdictProblem, extract_verdict, problem_kinds, verdict_problems,
+};

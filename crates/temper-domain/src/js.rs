@@ -16,6 +16,19 @@ pub(crate) use value::{
     entries, integer_from_radix, js_json, js_string, json_string, number_from_text, truthy,
 };
 
+/// 1.x throws a `TypeError` on this value (a property read of `null`, a missing array method),
+/// so the handler that reads it fails where 1.x's does. The text is Rust's (port plan D16(p)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct JsTypeError(&'static str);
+
+impl JsTypeError {
+    /// The error for the read `what` describes.
+    pub(crate) const fn new(what: &'static str) -> Self {
+        Self(what)
+    }
+}
+
 /// JS `\s` (the spec's `WhiteSpace` and `LineTerminator`) as the body of a `regex` class.
 const JS_SPACE_SET: &str = r"\t\n\x0B\x0C\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}";
 /// JS `\w` without the `u` flag: ASCII only.

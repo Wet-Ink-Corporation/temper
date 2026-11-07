@@ -3,6 +3,7 @@
 //! expected answers were printed by 1.x on the same JSON.
 
 mod extract;
+mod problems;
 
 use crate::js::Value;
 
