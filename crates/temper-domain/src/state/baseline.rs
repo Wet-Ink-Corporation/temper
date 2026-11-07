@@ -55,9 +55,14 @@ impl BaselineSummary {
         for (_, counts) in totals.iter() {
             total = total.add_sum(count_sum(counts)?);
         }
+        // The document is ours and dropped here, so the toolchain moves out (#207 review F6).
+        let toolchain = match doc {
+            Value::Object(mut object) => object.remove("toolchain"),
+            _ => None,
+        };
         Ok(Self {
             total: total.into_value(),
-            toolchain: doc.get("toolchain").cloned(),
+            toolchain,
         })
     }
 

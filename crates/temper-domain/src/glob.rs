@@ -113,42 +113,6 @@ fn js_source(pattern: &str) -> String {
     re
 }
 
-/// Several globs, matched as 1.x's `globs.some((p) => globMatch(p, rel))`.
-///
-/// # Examples
-///
-/// ```
-/// use temper_domain::Globs;
-///
-/// let protected = Globs::new([".cargo/**", "AGENTS.md"])?;
-/// assert!(protected.any_match(".cargo/config.toml"));
-/// assert!(!protected.any_match("src/lib.rs"));
-/// # Ok::<(), temper_domain::GlobError>(())
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct Globs(Vec<Glob>);
-
-impl Globs {
-    /// Compiles each pattern.
-    ///
-    /// # Errors
-    ///
-    /// The first [`GlobError`], as [`Glob::new`] gives it.
-    pub fn new<'a>(patterns: impl IntoIterator<Item = &'a str>) -> Result<Self, GlobError> {
-        patterns
-            .into_iter()
-            .map(Glob::new)
-            .collect::<Result<_, _>>()
-            .map(Self)
-    }
-
-    /// Does any glob match `rel`?
-    #[must_use]
-    pub fn any_match(&self, rel: &str) -> bool {
-        self.0.iter().any(|glob| glob.is_match(rel))
-    }
-}
-
 /// Several globs, each compiled only when a match first tries it.
 ///
 /// This is where 1.x's `globs.some((p) => globMatch(p, rel))` builds each regex: a pattern
@@ -179,17 +143,6 @@ impl<'a> LazyGlobs<'a> {
         )
     }
 
-    /// Owns `patterns`, compiling none of them: for a list kept beside its owner rather than
-    /// borrowed from it.
-    pub fn owned(patterns: impl IntoIterator<Item = String>) -> LazyGlobs<'static> {
-        LazyGlobs(
-            patterns
-                .into_iter()
-                .map(|pattern| (Cow::Owned(pattern), OnceCell::new()))
-                .collect(),
-        )
-    }
-
     /// Does any glob match `rel`? Each is compiled the first time it is tried.
     ///
     /// # Errors
@@ -209,6 +162,19 @@ impl<'a> LazyGlobs<'a> {
             }
         }
         Ok(false)
+    }
+}
+
+impl LazyGlobs<'static> {
+    /// Owns `patterns`, compiling none of them: for a list kept beside its owner rather than
+    /// borrowed from it.
+    pub fn owned(patterns: impl IntoIterator<Item = String>) -> Self {
+        Self(
+            patterns
+                .into_iter()
+                .map(|pattern| (Cow::Owned(pattern), OnceCell::new()))
+                .collect(),
+        )
     }
 }
 

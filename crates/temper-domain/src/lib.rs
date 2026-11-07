@@ -44,7 +44,7 @@ pub use fingerprint::{
     FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, gate_config,
     in_fingerprint, is_rust_relevant,
 };
-pub use glob::{Glob, GlobError, Globs, LazyGlobs};
+pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
     EditOp, EditStep, EditTarget, EditTool, HookEvent, HookOutcome, IRON_RULES, InterpreterCode,
