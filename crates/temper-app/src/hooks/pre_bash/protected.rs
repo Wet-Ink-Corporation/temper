@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
-use temper_domain::{ConfigChanges, Glob, GlobError, Globs};
+use temper_domain::{ConfigChanges, Glob, GlobError, Globs, InterpreterCode};
 
 use crate::git::{self, Short};
 use crate::hooks::HookCall;
@@ -93,17 +93,20 @@ pub(super) fn protected_shell_writes(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     cmd: &str,
+    code: &InterpreterCode,
 ) -> Changes {
-    protected_shell_writes_in(call, ws, cmd, &Guard::default())
+    protected_shell_writes_in(call, ws, (cmd, code), &Guard::default())
 }
 
-/// [`protected_shell_writes`] within `guard`'s bounds, which a test may set lower.
+/// [`protected_shell_writes`] of `line` (the command and the interpreter-code matcher)
+/// within `guard`'s bounds, which a test may set lower.
 pub(super) fn protected_shell_writes_in(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
-    cmd: &str,
+    line: (&str, &InterpreterCode),
     guard: &Guard,
 ) -> Changes {
+    let (cmd, code) = line;
     let env_cwd = call.env.cwd.to_string_lossy();
     let temp = call.env.temp_dir.to_string_lossy();
     let home = call.env.home.to_string_lossy();
@@ -133,6 +136,7 @@ pub(super) fn protected_shell_writes_in(
         top: Some(&ws.root),
         git_dir: ".git",
         tmp: Some(&temp),
+        untracked: false,
     };
     let Ok(commands) = parse_commands(cmd, opts) else {
         return Changes::default();
@@ -146,6 +150,7 @@ pub(super) fn protected_shell_writes_in(
         cx,
         start: &start,
         globs,
+        code,
         owners: HashMap::new(),
         owner_in: HashMap::new(),
         long: LongPaths::default(),
@@ -185,6 +190,7 @@ struct Reader<'a, 'c, P> {
     cx: PathCx<'a>,
     start: &'a str,
     globs: Globs,
+    code: &'a InterpreterCode,
     /// 1.x `ownerOf`'s cache: each ancestor checked, by its path relative to the root, and
     /// the checkout there, if any. A hit joins no path.
     owners: HashMap<String, Option<Owner>>,
@@ -253,7 +259,7 @@ impl<'a, P: Ports> Reader<'a, '_, P> {
         if let Some(PatchCommand::Applies(p)) = patch_command(c, self.cx) {
             self.patch(c, &p)?;
         }
-        for t in command_writes(c, self.cx) {
+        for t in command_writes(c, self.cx, self.code) {
             self.write(&t)?;
         }
         let (start, ws) = (self.start, self.ws);

@@ -121,31 +121,19 @@
     "cwd": "/ws",
     "cmd": "python3 -c \"open('.claude/temper.json','w').write('{}')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "python3 -c \"from pathlib import Path; Path('clippy.toml').write_text('x')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "node -e \"require('fs').writeFileSync('.claude/settings.json', '{}')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes .claude/settings.json. .claude/settings.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .claude/settings.json. .claude/settings.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
@@ -679,11 +667,7 @@
     "cwd": "/ws",
     "cmd": "cd .claude && python3 -c \"open('temper.json','w').write('{}')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
@@ -707,41 +691,25 @@
     "cwd": "/ws",
     "cmd": "python3 - <<'PY'\nimport json\np='.claude/temper.json'\nd=json.load(open(p))\nd['review']='off'\njson.dump(d,open(p,'w'))\nPY",
     "decision": "ask",
-    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .claude/temper.json. .claude/temper.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "python3 -c \"p='clippy.toml'; open(p,'w')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "node -e \"const f='.claude/settings.json'; require('fs').writeFileSync(f,'{}')\"",
     "decision": "ask",
-    "reason": "temper: this shell command writes .claude/settings.json. .claude/settings.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .claude/settings.json. .claude/settings.json is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "python3 - <<'PY'\nfrom pathlib import Path\np = Path('rust-toolchain.toml')\np.write_text('x')\nPY",
     "decision": "ask",
-    "reason": "temper: this shell command writes rust-toolchain.toml. rust-toolchain.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes rust-toolchain.toml. rust-toolchain.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
@@ -1377,31 +1345,19 @@
     "cwd": "/ws",
     "cmd": "[IO.File]::WriteAllText('clippy.toml', 'x')",
     "decision": "ask",
-    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "$p = 'clippy.toml'; [IO.File]::WriteAllText($p, 'x')",
     "decision": "ask",
-    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes clippy.toml. clippy.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    },
    {
     "cwd": "/ws",
     "cmd": "[ -d docs ] || python3 - <<'EOF'\nfrom pathlib import Path\nPath(\".cargo/config.toml\").write_text(x)\nEOF",
     "decision": "ask",
-    "reason": "temper: this shell command writes .cargo/config.toml. .cargo/config.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change.",
-    "until_2f": {
-     "decision": "none",
-     "reason": ""
-    }
+    "reason": "temper: this shell command writes .cargo/config.toml. .cargo/config.toml is verification/agent configuration. Changing it can weaken the checks (H-05, H-12). Approve only if you asked for this change."
    }
   ]
  },
@@ -1491,61 +1447,37 @@
     "cwd": "/ws",
     "cmd": "cat \"/tmp/cfg-patch/doc.diff\" | git apply",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `git apply` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `git apply`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `git apply` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",
     "cmd": "curl -sSL https://example.invalid/x.patch | patch -p1",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `patch -p1` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `patch -p1`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `patch -p1` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",
     "cmd": "git apply \"$PATCH\"",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `git apply $PATCH` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `git apply $PATCH`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `git apply $PATCH` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",
     "cmd": "git apply \"/tmp/cfg-patch/missing.patch\"",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `git apply /tmp/cfg-patch/missing.patch` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `git apply /tmp/cfg-patch/missing.patch`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `git apply /tmp/cfg-patch/missing.patch` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",
     "cmd": "patch -p1 < \"/tmp/cfg-patch/missing.patch\"",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `patch -p1` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `patch -p1`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `patch -p1` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",
     "cmd": "git am --continue",
     "decision": "deny",
-    "reason": "temper: temper cannot read the patch that `git am --continue` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again.",
-    "until_2f": {
-     "decision": "ask",
-     "reason": "temper: `git am --continue`: temper cannot read the patch, so it cannot tell whether it changes protected configuration (H-05, H-12). Approve only if you know what the patch changes."
-    }
+    "reason": "temper: temper cannot read the patch that `git am --continue` applies (stdin, a variable or a missing file), so it cannot tell whether it changes Rust sources, and the command was not run (H-12). Save the patch to a file in one command and check it with `git apply --stat <file>`; make changes to .rs files with the Edit or Write tools so the standard's checks run on them. To bring a change over from another worktree, commit it in the worktree it was made in and run `git cherry-pick <commit>` (or `git merge <branch>`) here: the Stop gate and CI check what it brings in. Retrying this patch the same way is denied again."
    },
    {
     "cwd": "/ws",

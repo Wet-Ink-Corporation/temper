@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 use std::cell::OnceCell;
 
-use temper_domain::PathStyle;
+use temper_domain::{InterpreterCode, PathStyle};
 
 use crate::hooks::HookCall;
 use crate::hooks::shell::{
@@ -21,17 +21,24 @@ use crate::project::Workspace;
 
 /// 1.x `stateDirWrite(proj, cmd, input.cwd ?? proj.root)` under `readerRule`: whether `cmd`
 /// writes into `ws`'s state dir. Where 1.x's reader throws, the answer is its fallback, no.
-pub(super) fn state_dir_write(call: &HookCall<'_, impl Ports>, ws: &Workspace, cmd: &str) -> bool {
-    state_dir_write_in(call, ws, cmd, &Guard::default())
-}
-
-/// [`state_dir_write`] within `guard`'s bounds, which a test may set lower.
-pub(super) fn state_dir_write_in(
+pub(super) fn state_dir_write(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     cmd: &str,
+    code: &InterpreterCode,
+) -> bool {
+    state_dir_write_in(call, ws, (cmd, code), &Guard::default())
+}
+
+/// [`state_dir_write`] of `line` (the command and the interpreter-code matcher) within
+/// `guard`'s bounds, which a test may set lower.
+pub(super) fn state_dir_write_in(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    line: (&str, &InterpreterCode),
     guard: &Guard,
 ) -> bool {
+    let (cmd, code) = line;
     let env = call.env;
     let style = env.style;
     let cwd = env.cwd.to_string_lossy();
@@ -62,6 +69,7 @@ pub(super) fn state_dir_write_in(
         top: Some(&ws.root),
         git_dir,
         tmp: Some(&temp),
+        untracked: false,
     };
     let Ok(commands) = parse_commands(cmd, opts) else {
         return false;
@@ -78,7 +86,7 @@ pub(super) fn state_dir_write_in(
     let targets: Vec<Target<'_>> = commands
         .iter()
         .take_while(|_| !guard.overflowed())
-        .flat_map(|c| command_writes(c, cx))
+        .flat_map(|c| command_writes(c, cx, code))
         .collect();
     !guard.overflowed()
         && targets

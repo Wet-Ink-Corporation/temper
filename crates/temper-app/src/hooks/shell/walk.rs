@@ -6,10 +6,10 @@
 //! it (1.x copies the variable map at every `(` and `$(`); a `cd` costs the value it reads,
 //! never a copy or a re-read of the whole path ([`word_dir`]).
 
-use std::cell::Cell;
+use std::cell::{Cell, OnceCell};
 use std::rc::Rc;
 
-use temper_domain::js_trim;
+use temper_domain::{InterpreterCode, js_trim};
 
 use super::lex::{self, Item, PartKind, RawCommand, RedirectOp};
 use super::words::{
@@ -35,7 +35,55 @@ pub(crate) struct ParseOpts<'a> {
     pub(crate) git_dir: &'a str,
     /// The temp directory `$TMPDIR` and `$(mktemp)` name.
     pub(crate) tmp: Option<&'a str>,
+    /// 1.x `untracked`: a variable the line assigns is unknown rather than its model's value
+    /// (#151 review 7), a command whose name or wrapper words temper does not read exactly
+    /// is reported as an [`Opaque::Name`] marker before it, and `env -S` as an
+    /// [`Opaque::Split`] one (#151 review 8). For the reviewer's fail-closed check.
+    pub(crate) untracked: bool,
 }
+
+/// What a command with no name stands for when temper does not read it (1.x `opaque`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Opaque {
+    /// Commands nested deeper than temper reads ([`MAX_DEPTH`]).
+    Depth,
+    /// Under `untracked`, a command name or wrapper word built from an expansion: the
+    /// marker's `argv0` is that word.
+    Name,
+    /// Under `untracked`, `env -S`, whose string is not shell syntax.
+    Split,
+}
+
+/// The line a command is read from, without its heredoc bodies (1.x `line`), and the files
+/// interpreter code in it writes, read once however many PowerShell expressions it holds.
+#[derive(Debug, Default)]
+pub(crate) struct Line {
+    pub(crate) text: String,
+    code_targets: OnceCell<Vec<String>>,
+}
+
+impl Line {
+    fn new(text: String) -> Self {
+        Self {
+            text,
+            code_targets: OnceCell::new(),
+        }
+    }
+
+    /// 1.x `lineCodeTargets(line)`: `codeWriteTargets` of the line, memoised.
+    pub(crate) fn code_targets(&self, code: &InterpreterCode) -> &[String] {
+        self.code_targets
+            .get_or_init(|| code.write_targets(&self.text))
+    }
+}
+
+impl PartialEq for Line {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for Line {}
 
 /// A redirection, with its target as a word.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,8 +95,9 @@ pub(crate) struct Redirect {
 /// Where a command's stdin comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Stdin {
-    /// The stage before it in a pipeline, and the heredoc or here-string body that stage read.
-    Pipe { body: Option<Rc<str>> },
+    /// The stage before it in a pipeline, and the heredoc or here-string body that stage
+    /// read; `exact` when that body was literal and that stage a plain `cat`.
+    Pipe { body: Option<Rc<str>>, exact: bool },
     /// `< file`.
     File(Word),
     /// `<<EOF`: its body, and whether it has no expansion in it.
@@ -64,7 +113,7 @@ impl Stdin {
     /// 1.x `stdin.body`: what a shell reading this stdin runs.
     pub(super) fn body(&self) -> Option<&str> {
         match self {
-            Self::Pipe { body } | Self::Heredoc { body, .. } => body.as_deref(),
+            Self::Pipe { body, .. } | Self::Heredoc { body, .. } => body.as_deref(),
             Self::Str { body, .. } => Some(body),
             Self::File(_) => None,
         }
@@ -85,23 +134,48 @@ pub(crate) struct Command {
     pub(crate) piped: bool,
     /// The directory it runs in, absolute, or `None` after a `cd` temper cannot follow.
     pub(crate) cwd: Option<Dir>,
+    /// What it runs with besides its words.
+    pub(crate) with: RunsWith,
+    /// The line it was read from.
+    pub(crate) line: Rc<Line>,
+    /// What it stands for, when it is a marker of something temper does not read.
+    pub(crate) opaque: Option<Opaque>,
+}
+
+/// What a command runs with besides its words.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RunsWith {
     /// A `GIT_CONFIG*` variable is set for it, which git reads as configuration.
     pub(crate) git_config: bool,
+    /// xargs, which hands it words temper does not know.
+    pub(crate) xargs: bool,
 }
 
 impl Command {
-    /// 1.x `depthMarker`: what stands for commands nested deeper than temper reads.
-    fn depth_marker() -> Self {
+    /// 1.x `depthMarker`: what stands for what temper does not read, with no name.
+    pub(super) fn marker(opaque: Opaque, argv0: Word) -> Self {
         Self {
             name: None,
-            argv0: Word::unknown(""),
+            argv0,
             args: Vec::new(),
             redirects: Vec::new(),
             stdin: None,
             piped: false,
             cwd: None,
-            git_config: false,
+            with: RunsWith::default(),
+            line: Rc::default(),
+            opaque: Some(opaque),
         }
+    }
+
+    /// 1.x `named`: its name is a literal word, which temper reads exactly.
+    pub(crate) fn named(&self) -> bool {
+        self.argv0.is_literal()
+    }
+
+    /// The marker of commands nested deeper than temper reads.
+    fn depth_marker() -> Self {
+        Self::marker(Opaque::Depth, Word::unknown(""))
     }
 }
 
@@ -131,11 +205,12 @@ pub(crate) fn parse_commands(cmd: &str, opts: ParseOpts<'_>) -> Result<Vec<Comma
         overflow: Cell::new(false),
         env: Env {
             cwd,
-            vars: Vars::metered(guard),
+            vars: Vars::new(opts.untracked).metered(guard),
             ..Env::default()
         },
         out: Vec::new(),
         depth: 0,
+        line: Rc::default(),
     };
     walker.run(cmd);
     if walker.overflow.get() || guard.overflowed() {
@@ -176,6 +251,8 @@ pub(super) struct Walker<'o> {
     pub(super) out: Vec<Command>,
     /// How deep in subshells, substitutions and inner scripts the walk is (1.x's `depth`).
     depth: usize,
+    /// The line being read, shared by the commands read from it.
+    line: Rc<Line>,
 }
 
 /// What a `(` saves.
@@ -184,6 +261,21 @@ struct Scope {
     prev: Option<Dir>,
     dirs: usize,
     vars: Mark,
+}
+
+/// The heredoc or here-string body a pipeline stage read, which the next stage reads.
+struct Passed {
+    body: Rc<str>,
+    /// The body is literal and the stage is a plain `cat`, so the next stage reads it as
+    /// written (1.x `exact`).
+    exact: bool,
+}
+
+/// 1.x `catsStdin(words)`: the stage is `cat` with no operand but `-`, so it passes its stdin
+/// on unchanged.
+fn cats_stdin(words: &[Word]) -> bool {
+    let mut rest = words.iter().skip_while(|w| w.assign > 0);
+    rest.next().and_then(Word::value) == Some("cat") && rest.all(|w| w.value() == Some("-"))
 }
 
 /// 1.x `KEYWORDS`.
@@ -249,9 +341,18 @@ impl Walker<'_> {
             self.out.push(Command::depth_marker());
             return;
         }
+        let lexed = lex::lex(src);
+        let line = Line::new(lex::without_bodies(src, &lexed.bodies));
+        let outer = std::mem::replace(&mut self.line, Rc::new(line));
+        self.items(lexed.items);
+        self.line = outer;
+    }
+
+    /// The items of one line, in order.
+    fn items(&mut self, items: Vec<Item>) {
         let mut scopes: Vec<Scope> = Vec::new();
-        let mut prev_body: Option<Rc<str>> = None;
-        for item in lex::lex(src) {
+        let mut prev_body: Option<Passed> = None;
+        for item in items {
             // 1.x has thrown by now: nothing after it is read.
             if self.stopped() {
                 return;
@@ -277,10 +378,9 @@ impl Walker<'_> {
         }
     }
 
-    /// One simple command of a line: its substitutions first, then the command. Returns the
-    /// heredoc or here-string body it read, which a pipe passes on.
-    fn item(&mut self, raw: &RawCommand, prev_body: Option<Rc<str>>) -> Option<Rc<str>> {
-        // Command substitutions run first, in a subshell.
+    /// The command and process substitutions of `raw`'s words and redirects, each walked in
+    /// a subshell, as they run before the command.
+    fn substitutions(&mut self, raw: &RawCommand) {
         let words = raw
             .words
             .iter()
@@ -299,6 +399,12 @@ impl Walker<'_> {
                 }
             }
         }
+    }
+
+    /// One simple command of a line: its substitutions first, then the command. Returns the
+    /// heredoc or here-string body it read, which a pipe passes on.
+    fn item(&mut self, raw: &RawCommand, prev: Option<Passed>) -> Option<Passed> {
+        self.substitutions(raw);
         let words = self.command_words(raw);
         let wenv = self.word_env(self.env.ps || words.ps);
         let redirects: Vec<Redirect> = raw
@@ -311,7 +417,10 @@ impl Walker<'_> {
             .collect();
         let piped = raw.sep.is_pipe();
         let isolated = piped || raw.after.is_pipe() || raw.after == lex::Joint::Background;
-        let mut stdin = piped.then_some(Stdin::Pipe { body: prev_body });
+        let mut stdin = piped.then(|| Stdin::Pipe {
+            exact: prev.as_ref().is_some_and(|p| p.exact),
+            body: prev.map(|p| p.body),
+        });
         for (redirect, lexed) in redirects.iter().zip(&raw.redirects) {
             stdin = match (redirect.op, &lexed.heredoc) {
                 (RedirectOp::In, _) => Some(Stdin::File(redirect.word.clone())),
@@ -329,10 +438,16 @@ impl Walker<'_> {
             };
         }
         let passed = match &stdin {
-            Some(Stdin::Heredoc { body, .. }) => body.clone(),
-            Some(Stdin::Str { body, .. }) => Some(Rc::clone(body)),
+            Some(Stdin::Heredoc { body, literal }) => body.clone().map(|body| (body, *literal)),
+            Some(Stdin::Str { body, literal }) => Some((Rc::clone(body), *literal)),
             Some(Stdin::Pipe { .. } | Stdin::File(_)) | None => None,
         };
+        // A body piped on is the next stage's script exactly only when it is literal and a
+        // plain `cat` passes it through unchanged.
+        let passed = passed.map(|(body, literal)| Passed {
+            body,
+            exact: literal && cats_stdin(&words.words),
+        });
         let meta = Meta {
             redirects,
             stdin,
@@ -462,7 +577,12 @@ impl Walker<'_> {
             stdin: meta.stdin.clone(),
             piped: meta.piped,
             cwd: run.cwd,
-            git_config: run.git_config || self.env.vars.has_git_config(),
+            with: RunsWith {
+                git_config: run.git_config || self.env.vars.has_git_config(),
+                xargs: run.xargs.is_some(),
+            },
+            line: Rc::clone(&self.line),
+            opaque: None,
         });
     }
 

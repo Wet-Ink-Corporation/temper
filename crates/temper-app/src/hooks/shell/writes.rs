@@ -2,14 +2,15 @@
 //! `psCopyArgs`, `optionValues`, `inPlace`, `inPlaceTargets`, `gitRestore`, `landing`,
 //! `pathspecPattern`).
 //!
-//! Interpreter code and PowerShell expressions that write files (1.x `codeWriteTargets`) are
-//! read in port Phase 2f, with the patches and copies onto `.rs` files that read them too.
+//! Interpreter code and PowerShell expressions that write files are read with the domain's
+//! [`InterpreterCode`] (1.x `codeWriteTargets`).
 
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use temper_domain::PathStyle;
+use temper_domain::{InterpreterCode, PathStyle};
 
+use super::code::{interpreter_code, is_interpreter};
 use super::git::git_command;
 use super::text::Text;
 use super::walk::Command;
@@ -23,6 +24,9 @@ pub(crate) enum Verb<'c> {
     Redirect,
     /// A command named for what it does: `tee`, `cp`, `curl`, `Copy-Item`, ...
     Named(&'c str),
+    /// A directory such a command writes into (`curl --output-dir`, `wget -P`, `tar -x -C`,
+    /// `unzip -d`; 1.x `dir: true`).
+    Into(&'c str),
     /// `sed -i` and `perl -i`.
     InPlace(&'c str),
     /// `git mv`.
@@ -32,6 +36,8 @@ pub(crate) enum Verb<'c> {
         checkout: bool,
         source: Option<String>,
     },
+    /// Interpreter code or a PowerShell expression (1.x verb `code`).
+    Code,
 }
 
 /// A copy's sources and how its destination takes them.
@@ -73,9 +79,7 @@ pub(crate) struct Target<'c> {
 impl Target<'_> {
     /// 1.x `t.path`: the absolute path the word names from `cwd`, or `None` when the name or
     /// the directory is unknown, or the line went past a bound. Built when a rule reads it;
-    /// [`command_writes`] has already checked that it fits. The scan of copies onto
-    /// `.rs` files reads it from port Phase 2f; until then only the tests do.
-    #[cfg(test)]
+    /// [`command_writes`] has already checked that it fits.
     pub(crate) fn path(&self, cx: PathCx<'_>) -> Option<String> {
         self.fits
             .then(|| super::words::word_path(cx, &self.word, self.cwd.as_ref()))
@@ -83,10 +87,15 @@ impl Target<'_> {
     }
 }
 
-/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would. 1.x
-/// makes each target's path here, so a path past V8's longest string stops the rule wherever
-/// it is: this checks that each would fit, and builds none of them.
-pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'c>> {
+/// 1.x `commandWrites(c)`: the files one command writes, in the order the shell would, the
+/// files its interpreter code or PowerShell expression writes last. 1.x makes each target's
+/// path here, so a path past V8's longest string stops the rule wherever it is: this checks
+/// that each would fit, and builds none of them.
+pub(crate) fn command_writes<'c>(
+    c: &'c Command,
+    cx: PathCx<'_>,
+    code: &InterpreterCode,
+) -> Vec<Target<'c>> {
     let mut out = Vec::new();
     let mut add =
         |verb: Verb<'c>, word: Cow<'c, Word>, copy: Option<CopyOp<'c>>, cwd: Option<Dir>| {
@@ -123,8 +132,12 @@ pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'
             None
         }
         _ => {
-            for word in named_writes(name, args) {
+            let (files, dirs) = named_writes(name, args);
+            for word in files {
                 add(Verb::Named(name), word, None, cwd());
+            }
+            for word in dirs {
+                add(Verb::Into(name), word, None, cwd());
             }
             None
         }
@@ -132,46 +145,70 @@ pub(crate) fn command_writes<'c>(c: &'c Command, cx: PathCx<'_>) -> Vec<Target<'
     if let Some((dest, op)) = copy {
         add(Verb::Named(name), dest, Some(op), cwd());
     }
+    for word in code_writes(c, name, code) {
+        add(Verb::Code, Cow::Owned(word), None, cwd());
+    }
+    out
+}
+
+/// The files that the code an interpreter `name` runs, or a PowerShell expression, writes.
+fn code_writes(c: &Command, name: &str, code: &InterpreterCode) -> Vec<Word> {
+    let mut out = Vec::new();
+    if is_interpreter(name) {
+        for body in interpreter_code(c) {
+            let lits = code.write_targets(body);
+            out.extend(lits.iter().map(String::as_str).map(Word::plain));
+        }
+    }
+    // A PowerShell expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`); `[ -f x ]`
+    // is a test.
+    let a0 = c.argv0.raw.as_str();
+    if a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[[" {
+        let lits = c.line.code_targets(code);
+        out.extend(lits.iter().map(String::as_str).map(Word::plain));
+    }
     out
 }
 
 /// The files a command named for what it does writes: `tee`, `truncate`, `curl -o`,
-/// `wget -O`, `dd of=`, `tar -x -C`, `unzip -d`, `Set-Content` and its kin.
-fn named_writes<'c>(name: &str, args: &'c [Word]) -> Vec<Cow<'c, Word>> {
+/// `wget -O`, `dd of=`, `Set-Content` and its kin; then the directories it writes into
+/// (`curl --output-dir`, `wget -P`, `tar -x -C`, `unzip -d`, 1.x `dir: true`).
+fn named_writes<'c>(name: &str, args: &'c [Word]) -> (Vec<Cow<'c, Word>>, Vec<Cow<'c, Word>>) {
     let file = |a: &Cow<'c, Word>| a.raw != "-";
     match name {
-        "tee" | "sponge" => args
-            .iter()
-            .filter(|a| !a.raw.starts_with('-'))
-            .map(Cow::Borrowed)
-            .collect(),
-        "truncate" => truncate_files(args),
+        "tee" | "sponge" => (
+            args.iter()
+                .filter(|a| !a.raw.starts_with('-'))
+                .map(Cow::Borrowed)
+                .collect(),
+            Vec::new(),
+        ),
+        "truncate" => (truncate_files(args), Vec::new()),
         "curl" => {
             let mut out = option_values(args, Some('o'), &["--output"], CURL_VALUES);
             out.retain(file);
-            out.extend(option_values(args, None, &["--output-dir"], ""));
-            out
+            (out, option_values(args, None, &["--output-dir"], ""))
         }
         "wget" => {
             let mut out = option_values(args, Some('O'), &["--output-document"], WGET_VALUES);
             out.retain(file);
-            out.extend(option_values(
-                args,
-                Some('P'),
-                &["--directory-prefix"],
-                WGET_VALUES,
-            ));
-            out
+            let dirs = option_values(args, Some('P'), &["--directory-prefix"], WGET_VALUES);
+            (out, dirs)
         }
-        "dd" => args
-            .iter()
-            .filter(|a| a.raw.starts_with("of="))
-            .map(|a| Cow::Owned(a.sliced(3, 3)))
-            .collect(),
-        "tar" if tar_extracts(args) => option_values(args, Some('C'), &["--directory"], ""),
-        "unzip" => option_values(args, Some('d'), &[], ""),
-        _ if is_ps_content(name) => ps_content_path(args).into_iter().collect(),
-        _ => Vec::new(),
+        "dd" => (
+            args.iter()
+                .filter(|a| a.raw.starts_with("of="))
+                .map(|a| Cow::Owned(a.sliced(3, 3)))
+                .collect(),
+            Vec::new(),
+        ),
+        "tar" if tar_extracts(args) => (
+            Vec::new(),
+            option_values(args, Some('C'), &["--directory"], ""),
+        ),
+        "unzip" => (Vec::new(), option_values(args, Some('d'), &[], "")),
+        _ if is_ps_content(name) => (ps_content_path(args).into_iter().collect(), Vec::new()),
+        _ => (Vec::new(), Vec::new()),
     }
 }
 

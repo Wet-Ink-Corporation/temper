@@ -4,8 +4,9 @@
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::ops::Range;
 
-use super::walk::{Inner, Meta, Walker};
+use super::walk::{Command, Inner, Meta, Opaque, Walker};
 use super::words::{Dir, Word, js_len, name_of, push_js, resolve_path};
 
 /// What the wrappers leave: the words, the index of the command word in them, its directory,
@@ -26,6 +27,19 @@ pub(super) enum Xargs {
     Input,
     /// `-I r`: in place of `r`.
     Replace(String),
+}
+
+/// A chain of wrapper words, and the indices of the wrappers' own command words in it.
+#[derive(Clone, Copy)]
+struct Chain<'a> {
+    words: &'a [Word],
+    cmds: &'a [usize],
+}
+
+impl<'a> Chain<'a> {
+    fn new(words: &'a [Word], cmds: &'a [usize]) -> Self {
+        Self { words, cmds }
+    }
 }
 
 /// A wrapper: its name, and its options that take a separate value.
@@ -166,6 +180,8 @@ impl Walker<'_> {
             xargs: None,
             git_config,
         };
+        // The wrappers' own command words, which are read only when literal.
+        let mut cmds: Vec<usize> = Vec::new();
         while let Some(word) = words.get(run.at) {
             let Some(name) = name_of(word) else {
                 break;
@@ -173,6 +189,7 @@ impl Walker<'_> {
             let Some(valued) = wrapper_values(&name) else {
                 break;
             };
+            cmds.push(run.at);
             run.at = run.at.saturating_add(1);
             if name == "command" && is_lookup(words.get(run.at)) {
                 // A lookup, not a run.
@@ -187,6 +204,7 @@ impl Walker<'_> {
             };
             let watch_exec = self.options(wrapper, &words, &mut run)?;
             if name == "watch" && !watch_exec {
+                self.unread(Chain::new(&words, &cmds), k..run.at, None);
                 if let Some(rest) = words.get(run.at..).filter(|r| !r.is_empty())
                     && let Some(script) = join_texts(rest, &self.overflow)
                 {
@@ -202,9 +220,36 @@ impl Walker<'_> {
                 run.at = run.at.saturating_add(1);
             }
         }
+        self.unread(Chain::new(&words, &cmds), k..run.at, Some(run.at));
         // A `GIT_CONFIG*` assignment is a cheap flag; `xargs` holds at most its replace string.
         run.words = words;
         Some(run)
+    }
+
+    /// 1.x `unread(from, to, name)`: under `untracked`, the first wrapper word in `span` that
+    /// temper does not read exactly (a command word that is not literal, or an option or
+    /// assignment that is neither literal nor [`Word::fixed`]), else the command name at
+    /// `name` when it is not literal, is reported as an [`Opaque::Name`] marker. The command
+    /// is still read after it.
+    fn unread(&mut self, chain: Chain<'_>, span: Range<usize>, name: Option<usize>) {
+        if !self.opts.untracked {
+            return;
+        }
+        let Chain { words, cmds } = chain;
+        let Range { start, end } = span;
+        let wrapper = words.get(start..end).and_then(|ws| {
+            ws.iter().zip(start..).find_map(|(y, j)| {
+                // `cmds` is in order, so a long chain is searched, not scanned.
+                (!y.is_literal() && (cmds.binary_search(&j).is_ok() || !y.fixed())).then_some(y)
+            })
+        });
+        let named = name
+            .and_then(|at| words.get(at))
+            .filter(|w| !w.is_literal());
+        if let Some(x) = wrapper.or(named) {
+            // The marker holds its own copy: the command after it still reads the word.
+            self.out.push(Command::marker(Opaque::Name, x.clone()));
+        }
     }
 
     /// The options after `wrapper`: whether they include watch's `--exec`, or `None` when
@@ -269,6 +314,13 @@ impl Walker<'_> {
             return Some(());
         };
         // Each of env's valued options takes the next word when nothing is attached.
+        if flag.opt == 'S' && self.opts.untracked {
+            // Its quoting and escapes are not the shell's, so the fail-closed parse does
+            // not read it.
+            self.out
+                .push(Command::marker(Opaque::Split, Word::unknown("")));
+            return None;
+        }
         if flag.opt == 'S' {
             // env -S splits its string into the command and runs it; env reads `\_`, `\t`,
             // `\n`, `\v`, `\f` and `\r` in it as whitespace.
@@ -364,7 +416,7 @@ pub(super) fn inner_script(
                     .as_ref()
                     .and_then(|s| s.body())
                     .map(str::to_owned),
-                Script::File | Script::None => None,
+                Script::File(_) | Script::None => None,
             };
             script
                 .filter(|s| !s.is_empty())
@@ -441,7 +493,7 @@ pub(super) enum Script<'w> {
     /// `-c`: the first operand after the options, if any.
     Arg(Option<&'w Word>),
     /// A script operand, which temper does not read.
-    File,
+    File(&'w Word),
     /// `-s` or no operand.
     Stdin,
     /// `--version` and `--help`.
@@ -503,7 +555,7 @@ impl ShellFlags {
     fn operand(self, w: Option<&Word>) -> Script<'_> {
         match w {
             _ if self.cmd => Script::Arg(w),
-            Some(_) if !self.stdin => Script::File,
+            Some(word) if !self.stdin => Script::File(word),
             _ => Script::Stdin,
         }
     }
@@ -511,7 +563,7 @@ impl ShellFlags {
 
 /// 1.x `trapAction(args)`: the action word of `trap action signal...`, or `None` for
 /// `trap -p`, `trap -l`, `trap - SIG` and a lone argument.
-fn trap_action(args: &[Word]) -> Option<&Word> {
+pub(super) fn trap_action(args: &[Word]) -> Option<&Word> {
     let a = match args.first() {
         Some(first) if first.value_is("--") => args.get(1..).unwrap_or(&[]),
         _ => args,
@@ -525,16 +577,23 @@ fn trap_action(args: &[Word]) -> Option<&Word> {
 }
 
 /// An awk program: its text, and whether its word is literal.
-struct AwkProgram<'w> {
-    literal: bool,
-    text: Cow<'w, str>,
+pub(super) struct AwkProgram<'w> {
+    pub(super) literal: bool,
+    pub(super) text: Cow<'w, str>,
 }
 
 /// 1.x `awkPrograms(args).progs`: each `-e`/`--source` value, else the first operand when no
 /// `-f` or `-E` names a program file.
 fn awk_programs(args: &[Word]) -> Vec<AwkProgram<'_>> {
+    awk_code(args).progs
+}
+
+/// 1.x `awkPrograms(args)`: the programs, and the files awk reads code from: each `-f`, `-E`,
+/// `-i` and `-l` value, a word or the text of `-fFILE` or `--file=FILE`.
+pub(super) fn awk_code(args: &[Word]) -> AwkArgs<'_> {
     let mut found = AwkArgs {
         progs: Vec::new(),
+        files: Vec::new(),
         main: false,
     };
     let mut k = 0;
@@ -550,7 +609,7 @@ fn awk_programs(args: &[Word]) -> Vec<AwkProgram<'_>> {
     {
         found.progs.push(AwkProgram::of(a, a.text()));
     }
-    found.progs
+    found
 }
 
 /// awk's long options that take a value.
@@ -573,10 +632,11 @@ impl<'w> AwkProgram<'w> {
     }
 }
 
-/// What awk's options name: its `-e` programs, and whether a program file stands in for the
-/// operand.
-struct AwkArgs<'w> {
-    progs: Vec<AwkProgram<'w>>,
+/// What awk's options name: its `-e` programs, the files it reads code from, and whether a
+/// program file stands in for the operand.
+pub(super) struct AwkArgs<'w> {
+    pub(super) progs: Vec<AwkProgram<'w>>,
+    pub(super) files: Vec<AwkProgram<'w>>,
     main: bool,
 }
 
@@ -601,35 +661,16 @@ impl<'w> AwkArgs<'w> {
             a.raw.as_str()
         };
         let next = k.saturating_add(1);
-        let stop_if = |stop: bool, at: usize| {
-            if stop {
-                AwkStep::Stop(at)
-            } else {
-                AwkStep::Next(at)
-            }
-        };
         if r == "--" {
             return AwkStep::Stop(next);
         }
-        if let Some((key, value)) = r.strip_prefix("--").and_then(|l| l.split_once('='))
-            && AWK_LONG.contains(&key)
-        {
-            match key {
-                "source" => self.progs.push(AwkProgram::of(a, value)),
-                "file" | "exec" => self.main = true,
-                _ => {}
-            }
-            return stop_if(key == "exec", next);
+        if let Some(step) = self.long_assign(a, r, next) {
+            return step;
         }
         let long = r.strip_prefix("--").is_some_and(|l| AWK_LONG.contains(&l));
         let short = r.len() == 2 && r.strip_prefix('-').is_some_and(|f| "evfFEil".contains(f));
         if long || short {
-            if let Some(v) = args.get(next)
-                && (r == "-e" || r == "--source")
-            {
-                self.progs.push(AwkProgram::of(v, v.text()));
-            }
-            self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
+            self.valued(args.get(next), r);
             return stop_if(r == "-E" || r == "--exec", next.saturating_add(1));
         }
         let mut chars = r.chars();
@@ -637,6 +678,9 @@ impl<'w> AwkArgs<'w> {
             && "evfFEil".contains(letter)
             && !chars.as_str().is_empty()
         {
+            if "fEil".contains(letter) {
+                self.files.push(AwkProgram::of(a, chars.as_str()));
+            }
             self.main |= letter == 'f' || letter == 'E';
             if letter == 'e' {
                 self.progs.push(AwkProgram::of(a, chars.as_str()));
@@ -649,12 +693,93 @@ impl<'w> AwkArgs<'w> {
             AwkStep::Stop(k)
         }
     }
+
+    /// A long option with its value after `=`, `--file=x`, in word `a` read as `r`.
+    fn long_assign(&mut self, a: &'w Word, r: &'w str, next: usize) -> Option<AwkStep> {
+        let (key, value) = r.strip_prefix("--").and_then(|l| l.split_once('='))?;
+        if !AWK_LONG.contains(&key) {
+            return None;
+        }
+        match key {
+            "source" => self.progs.push(AwkProgram::of(a, value)),
+            "field-separator" | "assign" => {}
+            _ => {
+                self.files.push(AwkProgram::of(a, value));
+                self.main |= key == "file" || key == "exec";
+            }
+        }
+        Some(stop_if(key == "exec", next))
+    }
+
+    /// Option `r`, whose value is the next word, `value`.
+    fn valued(&mut self, value: Option<&'w Word>, r: &str) {
+        if let Some(v) = value
+            && (r == "-e" || r == "--source")
+        {
+            self.progs.push(AwkProgram::of(v, v.text()));
+        }
+        let file = [
+            "-f",
+            "-E",
+            "-i",
+            "-l",
+            "--file",
+            "--exec",
+            "--include",
+            "--load",
+        ];
+        if file.contains(&r) {
+            self.files.push(value.map_or(
+                AwkProgram {
+                    literal: true,
+                    text: Cow::Borrowed(""),
+                },
+                |v| AwkProgram::of(v, v.text()),
+            ));
+        }
+        self.main |= ["-f", "-E", "--file", "--exec"].contains(&r);
+    }
+}
+
+/// Stop at `at` when `stop`, else read the option there.
+fn stop_if(stop: bool, at: usize) -> AwkStep {
+    if stop {
+        AwkStep::Stop(at)
+    } else {
+        AwkStep::Next(at)
+    }
 }
 
 /// 1.x `AWK_SYSTEM`, `/\bsystem\s*\(\s*"((?:[^"\\]|\\.)*)"\s*\)/g`: the string of each
 /// `system("...")` call with a literal alone as its argument. A string's scan ends at its
 /// first unescaped quote, so the scans from successive calls do not overlap.
 fn awk_systems(text: &str) -> Vec<String> {
+    awk_system_calls(text)
+        .into_iter()
+        .map(|call| text.get(call.body).unwrap_or("").to_owned())
+        .collect()
+}
+
+/// 1.x `text.replace(AWK_SYSTEM, '')`.
+pub(super) fn without_awk_systems(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for call in awk_system_calls(text) {
+        out.push_str(text.get(at..call.whole.start).unwrap_or(""));
+        at = call.whole.end;
+    }
+    out.push_str(text.get(at..).unwrap_or(""));
+    out
+}
+
+/// One match of 1.x `AWK_SYSTEM`: the whole call, and its string's text.
+struct SystemCall {
+    whole: Range<usize>,
+    body: Range<usize>,
+}
+
+/// The matches of 1.x `AWK_SYSTEM`, in order (see [`awk_systems`]).
+fn awk_system_calls(text: &str) -> Vec<SystemCall> {
     use crate::project::is_js_space;
     let line_end = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
     let mut out = Vec::new();
@@ -697,8 +822,12 @@ fn awk_systems(text: &str) -> Vec<String> {
         let Some(tail) = after.trim_start_matches(is_js_space).strip_prefix(')') else {
             continue;
         };
-        out.push(body.get(..close).unwrap_or("").to_owned());
+        let body_at = text.len().saturating_sub(body.len());
         from = text.len().saturating_sub(tail.len());
+        out.push(SystemCall {
+            whole: at..from,
+            body: body_at..body_at.saturating_add(close),
+        });
     }
     out
 }

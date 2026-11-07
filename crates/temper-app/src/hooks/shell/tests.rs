@@ -1,25 +1,31 @@
-//! Ports of `tests/shell.test.mjs`, in its order. Tests of the readers that arrive in port
-//! Phase 2f (`opaquePatch`, `codeWriteTargets`, the PowerShell expressions) are ported then;
-//! a test that also asserts them keeps its other assertions here, marked. The wall-clock
+//! Ports of `tests/shell.test.mjs`, in its order; the tests that are `opaquePatch`'s alone are
+//! in `opaque`, and `codeWriteTargets`' are temper-domain's (`hooks::bash::code`). The wall-clock
 //! bound of "a long chain of wrappers or reserved words parses in linear time" is retired
 //! into the hook parity harness's per-step budget (OC-4 A, wi-3ea323); its decisions are
 //! kept, and `long_inputs` adds 2^15 to 2^17 repeats of each start shape the reader sees.
 
 mod long_inputs;
+mod opaque;
 
-use temper_domain::PathStyle;
+use std::sync::LazyLock;
+
+use temper_domain::{InterpreterCode, OpaqueKind, PathStyle};
 
 use super::words::{Dir, word_path};
 use super::{
     Command, CopyDest, ParseOpts, PatchCommand, PatchTool, PathCx, Target, Verb, command_deletes,
-    command_writes, landing, parse_commands, patch_command, patch_files, pathspec_pattern,
-    resolve_path, walk,
+    command_writes, landing, opaque_patch, parse_commands, patch_command, patch_files,
+    pathspec_pattern, resolve_path, walk,
 };
 use crate::paths::PathEnv;
 
 /// 1.x `path.resolve(os.tmpdir(), 'shell-test-root')`.
 const ROOT: &str = "/tmp/shell-test-root";
 const HOME: &str = "/home/u";
+
+/// The interpreter-code patterns, compiled once for the tests.
+static CODE: LazyLock<InterpreterCode> =
+    LazyLock::new(|| InterpreterCode::new().expect("the code patterns compile"));
 
 fn cx() -> PathCx<'static> {
     PathCx {
@@ -46,6 +52,7 @@ fn opts() -> ParseOpts<'static> {
         top: None,
         git_dir: ".git",
         tmp: Some("/tmp"),
+        untracked: false,
     }
 }
 
@@ -62,13 +69,14 @@ fn parse_with(cmd: &str, opts: ParseOpts<'_>) -> Vec<Command> {
 fn verb(t: &Target<'_>) -> String {
     match &t.verb {
         Verb::Redirect => "redirect".to_owned(),
-        Verb::Named(name) => (*name).to_owned(),
+        Verb::Named(name) | Verb::Into(name) => (*name).to_owned(),
         Verb::InPlace(name) => format!("{name} -i"),
         Verb::GitMv => "git mv".to_owned(),
         Verb::GitRestore { checkout: true, .. } => "git checkout".to_owned(),
         Verb::GitRestore {
             checkout: false, ..
         } => "git restore".to_owned(),
+        Verb::Code => "code".to_owned(),
     }
 }
 
@@ -87,7 +95,7 @@ fn targets_with(cmd: &str, opts: ParseOpts<'_>) -> Vec<(String, Option<String>)>
     let commands = parse_with(cmd, opts);
     commands
         .iter()
-        .flat_map(|c| command_writes(c, cx()))
+        .flat_map(|c| command_writes(c, cx(), &CODE))
         .map(|t| (verb(&t), path_of(&t)))
         .collect()
 }
@@ -104,6 +112,54 @@ fn target(verb: &str, rel: &str) -> (String, Option<String>) {
 /// The paths alone.
 fn paths(cmd: &str) -> Vec<Option<String>> {
     targets(cmd).into_iter().map(|(_, p)| p).collect()
+}
+
+/// 1.x's `kind` names.
+fn kind_name(kind: OpaqueKind) -> &'static str {
+    match kind {
+        OpaqueKind::Git => "git",
+        OpaqueKind::Name => "name",
+        OpaqueKind::Code => "code",
+        OpaqueKind::Script => "script",
+        OpaqueKind::Alias => "alias",
+    }
+}
+
+/// 1.x `parseCommands(cmd, opts).map(opaquePatch).find(Boolean)?.kind`: every command is
+/// checked, as 1.x's `map` checks each before `find` picks the first.
+fn opaque_with(cmd: &str, opts: ParseOpts<'_>) -> Option<&'static str> {
+    let commands = parse_with(cmd, opts);
+    let found: Vec<_> = commands
+        .iter()
+        .map(|c| opaque_patch(c, opts.paths, &CODE))
+        .collect::<Result<_, _>>()
+        .expect("1.x's opaquePatch does not throw on the test commands");
+    found
+        .into_iter()
+        .flatten()
+        .next()
+        .map(|o| kind_name(o.kind))
+}
+
+/// 1.x's `o(cmd)` with `{ cwd: root }`.
+fn opaque(cmd: &str) -> Option<&'static str> {
+    opaque_with(cmd, opts())
+}
+
+/// 1.x's `{ cwd: root, top: root }`.
+fn topped() -> ParseOpts<'static> {
+    ParseOpts {
+        top: Some(ROOT),
+        ..opts()
+    }
+}
+
+/// 1.x's `{ cwd: root, top: root, untracked: true }`: the reviewer's fail-closed reading.
+fn untracked() -> ParseOpts<'static> {
+    ParseOpts {
+        untracked: true,
+        ..topped()
+    }
 }
 
 #[test]
@@ -148,7 +204,14 @@ fn redirects_and_write_verbs_are_reported_with_absolute_paths() {
             target("wget", "w1")
         ]
     );
-    // Port Phase 2f: the python and node code targets.
+    assert_eq!(
+        targets("python3 -c \"p='py1'; open(p, 'w')\""),
+        [target("code", "py1")]
+    );
+    assert_eq!(
+        targets("node -e \"require('fs').writeFileSync('n1', '')\""),
+        [target("code", "n1")]
+    );
     assert_eq!(
         targets("Set-Content -Path ps1 -Value x"),
         [target("set-content", "ps1")]
@@ -159,7 +222,7 @@ fn redirects_and_write_verbs_are_reported_with_absolute_paths() {
         .collect();
     assert_eq!(checkout, ["git checkout"]);
     let restore = parse("git restore --source=v1 g1");
-    let restore = restore.first().map(|c| command_writes(c, cx()));
+    let restore = restore.first().map(|c| command_writes(c, cx(), &CODE));
     let source = restore
         .as_ref()
         .and_then(|t| t.first())
@@ -301,7 +364,7 @@ fn a_cd_of_one_segment_lands_where_the_full_resolve_does() {
         };
         parse_with(cmd, opts)
             .iter()
-            .flat_map(|c| command_writes(c, windows))
+            .flat_map(|c| command_writes(c, windows, &CODE))
             .map(|t| word_path(windows, &t.word, t.cwd.as_ref()))
             .collect()
     };
@@ -470,14 +533,14 @@ fn copies_report_sources_and_landing_places_each_one() {
         let commands = parse(cmd);
         let index = commands
             .iter()
-            .position(|c| !command_writes(c, cx()).is_empty())
+            .position(|c| !command_writes(c, cx(), &CODE).is_empty())
             .unwrap_or(0);
         (commands, index)
     };
     let lands = |cmd: &str, dest_is_dir: bool| -> Vec<Option<String>> {
         let (commands, k) = first(cmd);
         let c = commands.get(k).expect("the command writes");
-        let writes = command_writes(c, cx());
+        let writes = command_writes(c, cx(), &CODE);
         let t = writes.first().expect("one target");
         let dest = path_of(t).expect("the destination is known");
         let op = t.copy.as_ref().expect("a copy");
@@ -497,7 +560,7 @@ fn copies_report_sources_and_landing_places_each_one() {
             .collect()
     };
     let (commands, _) = first("cp -r a/x b/y c/");
-    let writes = command_writes(commands.first().expect("cp"), cx());
+    let writes = command_writes(commands.first().expect("cp"), cx(), &CODE);
     let op = writes
         .first()
         .and_then(|t| t.copy.as_ref())
@@ -514,7 +577,7 @@ fn copies_report_sources_and_landing_places_each_one() {
     assert_eq!(targets("rsync -a x host:/y"), []);
     assert_eq!(targets("install -d a b"), []);
     let (commands, _) = first("Copy-Item -Path a -Destination b -Recurse");
-    let writes = command_writes(commands.first().expect("copy"), cx());
+    let writes = command_writes(commands.first().expect("copy"), cx(), &CODE);
     assert!(
         writes
             .first()
@@ -717,8 +780,8 @@ fn the_dashed_forms_git_apply_and_git_am_at_any_path_read_as_git_apply_and_git_a
 
 #[test]
 fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them() {
-    // 1.x "echo or printf piped into a shell is not read as the script": its `patchCommand`
-    // half. The `opaquePatch` half arrives in port Phase 2f.
+    // 1.x "echo or printf piped into a shell is not read as the script, and opaquePatch flags
+    // it".
     for cmd in [
         "echo 'git apply x.diff' | bash",
         "printf 'git apply x.diff\\n' | sh",
@@ -731,8 +794,10 @@ fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them()
         "echo 'git apply x.diff' > out.txt | bash",
     ] {
         assert_eq!(patch_of(cmd), None, "{cmd:?}");
+        assert_eq!(opaque(cmd), Some("script"), "{cmd:?}");
     }
     assert_eq!(patch_of("echo 'git apply x.diff' | grep apply"), None);
+    assert_eq!(opaque("echo 'git apply x.diff' | grep apply"), None);
     for cmd in [
         "bash <<'EOF'\ngit apply x.diff\nEOF",
         "bash <<< 'git apply x.diff'",
@@ -744,21 +809,100 @@ fn piped_shell_scripts_heredocs_and_here_strings_as_the_patch_reader_sees_them()
             "{cmd:?}"
         );
     }
+    for cmd in [
+        "bash <<'EOF'\nls\nEOF",
+        "sh <<< 'cargo test'",
+        "cat <<'EOF' | bash\nls\nEOF",
+        "cat - <<< ls | sh",
+    ] {
+        assert_eq!(opaque(cmd), None, "{cmd:?}");
+    }
+    // A body another command transforms is not the script the shell runs.
+    assert_eq!(opaque("tr a-z A-Z <<'EOF' | bash\nls\nEOF"), Some("script"));
 }
 
+/// Command names, and wrapper words, built from an expansion: each is opaque under
+/// `untracked`, whatever its last segment.
+const BUILT_NAMES: [&str; 34] = [
+    "\"$X/git\" apply x.diff",
+    "\"$X/patch\" -p1 < x.diff",
+    "\"$X\"/../git am x.mbox",
+    "\"$X/bin/sudo\" git apply x.diff",
+    "timeout 5 \"$X/git\" apply x.diff",
+    "\"$HOME/.cargo/bin/cargo\" test",
+    "source \"$HOME/.cargo/env\"; \"$HOME/.cargo/bin/cargo\" test",
+    "\"$CARGO_HOME/bin/cargo\" test",
+    "cd crates/a && \"$PWD/../../target/debug/a\"",
+    "HOME=/x; \"$HOME/cargo\" test",
+    "read X; \"$X/cargo\" test",
+    "\"${X:-/usr}/bin/cargo\" test",
+    "\"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
+    "\"$X\"/cargo test",
+    "\"$X\"/'cargo' test",
+    "timeout 60 \"$X/cargo\" test",
+    "$HOME/.cargo/bin/cargo test",
+    "$PWD/target/debug/a",
+    "${HOME}/.cargo/bin/cargo test",
+    "\"$X\"",
+    "\"$X$Y\"",
+    "\"$(which cargo)\"",
+    "\"$X/\"",
+    "\"$X/c$Y\"",
+    "\"$X\"/{a,b}",
+    "\"$X\"/c*",
+    "\"$@/cargo\"",
+    "\"${A[@]}/cargo\"",
+    "\"$X\"/$Y",
+    "env \"$X/cargo\" test",
+    "nice \"$X/cargo\" test",
+    "xargs \"$X/cargo\" test",
+    "\"$HOME/bin/timeout\" 5 cargo test",
+    "nohup \"$HOME/bin/timeout\" 5 cargo test",
+];
+
 #[test]
-fn a_command_name_built_from_an_expansion_reads_as_its_last_segment_here() {
-    // 1.x "a command name built from an expansion is not read, whatever its last segment":
-    // the halves without `untracked` and `opaquePatch` (port Phase 2f).
+fn a_command_name_built_from_an_expansion_is_not_read_whatever_its_last_segment() {
+    let untracked_tool = |cmd: &str| {
+        parse_with(cmd, untracked())
+            .iter()
+            .find_map(|c| patch_command(c, cx()).map(|p| Patched::of(p).tool))
+    };
     for cmd in ["\"$X/git-apply\" x.diff", "\"$X\"/../git-apply x.diff"] {
+        assert_eq!(untracked_tool(cmd), Some(PatchTool::GitApply), "{cmd:?}");
         assert_eq!(
             patch_of(cmd).map(|p| p.tool),
             Some(PatchTool::GitApply),
             "{cmd:?}"
         );
     }
+    for cmd in BUILT_NAMES {
+        assert_eq!(opaque_with(cmd, untracked()), Some("name"), "{cmd:?}");
+    }
+    // Other agents' commands keep main's reading: a name temper cannot read is not git apply
+    // or patch.
     for cmd in ["\"$X/git\" apply x.diff", "\"$X/patch\" -p1 < x.diff"] {
         assert_eq!(patch_of(cmd), None, "{cmd:?}");
+    }
+    for cmd in [
+        "bash \"$HOME/x.sh\"",
+        "bash \"$(git rev-parse --show-toplevel)/scripts/check.sh\"",
+        "source \"$HOME/.cargo/env\"",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), None, "{cmd:?}");
+    }
+    // A script operand whose value temper does not know, or whose last segment names a
+    // standard stream, may be the shell's stdin; a glob or brace list in it is an expansion.
+    for cmd in [
+        "bash \"$X/stdin\" < cmd.sh",
+        "bash \"$X/fd/0\" < cmd.sh",
+        "read HOME <<< /dev; bash \"$HOME/stdin\" < cmd.sh",
+        "source \"$X/env\"",
+        "bash /dev/std* < cmd.sh",
+        "bash /dev/st?in < cmd.sh",
+        "source {/dev/stdin,x}",
+        "bash \"$HOME\"/x* < cmd.sh",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), Some("script"), "{cmd:?}");
     }
 }
 
@@ -788,7 +932,6 @@ fn a_command_name_with_a_slash_in_it_is_never_a_builtin() {
 
 #[test]
 fn env_split_string_in_every_spelling() {
-    // The `patchCommand` half; the `untracked` `opaquePatch` half arrives in port Phase 2f.
     for cmd in [
         "env -S 'git apply x.diff'",
         "env -iS 'git apply x.diff'",
@@ -818,6 +961,26 @@ fn env_split_string_in_every_spelling() {
             Some(PatchTool::GitApply),
             "{cmd:?}"
         );
+    }
+    for cmd in [
+        "env -S 'cargo test'",
+        "env -S'cargo test'",
+        "env -iS 'cargo test'",
+        "env --split=cargo",
+        "env --sp 'cargo test'",
+        "env -S\"$X\"",
+        "env -u X -S 'cargo test'",
+        "env -S 'X=1 cargo test'",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), Some("script"), "{cmd:?}");
+    }
+    for cmd in [
+        "env cargo test",
+        "env -i PATH=/usr/bin cargo test",
+        "env -u X cargo test",
+        "env A=\"$X\" cargo test",
+    ] {
+        assert_eq!(opaque_with(cmd, untracked()), None, "{cmd:?}");
     }
 }
 
@@ -876,7 +1039,7 @@ fn ansi_c_quoting_is_decoded_exactly_or_its_word_is_unknown() {
         patch_of(r"bash -c $'git\x20apply x.diff'").map(|p| p.tool),
         Some(PatchTool::GitApply)
     );
-    // Port Phase 2f: `opaquePatch` of `bash -c $'git\cAapply x.diff'`.
+    assert_eq!(opaque(r"bash -c $'git\cAapply x.diff'"), Some("script"));
 }
 
 #[test]
@@ -905,7 +1068,7 @@ fn the_c_script_is_the_first_operand_after_the_options() {
     );
     // Without -c, the first operand is a script file, which temper does not read.
     assert_eq!(patch_of("bash -o pipefail 'git apply x.diff'"), None);
-    // Port Phase 2f: `opaquePatch` of `bash -c -- 'ls'`.
+    assert_eq!(opaque("bash -c -- 'ls'"), None);
 }
 
 #[test]
@@ -951,6 +1114,23 @@ fn a_long_chain_of_wrappers_or_reserved_words_parses_to_one_command() {
     ] {
         assert_eq!(parse(&cmd).len(), 1, "{:?}", cmd.get(..20));
     }
+}
+
+/// 1.x `hooks.test.mjs` "git-bash paths (/c/..., /tmp/...) are read as Windows paths on
+/// Windows", with `os.tmpdir()` at `C:/Users/me/AppData/Local/Temp`.
+#[test]
+fn git_bash_paths_are_read_as_windows_paths_on_windows() {
+    use super::msys_path;
+    let tmp = "C:/Users/me/AppData/Local/Temp";
+    let win = |t| msys_path(t, PathStyle::Windows, tmp).into_owned();
+    let linux = |t| msys_path(t, PathStyle::Posix, tmp).into_owned();
+    assert_eq!(win("/c/Users/me/x.rs"), "C:/Users/me/x.rs");
+    assert_eq!(win("/tmp/x.rs"), format!("{tmp}/x.rs"));
+    assert_eq!(win("/tmp"), tmp);
+    assert_eq!(linux("/c/Users/me/x.rs"), "/c/Users/me/x.rs");
+    assert_eq!(linux("/tmp/x.rs"), "/tmp/x.rs");
+    assert_eq!(win("C:/x.rs"), "C:/x.rs");
+    assert_eq!(win("/usr/x.rs"), "/usr/x.rs");
 }
 
 #[test]
@@ -1072,7 +1252,6 @@ fn deeply_nested_find_exec_stops_at_the_depth_limit() {
 
 #[test]
 fn a_test_command_is_not_powershell_and_heredoc_bodies_are_not_code_of_the_line() {
-    // The no-target half; the PowerShell expressions arrive in port Phase 2f.
     assert_eq!(
         targets(
             "[ -d docs ] || mkdir docs; cat <<'EOF'\nPath(\".cargo/config.toml\").write_text(x)\nEOF"
@@ -1081,6 +1260,36 @@ fn a_test_command_is_not_powershell_and_heredoc_bodies_are_not_code_of_the_line(
     );
     assert_eq!(targets("[[ -n x ]] && echo \"open('w.txt', 'w')\""), []);
     assert_eq!(targets("$x = 1\ncat <<'EOF'\nopen('w.txt', 'w')\nEOF"), []);
+    // PowerShell expressions still count, with a variable assigned earlier in the line.
+    let once = |cmd: &str| {
+        let mut seen: Vec<(String, Option<String>)> = Vec::new();
+        for t in targets(cmd) {
+            if !seen.contains(&t) {
+                seen.push(t);
+            }
+        }
+        seen
+    };
+    assert_eq!(
+        once("$p = 'ps.txt'; [IO.File]::WriteAllText($p, 'x')"),
+        [target("code", "ps.txt")]
+    );
+    assert_eq!(
+        once("[System.IO.File]::WriteAllText('ps2.txt', 'x')"),
+        [target("code", "ps2.txt")]
+    );
+}
+
+/// 1.x "code and word scans stay roughly linear on pathological input": the PowerShell
+/// line, whose code is read once however many expressions it holds; the brace list and the
+/// code scans are in `long_inputs` and the domain's `InterpreterCode` tests.
+#[test]
+fn a_powershell_line_is_read_once_for_all_its_expressions() {
+    let line = format!("$x copy( {}", "x ".repeat(20_000));
+    assert_eq!(targets(&line), []);
+    let many = "[IO.File]::WriteAllText('m.txt', 'x'); ".repeat(1 << 12);
+    assert_eq!(targets(&many).len(), 1 << 12);
+    assert!(targets(&many).iter().all(|t| *t == target("code", "m.txt")));
 }
 
 #[test]
@@ -1117,7 +1326,7 @@ fn bash_drops_a_backslash_before_any_char_outside_quotes() {
     let texts = |cmd: &str| -> Vec<String> {
         parse(cmd)
             .iter()
-            .flat_map(|c| command_writes(c, cx()))
+            .flat_map(|c| command_writes(c, cx(), &CODE))
             .map(|t| t.word.text().to_owned())
             .collect()
     };
@@ -1149,7 +1358,7 @@ fn a_powershell_command_keeps_its_backslashes_as_path_separators() {
     ] {
         let texts: Vec<String> = parse(cmd)
             .iter()
-            .flat_map(|c| command_writes(c, cx()))
+            .flat_map(|c| command_writes(c, cx(), &CODE))
             .map(|t| t.word.text().to_owned())
             .collect();
         assert_eq!(texts, [".git\\temper\\a.json"], "{cmd:?}");

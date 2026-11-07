@@ -171,7 +171,7 @@ const GIT_BUILTINS: [&str; 159] = [
     "write-tree",
 ];
 
-fn is_builtin(sub: &str) -> bool {
+pub(super) fn is_builtin(sub: &str) -> bool {
     GIT_BUILTINS.contains(&sub)
 }
 
@@ -187,6 +187,19 @@ pub(crate) struct Git<'c> {
     /// A subcommand git does not have, under configuration temper cannot read, which may be
     /// an alias of any command.
     pub(crate) hidden_alias: bool,
+    /// 1.x `dynamic`: temper cannot tell the subcommand (an unknown word, a shell alias, a
+    /// `-c` value that could define an alias, or a hidden alias).
+    pub(crate) dynamic: bool,
+}
+
+impl Git<'_> {
+    /// The same command, read as one whose subcommand temper cannot tell.
+    fn unread(self) -> Self {
+        Self {
+            dynamic: true,
+            ..self
+        }
+    }
 }
 
 /// 1.x `dashedGit(c)`: the subcommand of `git-apply`, `/usr/lib/git-core/git-am` and the like.
@@ -241,6 +254,7 @@ pub(crate) fn git_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<Git<'c>>
             args: Cow::Borrowed(&c.args),
             cwd: c.cwd.clone(),
             hidden_alias: false,
+            dynamic: false,
         });
     }
     if c.name.as_deref() != Some("git") {
@@ -249,7 +263,8 @@ pub(crate) fn git_command<'c>(c: &'c Command, cx: PathCx<'_>) -> Option<Git<'c>>
     let mut opts = GitOptions {
         dir: c.cwd.clone(),
         aliases: HashMap::new(),
-        hidden: c.git_config,
+        hidden: c.with.git_config,
+        opaque: false,
     };
     let mut args: Cow<'c, [Word]> = Cow::Borrowed(&c.args);
     let mut expansions = 0;
@@ -311,6 +326,9 @@ struct GitOptions {
     aliases: HashMap<String, String>,
     /// Configuration temper cannot read is set, which may define any alias.
     hidden: bool,
+    /// A `-c` value temper cannot read that is not a plain `section.key=` setting, which
+    /// could define an alias.
+    opaque: bool,
 }
 
 impl GitOptions {
@@ -332,6 +350,10 @@ impl GitOptions {
             self.aliases.insert(name.to_lowercase(), def);
         } else if includes_config(text) {
             self.hidden = true;
+        } else if word.and_then(Word::value).is_none()
+            && !plain_setting(word.map_or("", |word| word.raw.as_str()))
+        {
+            self.opaque = true;
         }
     }
 
@@ -350,7 +372,7 @@ impl GitOptions {
     /// expansion of the alias it is, after `expansions` earlier ones.
     fn subcommand<'c>(&self, word: &Word, rest: Cow<'c, [Word]>, expansions: usize) -> Next<'c> {
         let Some(sub) = word.value() else {
-            return Next::Git(self.ends(String::new(), rest, false));
+            return Next::Git(self.ends(String::new(), rest, false).unread());
         };
         let alias = (!is_builtin(sub))
             .then(|| self.aliases.get(&sub.to_lowercase()))
@@ -361,10 +383,10 @@ impl GitOptions {
         };
         // A chain longer than temper follows may end on git apply.
         if expansions == 8 {
-            return Next::Git(self.ends(String::new(), rest, true));
+            return Next::Git(self.ends(String::new(), rest, true).unread());
         }
         if def.is_empty() || def.starts_with('!') {
-            return Next::Git(self.ends(String::new(), rest, false));
+            return Next::Git(self.ends(String::new(), rest, false).unread());
         }
         let mut words: Vec<Word> = def
             .split(crate::project::is_js_space)
@@ -382,6 +404,7 @@ impl GitOptions {
             args,
             cwd: self.dir.clone(), // a shared `Rc` handle
             hidden_alias,
+            dynamic: self.opaque || hidden_alias,
         }
     }
 }

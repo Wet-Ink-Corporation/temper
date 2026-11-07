@@ -1,7 +1,5 @@
 //! `tests/hooks.test.mjs`'s state-dir cases, in its order, each command with 1.x's answer on
-//! the same workspace (no git, so the state dir is `/ws/target/temper`). Rows whose write is
-//! interpreter code (`python3 -c`, `node -e`, `ruby -e` and a Python here-document) arrive
-//! with `codeWriteTargets` in port Phase 2f; each test names them.
+//! the same workspace (no git, so the state dir is `/ws/target/temper`).
 
 use super::{Answer, PASS, Ws};
 use crate::hooks::pre_bash::tests::Answer::Deny;
@@ -19,8 +17,7 @@ fn answers(ws: &Ws, denied: &[&str], allowed: &[&str]) {
 }
 
 /// 1.x "Bash: shell writes into the temper state dir (.git/temper/) are denied; reading,
-/// copying out and deleting are not". Phase 2f: `python3 -c "open(...,'w')"`,
-/// `python3 -c "import pathlib; ..."` and `node -e "require('fs').writeFileSync(...)"`.
+/// copying out and deleting are not".
 #[test]
 fn shell_writes_into_the_temper_state_dir_are_denied_reading_copying_out_and_deleting_are_not() {
     let ws = Ws::new();
@@ -46,6 +43,9 @@ fn shell_writes_into_the_temper_state_dir_are_denied_reading_copying_out_and_del
             "tee -a .git/temper/telemetry.jsonl < x",
             "sed -i 's/changes_requested/approved/' .git/temper/verdicts/a.json",
             "perl -pi -e 's/false/true/' .git/temper/gate/a.json",
+            r#"python3 -c "open('.git/temper/verdicts/a.json','w').write('{}')""#,
+            r#"python3 -c "import pathlib; pathlib.Path('.git/temper/verdicts/a.json').write_text('{}')""#,
+            r#"node -e "require('fs').writeFileSync('.git/temper/gate/a.json', '{}')""#,
             "Set-Content -Path .git/temper/verdicts/a.json -Value '{}'",
             r"'{}' | Out-File .git\temper\gate\a.json",
             "Add-Content .git/temper/telemetry.jsonl x",
@@ -107,8 +107,7 @@ fn shell_writes_into_the_temper_state_dir_are_denied_reading_copying_out_and_del
 }
 
 /// 1.x "Bash: state-dir writes hidden by trailing redirects, variables, quoting, cd or other
-/// writers are denied; reads stay allowed". Phase 2f: the four `python3 -c "open(...)"` and
-/// `shutil.copy` rows, both Python here-documents, the three `node -e` rows and `ruby -e`.
+/// writers are denied; reads stay allowed".
 #[test]
 fn state_dir_writes_hidden_by_trailing_redirects_variables_quoting_cd_or_other_writers_are_denied_reads_stay_allowed()
  {
@@ -135,6 +134,16 @@ const HIDDEN_WRITES: &[&str] = &[
     "pushd .git/temper/gate; echo {} > a.json",
     "cd .git && echo {} > temper/verdicts/x.json",
     "cd target/temper && echo {} > gate/a.json",
+    r#"python3 -c "open('.git/temper/verdicts/a.json', mode='w').write('{}')""#,
+    r#"python3 -c "open('.git/temper/verdicts/a.json', 'x').write('{}')""#,
+    r#"python3 -c "open('.git/temper/verdicts/a.json', 'r+').write('{}')""#,
+    r#"python3 -c "import shutil;shutil.copy('v.json','.git/temper/verdicts/a.json')""#,
+    "python3 <<'EOF'\np = '.git/temper/verdicts/a.json'\nwith open(p, 'w') as f:\n    f.write('{}')\nEOF",
+    "python3 - <<'EOF'\nfrom pathlib import Path\np = Path('.git/temper/verdicts/a.json')\np.write_text('{}')\nEOF",
+    r#"node -e "require('fs').copyFileSync('v.json','.git/temper/gate/a.json')""#,
+    r#"node -e "require('fs').renameSync('v.json','.git/temper/gate/a.json')""#,
+    r#"node -e "const fs=require('fs'); const p='.git/temper/gate/a.json'; fs.writeFileSync(p,'{}')""#,
+    r#"ruby -e 'File.write(".git/temper/verdicts/a.json","{}")'"#,
     r#"bash -c "echo {} > .git/temper/verdicts/a.json""#,
     "curl -o .git/temper/verdicts/a.json file:///tmp/v.json",
     "curl -sSLo .git/temper/verdicts/a.json file:///tmp/v.json",
@@ -220,14 +229,17 @@ fn git_rev_parse_path_format_absolute_does_not_hide_the_state_dir() {
 }
 
 /// 1.x "Bash: state-dir writes spelled with bash backslash escapes or a Python mode variable
-/// are denied; reads stay allowed". Phase 2f: the two Python mode-variable rows.
+/// are denied; reads stay allowed".
 #[test]
-fn state_dir_writes_spelled_with_bash_backslash_escapes_are_denied_reads_stay_allowed() {
+fn state_dir_writes_spelled_with_bash_backslash_escapes_or_a_python_mode_variable_are_denied_reads_stay_allowed()
+ {
     answers(
         &Ws::new(),
         &[
             r"echo '{}' > .git/tem\per/verdicts/a.json",
             r"c\p /tmp/v.json .git/temper/gate/a.json",
+            r#"python3 -c "m='w'; open('.git/temper/verdicts/a.json', m).write('{}')""#,
+            r#"python3 -c "mode = 'a'; open('.git/temper/telemetry.jsonl', mode=mode)""#,
             // A bash function named like a PowerShell command does not make bash keep the
             // backslash.
             r"copy() { cat; }; echo '{}' | copy > .git/tem\per/verdicts/v.json",

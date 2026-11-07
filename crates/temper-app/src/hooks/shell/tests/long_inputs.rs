@@ -4,7 +4,7 @@
 //! minutes here; each of these reads it forward once per level.
 
 use super::{
-    Command, Dir, ParseOpts, command_deletes, command_writes, cx, parse_commands, parse_with,
+    CODE, Command, Dir, ParseOpts, command_deletes, command_writes, cx, parse_commands, parse_with,
     path_of,
 };
 use temper_domain::PathStyle;
@@ -33,7 +33,7 @@ fn decide(cmd: &str) -> Decision {
     let commands = parse_with(cmd, opts);
     let writes: Vec<_> = commands
         .iter()
-        .flat_map(|c| command_writes(c, cx()))
+        .flat_map(|c| command_writes(c, cx(), &CODE))
         .collect();
     Decision {
         commands: commands.len(),
@@ -167,7 +167,10 @@ fn a_value_doubled_past_v8s_longest_string_stops_the_reader_as_1x_throws() {
     };
     // The target's value, not its resolved path: normalising 2^28 chars is slow unoptimised.
     let commands = parse_commands(&doubled(28), opts()).map(|c| {
-        let w: Vec<_> = c.iter().flat_map(|c| command_writes(c, cx())).collect();
+        let w: Vec<_> = c
+            .iter()
+            .flat_map(|c| command_writes(c, cx(), &CODE))
+            .collect();
         w.first().and_then(|t| t.word.value()).map(str::len)
     });
     assert_eq!(commands, Ok(Some(1 << 28)));
@@ -276,7 +279,10 @@ fn a_line_of_cds_holds_each_name_once_however_deep_it_goes() {
     assert!(line.len() < 64 * 1024);
     let ran = parse_with(&line, r());
     let want = ["/r", &["/", d_value.as_str()].concat().repeat(4000), "/o"].concat();
-    let first = ran.iter().flat_map(|c| command_writes(c, cx())).next();
+    let first = ran
+        .iter()
+        .flat_map(|c| command_writes(c, cx(), &CODE))
+        .next();
     assert_eq!(first.and_then(|t| t.path(cx())), Some(want));
 }
 
@@ -323,7 +329,10 @@ fn dir_of(c: Option<&Command>) -> Option<String> {
 
 /// The path of a line's first write.
 fn first_write(commands: &[Command]) -> Option<String> {
-    let first = commands.iter().flat_map(|c| command_writes(c, cx())).next();
+    let first = commands
+        .iter()
+        .flat_map(|c| command_writes(c, cx(), &CODE))
+        .next();
     first.and_then(|t| t.path(cx()))
 }
 
@@ -403,7 +412,7 @@ fn command_names_and_target_paths_keep_no_joined_copy_of_their_words() {
     assert_eq!(names.iter().filter(|&&n| n == "a").count(), 200);
     let paths: Vec<_> = ran
         .iter()
-        .flat_map(|c| command_writes(c, cx()))
+        .flat_map(|c| command_writes(c, cx(), &CODE))
         .filter_map(|t| path_of(&t))
         .collect();
     assert_eq!(paths.len(), 200);
@@ -561,7 +570,10 @@ fn an_append_joins_the_old_value_and_the_words_text() {
             ..super::opts()
         };
         parse_commands(line, opts).map(|c| {
-            let w: Vec<_> = c.iter().flat_map(|c| command_writes(c, cx())).collect();
+            let w: Vec<_> = c
+                .iter()
+                .flat_map(|c| command_writes(c, cx(), &CODE))
+                .collect();
             w.first().and_then(|t| t.word.value()).map(str::to_owned)
         })
     };

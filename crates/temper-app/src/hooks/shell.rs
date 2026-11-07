@@ -23,10 +23,12 @@
 //! journaled once per name per scope, and its directories are shared handles; each string is
 //! held to V8's longest (see [`walk::TooLong`]), and so is each path joined from them.
 
+mod code;
 mod deletes;
 mod dir;
 mod git;
 mod lex;
+mod opaque;
 mod patch;
 mod text;
 mod walk;
@@ -34,11 +36,17 @@ mod words;
 mod wrappers;
 mod writes;
 
+pub(crate) use code::Threw;
 pub(crate) use deletes::command_deletes;
+pub(crate) use opaque::opaque_patch;
 pub(crate) use patch::{Patch, PatchCommand, PatchTool, patch_command, patch_files};
 pub(crate) use walk::{Command, ParseOpts, Stdin, parse_commands};
-pub(crate) use words::{Dir, Guard, PathCx, Word, js_len, msys_path, names_absolute, resolve_path};
-pub(crate) use writes::{CopyDest, Target, Verb, command_writes, landing, pathspec_pattern};
+pub(crate) use words::{
+    Dir, Guard, PathCx, Word, js_len, msys_path, names_absolute, resolve_path, word_path,
+};
+pub(crate) use writes::{
+    CopyDest, Target, Verb, command_writes, landing, node_basename, pathspec_pattern,
+};
 
 #[cfg(test)]
 mod tests;

@@ -7,6 +7,7 @@
 
 mod protected;
 mod rows;
+mod rust_writes;
 mod state_dir;
 
 use temper_domain::{HookEvent, HookOutcome, PathStyle::Posix, Scanner};
@@ -122,10 +123,12 @@ impl Ws {
             input: &input,
         };
         let ws = call.workspace().expect("the fake workspace is found");
+        let code = temper_domain::InterpreterCode::new().expect("the built-in patterns compile");
         let guard = crate::hooks::shell::Guard::with_budget(budget);
-        let state = super::state_dir::state_dir_write_in(&call, &ws, cmd, &guard);
+        let state = super::state_dir::state_dir_write_in(&call, &ws, (cmd, &code), &guard);
         let guard = crate::hooks::shell::Guard::with_budget(budget);
-        let changes = super::protected::protected_shell_writes_in(&call, &ws, cmd, &guard);
+        let line = (cmd, &code);
+        let changes = super::protected::protected_shell_writes_in(&call, &ws, line, &guard);
         (state, changes.as_domain().written.to_vec())
     }
 

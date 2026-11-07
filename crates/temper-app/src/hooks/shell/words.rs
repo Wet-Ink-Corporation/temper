@@ -68,15 +68,32 @@ pub(crate) struct Word {
 pub(super) enum Form {
     /// No expansion, brace list or glob at all: the text is exactly what the shell passes.
     Literal,
-    /// Anything else: whether it is an unquoted `*`, `?`, `[...]` or brace list (`glob`), and
-    /// whether some part is an expansion (`expanded`).
-    Made { glob: bool, expanded: bool },
+    /// Anything else: whether it is an unquoted `*`, `?`, `[...]` or brace list (`glob`),
+    /// which expansions it holds, and 1.x `fixedWord(w)`: made from parts, it starts with
+    /// literal text and its expansions are quoted (`A="$X"`), with no glob or brace list, so
+    /// its role and split are known (`fixed`).
+    Made {
+        glob: bool,
+        expanded: Expansions,
+        fixed: bool,
+    },
 }
 
-/// [`Form::Made`] with neither a glob nor an expansion.
+/// Which expansions a word holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Expansions {
+    Absent,
+    /// Some, none a process substitution.
+    Present,
+    /// A process substitution (`<(...)`, `>(...)`) among them.
+    Process,
+}
+
+/// [`Form::Made`] with neither a glob nor an expansion, and no parts.
 const MADE: Form = Form::Made {
     glob: false,
-    expanded: false,
+    expanded: Expansions::Absent,
+    fixed: false,
 };
 
 impl Word {
@@ -126,9 +143,32 @@ impl Word {
         self.form == Form::Literal
     }
 
+    /// A word that is not literal whose role and split temper still reads (see
+    /// [`Form::Made`]'s `fixed`).
+    pub(super) fn fixed(&self) -> bool {
+        matches!(self.form, Form::Made { fixed: true, .. })
+    }
+
     /// Some part is an expansion.
     pub(super) fn expanded(&self) -> bool {
-        matches!(self.form, Form::Made { expanded: true, .. })
+        matches!(
+            self.form,
+            Form::Made {
+                expanded: Expansions::Present | Expansions::Process,
+                ..
+            }
+        )
+    }
+
+    /// Some part is a process substitution (1.x `w.parts?.some((p) => p.t === 'proc')`).
+    pub(super) fn has_process(&self) -> bool {
+        matches!(
+            self.form,
+            Form::Made {
+                expanded: Expansions::Process,
+                ..
+            }
+        )
     }
 
     pub(crate) fn raw(&self) -> &str {
@@ -235,13 +275,18 @@ impl Word {
 /// many names holding long values stop at the budget.
 #[derive(Debug, Default)]
 pub(super) struct Vars {
-    map: HashMap<String, Shared>,
-    journal: Vec<(String, Option<Shared>)>,
+    /// Each name the line set, with its value, or `None` when it is unknown (only under
+    /// `untracked`: otherwise an unknown value deletes the name).
+    map: HashMap<String, Option<Shared>>,
+    journal: Vec<(String, Entry)>,
     /// Per open mark, innermost last, the names it has journaled. A scope the line leaves
     /// unclosed is closed by the rollback of the one outside it, or never.
     saved: Vec<HashSet<String>>,
     /// How many names start with `GIT_CONFIG`, which git reads as configuration.
     git_config: usize,
+    /// 1.x `untracked`: every name the line sets is unknown, whatever temper's model of the
+    /// shell makes of it.
+    untracked: bool,
     /// The line's budget; `None` charges nothing.
     meter: Option<Guard>,
     /// Values dropped while something else still held them, still charged.
@@ -253,6 +298,13 @@ pub(super) struct Vars {
     /// Where a value of several pieces is joined before it is shared, kept so its pages are
     /// reused; its capacity is charged as it grows.
     scratch: String,
+}
+
+/// A name's place in [`Vars`]: absent, or set to a value that may be unknown.
+#[derive(Debug)]
+enum Entry {
+    Absent,
+    Set(Option<Shared>),
 }
 
 /// Where [`Vars::mark`] opened a scope: the journal's length and the open marks' count then.
@@ -314,30 +366,58 @@ impl Shared {
     }
 }
 
+/// What [`Vars::lookup`] finds for a name.
+#[derive(Debug, Clone, Copy)]
+enum Lookup<'v> {
+    /// The line did not set it.
+    NotSet,
+    /// The line set it to a value temper does not know.
+    Unknown,
+    /// The line set it to this value.
+    Known(&'v Shared),
+}
+
 impl Vars {
-    /// A name's value, for the tests.
-    #[cfg(test)]
-    pub(super) fn get(&self, name: &str) -> Option<&str> {
-        self.map.get(name).map(|v| &*v.text)
-    }
-
-    /// The value of `name`, for a word to share.
-    fn shared(&self, name: &str) -> Option<&Shared> {
-        self.map.get(name)
-    }
-
-    /// Variables whose values are charged to `guard`, the line's budget.
-    pub(super) fn metered(guard: &Guard) -> Self {
+    /// No variables yet; `untracked` makes every name set unknown.
+    pub(super) fn new(untracked: bool) -> Self {
         Self {
-            meter: Some(guard.clone()), // a shared handle on the line's budget
+            untracked,
             ..Self::default()
         }
     }
 
-    /// 1.x `setVar`: `None` deletes. Past the budget the guard is stopped, and the line
-    /// falls back.
+    /// A name's value, when the line set it to one temper knows, for the tests.
+    #[cfg(test)]
+    pub(super) fn get(&self, name: &str) -> Option<&str> {
+        self.known(name).map(|v| &*v.text)
+    }
+
+    /// A name's value, when the line set it to one temper knows, for a word to share.
+    fn known(&self, name: &str) -> Option<&Shared> {
+        self.map.get(name).and_then(Option::as_ref)
+    }
+
+    /// Whether the line set the name, and to what value, for a word to share.
+    fn lookup(&self, name: &str) -> Lookup<'_> {
+        match self.map.get(name) {
+            None => Lookup::NotSet,
+            Some(None) => Lookup::Unknown,
+            Some(Some(value)) => Lookup::Known(value),
+        }
+    }
+
+    /// These variables, with the values they keep charged to `guard`, the line's budget.
+    pub(super) fn metered(self, guard: &Guard) -> Self {
+        Self {
+            meter: Some(guard.clone()), // a shared handle on the line's budget
+            ..self
+        }
+    }
+
+    /// 1.x `setVar`: `None` deletes, and under `untracked` every value is unknown. Past the
+    /// budget the guard is stopped, and the line falls back.
     pub(super) fn set(&mut self, name: &str, value: Option<String>) {
-        let value = value.map(|text| {
+        let value = value.filter(|_| !self.untracked).map(|text| {
             let units = js_len(&text);
             Shared::made(Rc::from(text), units)
         });
@@ -345,8 +425,12 @@ impl Vars {
     }
 
     /// [`Self::set`] with `word`'s value after its first `skip` bytes (ASCII): the piece it
-    /// names shared when the value is one, else joined once; deleted when it is unknown.
+    /// names shared when the value is one, else joined once; deleted when it is unknown, and
+    /// unknown under `untracked`.
     pub(super) fn set_word(&mut self, name: &str, word: &Word, skip: usize) {
+        if self.untracked {
+            return self.set_shared(name, None);
+        }
         let value = self.joined(None, word, skip);
         self.set_shared(name, value);
     }
@@ -355,9 +439,13 @@ impl Vars {
     /// bytes (ASCII) appended, built as [`Self::set_word`] builds a value, so an empty old
     /// value shares the piece the word names. A name unset, or set to an unknown value, is
     /// deleted, as 1.x appends only to a known value; so is one that would pass V8's longest
-    /// string, where 1.x throws, which gives `false`.
+    /// string, where 1.x throws, which gives `false`. Under `untracked` the name is unknown.
     pub(super) fn append_word(&mut self, name: &str, word: &Word, skip: usize) -> bool {
-        let old = self.map.get(name).map(Shared::hold); // for the join to read
+        if self.untracked {
+            self.set_shared(name, None);
+            return true;
+        }
+        let old = self.known(name).map(Shared::hold); // for the join to read
         let units = old
             .as_ref()
             .map(|old| old.units.saturating_add(word.units_after(skip)));
@@ -387,11 +475,18 @@ impl Vars {
     /// [`Self::set`] with a value already built. Only a string these variables made is
     /// charged: a value shared with what already held it costs nothing more.
     fn set_shared(&mut self, name: &str, value: Option<Shared>) {
-        if let (Some(meter), Some(value)) = (&self.meter, value.as_ref().filter(|v| v.charged)) {
+        let entry = match value {
+            _ if self.untracked => Entry::Set(None),
+            Some(value) => Entry::Set(Some(value)),
+            None => Entry::Absent,
+        };
+        if let (Some(meter), Entry::Set(Some(value))) = (&self.meter, &entry)
+            && value.charged
+        {
             // `charge` stops the guard when the budget is spent; the walk then stops.
             meter.charge(value.text.len());
         }
-        let old = self.put(name, value);
+        let old = self.put(name, entry);
         if let Some(saved) = self.saved.last_mut()
             && !saved.contains(name)
         {
@@ -404,9 +499,10 @@ impl Vars {
 
     /// Refunds a value these variables made, and no longer hold, once nothing else holds it
     /// either; a shared one was never charged here.
-    fn release(&mut self, old: Option<Shared>) {
-        let Some(old) = old.filter(|old| old.charged) else {
-            return;
+    fn release(&mut self, old: Entry) {
+        let old = match old {
+            Entry::Set(Some(old)) if old.charged => old,
+            Entry::Set(_) | Entry::Absent => return,
         };
         if Rc::strong_count(&old.text) > 1 {
             self.dropped.push(old.text);
@@ -444,10 +540,10 @@ impl Vars {
         }
     }
 
-    fn put(&mut self, name: &str, value: Option<Shared>) -> Option<Shared> {
-        let old = match value {
-            Some(value) => self.map.insert(name.to_owned(), value),
-            None => self.map.remove(name),
+    fn put(&mut self, name: &str, entry: Entry) -> Entry {
+        let old = match entry {
+            Entry::Set(value) => self.map.insert(name.to_owned(), value),
+            Entry::Absent => self.map.remove(name),
         };
         if name.starts_with("GIT_CONFIG") {
             let now = self.map.contains_key(name);
@@ -457,7 +553,7 @@ impl Vars {
                 _ => {}
             }
         }
-        old
+        old.map_or(Entry::Absent, Entry::Set)
     }
 
     /// Opens a scope, for [`Self::rollback`], which closes it.
@@ -566,20 +662,44 @@ pub(super) fn make_word(parts: &[Part], env: &WordEnv<'_>) -> Word {
     {
         glob = true;
     }
-    // An unquoted `{` may open a brace list, one that spans a quoted part too.
-    let expanded = parts.iter().any(|p| !p.is_lit());
-    let literal = !expanded && !glob && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
     Word {
         raw,
         text: Text::of(pieces, units, env.guard),
         known,
         quoted: parts.iter().any(|p| p.quoted),
         assign: assign_len(parts),
-        form: if literal {
-            Form::Literal
-        } else {
-            Form::Made { glob, expanded }
-        },
+        form: form_of(parts, glob),
+    }
+}
+
+/// How a word of `parts` was made; `glob` says whether it is one.
+fn form_of(parts: &[Part], glob: bool) -> Form {
+    // An unquoted `{` may open a brace list, one that spans a quoted part too.
+    let expanded = if parts.iter().any(|p| matches!(p.kind, PartKind::Proc(_))) {
+        Expansions::Process
+    } else if parts.iter().any(|p| !p.is_lit()) {
+        Expansions::Present
+    } else {
+        Expansions::Absent
+    };
+    let literal = expanded == Expansions::Absent
+        && !glob
+        && !parts.iter().any(|p| !p.quoted && p.text.contains('{'));
+    let fixed = !glob
+        && parts
+            .first()
+            .is_some_and(|p| p.is_lit() && !p.text.is_empty())
+        && parts
+            .iter()
+            .all(|p| p.quoted || (p.is_lit() && !p.text.replace("{}", "").contains('{')));
+    if literal {
+        Form::Literal
+    } else {
+        Form::Made {
+            glob,
+            expanded,
+            fixed,
+        }
     }
 }
 
@@ -665,8 +785,11 @@ fn part_value(part: &Part, env: &WordEnv<'_>) -> Option<Shared> {
     };
     match &part.kind {
         PartKind::Var(name) => {
-            if let Some(value) = env.vars.shared(name) {
-                return Some(value.hold());
+            // A name the line set wins over the shell's own, even when its value is unknown.
+            match env.vars.lookup(name) {
+                Lookup::Known(value) => return Some(value.hold()),
+                Lookup::Unknown => return None,
+                Lookup::NotSet => {}
             }
             match name.as_str() {
                 "HOME" => Some(Shared::of(env.home)),
@@ -1082,7 +1205,10 @@ pub(super) fn is_ps_var(raw: &str) -> bool {
 mod tests {
     use std::rc::Rc;
 
-    use super::{Form, Guard, Shared, Text, Vars, Word, brace_list, git_path, without_path_format};
+    use super::{
+        Expansions, Form, Guard, Shared, Text, Vars, Word, brace_list, git_path,
+        without_path_format,
+    };
 
     /// A top-level assignment keeps no undo record; a scope's are undone, nested or not.
     #[test]
@@ -1142,7 +1268,7 @@ mod tests {
     #[test]
     fn variables_charge_the_values_they_keep_alive_net_of_those_they_drop() {
         let guard = Guard::with_budget(1 << 20);
-        let mut vars = Vars::metered(&guard);
+        let mut vars = Vars::default().metered(&guard);
         let long = "x".repeat(1000);
         vars.set("a", Some(long.clone()));
         assert_eq!(guard.spent(), 1000);
@@ -1155,7 +1281,8 @@ mod tests {
         vars.rollback(mark);
         assert_eq!(guard.spent(), 1, "both long values freed");
         vars.set("c", Some(long));
-        let shared = vars.shared("c").map(|s| Rc::clone(&s.text));
+        let shared = vars.known("c").map(|s| Rc::clone(&s.text));
+        assert!(shared.is_some(), "`c` is known");
         vars.set("c", None);
         assert_eq!(guard.spent(), 1001, "a word still holds it");
         drop(shared);
@@ -1177,9 +1304,9 @@ mod tests {
     fn a_value_two_names_share_is_charged_once_and_refunded_once_both_drop_it() {
         for maker_first in [true, false] {
             let guard = Guard::with_budget(1 << 20);
-            let mut vars = Vars::metered(&guard);
+            let mut vars = Vars::default().metered(&guard);
             vars.set("x", Some("x".repeat(1000)));
-            let text = vars.shared("x").map(|x| Rc::clone(&x.text));
+            let text = vars.known("x").map(|x| Rc::clone(&x.text));
             vars.set_shared("a", text.map(|text| Shared::new(text, 1000)));
             assert_eq!(guard.spent(), 1000, "the shared hold costs nothing");
             let order = if maker_first { ["x", "a"] } else { ["a", "x"] };
@@ -1200,11 +1327,11 @@ mod tests {
     #[test]
     fn a_value_a_word_shares_is_not_charged_again() {
         let guard = Guard::with_budget(1 << 20);
-        let mut vars = Vars::metered(&guard);
+        let mut vars = Vars::default().metered(&guard);
         vars.set("x", Some("x".repeat(1000)));
         vars.set("b", Some(String::new()));
         vars.set("c", Some("y".to_owned()));
-        let x = vars.shared("x").map(|x| Rc::clone(&x.text)).expect("set");
+        let x = vars.known("x").map(|x| Rc::clone(&x.text)).expect("set");
         let word = |name: &str| Word {
             raw: [name, "$x"].concat(),
             text: Text::of(vec![Rc::from(name), Rc::clone(&x)], name.len() + 1000, None),
@@ -1213,7 +1340,8 @@ mod tests {
             assign: 1,
             form: Form::Made {
                 glob: false,
-                expanded: true,
+                expanded: Expansions::Present,
+                fixed: false,
             },
         };
         let spent = guard.spent();
@@ -1222,7 +1350,7 @@ mod tests {
         assert!(vars.append_word("b", &word("b+="), 3));
         assert_eq!(guard.spent(), spent, "b+=$x on an empty b charges nothing");
         for name in ["a", "b"] {
-            let held = vars.shared(name).map(|v| Rc::ptr_eq(&v.text, &x));
+            let held = vars.known(name).map(|v| Rc::ptr_eq(&v.text, &x));
             assert_eq!(held, Some(true), "{name} shares $x");
         }
         assert!(vars.append_word("c", &word("c+="), 3));

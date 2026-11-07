@@ -7,6 +7,7 @@
 //! level, and a heredoc's lines once in all, so the cost is linear in the line at each nesting
 //! level the walker reads.
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::project::is_js_space;
@@ -185,8 +186,15 @@ pub(super) enum Item {
 /// 1.x `OPERATOR`, in its alternation order.
 const OPERATORS: [&str; 11] = [";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")"];
 
+/// What [`lex`] reads from a source.
+pub(super) struct Lexed {
+    pub(super) items: Vec<Item>,
+    /// 1.x `items.bodies`: where each heredoc body is in the source, in order.
+    pub(super) bodies: Vec<Range<usize>>,
+}
+
 /// 1.x `lex(src)`.
-pub(super) fn lex(src: &str) -> Vec<Item> {
+pub(super) fn lex(src: &str) -> Lexed {
     let mut lexer = Lexer {
         s: src,
         i: 0,
@@ -196,9 +204,26 @@ pub(super) fn lex(src: &str) -> Vec<Item> {
         redir: None,
         sep: Joint::Other,
         heredocs: Vec::new(),
+        bodies: Vec::new(),
     };
     lexer.run();
-    lexer.out
+    Lexed {
+        items: lexer.out,
+        bodies: lexer.bodies,
+    }
+}
+
+/// 1.x's `line`: `src` without its heredoc bodies, the code a PowerShell expression is read
+/// from.
+pub(super) fn without_bodies(src: &str, bodies: &[Range<usize>]) -> String {
+    let mut line = String::with_capacity(src.len());
+    let mut at = 0;
+    for body in bodies {
+        line.push_str(src.get(at..body.start).unwrap_or(""));
+        at = body.end.max(at);
+    }
+    line.push_str(src.get(at..).unwrap_or(""));
+    line
 }
 
 struct Lexer<'s> {
@@ -211,6 +236,8 @@ struct Lexer<'s> {
     sep: Joint,
     /// The heredocs waiting for the next newline: the item and redirect each one is.
     heredocs: Vec<(usize, usize)>,
+    /// Where each heredoc body read so far is.
+    bodies: Vec<Range<usize>>,
 }
 
 impl Lexer<'_> {
@@ -549,6 +576,7 @@ impl Lexer<'_> {
             let tabs = *op == RedirectOp::HeredocTabs;
             let (body, next) = heredoc_body(s, self.i, &heredoc.delim, tabs);
             heredoc.body = Some(body);
+            self.bodies.push(self.i..next.min(s.len()));
             self.i = next;
         }
     }
