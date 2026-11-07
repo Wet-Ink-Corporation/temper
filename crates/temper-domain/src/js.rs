@@ -1,6 +1,7 @@
 //! JavaScript semantics the port must reproduce: the `String.prototype.trim` whitespace set,
 //! UTF-16 length limits, and the translation of 1.x regex sources to `regex` syntax.
 
+mod add;
 mod canonical;
 mod json;
 mod map;
@@ -9,6 +10,7 @@ mod translate;
 mod utf8;
 mod value;
 
+pub(crate) use add::Sum;
 pub(crate) use canonical::canonical;
 pub use canonical::js_sort;
 pub use json::JsonParseError;

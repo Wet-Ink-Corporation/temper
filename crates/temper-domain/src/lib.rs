@@ -31,6 +31,8 @@ mod js;
 mod manifest;
 mod paths;
 mod scan;
+mod state;
+mod status;
 mod time;
 mod verdict;
 
@@ -66,6 +68,8 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
+pub use state::{BaselineParseError, BaselineSummary, GateRecord};
+pub use status::{BaselineLine, STATUS_USAGE, StatusFacts, render_status_text, temper_base_note};
 pub use time::Timestamp;
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
