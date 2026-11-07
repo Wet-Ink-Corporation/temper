@@ -1,12 +1,20 @@
 use temper_domain::PathStyle::Posix;
 use temper_domain::{NOT_A_RUST_PROJECT, Scanner};
 
-use crate::engine::{CommandError, Engine, Exit, RunEnv, StatusArgs};
+use crate::engine::{CommandError, Engine, Exit, OutputFormat, RunEnv, StatusArgs};
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, Reply};
 use crate::ports::ExitKind;
 
+mod json;
+
 const HEAD: &str = "1111111111111111111111111111111111111111";
 const OTHER: &str = "3333333333333333333333333333333333333333";
+
+/// `temper status`, no session.
+const TEXT: StatusArgs = StatusArgs {
+    format: OutputFormat::Text,
+    session: None,
+};
 
 fn ran(stdout: &str) -> Reply {
     Reply::Exit {
@@ -33,6 +41,7 @@ fn engine(ports: FakePorts, temper_base: Option<&str>) -> Engine<FakePorts> {
 fn text(engine: &Engine<FakePorts>, session: Option<&str>) -> (String, String) {
     let out = engine
         .status(&StatusArgs {
+            format: OutputFormat::Text,
             session: session.map(str::to_owned),
         })
         .expect("status answers");
@@ -79,7 +88,7 @@ fn line<'t>(text: &'t str, key: &str) -> &'t str {
 fn outside_a_rust_project_status_refuses_with_exit_2() {
     let engine = engine(FakePorts::new(FakeFiles::new(Posix)), None);
 
-    let refused = engine.status(&StatusArgs { session: None });
+    let refused = engine.status(&TEXT);
 
     assert!(
         matches!(&refused, Err(CommandError::Refused { exit: Exit::Usage, message }) if message == NOT_A_RUST_PROJECT),
@@ -200,7 +209,7 @@ fn a_verdict_1x_cannot_convert_fails_status_and_a_toolchain_reads_as_unreadable(
         repo(with(r#"{"verdict":{"toString":1}}"#), &[("HEAD", HEAD)]),
         None,
     )
-    .status(&StatusArgs { session: None });
+    .status(&TEXT);
     let (stdout, _) = text(
         &engine(
             repo(with(r#"{"verdict":"approved"}"#), &[("HEAD", HEAD)]),

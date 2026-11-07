@@ -1,0 +1,152 @@
+[
+ {
+  "name": "nothing recorded",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a green gate and an approved verdict",
+  "base": "1111111111111111111111111111111111111111",
+  "changed": [
+   "src/lib.rs"
+  ],
+  "gate": "{\"ok\":true,\"fp\":\"0123456789abcdef\",\"at\":\"2026-10-11T10:00:00.000Z\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":120,\"summary\":\"applied\"},{\"name\":\"clippy\",\"ok\":true,\"ms\":9000,\"summary\":\"clean\",\"log\":\"/x/clippy.log\"}]}",
+  "verdict": "{\"temper_verdict\":1,\"verdict\":\"approved\",\"fingerprint\":\"0123456789abcdef\",\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"architecture\":\"n/a\"},\"recorded_at\":\"2026-10-11T10:05:00.000Z\",\"stale\":false,\"findings\":[{\"severity\":\"nit\",\"rule\":\"API-01\",\"file\":\"src/lib.rs\",\"line\":2,\"evidence\":\"pub fn b() {}\",\"fix\":\"document b\"}],\"evidence\":{\"files_read\":[\"src/lib.rs\"]}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":\"1111111111111111111111111111111111111111\",\"fingerprint\":\"0123456789abcdef\",\"changed\":[\"src/lib.rs\"],\"gate\":{\"ok\":true,\"unavailable\":false,\"at\":\"2026-10-11T10:00:00.000Z\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":120,\"summary\":\"applied\"},{\"name\":\"clippy\",\"ok\":true,\"ms\":9000,\"summary\":\"clean\"}],\"running\":null},\"review\":{\"verdict\":\"approved\",\"stale\":false,\"fingerprint\":\"0123456789abcdef\",\"recorded_at\":\"2026-10-11T10:05:00.000Z\",\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"architecture\":\"n/a\"},\"findings\":[{\"severity\":\"nit\",\"rule\":\"API-01\",\"file\":\"src/lib.rs\",\"line\":2,\"fix\":\"document b\"}]},\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a red gate, a stale verdict and a readable baseline",
+  "gate": "{\"ok\":false,\"steps\":[{\"name\":\"clippy\",\"ok\":false,\"ms\":50,\"summary\":\"error: unused\"}]}",
+  "verdict": "{\"verdict\":\"changes-requested\",\"fingerprint\":\"ffffffffffffffff\",\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"architecture\":\"n/a\"},\"stale\":true,\"findings\":[{\"severity\":\"major\",\"rule\":\"ERR-02\",\"file\":\"src/lib.rs\",\"evidence\":\"x\",\"fix\":\"type the error\"}]}",
+  "baseline": "{\"temper_baseline\":1,\"toolchain\":\"1.90.0\",\"totals\":{\"a\":{\"clippy::x\":2,\"clippy::y\":3}}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":false,\"unavailable\":false,\"at\":null,\"steps\":[{\"name\":\"clippy\",\"ok\":false,\"ms\":50,\"summary\":\"error: unused\"}],\"running\":null},\"review\":{\"verdict\":\"changes-requested\",\"stale\":true,\"fingerprint\":\"ffffffffffffffff\",\"recorded_at\":null,\"scores\":{\"correctness\":4,\"escape_hatches\":4,\"architecture\":\"n/a\"},\"findings\":[{\"severity\":\"major\",\"rule\":\"ERR-02\",\"file\":\"src/lib.rs\",\"line\":null,\"fix\":\"type the error\"}]},\"baseline\":{\"path\":\".claude/temper-baseline.json\",\"total\":5,\"toolchain\":\"1.90.0\"},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a gate of [1] and a verdict of 7 read as none",
+  "gate": "[1]",
+  "verdict": "7",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a gate of null, true and a string read as none",
+  "gate": "null",
+  "verdict": "\"x\"",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "bad step and finding entries are dropped",
+  "gate": "{\"ok\":false,\"steps\":[null,{\"name\":\"clippy\",\"ok\":false,\"ms\":1,\"summary\":\"x\"},[1],\"s\"]}",
+  "verdict": "{\"verdict\":\"approved\",\"findings\":[null,3,[],{\"rule\":\"R\"}]}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":false,\"unavailable\":false,\"at\":null,\"steps\":[{\"name\":\"clippy\",\"ok\":false,\"ms\":1,\"summary\":\"x\"}],\"running\":null},\"review\":{\"verdict\":\"approved\",\"stale\":false,\"fingerprint\":\"0123456789abcdef\",\"recorded_at\":null,\"scores\":{},\"findings\":[{\"rule\":\"R\",\"line\":null}]},\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "steps that are not an array",
+  "gate": "{\"ok\":true,\"steps\":{}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":true,\"unavailable\":false,\"at\":null,\"steps\":[],\"running\":null},\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a gate without ok, with odd fields",
+  "gate": "{\"unavailable\":\"x\",\"at\":null,\"steps\":[{},{\"name\":5,\"ok\":\"yes\",\"ms\":null,\"summary\":0},{\"name\":\"n\",\"ms\":1e21,\"summary\":null}]}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"unavailable\":true,\"at\":null,\"steps\":[{\"ms\":null,\"summary\":\"\"},{\"name\":5,\"ok\":\"yes\",\"ms\":null,\"summary\":0},{\"name\":\"n\",\"ms\":1e+21,\"summary\":\"\"}],\"running\":null},\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a gate with ok null and unavailable 0",
+  "gate": "{\"ok\":null,\"unavailable\":0,\"at\":7}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":null,\"unavailable\":false,\"at\":7,\"steps\":[],\"running\":null},\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "an empty verdict",
+  "verdict": "{}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":{\"stale\":false,\"fingerprint\":\"0123456789abcdef\",\"recorded_at\":null,\"scores\":{},\"findings\":[]},\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a verdict with nulls",
+  "verdict": "{\"verdict\":null,\"stale\":\"\",\"fingerprint\":null,\"recorded_at\":null,\"scores\":null,\"findings\":null}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":{\"verdict\":null,\"stale\":false,\"fingerprint\":\"0123456789abcdef\",\"recorded_at\":null,\"scores\":{},\"findings\":[]},\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a verdict with odd values",
+  "verdict": "{\"verdict\":[\"a\"],\"stale\":1,\"fingerprint\":5,\"recorded_at\":0,\"scores\":\"x\",\"findings\":[{\"severity\":null,\"line\":0,\"fix\":{\"a\":[1,-0]}}]}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":{\"verdict\":[\"a\"],\"stale\":true,\"fingerprint\":5,\"recorded_at\":0,\"scores\":\"x\",\"findings\":[{\"severity\":null,\"line\":0,\"fix\":{\"a\":[1,0]}}]},\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a running gate and no result",
+  "running": {
+   "startedAt": "2026-10-11T11:59:00.000Z",
+   "steps": [
+    {
+     "name": "fmt",
+     "ok": true,
+     "ms": 10
+    }
+   ],
+   "current": {
+    "name": "clippy",
+    "startedAt": "2026-10-11T11:59:55.000Z"
+   }
+  },
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":null,\"unavailable\":false,\"at\":null,\"steps\":[],\"running\":{\"startedAt\":\"2026-10-11T11:59:00.000Z\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":10}],\"current\":{\"name\":\"clippy\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}}},\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a running gate beside a result",
+  "gate": "{\"ok\":true,\"steps\":[]}",
+  "running": {
+   "steps": [],
+   "current": null
+  },
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":{\"ok\":true,\"unavailable\":false,\"at\":null,\"steps\":[],\"running\":{\"steps\":[],\"current\":null}},\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline with a string count and an object toolchain",
+  "baseline": "{\"temper_baseline\":1,\"toolchain\":{\"toString\":1},\"totals\":{\"a\":{\"x\":1,\"y\":\"2\"},\"b\":[3]}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"path\":\".claude/temper-baseline.json\",\"total\":\"0123\",\"toolchain\":{\"toString\":1}},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline with a null toolchain",
+  "baseline": "{\"temper_baseline\":1,\"toolchain\":null,\"totals\":{}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"path\":\".claude/temper-baseline.json\",\"total\":0,\"toolchain\":null},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline whose numbers overflow",
+  "baseline": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":1e308,\"y\":1e308}}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"path\":\".claude/temper-baseline.json\",\"total\":null,\"toolchain\":null},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline that is not a baseline",
+  "baseline": "{\"temper_baseline\":2,\"totals\":{}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"error\":\".claude/temper-baseline.json is not a temper baseline (expected \\\"temper_baseline\\\": 1 and a \\\"totals\\\" table)\"},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline with bad targets",
+  "baseline": "{\"temper_baseline\":1,\"totals\":{},\"targets\":{\"h\":{}}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"error\":\".claude/temper-baseline.json is not a temper baseline (\\\"targets\\\" must map each host to a section with a \\\"totals\\\" table)\"},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline with a count 1.x cannot convert",
+  "baseline": "{\"temper_baseline\":1,\"totals\":{\"a\":{\"x\":{\"toString\":1}}}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"error\":\"Cannot convert object to primitive value\"},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "a baseline with a null section",
+  "baseline": "{\"temper_baseline\":1,\"totals\":{\"a\":null}}",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":{\"error\":\"Cannot convert undefined or null to object\"},\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "escapes in the paths and changes",
+  "root": "/w \"q\" \\  ",
+  "stateDir": "/w/\u0001",
+  "changed": [
+   "a\"b.rs",
+   "c\\d.rs",
+   "😀.rs"
+  ],
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w \\\"q\\\" \\\\  \",\"stateDir\":\"/w/\\u0001\",\"base\":null,\"fingerprint\":\"0123456789abcdef\",\"changed\":[\"a\\\"b.rs\",\"c\\\\d.rs\",\"😀.rs\"],\"gate\":null,\"review\":null,\"baseline\":null,\"config\":{\"review\":\"required\",\"skillGate\":true}}\n"
+ },
+ {
+  "name": "an advisory review, no skill gate, disabled",
+  "review": "advisory",
+  "skillGate": false,
+  "disabled": true,
+  "base": "abc",
+  "want": "{\"temper_status\":1,\"version\":\"1.6.0\",\"root\":\"/w\",\"stateDir\":\"/w/.git/temper\",\"base\":\"abc\",\"fingerprint\":\"0123456789abcdef\",\"changed\":[],\"gate\":null,\"review\":null,\"baseline\":null,\"config\":{\"review\":\"advisory\",\"skillGate\":false},\"disabled\":true}\n"
+ }
+]

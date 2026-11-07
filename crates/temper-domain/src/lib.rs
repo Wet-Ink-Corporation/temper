@@ -44,7 +44,7 @@ pub use fingerprint::{
     FingerprintHasher, FingerprintParseError, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE, gate_config,
     in_fingerprint, is_rust_relevant,
 };
-pub use glob::{Glob, GlobError, Globs, LazyGlobs};
+pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
     EditOp, EditStep, EditTarget, EditTool, HookEvent, HookOutcome, IRON_RULES, InterpreterCode,
@@ -68,9 +68,12 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
-pub use state::{BaselineParseError, BaselineSummary, GateRecord};
-pub use status::{BaselineLine, STATUS_USAGE, StatusFacts, render_status_text, temper_base_note};
-pub use time::Timestamp;
+pub use state::{BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, gate_progress};
+pub use status::{
+    BaselineLine, STATUS_USAGE, StatusDoc, StatusFacts, render_no_project_json, render_status_json,
+    render_status_text, temper_base_note,
+};
+pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
     VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,

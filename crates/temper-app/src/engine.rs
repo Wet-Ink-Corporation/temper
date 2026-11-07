@@ -30,6 +30,13 @@ pub struct RunEnv {
     /// `TEMPER_BASE` when it is set and not empty: the base a command run outside a hook
     /// compares with, when it is a commit here.
     pub temper_base: Option<String>,
+    /// This process's id: the pid probe checks that it sees this process (OC-2 A).
+    pub pid: u32,
+    /// `TEMPER_PLUGIN_VERSION` when it is set and not empty: the version `status --json`
+    /// reports, else the engine's own (port plan 3-13).
+    pub plugin_version: Option<String>,
+    /// `TEMPER_DISABLE=1`: `status --json` says `"disabled": true`.
+    pub disabled: bool,
 }
 
 /// The use cases, over the ports `P`.
@@ -55,14 +62,16 @@ impl<P: Ports> Engine<P> {
     }
 
     /// `temper status`: the project, base, fingerprint, Rust changes, cached gate, recorded
-    /// review, baseline and config, as 1.x's nine lines. A `TEMPER_BASE` that is not a commit
-    /// here is noted on stderr once per engine. `--json` arrives in port Phase 3c.
+    /// review, baseline and config, as 1.x's nine lines, or with `--json` as its
+    /// `temper_status: 1` document, which also carries a gate running now. A `TEMPER_BASE`
+    /// that is not a commit here is noted on stderr once per engine.
     ///
     /// # Errors
     ///
-    /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project, and
-    /// [`CommandError::Unconvertible`] for a recorded review verdict that 1.x's `String()`
-    /// throws on (wi-32d7c9); nothing else fails, as in 1.x.
+    /// [`CommandError::Refused`] (exit [`Exit::Usage`]) outside a Rust project, in text only
+    /// (the JSON says `project: null`); [`CommandError::Unconvertible`] where 1.x converts a
+    /// recorded value to a string outside any `try` and throws: the review verdict in text
+    /// (wi-32d7c9), a running gate's start time in JSON. Nothing else fails, as in 1.x.
     pub fn status(&self, args: &StatusArgs) -> Result<CommandOutput, CommandError> {
         status::run(&self.ports, &self.env, &self.base_noted, args)
     }
@@ -134,6 +143,8 @@ pub enum HookError {
 /// The arguments of `temper status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusArgs {
+    /// `--json`: the `temper_status: 1` document instead of the nine lines.
+    pub format: OutputFormat,
     /// `--session ID`: compare with that session's base instead of `TEMPER_BASE` or HEAD.
     pub session: Option<String>,
 }

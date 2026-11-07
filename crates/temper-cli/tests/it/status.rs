@@ -144,6 +144,33 @@ fn a_garbage_temper_base_gives_head_and_a_note() -> TestResult {
     Ok(())
 }
 
+/// With stdout and stderr on one pipe (a terminal, `2>&1`), the `TEMPER_BASE` note comes
+/// before the nine lines, as 1.x writes it while it finds the base (#207 review F1).
+#[test]
+fn the_temper_base_note_comes_before_the_lines_on_a_merged_stream() -> TestResult {
+    let dir = repo()?;
+    let (mut reader, writer) = std::io::pipe()?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_temper"))
+        .arg("status")
+        .current_dir(dir.path())
+        .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir())
+        .env("TEMPER_BASE", "not-a-commit-at-all")
+        .stdout(writer.try_clone()?)
+        .stderr(writer)
+        .spawn()?;
+    let mut merged = String::new();
+    std::io::Read::read_to_string(&mut reader, &mut merged)?;
+    let status = child.wait()?;
+
+    assert!(status.success(), "{merged}");
+    assert!(
+        merged.starts_with("temper: TEMPER_BASE not-a-commit is not a commit"),
+        "{merged}"
+    );
+    assert!(merged.contains("\nroot:        "), "{merged}");
+    Ok(())
+}
+
 /// The fingerprint of `dir` with `tests/<name>` untracked, made by `make`.
 fn fingerprint_with(
     name: &str,

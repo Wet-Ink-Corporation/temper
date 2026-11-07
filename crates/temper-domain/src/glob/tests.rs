@@ -55,12 +55,14 @@ fn a_question_mark_takes_one_char() {
 
 #[test]
 fn globs_match_when_any_pattern_does() {
-    let globs = Globs::new(["crates/*", "**/deny.toml"]).expect("the test globs compile");
-    assert!(globs.any_match("x/deny.toml"), "the second");
-    assert!(globs.any_match("crates/a"), "the first");
-    assert!(!globs.any_match("src/lib.rs"), "neither");
+    // Through `LazyGlobs` since the eager `Globs` went (#207 review F4); the rows are as they were.
+    let globs = LazyGlobs::new(["crates/*", "**/deny.toml"]);
+    let matches = |rel: &str| globs.any_match(rel).expect("the test globs compile");
+    assert!(matches("x/deny.toml"), "the second");
+    assert!(matches("crates/a"), "the first");
+    assert!(!matches("src/lib.rs"), "neither");
     assert!(
-        !Globs::new([]).expect("no globs").any_match(""),
+        !LazyGlobs::new([]).any_match("").expect("no globs"),
         "an empty list matches nothing"
     );
 }

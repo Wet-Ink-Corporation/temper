@@ -106,8 +106,9 @@ pub(crate) fn head_rev(process: &impl ProcessRunner, git_root: &Path) -> Option<
 
 /// How a streamed git call ended. Either way, what reached the sink counts, as 1.x's
 /// `fingerprint` hashes `git diff`'s stdout without looking at the exit code, and `spawnSync`
-/// returns the output read before an error.
+/// returns the output read before an error; the caller names both outcomes (#207 review F2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "name both outcomes, even when each keeps what streamed"]
 pub(crate) enum Streamed {
     /// git ran to an exit (any code), a signal or its timeout.
     Ran,

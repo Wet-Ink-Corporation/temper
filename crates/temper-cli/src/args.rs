@@ -97,8 +97,8 @@ fn scan(args: impl Iterator<Item = OsString>) -> Command {
 
 /// `status`'s arguments, read as 1.x's `statusArgs` reads them: the first `--session` takes the
 /// argument after it, which must be there, not empty and not start with `--`; `--json`
-/// anywhere asks for the JSON form, which waits for port Phase 3c (an unported subcommand
-/// until then, 2b-1); anything else is ignored. The session check comes first, as in 1.x.
+/// anywhere asks for the JSON form; anything else is ignored. The session check comes first,
+/// as in 1.x.
 fn status(args: impl Iterator<Item = OsString>) -> Command {
     let args: Vec<String> = args
         .map(|arg| {
@@ -114,10 +114,12 @@ fn status(args: impl Iterator<Item = OsString>) -> Command {
             Some(_) | None => return Command::Status(Err(StatusUsage)),
         },
     };
-    if json {
-        return Command::Usage(UsageExit::Unknown);
-    }
-    Command::Status(Ok(StatusArgs { session }))
+    let format = if json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    Command::Status(Ok(StatusArgs { format, session }))
 }
 
 /// `hook`'s event, decoded lossily, with a missing one read as JS's `undefined`, as 1.x's
@@ -299,6 +301,7 @@ mod tests {
     fn status_reads_its_session_and_ignores_the_rest() {
         let session = |sid: Option<&str>| {
             Command::Status(Ok(StatusArgs {
+                format: OutputFormat::Text,
                 session: sid.map(str::to_owned),
             }))
         };
@@ -313,9 +316,10 @@ mod tests {
     }
 
     /// `--session` with no id, an empty one or one starting `--` is a usage error, checked
-    /// before `--json`, which waits for port Phase 3c.
+    /// before `--json`; `--json` anywhere asks for the JSON form (port Phase 3c; until 3c this
+    /// row pinned `status --json` as an unported subcommand).
     #[test]
-    fn status_with_a_bad_session_is_a_usage_error_and_json_is_not_ported() {
+    fn status_with_a_bad_session_is_a_usage_error_and_json_anywhere_is_the_json_form() {
         for args in [
             &["--session"][..],
             &["--session", ""],
@@ -328,10 +332,16 @@ mod tests {
                 "{args:?}"
             );
         }
+        let json = |sid: Option<&str>| {
+            Command::Status(Ok(StatusArgs {
+                format: OutputFormat::Json,
+                session: sid.map(str::to_owned),
+            }))
+        };
+        assert_eq!(status_of(&["--json"]), json(None));
         assert_eq!(
-            status_of(&["--json"]),
-            Command::Usage(UsageExit::Unknown),
-            "status --json waits for 3c"
+            status_of(&["x", "--json", "--session", "s"]),
+            json(Some("s"))
         );
     }
 

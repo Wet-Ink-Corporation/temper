@@ -1,0 +1,258 @@
+[
+ {
+  "name": "fresh",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:00.000Z\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":10}],\"current\":{\"name\":\"clippy\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:00.000Z\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":10}],\"current\":{\"name\":\"clippy\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}}"
+ },
+ {
+  "name": "no startedAt key: the key is left out",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"steps\":[],\"current\":{\"name\":\"x\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}}",
+  "step": 900,
+  "want": "{\"steps\":[],\"current\":{\"name\":\"x\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}}"
+ },
+ {
+  "name": "current null",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "no current key",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "current a string",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"current\":\"x\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":\"x\"}"
+ },
+ {
+  "name": "current startedAt null falls back",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"current\":{\"startedAt\":null}}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":{\"startedAt\":null}}"
+ },
+ {
+  "name": "current startedAt a year number",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"current\":{\"startedAt\":2026}}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "current startedAt in an array",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"current\":{\"startedAt\":[\"2026-10-11T11:59:55.000Z\"]}}",
+  "step": 900,
+  "want": "{\"steps\":[],\"current\":{\"startedAt\":[\"2026-10-11T11:59:55.000Z\"]}}"
+ },
+ {
+  "name": "current startedAt an object",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"current\":{\"startedAt\":{\"a\":1}}}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "current startedAt an object with toString",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"current\":{\"startedAt\":{\"toString\":1}}}",
+  "step": 900,
+  "want": {
+   "throws": "TypeError"
+  }
+ },
+ {
+  "name": "startedAt an array holding an object with toString",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":[{\"toString\":\"x\"}]}",
+  "step": 900,
+  "want": {
+   "throws": "TypeError"
+  }
+ },
+ {
+  "name": "neither time",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"steps\":[]}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "steps not an array",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":\"x\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "steps of junk kept",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[null,5,{\"__proto__\":1}]}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[null,5,{\"__proto__\":1}],\"current\":null}"
+ },
+ {
+  "name": "fp uppercase",
+  "text": "{\"fp\":\"0123456789ABCDEF\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "fp a number",
+  "text": "{\"fp\":123,\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "fp repeated, the last wins",
+  "text": "{\"fp\":\"x\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"fp\":\"0123456789abcdef\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "pid a string",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":\"$PID\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "pid written 4242.0",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID.0,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:59:55.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "pid with a fraction",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID.5,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "dead pid",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":2147483646,\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "no pid",
+  "text": "{\"fp\":\"0123456789abcdef\",\"startedAt\":\"2026-10-11T11:59:55.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "an array",
+  "text": "[1]",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "a number",
+  "text": "5",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "zero",
+  "text": "0",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "null",
+  "text": "null",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "a string",
+  "text": "\"x\"",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "true",
+  "text": "true",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "not JSON",
+  "text": "{ not json",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "blank",
+  "text": " ",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "empty",
+  "text": "",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "an offset time",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T12:59:55.000+01:00\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T12:59:55.000+01:00\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "the margin: 1,000 s on a 900 s step",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:43:20.000Z\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-11T11:43:20.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "past the margin: 1,300 s",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:38:20.000Z\"}",
+  "step": 900,
+  "want": null
+ },
+ {
+  "name": "step timeout 0: 300 s margin only",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:55:01.000Z\"}",
+  "step": 0,
+  "want": "{\"startedAt\":\"2026-10-11T11:55:01.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "step timeout 0: past 300 s",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:54:59.000Z\"}",
+  "step": 0,
+  "want": null
+ },
+ {
+  "name": "step timeout -300: any age",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:59:59.999Z\"}",
+  "step": -300,
+  "want": null
+ },
+ {
+  "name": "step timeout 0.5",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:54:59.500Z\"}",
+  "step": 0.5,
+  "want": "{\"startedAt\":\"2026-10-11T11:54:59.500Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "step timeout 0.5, a ms past",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11T11:54:59.499Z\"}",
+  "step": 0.5,
+  "want": null
+ },
+ {
+  "name": "a start in the future",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-12T12:00:00.000Z\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"2026-10-12T12:00:00.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "the date range end",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"+275760-09-13T00:00:00.000Z\"}",
+  "step": 900,
+  "want": "{\"startedAt\":\"+275760-09-13T00:00:00.000Z\",\"steps\":[],\"current\":null}"
+ },
+ {
+  "name": "a date-only start long ago",
+  "text": "{\"fp\":\"0123456789abcdef\",\"pid\":$PID,\"startedAt\":\"2026-10-11\"}",
+  "step": 900,
+  "want": null
+ }
+]

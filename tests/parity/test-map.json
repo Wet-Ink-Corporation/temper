@@ -1644,7 +1644,7 @@
     },
     {
       "source": "tests/handlers.test.mjs",
-      "pending": "port Phase 3 (SessionStart, change detection, SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript) and Phase 4 (Stop, the implementer branch of SubagentStop)",
+      "pending": "port Phase 3 (SessionStart, SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript) and Phase 4 (Stop, the implementer branch of SubagentStop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
       "tests": [
         {
           "node": "skill gate: a Rust edit is refused until rust-craft is loaded through the Skill tool",
@@ -1666,6 +1666,48 @@
           "crate": "temper-app",
           "rust": [
             "hooks::pre_edit::tests::gate::skill_gate_skill_gate_false_in_temper_json_turns_it_off"
+          ]
+        },
+        {
+          "node": "change detection: .claude/temper.json and .cargo/config(.toml) count as Rust changes and change the fingerprint",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::temper_json_and_cargo_config_count_as_rust_changes_and_change_the_fingerprint"
+          ]
+        },
+        {
+          "node": "change detection: other files under .claude/ and .cargo/ are not Rust changes and leave the fingerprint alone",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::other_files_under_claude_and_cargo_are_no_rust_changes"
+          ]
+        },
+        {
+          "node": "change detection: .claude/temper.json counts only when a key the gate reads (gate, scanner, manifests) changes",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::temper_json_counts_only_when_a_key_the_gate_reads_changes"
+          ]
+        },
+        {
+          "node": "change detection: a property the gate does not read under gate, scanner or manifests is no Rust change",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::a_property_the_gate_does_not_read_is_no_rust_change"
+          ]
+        },
+        {
+          "node": "change detection outside git: config files count, and the fingerprint is stable and follows only the gate settings",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::outside_git_config_files_count_and_the_fingerprint_follows_the_gate_settings"
+          ]
+        },
+        {
+          "node": "change detection: a git-ignored .claude/temper.json still counts, as temper reads it",
+          "crate": "temper-cli",
+          "rust": [
+            "status_json::a_git_ignored_temper_json_still_counts"
           ]
         }
       ]
@@ -1725,13 +1767,75 @@
     },
     {
       "source": "tests/status-json.test.mjs",
-      "pending": "port Phase 3c (status --json and its --session form), Phase 7 (stats)",
+      "pending": "port Phase 7 (stats)",
       "tests": [
+        {
+          "node": "status --json: a green gate and an approved verdict for the current tree",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::a_green_gate_and_an_approved_verdict_give_1xs_document"
+          ]
+        },
+        {
+          "node": "status --json: a red gate, a stale verdict and a readable baseline",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::a_red_gate_a_stale_verdict_and_a_readable_baseline"
+          ]
+        },
+        {
+          "node": "status --json: no gate and no review for the tree are null; an unreadable baseline is an error object",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::no_records_are_null_and_an_unreadable_baseline_is_an_error_object"
+          ]
+        },
+        {
+          "node": "status --json: malformed gate and verdict files read as none, or lose their bad entries",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::malformed_records_read_as_none_or_lose_their_bad_entries"
+          ]
+        },
+        {
+          "node": "status --json: outside a Rust project it says project: null and exits 0",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::outside_a_rust_project_the_document_says_project_null"
+          ]
+        },
+        {
+          "node": "status --json: TEMPER_DISABLE=1 marks the document disabled",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::temper_disable_marks_the_document_disabled"
+          ]
+        },
+        {
+          "node": "status --json --session: the session's recorded base wins over HEAD",
+          "crate": "temper-app",
+          "rust": [
+            "status::tests::json::a_sessions_recorded_base_wins_over_head"
+          ]
+        },
         {
           "node": "status: the text output keeps its lines",
           "crate": "temper-cli",
           "rust": [
             "status::the_text_output_keeps_its_lines"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/gate-progress.test.mjs",
+      "pending": "port Phase 3d (pruning) and Phase 4 (the gate that writes the progress file)",
+      "tests": [
+        {
+          "node": "gate progress: a file whose process is gone, or whose step is older than the step timeout, is stale",
+          "crate": "temper-domain",
+          "rust": [
+            "state::progress::tests::a_progress_file_whose_process_is_gone_or_whose_step_is_too_old_is_stale"
           ]
         }
       ]

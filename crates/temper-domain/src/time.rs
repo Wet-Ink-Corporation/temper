@@ -1,6 +1,10 @@
 //! Instants as 1.x records them: JS `Date` milliseconds, printed by `toISOString`.
 
+mod parse;
+
 use std::fmt;
+
+use crate::js::number_from_text;
 
 /// The furthest a JS `Date` reaches from the epoch, in milliseconds (ECMA-262 `TimeClip`).
 const MAX_MILLIS: i64 = 8_640_000_000_000_000;
@@ -62,6 +66,42 @@ impl fmt::Display for Timestamp {
             ms / 1000 % 60,
             ms % 1000
         )
+    }
+}
+
+/// A file's modification time as Node's `fs.statSync(p).mtimeMs` gives it.
+///
+/// That is a fractional count of milliseconds since the epoch, computed from the `timespec` as
+/// `sec * 1e3 + nsec / 1e6` in doubles (Node's `msFromTimeSpec`), so it compares with
+/// `Date.now()` as 1.x's does.
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::ModTime;
+///
+/// let t = ModTime::from_unix_nanos(-1_500_000_000); // 1.5 s before the epoch
+/// assert_eq!(t.millis(), -1500.0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct ModTime(f64);
+
+impl ModTime {
+    /// The time `nanos` nanoseconds after the epoch (before it when negative). The `timespec`
+    /// holds whole seconds rounded down and the nanoseconds above them, as POSIX's does.
+    #[must_use]
+    pub fn from_unix_nanos(nanos: i128) -> Self {
+        let sec = nanos.div_euclid(1_000_000_000);
+        // `rem_euclid` is in 0..1e9, which always fits a `u32`.
+        let nsec = u32::try_from(nanos.rem_euclid(1_000_000_000)).map_or(0.0, f64::from);
+        // `static_cast<double>(sec)`: the nearest double, which the decimal text parses to.
+        Self(number_from_text(&sec.to_string()) * 1e3 + nsec / 1e6)
+    }
+
+    /// Node's `mtimeMs`.
+    #[must_use]
+    pub const fn millis(self) -> f64 {
+        self.0
     }
 }
 

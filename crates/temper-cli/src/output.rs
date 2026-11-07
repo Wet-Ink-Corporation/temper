@@ -37,15 +37,19 @@ impl From<Exit> for ExitCode {
     }
 }
 
-/// Writes `stdout`, then `stderr`, each through one locked handle and flushed (H-06, ERR-13),
+/// Writes `stderr`, then `stdout`, each through one locked handle and flushed (H-06, ERR-13),
 /// and returns the exit: `exit` itself, or [`Exit::Failure`] when a stream cannot be written.
+///
+/// Stderr goes first because every 1.x command that writes both writes its note while it
+/// works (`status`'s `TEMPER_BASE` note) and its result last, so a merged stream (a terminal,
+/// `2>&1`) reads as 1.x's does (#207 review F1).
 ///
 /// A reader that went away (`temper .. | head`) is not a failure: temper stops writing to it
 /// and keeps the command's own code (port plan §2.4, D16(b)).
 pub(crate) fn emit(stdout: &str, stderr: &str, exit: Exit) -> Exit {
     let written = [
-        write_to(io::stdout().lock(), stdout),
         write_to(io::stderr().lock(), stderr),
+        write_to(io::stdout().lock(), stdout),
     ];
     let failed = written
         .iter()

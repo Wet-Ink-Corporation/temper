@@ -4,5 +4,6 @@ mod cli;
 mod hooks;
 mod scan;
 mod status;
+mod status_json;
 #[cfg(test)]
 mod support;

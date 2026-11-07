@@ -122,8 +122,12 @@ fn hash_git_tree(
     args.extend(FINGERPRINT_PATHSPECS);
     args.extend(excludes.iter().map(String::as_str));
     let mut diff = hasher.diff();
-    // However git ended, what it wrote is hashed (`git::Streamed`).
-    git::stream_into(process, at, &args, &mut diff);
+    match git::stream_into(process, at, &args, &mut diff) {
+        // An exit of any code, a signal or the timeout (`Ran`) leaves the diff 1.x hashes; a
+        // git that did not start or whose output broke off (`Lost`) adds nothing beyond what
+        // streamed, as 1.x's `r.stdout ?? ''`. Either way the hash goes on.
+        git::Streamed::Ran | git::Streamed::Lost => {}
+    }
     diff.finish();
     let mut names: Vec<String> = git::untracked(process, at)
         .into_iter()
