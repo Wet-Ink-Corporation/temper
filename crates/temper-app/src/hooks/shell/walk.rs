@@ -54,33 +54,44 @@ pub(crate) enum Opaque {
     Split,
 }
 
-/// The line a command is read from, without its heredoc bodies (1.x `line`), and the files
-/// interpreter code in it writes, read once however many PowerShell expressions it holds.
+/// The line a command is read from, and the files interpreter code in it writes, read once
+/// however many PowerShell expressions it holds.
+///
+/// Only a PowerShell expression reads the line, so the line keeps its text (without its
+/// heredoc bodies, 1.x `line`) only when one is on it: the walker marks it at the command
+/// and fills it in once the line is walked.
 #[derive(Debug, Default)]
 pub(crate) struct Line {
-    pub(crate) text: String,
+    text: OnceCell<String>,
+    /// A command on the line is a PowerShell expression.
+    read: Cell<bool>,
     code_targets: OnceCell<Vec<String>>,
 }
 
 impl Line {
-    fn new(text: String) -> Self {
-        Self {
-            text,
-            code_targets: OnceCell::new(),
-        }
-    }
-
     /// 1.x `lineCodeTargets(line)`: `codeWriteTargets` of the line, memoised.
     pub(crate) fn code_targets(&self, code: &InterpreterCode) -> &[String] {
         self.code_targets
-            .get_or_init(|| code.write_targets(&self.text))
+            .get_or_init(|| code.write_targets(self.text.get().map_or("", String::as_str)))
+    }
+
+    /// The bytes of text the line keeps.
+    #[cfg(test)]
+    pub(crate) fn held_bytes(&self) -> usize {
+        self.text.get().map_or(0, String::capacity)
     }
 }
 
 impl PartialEq for Line {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text
+        self.text.get() == other.text.get()
     }
+}
+
+/// 1.x `/^[[$]/.test(a0) && a0 !== '[' && a0 !== '[['`: a command word that is a PowerShell
+/// expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`), not a `[ -f x ]` test.
+pub(super) fn is_ps_expression(a0: &str) -> bool {
+    a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[["
 }
 
 impl Eq for Line {}
@@ -342,10 +353,15 @@ impl Walker<'_> {
             return;
         }
         let lexed = lex::lex(src);
-        let line = Line::new(lex::without_bodies(src, &lexed.bodies));
-        let outer = std::mem::replace(&mut self.line, Rc::new(line));
+        let outer = std::mem::replace(&mut self.line, Rc::default());
         self.items(lexed.items);
-        self.line = outer;
+        let line = std::mem::replace(&mut self.line, outer);
+        // An inner script's copy is charged as its walk is; past the budget the parse stops,
+        // so the text is never read.
+        if line.read.get() && (self.depth == 0 || self.charge_script(src)) {
+            line.text
+                .get_or_init(|| lex::without_bodies(src, &lexed.bodies));
+        }
     }
 
     /// The items of one line, in order.
@@ -569,6 +585,9 @@ impl Walker<'_> {
         } else {
             words.remove(0)
         };
+        if is_ps_expression(&argv0.raw) {
+            self.line.read.set(true);
+        }
         self.out.push(Command {
             name,
             argv0,

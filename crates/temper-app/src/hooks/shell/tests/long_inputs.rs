@@ -597,3 +597,52 @@ fn an_append_joins_the_old_value_and_the_words_text() {
         "an unknown part deletes the name"
     );
 }
+
+/// The line each command keeps holds its text only when a PowerShell expression on it reads
+/// that text: `X='<8 MiB>'; bash -c "$X"; ` x 120 kept an uncharged copy of every inner
+/// script, past 3 GB. Here 40 inner scripts of 64 KiB keep none, and a PowerShell expression
+/// at either level still finds what it writes.
+#[test]
+fn a_line_keeps_its_text_only_for_a_powershell_expression_on_it() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let line = [x.as_str(), &r#"bash -c "$X"; "#.repeat(40)].concat();
+    let ran = parse_with(&line, super::opts());
+    let bash = ran.iter().filter(|c| c.name.as_deref() == Some("bash"));
+    assert_eq!(bash.count(), 40);
+    let held: usize = ran.iter().map(|c| c.line.held_bytes()).sum();
+    assert_eq!(held, 0, "lines kept text no command reads");
+    let ps =
+        r#"[IO.File]::WriteAllText('a.rs', 'x'); bash -c "[IO.File]::WriteAllText('b.rs', 'x')""#;
+    let ran = parse_with(ps, super::opts());
+    let paths: Vec<_> = ran
+        .iter()
+        .flat_map(|c| command_writes(c, cx(), &CODE))
+        .filter_map(|t| path_of(&t))
+        .collect();
+    let names: Vec<_> = paths.iter().filter_map(|p| p.rsplit('/').next()).collect();
+    assert_eq!(names, ["a.rs", "b.rs"]);
+}
+
+/// An inner script that holds a PowerShell expression keeps its text, charged to the line's
+/// budget on top of its read and its walk: here 40 scripts of 64 KiB cost 7.5 MiB, not 5.
+#[test]
+fn an_inner_line_kept_for_a_powershell_expression_is_charged() {
+    let x = ["X=a; ", &"X=$X$X; ".repeat(16)].concat();
+    let line = [x.as_str(), &r#"bash -c "[$X"; "#.repeat(40)].concat();
+    let within = |budget: usize| {
+        let guard = Guard::with_budget(budget);
+        let opts = ParseOpts {
+            paths: PathCx {
+                guard: Some(&guard),
+                ..cx()
+            },
+            ..super::opts()
+        };
+        parse_commands(&line, opts).map(|ran| {
+            let held: usize = ran.iter().map(|c| c.line.held_bytes()).sum();
+            (ran.len(), held > 40 << 16)
+        })
+    };
+    assert_eq!(within(8 << 20), Ok((80, true)));
+    assert_eq!(within(6 << 20), Err(TooLong));
+}

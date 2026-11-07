@@ -13,7 +13,7 @@ use temper_domain::{InterpreterCode, PathStyle};
 use super::code::{interpreter_code, is_interpreter};
 use super::git::git_command;
 use super::text::Text;
-use super::walk::Command;
+use super::walk::{Command, is_ps_expression};
 use super::words::{Dir, PathCx, Word, word_path_fits};
 use super::wrappers::cluster_reaches;
 
@@ -162,8 +162,7 @@ fn code_writes(c: &Command, name: &str, code: &InterpreterCode) -> Vec<Word> {
     }
     // A PowerShell expression (`[IO.File]::WriteAllText(...)`, `$x.Save(...)`); `[ -f x ]`
     // is a test.
-    let a0 = c.argv0.raw.as_str();
-    if a0.starts_with(['[', '$']) && a0 != "[" && a0 != "[[" {
+    if is_ps_expression(&c.argv0.raw) {
         let lits = c.line.code_targets(code);
         out.extend(lits.iter().map(String::as_str).map(Word::plain));
     }
