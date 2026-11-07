@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use temper_domain::Timestamp;
+use temper_domain::{ModTime, Timestamp};
 
 /// The file system, with 1.x's (Node's) semantics.
 pub trait Files {
@@ -90,6 +90,23 @@ pub trait Files {
         limit: u64,
         sink: &mut dyn io::Write,
     ) -> Result<ReadInto, FsError>;
+
+    /// Removes the file or symlink at `path`, never what a link points to; nothing there is
+    /// not an error (Node's `rmSync(path, { force: true })`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when it cannot be removed, a directory included.
+    fn remove_file(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Removes whatever is at `path`, a directory with everything below it, without following
+    /// a symlink; nothing there is not an error (Node's
+    /// `rmSync(path, { recursive: true, force: true })`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when something cannot be removed.
+    fn remove_all(&self, path: &Path) -> Result<(), FsError>;
 }
 
 /// What [`Files::read_into`] did.
@@ -106,12 +123,15 @@ pub enum ReadInto {
 }
 
 /// What [`Files::stat`] reports about a path. Fields arrive with their readers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FileMeta {
     /// What is there, after symlinks: never [`EntryKind::Symlink`].
     pub kind: EntryKind,
     /// The size in bytes.
     pub len: u64,
+    /// When it was last modified, as Node's `mtimeMs`; `None` where the platform keeps no
+    /// such time.
+    pub modified: Option<ModTime>,
 }
 
 /// One entry of a directory listing.
@@ -191,6 +211,8 @@ pub enum FsOp {
     Rename,
     /// [`Files::read_into`].
     ReadInto,
+    /// [`Files::remove_file`] and [`Files::remove_all`].
+    Remove,
 }
 
 impl fmt::Display for FsOp {
@@ -204,6 +226,7 @@ impl fmt::Display for FsOp {
             Self::Append => "append to",
             Self::CreateDir => "create directory",
             Self::Rename => "rename",
+            Self::Remove => "remove",
         })
     }
 }

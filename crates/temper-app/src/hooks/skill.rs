@@ -10,7 +10,7 @@ use temper_domain::{
 
 use super::HookCall;
 use super::input::{agent_key, given, js_string_or_empty, session_segment};
-use crate::engine::HookError;
+use crate::engine::{HookError, RunEnv};
 use crate::paths;
 use crate::ports::{Clock, Files, FsError, Ports};
 use crate::project::exists;
@@ -72,18 +72,24 @@ fn mark_skill_loaded(call: &HookCall<'_, impl Ports>) -> Result<(), FsError> {
         .write_atomic(Path::new(&marker_path(call)), &now)
 }
 
-/// `path.join(markerDir(input), 'skill-<agent key>')`, resolved against the working directory
-/// as the file system reads it: per session and agent context, independent of the project.
-fn marker_path<P>(call: &HookCall<'_, P>) -> String {
-    let env = call.env;
-    let base = match &env.plugin_data {
+/// Where the skill markers' `sessions` directory lives: 1.x's
+/// `process.env.CLAUDE_PLUGIN_DATA || path.join(os.tmpdir(), 'temper-plugin-data')`.
+pub(crate) fn markers_root(env: &RunEnv) -> String {
+    match &env.plugin_data {
         Some(dir) => dir.to_string_lossy().into_owned(),
         None => paths::join(
             env.style,
             &env.temp_dir.to_string_lossy(),
             FALLBACK_DATA_DIR,
         ),
-    };
+    }
+}
+
+/// `path.join(markerDir(input), 'skill-<agent key>')`, resolved against the working directory
+/// as the file system reads it: per session and agent context, independent of the project.
+fn marker_path<P>(call: &HookCall<'_, P>) -> String {
+    let env = call.env;
+    let base = markers_root(env);
     let sep = match env.style {
         PathStyle::Windows => '\\',
         PathStyle::Posix => '/',

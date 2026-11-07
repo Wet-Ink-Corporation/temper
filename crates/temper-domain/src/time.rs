@@ -45,6 +45,20 @@ impl Timestamp {
     pub const fn unix_millis(self) -> i64 {
         self.0
     }
+
+    /// Milliseconds since the epoch as the JS number `Date.now()` returns: exact, since a
+    /// `Date`'s range is within 2^53.
+    ///
+    /// ```
+    /// use temper_domain::Timestamp;
+    ///
+    /// assert_eq!(Timestamp::from_unix_millis(-8_640_000_000_000_000).js_millis(), -8.64e15);
+    /// assert_eq!(Timestamp::from_unix_millis(1_730_000_000_123).js_millis(), 1_730_000_000_123.0);
+    /// ```
+    #[must_use]
+    pub fn js_millis(self) -> f64 {
+        number_from_text(&self.0.to_string())
+    }
 }
 
 impl fmt::Display for Timestamp {

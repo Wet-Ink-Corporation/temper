@@ -76,11 +76,8 @@ fn create_dir_all_rename_and_stat() -> TestResult {
     StdFiles.rename(&log, &old)?;
 
     assert_eq!(
-        before,
-        Some(FileMeta {
-            kind: EntryKind::File,
-            len: 5
-        }),
+        before.map(|FileMeta { kind, len, .. }| (kind, len)),
+        Some((EntryKind::File, 5)),
         "the size"
     );
     assert_eq!(

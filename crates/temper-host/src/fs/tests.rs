@@ -8,6 +8,7 @@ use temper_app::{EntryKind, Files};
 use super::{StdFiles, read_capped_text};
 
 mod read_into;
+mod removals;
 mod writes;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;

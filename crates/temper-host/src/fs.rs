@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use temper_app::{DirEntry, EntryKind, FileMeta, Files, FsError, FsOp, ReadInto};
+use temper_domain::ModTime;
 
 /// The longest JS string, in UTF-16 code units: V8's `String::kMaxLength` on 64-bit targets,
 /// Node 22's `buffer.constants.MAX_STRING_LENGTH`. `readFileSync(path, 'utf8')` throws past it.
@@ -64,6 +65,7 @@ impl Files for StdFiles {
                     EntryKind::Other
                 },
                 len: meta.len(),
+                modified: mod_time(&meta),
             })),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(FsError::new(FsOp::Stat, path, error)),
@@ -151,6 +153,56 @@ impl Files for StdFiles {
             ReadInto::Read
         })
     }
+
+    fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(FsError::new(FsOp::Remove, path, error)),
+        }
+    }
+
+    /// The entry itself decides, never what a link points to: `remove_dir_all` for a real
+    /// directory, else the entry alone (on Windows a directory link is removed as a directory).
+    fn remove_all(&self, path: &Path) -> Result<(), FsError> {
+        let failed = |error| FsError::new(FsOp::Remove, path, error);
+        let kind = match fs::symlink_metadata(path) {
+            Ok(meta) => meta.file_type(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(failed(error)),
+        };
+        let removed = if kind.is_dir() {
+            fs::remove_dir_all(path)
+        } else {
+            match fs::remove_file(path) {
+                Err(error) if cfg!(windows) && kind.is_symlink() => {
+                    fs::remove_dir(path).map_err(|_dir| error)
+                }
+                other => other,
+            }
+        };
+        match removed {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(failed(error)),
+        }
+    }
+}
+
+/// The entry's modification time as Node's `mtimeMs`, or `None` where the platform keeps none.
+fn mod_time(meta: &fs::Metadata) -> Option<ModTime> {
+    let time = match meta.modified() {
+        Ok(time) => time,
+        // No modification time on this platform: nothing to compare.
+        Err(_unsupported) => return None,
+    };
+    let nanos = match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => i128::try_from(after.as_nanos()).ok()?,
+        Err(before) => i128::try_from(before.duration().as_nanos())
+            .ok()?
+            .checked_neg()?,
+    };
+    Some(ModTime::from_unix_nanos(nanos))
 }
 
 /// `<path>.<pid>.<nanos>.tmp`: unique per process and write, as 1.x's `<p>.<pid>.<ms>.tmp`.
