@@ -16,6 +16,13 @@ use super::{JsMap, Value, number_from_text};
 #[error("not valid JSON")]
 pub struct JsonParseError(#[source] serde_json::Error);
 
+impl JsonParseError {
+    /// `serde_json`'s description of the error, the detail D16(a) puts where 1.x prints V8's.
+    pub(crate) fn detail(&self) -> String {
+        self.0.to_string()
+    }
+}
+
 impl Value {
     /// `JSON.parse(text)`.
     ///

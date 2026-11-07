@@ -31,6 +31,7 @@ mod manifest;
 mod paths;
 mod scan;
 mod time;
+mod verdict;
 
 pub use config::{
     CargoFeatures, Config, ConfigLoad, ConfigProblem, ExemptRule, GateConfig, ReviewMode, Switch,
@@ -61,3 +62,4 @@ pub use scan::{
     is_build_script, new_hits, render_scan_text,
 };
 pub use time::Timestamp;
+pub use verdict::{DIMENSIONS, ExtractedVerdict, extract_verdict};
