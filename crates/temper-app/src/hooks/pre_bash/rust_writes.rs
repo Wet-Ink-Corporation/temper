@@ -349,11 +349,10 @@ impl<F: Files> Reader<'_, F> {
         }
         let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for f in touched {
-            let f = f
-                .strip_prefix("a/")
-                .or_else(|| f.strip_prefix("b/"))
-                .map_or_else(|| f.clone(), str::to_owned); // the stripped name is a new string
+        for mut f in touched {
+            if f.starts_with("a/") || f.starts_with("b/") {
+                f.drain(..2);
+            }
             if seen.insert(f.clone()) {
                 out.push(f); // the set and the list each hold one
             }
