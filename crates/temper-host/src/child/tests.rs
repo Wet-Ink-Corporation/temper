@@ -3,7 +3,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use temper_app::{
-    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, Stream,
+    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink,
+    Stream,
 };
 
 use super::{Captured, StdProcess, read_capped};
@@ -33,11 +34,11 @@ const GENEROUS: Limits = Limits {
 fn run(command: &[&str], limits: Limits) -> Result<ProcessOutput, ProcessError> {
     let (program, args) = command.split_first().expect("a program");
     let args: Vec<OsString> = args.iter().map(OsString::from).collect();
-    StdProcess.run(&ProcessRequest {
+    StdProcess.run(ProcessRequest {
         program,
         args: &args,
         cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
-        stdout_cap: limits.stdout_cap,
+        stdout: StdoutSink::Capture(limits.stdout_cap),
         stderr_cap: limits.stderr_cap,
         timeout: limits.timeout,
     })
@@ -149,6 +150,51 @@ fn read_capped_keeps_at_most_its_cap_and_flags_the_rest() -> TestResult {
         let got = read_capped(input, ByteCap::new(cap))?;
         assert_eq!(got, expected, "cap {cap}, input {input:?}");
     }
+    Ok(())
+}
+
+/// OC-1 A (wi-50fc9a): a streamed stdout goes to the sink, whole and uncapped, and the output
+/// holds none of it; stderr keeps its cap.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn a_streamed_stdout_goes_to_the_sink_and_stderr_keeps_its_cap() -> TestResult {
+    let args = [OsString::from("--version")];
+    let mut sink = Vec::new();
+    let output = StdProcess.run(ProcessRequest {
+        program: "git",
+        args: &args,
+        cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
+        stdout: StdoutSink::Stream(&mut sink),
+        stderr_cap: ROOMY,
+        timeout: PATIENT,
+    })?;
+    let bad = [OsString::from("--no-such-flag")];
+    let overflow = StdProcess.run(ProcessRequest {
+        program: "git",
+        args: &bad,
+        cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
+        stdout: StdoutSink::Stream(&mut Vec::new()),
+        stderr_cap: ByteCap::new(4),
+        timeout: PATIENT,
+    });
+
+    assert_eq!(
+        (output.status, output.stdout.len()),
+        (ExitKind::Code(0), 0),
+        "nothing captured"
+    );
+    assert!(sink.starts_with(b"git version "), "{sink:?}");
+    assert!(
+        matches!(
+            overflow,
+            Err(ProcessError::Overflow {
+                stream: Stream::Stderr,
+                cap: 4,
+                ..
+            })
+        ),
+        "{overflow:?}"
+    );
     Ok(())
 }
 
