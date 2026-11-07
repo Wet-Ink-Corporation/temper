@@ -527,6 +527,7 @@ impl RunEnv {
             temp_dir: PathBuf::from(temp),
             home: PathBuf::from(home),
             remote_session: None,
+            temper_base: None,
         }
     }
 }

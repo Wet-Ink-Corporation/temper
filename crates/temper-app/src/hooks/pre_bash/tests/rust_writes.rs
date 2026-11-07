@@ -164,6 +164,7 @@ fn differs(case: &JsValue, cmd: &str, ports: &FakePorts, scanner: &Scanner) -> O
         temp_dir: PathBuf::from("/tmp"),
         home: PathBuf::from(text(case, "home").unwrap_or_default()),
         remote_session: None,
+        temper_base: None,
     };
     let call = crate::hooks::HookCall {
         ports,

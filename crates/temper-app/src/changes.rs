@@ -41,11 +41,10 @@ pub(crate) fn fingerprint(
     base: Option<&str>,
 ) -> Fingerprint {
     let base = base.filter(|base| !base.is_empty());
-    let mut hasher = FingerprintHasher::new();
-    match ws.git_root() {
-        Some(git_root) => hash_git_tree(ports, env, git_root, base, &mut hasher),
-        None => hash_walked_tree(ports.files(), env, &ws.root, &mut hasher),
-    }
+    let mut hasher = match ws.git_root() {
+        Some(git_root) => hash_git_tree(ports, env, git_root, base),
+        None => hash_walked_tree(ports.files(), env, &ws.root),
+    };
     if let Some(config) = changed_gate_config(ports, env, ws, base) {
         hasher.gate_config(&config);
     }
@@ -103,14 +102,14 @@ pub(crate) fn rust_changes(
     changes
 }
 
-/// The git half of [`fingerprint`].
+/// The git half of [`fingerprint`], before the gate config.
 fn hash_git_tree(
     ports: &impl Ports,
     env: &RunEnv,
     git_root: &str,
     base: Option<&str>,
-    hasher: &mut FingerprintHasher,
-) {
+) -> FingerprintHasher {
+    let mut hasher = FingerprintHasher::new();
     let (process, at) = (ports.process(), Path::new(git_root));
     let head = git::resolve_rev(process, at, "HEAD");
     let based = base.and_then(|base| git::resolve_rev(process, at, base));
@@ -139,10 +138,12 @@ fn hash_git_tree(
             hasher.accept(content);
         }
     }
+    hasher
 }
 
-/// The walk half of [`fingerprint`], outside git.
-fn hash_walked_tree(files: &impl Files, env: &RunEnv, root: &str, hasher: &mut FingerprintHasher) {
+/// The walk half of [`fingerprint`], outside git, before the gate config.
+fn hash_walked_tree(files: &impl Files, env: &RunEnv, root: &str) -> FingerprintHasher {
+    let mut hasher = FingerprintHasher::new();
     let style = env.style;
     // 1.x keeps `RUST_RELEVANT || CHARTER` on the absolute path; `in_fingerprint` adds only
     // the relative baseline path, which no absolute path equals.
@@ -165,6 +166,7 @@ fn hash_walked_tree(files: &impl Files, env: &RunEnv, root: &str, hasher: &mut F
             hasher.accept(content);
         }
     }
+    hasher
 }
 
 /// 1.x `changedGateConfig(proj, base)`: the gate config now, when it differs from the one at

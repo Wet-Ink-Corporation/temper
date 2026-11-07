@@ -20,12 +20,14 @@ mod ports;
 mod project;
 mod relpath;
 mod scan;
+mod session;
 mod state;
+mod status;
 mod telemetry;
 
 pub use engine::{
     CommandError, CommandOutput, Engine, Exit, HookError, OutputFormat, RunEnv, ScanArgs,
-    ScanTargets,
+    ScanTargets, StatusArgs,
 };
 pub use hooks::{HookInput, HookInputError};
 pub use ports::{

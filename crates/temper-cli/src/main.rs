@@ -1,9 +1,9 @@
 //! The `temper` binary: the composition root of the 2.0 port.
 //!
 //! Until the 2.0.0 cutover it answers `--version`, the usage text, `temper scan --all`,
-//! `temper scan FILES..` and `temper hook post-tool`, `user-prompt`, `pre-edit` and `pre-bash`; nothing
-//! routes to it yet, and every 1.x subcommand still runs in the Node engine
-//! (`scripts/temper.mjs`).
+//! `temper scan FILES..`, `temper status` (text) and `temper hook post-tool`, `user-prompt`,
+//! `pre-edit` and `pre-bash`; the launcher routes only the hooks in its `RUST_READY` to it,
+//! and every other 1.x subcommand still runs in the Node engine (`scripts/temper.mjs`).
 
 mod args;
 mod hook_io;
@@ -13,10 +13,11 @@ mod wire;
 use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
-use args::{Command, USAGE, UsageExit};
+use args::{Command, StatusUsage, USAGE, UsageExit};
 use output::Exit;
-use temper_app::{CommandError, HookInput, ScanArgs};
-use temper_domain::{HookEvent, HookOutcome, UnknownHookEvent};
+use temper_app::{CommandError, CommandOutput, Engine, HookInput};
+use temper_domain::{HookEvent, HookOutcome, STATUS_USAGE, UnknownHookEvent};
+use temper_host::HostPorts;
 
 fn main() -> ExitCode {
     let exit = match args::parse(std::env::args_os().skip(1)) {
@@ -27,19 +28,22 @@ fn main() -> ExitCode {
         ),
         Command::Usage(UsageExit::Requested) => output::emit(USAGE, "", Exit::Success),
         Command::Usage(UsageExit::Unknown) => output::emit(USAGE, "", Exit::Usage),
-        Command::Scan(args) => scan(&args),
+        Command::Scan(args) => command(|engine| engine.scan(&args)),
         Command::Hook(event) => hook(event),
+        Command::Status(Ok(args)) => command(|engine| engine.status(&args)),
+        Command::Status(Err(StatusUsage)) => output::emit("", STATUS_USAGE, Exit::Usage),
     };
     exit.into()
 }
 
-/// `temper scan`: the engine's output, its refusal (1.x's stderr line and exit), or a failure.
-fn scan(args: &ScanArgs) -> Exit {
+/// `temper scan` or `status`: the engine's output, its refusal (1.x's stderr line and exit),
+/// or a failure.
+fn command(run: impl FnOnce(&Engine<HostPorts>) -> Result<CommandOutput, CommandError>) -> Exit {
     let engine = match wire::engine() {
         Ok(engine) => engine,
         Err(error) => return output::fail(&error),
     };
-    match engine.scan(args) {
+    match run(&engine) {
         Ok(out) => output::emit(&out.stdout, &out.stderr, out.exit.into()),
         Err(CommandError::Refused { exit, message }) => {
             output::emit("", &format!("{message}\n"), exit.into())
