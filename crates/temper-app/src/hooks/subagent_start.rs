@@ -7,9 +7,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use temper_domain::{
-    ContextEvent, Fingerprint, HookOutcome, JsValue, OtherTree, ReviewerExtras, SubagentStartFacts,
-    Target, TelemetryEvent, earlier_review, is_reviewer, skill_preloaded, subagent_start_context,
-    tree_gate_command,
+    CachedGate, ContextEvent, Fingerprint, HookOutcome, JsValue, OtherTree, ReviewerExtras,
+    SubagentStartFacts, Target, TelemetryEvent, earlier_review, is_reviewer, skill_preloaded,
+    subagent_start_context, tree_gate_command,
 };
 
 use super::plans::list_plans;
@@ -91,6 +91,17 @@ enum Role {
     Worker,
 }
 
+impl Role {
+    /// The role of temper's agent `agent_type`.
+    fn of(agent_type: &str) -> Self {
+        if is_reviewer(agent_type) {
+            Self::Reviewer
+        } else {
+            Self::Worker
+        }
+    }
+}
+
 /// What every tree's gate command depends on (1.x `gateIn`'s closure).
 struct GateIn {
     command: String,
@@ -129,11 +140,7 @@ fn context(
 ) -> Result<String, HookError> {
     let HookCall { ports, env, input } = *call;
     let (files, process, style) = (ports.files(), ports.process(), env.style);
-    let role = if is_reviewer(agent_type) {
-        Role::Reviewer
-    } else {
-        Role::Worker
-    };
+    let role = Role::of(agent_type);
     let linked = ws
         .git_root()
         .is_some_and(|root| git::is_linked(process, style, root));
@@ -153,6 +160,9 @@ fn context(
         linked,
         role,
     };
+    // Where 1.x builds the gate line, so a red record it cannot read throws before the other
+    // worktrees, the earlier verdict and the diff stat are read (#210 review F3).
+    let gate = CachedGate::of(gate.as_ref())?;
     let listed = listed(call, ws, &also, &gate_in);
     let others = other_trees(&also, &listed);
     let (earlier, stat) = match role {
@@ -177,7 +187,7 @@ fn context(
         base,
         fingerprint: fp,
         changes: &changes,
-        gate: gate.as_ref(),
+        gate: &gate,
         gate_command: &target_gate,
         plans: &plans,
         also: &others,
@@ -186,7 +196,7 @@ fn context(
             diff_stat: &stat,
         }),
     };
-    Ok(subagent_start_context(&facts)?)
+    Ok(subagent_start_context(&facts))
 }
 
 /// 1.x `treeLabel(main, tree)`: `t`'s path relative to this checkout when inside it, else its

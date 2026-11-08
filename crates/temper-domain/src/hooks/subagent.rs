@@ -2,6 +2,8 @@
 //! on, its scope, fingerprint, gate and plans, the session's other changed worktrees, and for
 //! a reviewer what its verdict must say.
 
+use std::borrow::Cow;
+
 use crate::js::JsTypeError;
 use crate::{Fingerprint, GateRecord};
 
@@ -51,6 +53,36 @@ pub struct ReviewerExtras<'a> {
     pub diff_stat: &'a str,
 }
 
+/// The cached gate as the context names it: 1.x's
+/// `g ? (g.ok ? 'green' : `red (${failed})`) : 'not run yet'`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CachedGate {
+    /// No gate record for the fingerprint, or a falsy one.
+    NotRun,
+    /// A record whose `ok` is truthy.
+    Green,
+    /// Any other record, with its failed steps' names joined by `, `.
+    Red(String),
+}
+
+impl CachedGate {
+    /// The gate line's state for `gate`, as `cachedGate` read it. 1.x evaluates it where it
+    /// builds the line, before the other worktrees, the earlier verdict and the diff stat, so
+    /// a caller evaluates it there too (#210 review F3).
+    ///
+    /// # Errors
+    ///
+    /// [`JsTypeError`] where 1.x's `g.steps.filter(…)` throws on a red gate record
+    /// ([`GateRecord::failed_steps`]), outside any `try` (F5).
+    pub fn of(gate: Option<&GateRecord>) -> Result<Self, JsTypeError> {
+        Ok(match gate.filter(|g| g.is_present()) {
+            Some(g) if g.ok() => Self::Green,
+            Some(g) => Self::Red(g.failed_steps()?),
+            None => Self::NotRun,
+        })
+    }
+}
+
 /// What [`subagent_start_context`] says.
 #[derive(Debug, Clone, Copy)]
 pub struct SubagentStartFacts<'a> {
@@ -66,8 +98,8 @@ pub struct SubagentStartFacts<'a> {
     pub fingerprint: Fingerprint,
     /// The target's Rust changes.
     pub changes: &'a [String],
-    /// The cached gate for the fingerprint, as `cachedGate` read it.
-    pub gate: Option<&'a GateRecord>,
+    /// The cached gate for the fingerprint.
+    pub gate: &'a CachedGate,
     /// The target's gate command, from [`tree_gate_command`].
     pub gate_command: &'a str,
     /// The newest plans (1.x `listPlans`).
@@ -97,12 +129,8 @@ pub fn tree_gate_command(gate_command: &str, base_to_name: Option<&str>, reviewe
 }
 
 /// 1.x `subagentStart`'s context text, byte for byte, without a final newline.
-///
-/// # Errors
-///
-/// [`JsTypeError`] where 1.x's `g.steps.filter(…)` throws on a red gate record
-/// ([`GateRecord::failed_steps`]), outside any `try` (F5).
-pub fn subagent_start_context(facts: &SubagentStartFacts<'_>) -> Result<String, JsTypeError> {
+#[must_use]
+pub fn subagent_start_context(facts: &SubagentStartFacts<'_>) -> String {
     let base = facts.base.unwrap_or("");
     let mut lines = vec![format!("temper context for {}:", facts.agent_type)];
     let scope_dir = match facts.target {
@@ -133,10 +161,10 @@ pub fn subagent_start_context(facts: &SubagentStartFacts<'_>) -> Result<String, 
         facts.changes.len(),
         if listed.is_empty() { "none" } else { &listed }
     ));
-    let gate = match facts.gate.filter(|g| g.is_present()) {
-        Some(g) if g.ok() => "green".to_owned(),
-        Some(g) => format!("red ({})", g.failed_steps()?),
-        None => "not run yet".to_owned(),
+    let gate = match facts.gate {
+        CachedGate::Green => Cow::Borrowed("green"),
+        CachedGate::Red(failed) => Cow::Owned(format!("red ({failed})")),
+        CachedGate::NotRun => Cow::Borrowed("not run yet"),
     };
     lines.push(format!(
         "- Gate for this fingerprint: {gate}. Gate command: {}",
@@ -151,7 +179,7 @@ pub fn subagent_start_context(facts: &SubagentStartFacts<'_>) -> Result<String, 
     if let Some(reviewer) = facts.reviewer {
         push_reviewer_lines(&mut lines, facts, reviewer);
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 /// 1.x's `- Also changed in this session: …` line for another worktree.
