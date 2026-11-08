@@ -4,8 +4,8 @@ use std::path::Path;
 
 use temper_domain::{
     ContextEvent, EnvExports, Fingerprint, GateRecord, HookOutcome, JsValue, PathStyle,
-    SessionStartFacts, TelemetryEvent, TreeState, env_file_lines, session_start_context,
-    with_runtime_warnings,
+    SessionStartFacts, SessionState, TelemetryEvent, TreeState, env_file_lines,
+    session_start_context, with_runtime_warnings,
 };
 
 use super::lost_gates::log_lost_gates;
@@ -34,8 +34,9 @@ const FRESH: [&str; 3] = ["startup", "clear", "fork"];
 /// [`HookError::NullInput`] for `null` input; [`HookError::Files`] when the base or the tree
 /// record cannot be written, as 1.x's `writeAtomic` throws (fail-open F1); and
 /// [`HookError::InputType`] when the session id is a value 1.x's `sessionDir` throws on,
-/// before anything is written, or when the recorded review's `verdict` is a value 1.x's
-/// template literal throws on.
+/// before anything is written, when the recorded review's `verdict` is a value 1.x's template
+/// literal throws on, before the telemetry row, or when the agent id is a value 1.x's
+/// `agentKey` throws on, after the row and the lost gates.
 pub(crate) fn session_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
     let HookCall { ports, env, input } = *call;
     input.require_object("cwd")?;
@@ -62,31 +63,29 @@ pub(crate) fn session_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutco
     let base = base_rev(ports, style, &ws, &sid);
     let base = base.as_deref();
     write_env_file(ports, env, base);
-    let tree = TreeRecords::read(ports, env, &ws, base);
-    let gate_command = gate_command(env);
-    // 1.x builds the state line, which can throw, before its telemetry row, and reads the skill
-    // marker after its lost gates, which never touch the markers.
-    let text = session_start_context(&SessionStartFacts {
-        skill_loaded: skill_loaded(call)?,
-        gate_command: &gate_command,
-        cli_exported: cli_path(env).is_some(),
-        base,
-        state: tree.state(),
-        config_problem: ws.config_problem.as_ref(),
-    })?;
+    // 1.x builds the state line, which can throw, before its telemetry row and lost gates, and
+    // reads the skill marker, which can throw on the agent id, only after them.
+    let state = SessionState::new(&TreeRecords::read(ports, env, &ws, base).state())?;
     let event = TelemetryEvent::SessionStart {
         source: source.map(JsValue::to_json),
     };
-    let context = HookOutcome::Context {
-        event: ContextEvent::SessionStart,
-        text,
-    };
-    let outcome = with_runtime_warnings(context, &env.runtime_warnings);
-    Ok(logged_then(call, &ws, &event, || {
+    logged_then(call, &ws, &event, || -> Result<HookOutcome, HookError> {
         // Best effort, as 1.x's `catch`: what it logged changes nothing in the answer.
         let _logged = log_lost_gates(call, &ws);
-        outcome
-    }))
+        let text = session_start_context(&SessionStartFacts {
+            skill_loaded: skill_loaded(call)?,
+            gate_command: &gate_command(env),
+            cli_exported: cli_path(env).is_some(),
+            base,
+            state: &state,
+            config_problem: ws.config_problem.as_ref(),
+        });
+        let context = HookOutcome::Context {
+            event: ContextEvent::SessionStart,
+            text,
+        };
+        Ok(with_runtime_warnings(context, &env.runtime_warnings))
+    })
 }
 
 /// The tree against the session base, as 1.x reads it for the context's last line: the Rust

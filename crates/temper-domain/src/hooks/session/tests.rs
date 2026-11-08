@@ -3,7 +3,7 @@ use crate::js::Value;
 use crate::{ConfigProblem, Fingerprint, GateRecord, PathStyle};
 
 use super::{
-    EnvExports, SessionStartFacts, TreeState, env_file_lines, session_start_context,
+    EnvExports, SessionStartFacts, SessionState, TreeState, env_file_lines, session_start_context,
     with_runtime_warnings,
 };
 
@@ -28,7 +28,7 @@ fn text_1x(loaded: &str, gate: &str, alias: &str, tail: &str) -> String {
 
 const ALIAS: &str = r#" (also available as: node "$TEMPER_CLI" gate)"#;
 
-fn facts(state: TreeState<'_>) -> SessionStartFacts<'_> {
+fn facts(state: &SessionState) -> SessionStartFacts<'_> {
     SessionStartFacts {
         skill_loaded: false,
         gate_command: GATE,
@@ -43,15 +43,19 @@ fn fp() -> Fingerprint {
     "0123456789abcdef".parse().expect("hex")
 }
 
+fn no_changes() -> SessionState {
+    SessionState::new(&TreeState::NoChanges).expect("no throw")
+}
+
 #[test]
 fn the_context_is_1x_s_with_no_changes_and_without_git() {
-    let clean = session_start_context(&facts(TreeState::NoChanges)).expect("no throw");
+    let state = no_changes();
+    let clean = session_start_context(&facts(&state));
     let no_git = session_start_context(&SessionStartFacts {
         skill_loaded: true,
         base: None,
-        ..facts(TreeState::NoChanges)
-    })
-    .expect("no throw");
+        ..facts(&state)
+    });
 
     assert_eq!(
         clean,
@@ -95,7 +99,9 @@ fn changes_report_the_gate_and_the_review_as_1x_does() {
             fingerprint: fp(),
         };
 
-        let text = session_start_context(&facts(state)).expect("no throw");
+        let state = SessionState::new(&state).expect("no throw");
+
+        let text = session_start_context(&facts(&state));
 
         let tail = format!(
             "{HEAD}. Current state: 2 Rust file(s) changed; {said} (fingerprint 0123456789abcdef)."
@@ -123,7 +129,7 @@ fn a_review_verdict_with_a_to_string_key_throws_as_in_1x() {
         fingerprint: fp(),
     };
 
-    let error = session_start_context(&facts(state)).expect_err("1.x throws");
+    let error = SessionState::new(&state).expect_err("1.x throws");
     assert!(
         error.to_string().contains("toString"),
         "Cannot convert object to primitive value: {error}"
@@ -132,12 +138,12 @@ fn a_review_verdict_with_a_to_string_key_throws_as_in_1x() {
 
 #[test]
 fn without_a_plugin_root_the_gate_command_is_temper_gate_with_no_alias() {
+    let state = no_changes();
     let text = session_start_context(&SessionStartFacts {
         gate_command: "temper gate",
         cli_exported: false,
-        ..facts(TreeState::NoChanges)
-    })
-    .expect("no throw");
+        ..facts(&state)
+    });
 
     assert!(
         text.contains("\n- Gate command: temper gate. It runs cargo fmt,"),
@@ -148,11 +154,11 @@ fn without_a_plugin_root_the_gate_command_is_temper_gate_with_no_alias() {
 #[test]
 fn a_config_problem_adds_oc5_s_line_after_the_base_line() {
     let problem = ConfigProblem::NotAnObject;
+    let state = no_changes();
     let text = session_start_context(&SessionStartFacts {
         config_problem: Some(&problem),
-        ..facts(TreeState::NoChanges)
-    })
-    .expect("no throw");
+        ..facts(&state)
+    });
 
     let tail = format!(
         "{HEAD}. Current state: no Rust changes since the session base.\n- Config: unreadable ({problem}): defaults in use."

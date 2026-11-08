@@ -62,14 +62,14 @@ fn logged(
     }
 }
 
-/// The outcome `then` gives, after a telemetry row for `event`: `then` may log rows of its own,
-/// which follow this one.
-fn logged_then(
+/// What `then` gives (an outcome, or a result when it can fail as 1.x throws after the row),
+/// after a telemetry row for `event`: `then` may log rows of its own, which follow this one.
+fn logged_then<T>(
     call: &HookCall<'_, impl Ports>,
     workspace: &Workspace,
     event: &TelemetryEvent,
-    then: impl FnOnce() -> HookOutcome,
-) -> HookOutcome {
+    then: impl FnOnce() -> T,
+) -> T {
     match telemetry::log(call, workspace, event) {
         // Best effort, as in `logged`.
         Ok(()) | Err(_) => then(),
