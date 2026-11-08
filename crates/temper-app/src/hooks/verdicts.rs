@@ -126,3 +126,6 @@ pub(super) fn store_verdict(
         Ok(()) | Err(_) => Ok(()),
     }
 }
+
+#[cfg(test)]
+mod tests;

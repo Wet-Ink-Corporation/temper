@@ -12,11 +12,13 @@ use super::input::given;
 use super::verdicts::{Checked, check_verdict, invalid_detail, store_verdict};
 use super::{HookCall, logged, logged_then};
 use crate::engine::HookError;
+use crate::memo::{GitMemo, MemoPorts};
 use crate::ports::Ports;
 use crate::project::Workspace;
 
 /// 1.x `preHandback(input)`, in its order: the `handback` row for any agent type, then for the
-/// reviewer the verdict in `tool_input.message`, denied with its problems or stored.
+/// reviewer the verdict in `tool_input.message`, denied with its problems or stored. Git's
+/// answers are memoised for the run ([`GitMemo`], 3f-17).
 ///
 /// # Errors
 ///
@@ -25,6 +27,14 @@ use crate::project::Workspace;
 /// agent id) or while checking the verdict; [`HookError::Files`] when storing a valid verdict
 /// fails (F3).
 pub(crate) fn pre_handback(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
+    // One memo per run: checking and storing a verdict resolve the same trees (3f-17).
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(call.ports, &memo);
+    let call = &HookCall {
+        ports: &ports,
+        env: call.env,
+        input: call.input,
+    };
     let input = call.input;
     input.require_object("cwd")?;
     let Some(ws) = call.workspace() else {

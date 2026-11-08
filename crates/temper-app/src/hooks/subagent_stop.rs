@@ -14,6 +14,7 @@ use super::transcript::report_from_transcript;
 use super::verdicts::{Checked, check_verdict, invalid_detail, store_verdict};
 use super::{HookCall, agent_key, logged, logged_then, session_segment};
 use crate::engine::HookError;
+use crate::memo::{GitMemo, MemoPorts};
 use crate::paths;
 use crate::ports::{Files, Ports};
 use crate::project::Workspace;
@@ -21,7 +22,8 @@ use crate::session::session_dir;
 use crate::state::read_js_text;
 
 /// 1.x `subagentStop(input)`, in its order: the row before the type is filtered (#97), then
-/// for the reviewer its verdict, and for the implementer [`HookError::NotPorted`].
+/// for the reviewer its verdict, and for the implementer [`HookError::NotPorted`]. Git's
+/// answers are memoised for the run ([`GitMemo`], 3f-17).
 ///
 /// # Errors
 ///
@@ -31,6 +33,14 @@ use crate::state::read_js_text;
 /// the hand-back's hash file cannot be removed or a valid verdict cannot be stored (F4);
 /// [`HookError::NotPorted`] for the implementer.
 pub(crate) fn subagent_stop(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
+    // One memo per run: checking and storing a verdict resolve the same trees (3f-17).
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(call.ports, &memo);
+    let call = &HookCall {
+        ports: &ports,
+        env: call.env,
+        input: call.input,
+    };
     let input = call.input;
     input.require_object("agent_type")?;
     let Some(ws) = call.workspace() else {
