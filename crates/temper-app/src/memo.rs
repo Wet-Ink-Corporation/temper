@@ -172,6 +172,7 @@ impl<R: ProcessRunner> ProcessRunner for MemoProcess<'_, R> {
         let StdoutSink::Capture(stdout_cap) = request.stdout else {
             return self.inner.run(request);
         };
+        // The key owns copies of the arguments and directory: the memo stores it.
         let key = Key {
             args: request.args.to_vec(),
             cwd: request.cwd.to_path_buf(),
