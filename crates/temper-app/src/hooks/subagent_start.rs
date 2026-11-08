@@ -3,7 +3,6 @@
 
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
@@ -20,7 +19,7 @@ use crate::changes::{diff_stat, fingerprint, rust_changes};
 use crate::engine::HookError;
 use crate::git;
 use crate::paths::{self, PathEnv};
-use crate::ports::{ByteCap, Ports, ProcessRequest, ProcessRunner, StdoutSink};
+use crate::ports::{Ports, ProcessRequest, ProcessRunner, StderrSink, StdoutSink};
 use crate::project::Workspace;
 use crate::relpath::rel_to;
 use crate::session::base_rev;
@@ -29,8 +28,6 @@ use crate::trees::{Checkout, DueTree, Scope, Tree, Widen, due_trees, note_tree, 
 
 /// `cargo fmt --all`'s timeout for a reviewer's tree (1.x's `timeoutMs: 120000`).
 const FMT_TIMEOUT: Duration = Duration::from_secs(120);
-/// The cap on `cargo fmt`'s stderr: 1.x `run`'s `maxBuffer`.
-const FMT_CAP: ByteCap = ByteCap::new(256 * 1024 * 1024);
 
 /// 1.x `subagentStart(input)`, in its order: the telemetry row for any agent type, the tree
 /// record, then for temper's agents the target tree and its context. A reviewer started in the
@@ -304,16 +301,17 @@ fn format_trees(process: &impl ProcessRunner, target: &Tree<'_>, also: &[DueTree
     }
 }
 
-/// `cargo fmt --all` in `root`, its output discarded, with 1.x's 120 s timeout.
+/// `cargo fmt --all` in `root`, with 1.x's 120 s timeout. 1.x never reads its output, so both
+/// streams go to the null device: past the timeout, a `rustfmt` that outlives the killed
+/// `cargo` holds no pipe a reader waits on (review F2, H-13).
 fn format_tree(process: &impl ProcessRunner, root: &str) -> Formatted {
     let args = [OsString::from("fmt"), OsString::from("--all")];
-    let mut discard = io::sink();
     let request = ProcessRequest {
         program: "cargo",
         args: &args,
         cwd: Path::new(root),
-        stdout: StdoutSink::Stream(&mut discard),
-        stderr_cap: FMT_CAP,
+        stdout: StdoutSink::Null,
+        stderr: StderrSink::Null,
         timeout: FMT_TIMEOUT,
     };
     match process.run(request) {

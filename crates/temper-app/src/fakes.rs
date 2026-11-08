@@ -12,7 +12,7 @@ use temper_domain::{ModTime, PathStyle, Timestamp};
 use crate::engine::RunEnv;
 use crate::ports::{
     Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports, ProcessError,
-    ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
+    ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StderrSink, StdoutSink, Stream,
 };
 
 /// A file tree held as text paths in one [`PathStyle`]. A directory exists when a file is below
@@ -480,6 +480,11 @@ impl ProcessRunner for FakeProcess {
                 stdout: stdout.as_bytes().to_vec(),
                 stderr: Vec::new(),
             }),
+            (Some(Reply::Exit { status, .. }), StdoutSink::Null) => Ok(ProcessOutput {
+                status: *status,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            }),
             (Some(Reply::Exit { status, stdout }), StdoutSink::Stream(sink)) => {
                 // Two writes, so a sink sees its input split as a pipe splits it.
                 let (head, tail) = stdout.as_bytes().split_at(stdout.len() / 2);
@@ -498,11 +503,12 @@ impl ProcessRunner for FakeProcess {
             (Some(Reply::Overflows(stream)), stdout) => Err(ProcessError::Overflow {
                 program,
                 stream: *stream,
-                cap: match (stream, stdout) {
-                    (Stream::Stdout, StdoutSink::Capture(cap)) => cap.get(),
-                    // A streamed stdout has no cap; the fake reports none.
-                    (Stream::Stdout, StdoutSink::Stream(_)) => usize::MAX,
-                    (Stream::Stderr, _) => request.stderr_cap.get(),
+                cap: match (stream, stdout, request.stderr) {
+                    (Stream::Stdout, StdoutSink::Capture(cap), _)
+                    | (Stream::Stderr, _, StderrSink::Capture(cap)) => cap.get(),
+                    // A streamed or null stream has no cap; the fake reports none.
+                    (Stream::Stdout, StdoutSink::Stream(_) | StdoutSink::Null, _)
+                    | (Stream::Stderr, _, StderrSink::Null) => usize::MAX,
                 },
             }),
             (Some(Reply::SpawnFails) | None, _) => Err(ProcessError::Spawn {

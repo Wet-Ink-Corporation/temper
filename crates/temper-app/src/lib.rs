@@ -35,5 +35,6 @@ pub use engine::{
 pub use hooks::{HookInput, HookInputError};
 pub use ports::{
     ByteCap, Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports,
-    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
+    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StderrSink, StdoutSink,
+    Stream,
 };
