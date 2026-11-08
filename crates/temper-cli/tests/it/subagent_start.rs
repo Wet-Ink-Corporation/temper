@@ -112,7 +112,7 @@ pub(crate) fn fingerprint(dir: &Path, sid: &str) -> Result<String, Box<dyn std::
 }
 
 /// 1.x `r.gate(ok)`: the cached gate record for fingerprint `fp`.
-fn seed_gate(dir: &Path, fp: &str, ok: bool) -> TestResult {
+pub(crate) fn seed_gate(dir: &Path, fp: &str, ok: bool) -> TestResult {
     let gate = state(dir).join("gate");
     fs::create_dir_all(&gate)?;
     let summary = if ok { "clean" } else { "error: seeded failure" };

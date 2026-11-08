@@ -10,6 +10,7 @@ mod session_start;
 mod shell;
 mod skill;
 mod subagent_start;
+mod subagent_stop;
 mod transcript;
 mod verdicts;
 
@@ -48,7 +49,8 @@ pub(crate) fn run<P: Ports>(
         HookEvent::SessionStart => session_start::session_start(call),
         HookEvent::SubagentStart => subagent_start::subagent_start(call),
         HookEvent::PreHandback => pre_handback::pre_handback(call),
-        HookEvent::Stop | HookEvent::SubagentStop => Err(HookError::NotPorted { event }),
+        HookEvent::SubagentStop => subagent_stop::subagent_stop(call),
+        HookEvent::Stop => Err(HookError::NotPorted { event }),
     }
 }
 

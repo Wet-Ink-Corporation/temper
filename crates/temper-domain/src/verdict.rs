@@ -10,7 +10,7 @@ mod summary;
 mod texts;
 mod valid;
 
-pub use extract::{ExtractedVerdict, extract_verdict};
+pub use extract::{ExtractedVerdict, extract_verdict, extract_verdict_from};
 pub use history::recorded_after;
 pub use problems::{
     GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds, verdict_problems,

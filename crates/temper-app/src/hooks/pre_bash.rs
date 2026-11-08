@@ -87,7 +87,7 @@ fn merged(own: HookOutcome, rest: HookOutcome) -> HookOutcome {
                     Some(text)
                 }
                 HookOutcome::Ask { context, .. } | HookOutcome::Deny { context, .. } => context,
-                HookOutcome::Pass | HookOutcome::Notice { .. } => None,
+                HookOutcome::Pass | HookOutcome::Notice { .. } | HookOutcome::Block { .. } => None,
             };
             let joined: Vec<String> = [context, own_context]
                 .into_iter()

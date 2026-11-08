@@ -28,7 +28,7 @@ impl ContextEvent {
     }
 }
 
-/// A hook's answer. The block shape arrives with `stop` (port Phase 4).
+/// A hook's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookOutcome {
     /// No output: the action proceeds unremarked.
@@ -58,6 +58,11 @@ pub enum HookOutcome {
     Notice {
         /// The message.
         message: String,
+    },
+    /// The subagent may not stop yet (`SubagentStop`, `decision: "block"`): 1.x `block`.
+    Block {
+        /// Why, for the model.
+        reason: String,
     },
     /// Text for the model's context and a message for the human, as 1.x's
     /// `withRuntimeWarnings` spreads them: `hookSpecificOutput` first, then `systemMessage`.
@@ -101,6 +106,8 @@ impl HookOutcome {
     /// let notice = HookOutcome::Notice { message: "hi".to_owned() };
     /// assert_eq!(notice.to_json().as_deref(), Some(r#"{"systemMessage":"hi"}"#));
     /// assert_eq!(HookOutcome::Pass.to_json(), None);
+    /// let block = HookOutcome::Block { reason: "fix it".to_owned() };
+    /// assert_eq!(block.to_json().as_deref(), Some(r#"{"decision":"block","reason":"fix it"}"#));
     /// ```
     #[must_use]
     pub fn to_json(&self) -> Option<String> {
@@ -123,6 +130,10 @@ impl HookOutcome {
             )),
             Self::Deny { reason, context } => Some(decision("deny", reason, context.as_deref())),
             Self::Ask { reason, context } => Some(decision("ask", reason, context.as_deref())),
+            Self::Block { reason } => Some(format!(
+                r#"{{"decision":"block","reason":{}}}"#,
+                json_string(reason)
+            )),
             Self::Notice { message } => {
                 Some(format!(r#"{{"systemMessage":{}}}"#, json_string(message)))
             }

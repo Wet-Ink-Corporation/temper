@@ -9,6 +9,7 @@ mod session_start;
 mod status;
 mod status_json;
 mod subagent_start;
+mod subagent_stop;
 mod subagent_worktrees;
 #[cfg(test)]
 mod support;

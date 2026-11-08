@@ -3,7 +3,7 @@
 
 use crate::js::Value;
 
-use super::super::{ExtractedVerdict, extract_verdict};
+use super::super::{ExtractedVerdict, extract_verdict, extract_verdict_from, verdict_hash};
 use super::{verdict, verdict_json};
 
 const V: &str = r#"{"temper_verdict":1,"verdict":"approved"}"#;
@@ -145,4 +145,41 @@ fn a_report_of_many_fences_is_read_in_one_pass() {
         "x".repeat(1 << 20)
     );
     assert_eq!(parsed(&text), Some(Value::from_json(V).expect("JSON")));
+}
+
+#[test]
+fn a_report_of_any_json_value_is_read_as_1x_s_extract_verdict_reads_it() {
+    let block = format!("```json\n{V}\n```");
+    let report = Value::String(block);
+    assert_eq!(
+        extract_verdict_from(Some(&report)),
+        Ok(Some(ExtractedVerdict::Parsed(
+            Value::from_json(V).expect("JSON")
+        )))
+    );
+    // `if (!text) return null`: nothing, an empty string, 0 and false have no verdict
+    for falsy in ["\"\"", "0", "-0", "false", "null"] {
+        let value = Value::from_json(falsy).expect("JSON");
+        assert_eq!(extract_verdict_from(Some(&value)), Ok(None), "{falsy}");
+    }
+    assert_eq!(extract_verdict_from(None), Ok(None));
+    // anything else truthy has no `matchAll`, which 1.x calls, so it throws
+    for truthy in ["5", "true", "[]", "{}", "[\"x\"]"] {
+        let value = Value::from_json(truthy).expect("JSON");
+        assert!(extract_verdict_from(Some(&value)).is_err(), "{truthy}");
+    }
+}
+
+#[test]
+fn an_unparseable_verdict_hashes_as_1x_s_parse_error_object() {
+    let bad = ExtractedVerdict::Unparseable {
+        message: "x".to_owned(),
+    };
+    // `verdictHash({ __parseError: 'x' })`, printed by Node 22.
+    assert_eq!(bad.hash(), "5a5c8c690d0b29e0");
+    let value = Value::from_json(V).expect("JSON");
+    assert_eq!(
+        ExtractedVerdict::Parsed(value.clone()).hash(),
+        verdict_hash(&value)
+    );
 }

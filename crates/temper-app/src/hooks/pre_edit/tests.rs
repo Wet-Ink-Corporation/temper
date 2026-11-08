@@ -161,6 +161,7 @@ fn decision(outcome: &HookOutcome) -> &'static str {
         HookOutcome::Context { .. } | HookOutcome::ContextWithNotice { .. } => "context",
         HookOutcome::Pass => "none",
         HookOutcome::Notice { .. } => "notice",
+        HookOutcome::Block { .. } => "block",
     }
 }
 
@@ -173,6 +174,7 @@ fn reason(outcome: &HookOutcome) -> String {
         HookOutcome::Context { text, .. } | HookOutcome::ContextWithNotice { text, .. } => {
             format!("\n{text}")
         }
+        HookOutcome::Block { reason } => format!("{reason}\n"),
         HookOutcome::Pass | HookOutcome::Notice { .. } => "\n".to_owned(),
     }
 }

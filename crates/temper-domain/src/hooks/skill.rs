@@ -60,6 +60,24 @@ pub fn is_reviewer(agent_type: &str) -> bool {
     agent_is(agent_type, "rust-reviewer")
 }
 
+/// Is an agent of `agent_type` temper's implementer, bare or `<plugin>:`-prefixed (1.x
+/// `IMPLEMENTER` on `input.agent_type ?? ''`)?
+///
+/// # Examples
+///
+/// ```
+/// use temper_domain::is_implementer;
+///
+/// assert!(is_implementer("temper:rust-implementer"));
+/// assert!(is_implementer("rust-implementer"));
+/// assert!(!is_implementer("xrust-implementer"));
+/// assert!(!is_implementer("rust-implementer\n"));
+/// ```
+#[must_use]
+pub fn is_implementer(agent_type: &str) -> bool {
+    agent_is(agent_type, "rust-implementer")
+}
+
 /// 1.x `/(^|:)<name>$/`.
 fn agent_is(agent_type: &str, name: &str) -> bool {
     agent_type

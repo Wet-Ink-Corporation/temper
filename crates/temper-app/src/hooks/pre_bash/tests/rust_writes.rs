@@ -132,6 +132,7 @@ fn answer(outcome: &HookOutcome) -> (&'static str, Option<&str>, Option<&str>) {
         HookOutcome::Deny { reason, context } => ("deny", Some(reason), some(context.as_ref())),
         HookOutcome::Context { text, .. } => ("context", None, Some(text)),
         HookOutcome::Notice { message } => ("notice", Some(message), None),
+        HookOutcome::Block { reason } => ("block", Some(reason), None),
         HookOutcome::ContextWithNotice { text, notice, .. } => {
             ("context", Some(notice), Some(text))
         }
