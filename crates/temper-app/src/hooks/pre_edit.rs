@@ -3,9 +3,9 @@
 //! refused, Rust edits wait for the skill, and the edit's result goes through the domain's
 //! policy: the protected-config ask, the manifest checks and the new-hit scan.
 //!
-//! 1.x's `noteTree` (the `tree-*.json` record of a Rust or manifest edit in a git repository
-//! with a session id) arrives in port Phase 3 with the fingerprint, and `pre-edit` graduates
-//! then (2-2). Without git or a session id it writes nothing, as here.
+//! A Rust or manifest edit first records its checkout for the session (1.x's `noteTree`,
+//! `tree-*.json`, port Phase 3e), before the skill gate; without git or a session id nothing
+//! is recorded.
 
 mod edited;
 
@@ -29,6 +29,7 @@ use crate::paths::{self, PathEnv};
 use crate::ports::{Files, Ports};
 use crate::project::{Workspace, crate_of};
 use crate::relpath::rel_to;
+use crate::trees::note_tree;
 
 /// V8's text when a non-string reaches `path.resolve`.
 const PATH_NOT_A_STRING: &str = "The \"paths[0]\" argument must be of type string";
@@ -132,7 +133,11 @@ fn checked(
     // 1.x's case-sensitive `rel.endsWith('.rs')`.
     let rust = rel.strip_suffix(".rs").is_some();
     let manifest = is_named(rel, "Cargo.toml");
-    // 1.x notes the tree here (`noteTree`); that waits for port Phase 3 (2-2).
+    if rust || manifest {
+        // 1.x's `noteTree`, before the skill gate: a write failure fails the hook open, which
+        // lets the edit through unchecked, as in 1.x (F2).
+        note_tree(call, workspace)?;
+    }
     let config = &workspace.config;
     if (rust || manifest) && config.skill_gate() && !preloaded(call) && !skill_loaded(call) {
         // The row stores the path.
