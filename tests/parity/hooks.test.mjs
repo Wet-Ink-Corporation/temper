@@ -118,7 +118,10 @@ for (const c of cases) {
     if (c.stdout) assert.deepEqual(node.out.map((s) => s.stdout), c.stdout, 'the pinned stdout');
     if (c.wrote) assert.deepEqual(Object.keys(node.files).sort(), [...c.wrote].sort(), 'the pinned files');
     for (const [rel, parts] of Object.entries(c.has ?? {})) for (const p of parts) assert.ok(node.files[rel]?.includes(p), `${rel} has ${p}`);
-    for (const [rel, parts] of Object.entries(c.lacks ?? {})) for (const p of parts) assert.ok(!node.files[rel]?.includes(p), `${rel} lacks ${p}`);
+    for (const [rel, parts] of Object.entries(c.lacks ?? {})) {
+      assert.ok(rel in node.files, `${rel} was written`);
+      for (const p of parts) assert.ok(!node.files[rel].includes(p), `${rel} lacks ${p}`);
+    }
     const slow = rust.ms.filter((ms) => ms >= BUDGET_MS);
     assert.deepEqual(slow, [], `a Rust step took ${BUDGET_MS} ms or more (OC-4 A)`);
   });
