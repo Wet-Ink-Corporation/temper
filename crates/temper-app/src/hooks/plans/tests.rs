@@ -17,9 +17,19 @@ fn plan(files: FakeFiles, name: &str, ms: i128) -> FakeFiles {
 
 #[test]
 fn the_five_newest_markdown_plans_ties_in_directory_order() {
-    let files = [("a.md", 5), ("b.md", 9), ("c.txt", 99), ("d.md", 5), ("e.md", 1), ("f.md", 7), ("g.md", 8)]
-        .into_iter()
-        .fold(FakeFiles::new(Posix), |files, (name, ms)| plan(files, name, ms));
+    let files = [
+        ("a.md", 5),
+        ("b.md", 9),
+        ("c.txt", 99),
+        ("d.md", 5),
+        ("e.md", 1),
+        ("f.md", 7),
+        ("g.md", 8),
+    ]
+    .into_iter()
+    .fold(FakeFiles::new(Posix), |files, (name, ms)| {
+        plan(files, name, ms)
+    });
     let ports = FakePorts::new(files);
 
     assert_eq!(
@@ -37,9 +47,24 @@ fn the_five_newest_markdown_plans_ties_in_directory_order() {
 
 #[test]
 fn any_stat_failure_or_no_directory_gives_none() {
-    let dangling = plan(FakeFiles::new(Posix), "a.md", 5).with_link(&format!("{PLANS}/x.md"), "/nowhere");
-    let files = dangling.with_listing(PLANS, &[("a.md", crate::ports::EntryKind::File), ("x.md", crate::ports::EntryKind::Symlink)]);
+    let dangling =
+        plan(FakeFiles::new(Posix), "a.md", 5).with_link(&format!("{PLANS}/x.md"), "/nowhere");
+    let files = dangling.with_listing(
+        PLANS,
+        &[
+            ("a.md", crate::ports::EntryKind::File),
+            ("x.md", crate::ports::EntryKind::Symlink),
+        ],
+    );
 
-    assert_eq!(list_plans(&files, Posix, "/w"), Vec::<String>::new(), "a dangling x.md");
-    assert_eq!(list_plans(&FakeFiles::new(Posix), Posix, "/w"), Vec::<String>::new(), "no dir");
+    assert_eq!(
+        list_plans(&files, Posix, "/w"),
+        Vec::<String>::new(),
+        "a dangling x.md"
+    );
+    assert_eq!(
+        list_plans(&FakeFiles::new(Posix), Posix, "/w"),
+        Vec::<String>::new(),
+        "no dir"
+    );
 }

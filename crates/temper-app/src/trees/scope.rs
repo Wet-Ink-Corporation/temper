@@ -108,7 +108,9 @@ pub(crate) fn own_tree(
     };
     let widened = match session.base.as_deref().filter(|b| !b.is_empty()) {
         Some(from) => {
-            widen == Widen::ToSessionBase && from != base && git::is_ancestor(process, at, from, &base)
+            widen == Widen::ToSessionBase
+                && from != base
+                && git::is_ancestor(process, at, from, &base)
         }
         None => false,
     };

@@ -47,7 +47,11 @@ impl Git<'_> {
                 ROOT,
                 ran(&format!("{BASE}\n")),
             )
-            .answering(&["git", "rev-parse", "HEAD"], ROOT, ran(&format!("{HEAD}\n")))
+            .answering(
+                &["git", "rev-parse", "HEAD"],
+                ROOT,
+                ran(&format!("{HEAD}\n")),
+            )
             .answering(
                 &["git", "symbolic-ref", "--short", "-q", "HEAD"],
                 ROOT,
@@ -157,7 +161,11 @@ fn the_main_agent_entering_a_linked_worktree_widens_to_the_session_base() {
 
     let rec = record(&ports, "main");
     assert_eq!(rec.get("head"), Some(&JsValue::String(BASE.to_owned())));
-    assert_eq!(rec.get("startFp"), Some(&JsValue::Null), "no starting point");
+    assert_eq!(
+        rec.get("startFp"),
+        Some(&JsValue::Null),
+        "no starting point"
+    );
     assert_eq!(rec.get("branch"), Some(&JsValue::String("wt".to_owned())));
 }
 
@@ -201,7 +209,11 @@ fn the_scope_is_not_widened_for_an_agent_a_session_record_or_a_base_not_held() {
         let ports = ports(with_base(files), git);
         note(&ports, &workspace(true), input).expect("written");
         let rec = record(&ports, agent);
-        assert_eq!(rec.get("head"), Some(&JsValue::String(HEAD.to_owned())), "{why}");
+        assert_eq!(
+            rec.get("head"),
+            Some(&JsValue::String(HEAD.to_owned())),
+            "{why}"
+        );
         let fp = fingerprint_from(&ports, HEAD);
         assert_eq!(rec.get("startFp"), Some(&JsValue::String(fp)), "{why}");
     }
@@ -239,7 +251,10 @@ fn without_git_or_a_session_id_nothing_is_written() {
 
 #[test]
 fn a_write_failure_is_the_handler_s_error() {
-    let ports = ports(FakeFiles::new(Posix).with_read_only(SESSION), &MAIN_CHECKOUT);
+    let ports = ports(
+        FakeFiles::new(Posix).with_read_only(SESSION),
+        &MAIN_CHECKOUT,
+    );
 
     let error = note(&ports, &workspace(true), r#"{"session_id":"s1"}"#);
 

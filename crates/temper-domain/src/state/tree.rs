@@ -96,7 +96,14 @@ mod tests {
     #[test]
     fn root_is_a_truthy_string_and_anything_else_truthy_fails() {
         assert_eq!(record(r#"{"root":"/w"}"#).root(), Ok(Some("/w")));
-        for falsy in [r#"{"root":""}"#, r#"{"root":0}"#, "{}", "null", r#""/w""#, "[1]"] {
+        for falsy in [
+            r#"{"root":""}"#,
+            r#"{"root":0}"#,
+            "{}",
+            "null",
+            r#""/w""#,
+            "[1]",
+        ] {
             assert_eq!(record(falsy).root(), Ok(None), "{falsy}");
         }
         for odd in [r#"{"root":5}"#, r#"{"root":["/w"]}"#, r#"{"root":true}"#] {
@@ -107,16 +114,28 @@ mod tests {
     #[test]
     fn the_head_is_read_as_1x_s_template_literal_reads_it() {
         assert_eq!(
-            record(r#"{"head":"abc"}"#).head_rev().ok().flatten().as_deref(),
+            record(r#"{"head":"abc"}"#)
+                .head_rev()
+                .ok()
+                .flatten()
+                .as_deref(),
             Some("abc")
         );
         assert_eq!(
-            record(r#"{"head":12}"#).head_rev().ok().flatten().as_deref(),
+            record(r#"{"head":12}"#)
+                .head_rev()
+                .ok()
+                .flatten()
+                .as_deref(),
             Some("12")
         );
         assert!(record(r#"{"head":{"toString":1}}"#).head_rev().is_err());
         assert!(!record(r#"{"head":""}"#).has_head());
-        assert!(record(r#"{"head":null}"#).head_rev().is_ok_and(|h| h.is_none()));
+        assert!(
+            record(r#"{"head":null}"#)
+                .head_rev()
+                .is_ok_and(|h| h.is_none())
+        );
     }
 
     #[test]
@@ -125,7 +144,11 @@ mod tests {
         assert_eq!(record(r#"{"startFp":5}"#).start_fp(), None);
         let (a, b) = (record(r#"{"at":"10"}"#), record(r#"{"at":"9"}"#));
         assert_eq!(a.earlier_than(&b), Ok(true), "two strings by code unit");
-        assert_eq!(record(r#"{"at":10}"#).earlier_than(&b), Ok(false), "as numbers");
+        assert_eq!(
+            record(r#"{"at":10}"#).earlier_than(&b),
+            Ok(false),
+            "as numbers"
+        );
         assert_eq!(record("{}").earlier_than(&b), Ok(false), "undefined is NaN");
     }
 }

@@ -10,6 +10,7 @@ mod outcome;
 mod session;
 mod setup;
 mod skill;
+mod subagent;
 mod telemetry;
 
 pub use bash::{
@@ -34,6 +35,10 @@ pub use session::{
 };
 pub use setup::PolicySetupError;
 pub use skill::{SKILL_NOT_LOADED, SkillVia, is_reviewer, skill_load_via, skill_preloaded};
+pub use subagent::{
+    OtherTree, ReviewerExtras, SubagentStartFacts, Target, subagent_start_context,
+    tree_gate_command,
+};
 pub use telemetry::{
     ProtectedChange, ShellAskVia, ShellDenyVia, ShellWriteFile, TelemetryEvent, TelemetryRow,
 };
