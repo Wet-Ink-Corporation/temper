@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wet-Ink-Corporation/temper/docs/contracts/schemas/rust.check-gate-config-1.schema.json",
+  "title": "rust.check-gate-config/1",
+  "description": "Compares the keys of .claude/temper.json that steer temper, at base and head; any difference the base does not admit by exact base and head value is a finding (assay `temper/gate_config.rs`, temper#172 ask 5). The result envelope is redkiln SPEC CLI-01 to CLI-04. Proposed: no temper release implements it yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "command",
+    "data",
+    "findings",
+    "proves",
+    "does_not_prove"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rust.check-gate-config/1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "true exactly when the exit code is 0, which is exactly when findings is empty"
+    },
+    "command": {
+      "const": "check gate-config"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "base",
+        "head",
+        "keys"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "gate",
+              "scanner",
+              "manifests",
+              "protected",
+              "review",
+              "skillGate",
+              "preapprovedDependencies",
+              "askOnNewDependency"
+            ]
+          },
+          "description": "The .claude/temper.json keys compared"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(gate-config|unreadable):",
+            "description": "<kind>:<stable subject>, stable across runs"
+          },
+          "message": {
+            "type": "string",
+            "pattern": "^[^\\n]*$"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "note"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "description": "worktree-relative path, optionally :line or :line:col"
+          }
+        }
+      }
+    },
+    "proves": {
+      "type": "string"
+    },
+    "does_not_prove": {
+      "type": "string"
+    }
+  }
+}

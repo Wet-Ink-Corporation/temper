@@ -1,0 +1,28 @@
+{
+  "schema": "rust.check-raised/1",
+  "ok": false,
+  "command": "check raised",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "raises": [
+      {
+        "crate": "fixture",
+        "lint": "clippy::unwrap_used",
+        "from": 1,
+        "to": 2
+      }
+    ],
+    "crates_changed": []
+  },
+  "findings": [
+    {
+      "key": "raised:fixture/clippy::unwrap_used",
+      "message": "fixture: clippy::unwrap_used rose from 1 to 2",
+      "severity": "error",
+      "at": ".claude/temper-baseline.json"
+    }
+  ],
+  "proves": "the baseline at head records no (crate, lint) count above base's, no new entry and no crate added or moved",
+  "does_not_prove": "that the code has no new findings: run baseline --check for that"
+}

@@ -2,6 +2,8 @@
 
 This repository is temper itself: the Claude Code plugin that ships the rust-craft standard and its enforcement. It is also the `temper` marketplace that users install from. This file is for anyone working **on** temper, human or agent. The README explains how to **use** temper.
 
+**temper is moving into redkiln.** It becomes Redkiln Rust (`rk-rust` 2.0) in the `Wet-Ink-Corporation/redkiln` monorepo, through a history-preserving import of `main` (wi-187aa7), after redkiln's Core 1.0. The 2.0 port is paused after Phase 3 (wi-14cf95); start no Phase 4 work here. At the import this file becomes `docs/rust/charter.md`. The repository-only parts (the vendored-copy steps, the ruleset, the release checklist, the CI commands) are superseded by redkiln's root charter. [`docs/plans/redkiln-move.md`](docs/plans/redkiln-move.md) is the import manifest.
+
 ## `main` is what users get
 
 New marketplace installs and the claude.ai organization sync get whatever `main` holds. An existing marketplace install moves only when `plugin.json`'s version changes. Every merge to `main` reaches some users, so keep it releasable.
@@ -23,7 +25,8 @@ New marketplace installs and the claude.ai organization sync get whatever `main`
 | `templates/example-workspace/` | A complete reference workspace that passes its own gate. Its `.claude/temper/` is a vendored copy of `scripts/`. |
 | `tests/` | Node unit tests, Python consistency checks, e2e scripts, fixtures. `tests/parity/` is the 1.x-against-Rust differential harness of the 2.0 port, deleted at cutover (its `README.md`) |
 | `evals/` | `claude plugin eval` cases |
-| `docs/plans/` | Live plans: `v1-readiness.md` (the road to v1) and `temper-2-rust-port.md` (the 2.0 port) |
+| `docs/plans/` | Live plans: `v1-readiness.md` (the road to v1), `temper-2-rust-port.md` (the 2.0 port, paused after Phase 3) and `redkiln-move.md` (the import manifest for the move into redkiln) |
+| `docs/contracts/` | Contracts other products build against: the `rust.*` event map and the `check` subcommands' JSON |
 | `docs/history/` | Specs, reviews, findings and the decision log behind each release |
 | `.kb/_intake/decisions/` | Weigh-In decision records (generated; see below) |
 | `.claude-plugin/` | `plugin.json` (the version lives here) and `marketplace.json` (lists `temper` and `temper-lens`) |

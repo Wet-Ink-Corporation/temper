@@ -1,0 +1,13 @@
+{
+  "schema": "rust.check-tests/1",
+  "ok": true,
+  "command": "check tests",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "files": 14
+  },
+  "findings": [],
+  "proves": "no test was dropped, conditioned or ignored and no manifest test switch changed, except as the base admits",
+  "does_not_prove": "that the remaining tests are meaningful or pass"
+}

@@ -1,0 +1,29 @@
+{
+  "schema": "rust.check-gate-config/1",
+  "ok": false,
+  "command": "check gate-config",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "keys": [
+      "gate",
+      "scanner",
+      "manifests",
+      "protected",
+      "review",
+      "skillGate",
+      "preapprovedDependencies",
+      "askOnNewDependency"
+    ]
+  },
+  "findings": [
+    {
+      "key": "gate-config:gate",
+      "message": "`gate` changed and the base does not admit the change",
+      "severity": "error",
+      "at": ".claude/temper.json"
+    }
+  ],
+  "proves": "the .claude/temper.json keys that steer temper are unchanged from base, or changed only as the base admits",
+  "does_not_prove": "that the base configuration itself is sound"
+}

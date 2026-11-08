@@ -1,0 +1,14 @@
+{
+  "schema": "rust.check-exceptions/1",
+  "ok": true,
+  "command": "check exceptions",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "allowlist": ".assay/exceptions.toml",
+    "admitted": 1
+  },
+  "findings": [],
+  "proves": "every ask-level scan hit in the head tree is admitted by the base allowlist, every #[expect] names one lint, and the scan saw every Rust file",
+  "does_not_prove": "that the admitted exceptions are justified, or that rustc agrees with the scan (temper#190's backstop)"
+}

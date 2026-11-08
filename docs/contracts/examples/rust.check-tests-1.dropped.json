@@ -1,0 +1,26 @@
+{
+  "schema": "rust.check-tests/1",
+  "ok": false,
+  "command": "check tests",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "files": 14
+  },
+  "findings": [
+    {
+      "key": "test-inventory:src/parse.rs",
+      "message": "src/parse.rs: unconditional tests fell from 6 to 5",
+      "severity": "error",
+      "at": "src/parse.rs"
+    },
+    {
+      "key": "manifest-switch:crates/core/Cargo.toml/harness",
+      "message": "crates/core/Cargo.toml sets harness = false on a test target",
+      "severity": "error",
+      "at": "crates/core/Cargo.toml"
+    }
+  ],
+  "proves": "no test was dropped, conditioned or ignored and no manifest test switch changed, except as the base admits",
+  "does_not_prove": "that the remaining tests are meaningful or pass"
+}

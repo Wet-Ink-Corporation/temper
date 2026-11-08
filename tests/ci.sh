@@ -40,6 +40,10 @@ python3 tests/registry.py
 step "lint and scanner claims"
 python3 tests/lint-claims.py
 
+step "contracts: examples valid against their schemas"
+python3 tests/contracts.py --self-test
+python3 tests/contracts.py
+
 step "rule map is current"
 python3 tests/gen_rulemap.py --check
 

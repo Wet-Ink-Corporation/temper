@@ -1,0 +1,27 @@
+{
+  "schema": "rust.check-exceptions/1",
+  "ok": false,
+  "command": "check exceptions",
+  "data": {
+    "base": "5e1f0b9c2d3a4e5f60718293a4b5c6d7e8f90a1b",
+    "head": "c0ffee0000000000000000000000000000000002",
+    "allowlist": null,
+    "admitted": 0
+  },
+  "findings": [
+    {
+      "key": "exception:src/legacy.rs/clippy::unwrap_used",
+      "message": "#[expect(clippy::unwrap_used)] is not admitted by the base allowlist",
+      "severity": "error",
+      "at": "src/legacy.rs:3"
+    },
+    {
+      "key": "blind-spot:src/lib.rs/include",
+      "message": "include!(\"gen.rs\") brings in Rust the scan cannot see",
+      "severity": "error",
+      "at": "src/lib.rs:12"
+    }
+  ],
+  "proves": "every ask-level scan hit in the head tree is admitted by the base allowlist, every #[expect] names one lint, and the scan saw every Rust file",
+  "does_not_prove": "that the admitted exceptions are justified, or that rustc agrees with the scan (temper#190's backstop)"
+}
