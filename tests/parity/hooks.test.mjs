@@ -97,11 +97,11 @@ function assertD17(rust, node, writes) {
   assert.equal(rust.d17, 2 * writes, `D17: two lines per env-file write (${writes})`);
 }
 
-test('the hook cases: unique names, known fixtures, and the 3e floor of 191 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 26, subagent-start: 20)', () => {
+test('the hook cases: unique names, known fixtures, and the 3e floor of 192 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 27, subagent-start: 20)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 191, `${cases.length} cases`);
+  assert.ok(cases.length >= 192, `${cases.length} cases`);
 });
 
 for (const c of cases) {
@@ -117,6 +117,8 @@ for (const c of cases) {
     assertD17(rust, node, c.envFileWrites ?? 0);
     if (c.stdout) assert.deepEqual(node.out.map((s) => s.stdout), c.stdout, 'the pinned stdout');
     if (c.wrote) assert.deepEqual(Object.keys(node.files).sort(), [...c.wrote].sort(), 'the pinned files');
+    for (const [rel, parts] of Object.entries(c.has ?? {})) for (const p of parts) assert.ok(node.files[rel]?.includes(p), `${rel} has ${p}`);
+    for (const [rel, parts] of Object.entries(c.lacks ?? {})) for (const p of parts) assert.ok(!node.files[rel]?.includes(p), `${rel} lacks ${p}`);
     const slow = rust.ms.filter((ms) => ms >= BUDGET_MS);
     assert.deepEqual(slow, [], `a Rust step took ${BUDGET_MS} ms or more (OC-4 A)`);
   });

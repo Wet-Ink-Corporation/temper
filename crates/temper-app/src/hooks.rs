@@ -64,8 +64,8 @@ fn logged(
     }
 }
 
-/// What `then` gives (an outcome, or the rest of a handler), after a telemetry row for `event`:
-/// `then` may log rows of its own, which follow this one.
+/// What `then` gives (an outcome, or a result when it can fail as 1.x throws after the row),
+/// after a telemetry row for `event`: `then` may log rows of its own, which follow this one.
 fn logged_then<T>(
     call: &HookCall<'_, impl Ports>,
     workspace: &Workspace,

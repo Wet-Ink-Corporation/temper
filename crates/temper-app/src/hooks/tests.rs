@@ -155,6 +155,27 @@ fn hooks_fail_on_a_session_id_1x_cannot_convert_and_write_nothing() {
     assert_eq!(outcomes, untouched, "1.x's `String(sid)` throws first");
 }
 
+/// 1.x's `sessionStart` writes its telemetry row and logs the lost gates before
+/// `skillLoaded`, the first call that throws on an agent id `String` cannot convert.
+#[test]
+fn session_start_logs_its_row_before_an_agent_id_1x_cannot_convert_fails_it() {
+    let ports = FakePorts::new(workspace(&[]));
+    let env = env_with_data(Some("/data"));
+    let json = r#"{"session_id":"s1","cwd":"/ws","source":"startup","agent_id":{"toString":1}}"#;
+
+    let failed = run(&ports, &env, HookEvent::SessionStart, &input(json));
+
+    assert!(
+        matches!(failed, Err(HookError::InputType(_))),
+        "1.x's `agentKey` throws in `skillLoaded`: {failed:?}"
+    );
+    let rows = ports.files.text("/ws/target/temper/telemetry.jsonl");
+    assert!(
+        rows.is_some_and(|rows| rows.contains(r#""event":"session-start""#)),
+        "the row is written first"
+    );
+}
+
 #[test]
 fn empty_input_reads_as_an_empty_object_and_bad_json_is_an_error() {
     let parsed = ["", "{}", " ", "{"].map(|text| HookInput::parse(text).is_ok());

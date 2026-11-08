@@ -30,7 +30,7 @@ pub use lost_gate::{
 };
 pub use outcome::{ContextEvent, HookOutcome};
 pub use session::{
-    EnvExports, SessionStartFacts, TreeState, env_file_lines, session_start_context,
+    EnvExports, SessionStartFacts, SessionState, TreeState, env_file_lines, session_start_context,
     with_runtime_warnings,
 };
 pub use setup::PolicySetupError;

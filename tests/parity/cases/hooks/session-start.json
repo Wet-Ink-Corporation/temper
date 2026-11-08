@@ -657,7 +657,72 @@
       }
     ],
     "event": "session-start",
-    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}",
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/",
+      "tree/.git/temper/sessions/s1/base",
+      "tree/.git/temper/sessions/s1/start-fp",
+      "tree/.git/temper/sessions/s1/started",
+      "tree/.git/temper/telemetry.jsonl"
+    ],
+    "lacks": {
+      "tree/.git/temper/telemetry.jsonl": [
+        "\"event\":\"gate-lost\""
+      ]
+    }
+  },
+  {
+    "name": "an agent id 1.x's String() throws on fails the hook after its telemetry row and lost gates (Invariant 4)",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/telemetry.jsonl": "{\"t\":\"2026-01-01T00:00:00.000Z\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":<DEADPID>,\"timeoutMs\":1200000}\n"
+        }
+      }
+    ],
+    "maskFailure": 1,
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\",\"agent_id\":{\"toString\":1}}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook session-start failed: <MSG>\"}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/",
+      "tree/.git/temper/sessions/",
+      "tree/.git/temper/sessions/s1/",
+      "tree/.git/temper/sessions/s1/base",
+      "tree/.git/temper/sessions/s1/gate-lost-2147483646-1767225600000",
+      "tree/.git/temper/sessions/s1/start-fp",
+      "tree/.git/temper/sessions/s1/started",
+      "tree/.git/temper/telemetry.jsonl"
+    ],
+    "has": {
+      "tree/.git/temper/telemetry.jsonl": [
+        "\"event\":\"session-start\"",
+        "\"event\":\"gate-lost\""
+      ]
+    }
   },
   {
     "name": "an unreadable config adds OC-5's line (masked) and uses the defaults",

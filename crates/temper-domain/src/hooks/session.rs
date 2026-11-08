@@ -116,6 +116,26 @@ pub enum TreeState<'a> {
     },
 }
 
+/// 1.x's `state`, the context's last words, rendered on its own.
+///
+/// 1.x builds it, where its template literal can throw, before its telemetry row and lost
+/// gates, and reads the skill marker only after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionState(String);
+
+impl SessionState {
+    /// `no Rust changes since the session base`, or `${n} Rust file(s) changed; gate …;
+    /// review … (fingerprint …)`.
+    ///
+    /// # Errors
+    ///
+    /// [`JsTypeError`] where 1.x's template literal throws on the review's `verdict` (an object
+    /// with its own `toString` key), outside any `try`, so the hook fails.
+    pub fn new(state: &TreeState<'_>) -> Result<Self, JsTypeError> {
+        tree_state(state).map(Self)
+    }
+}
+
 /// What [`session_start_context`] says.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionStartFacts<'a> {
@@ -127,8 +147,8 @@ pub struct SessionStartFacts<'a> {
     pub cli_exported: bool,
     /// The session base, `None` outside git.
     pub base: Option<&'a str>,
-    /// The tree against the base.
-    pub state: TreeState<'a>,
+    /// The tree against the base, as the context's last words.
+    pub state: &'a SessionState,
     /// What was wrong with `.claude/temper.json`, for OC-5's line.
     pub config_problem: Option<&'a ConfigProblem>,
 }
@@ -136,13 +156,10 @@ pub struct SessionStartFacts<'a> {
 /// 1.x `sessionStart`'s context text, byte for byte, without a final newline.
 ///
 /// When the config could not be read, OC-5's `- Config: unreadable (<why>): defaults in use.` (owner,
-/// wi-018023). Without `TEMPER_CLI` exported, the gate command has no alias (OC-6 A).
-///
-/// # Errors
-///
-/// [`JsTypeError`] where 1.x's template literal throws on the review's `verdict` (an object
-/// with its own `toString` key), outside any `try`, so the hook fails.
-pub fn session_start_context(facts: &SessionStartFacts<'_>) -> Result<String, JsTypeError> {
+/// wi-018023). Without `TEMPER_CLI` exported, the gate command has no alias (OC-6 A). The one
+/// part that can throw in 1.x, the state, is [`SessionState`]'s.
+#[must_use]
+pub fn session_start_context(facts: &SessionStartFacts<'_>) -> String {
     let loaded = if facts.skill_loaded {
         "is loaded in this session"
     } else {
@@ -164,7 +181,7 @@ pub fn session_start_context(facts: &SessionStartFacts<'_>) -> Result<String, Js
         format!(
             "- Session base revision: {}. Current state: {}.",
             facts.base.unwrap_or("none (no git)"),
-            tree_state(&facts.state)?
+            facts.state.0
         ),
     ];
     if let Some(problem) = facts.config_problem {
@@ -172,7 +189,7 @@ pub fn session_start_context(facts: &SessionStartFacts<'_>) -> Result<String, Js
             "- Config: unreadable ({problem}): defaults in use."
         ));
     }
-    Ok(lines.join("\n"))
+    lines.join("\n")
 }
 
 /// 1.x's `state`: `${n} Rust file(s) changed; gate …; review … (fingerprint …)`.
