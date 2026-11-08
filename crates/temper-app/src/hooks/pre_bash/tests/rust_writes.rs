@@ -132,6 +132,9 @@ fn answer(outcome: &HookOutcome) -> (&'static str, Option<&str>, Option<&str>) {
         HookOutcome::Deny { reason, context } => ("deny", Some(reason), some(context.as_ref())),
         HookOutcome::Context { text, .. } => ("context", None, Some(text)),
         HookOutcome::Notice { message } => ("notice", Some(message), None),
+        HookOutcome::ContextWithNotice { text, notice, .. } => {
+            ("context", Some(notice), Some(text))
+        }
     }
 }
 
@@ -158,16 +161,8 @@ fn input_of(case: &JsValue, cmd: &str) -> HookInput {
 fn differs(case: &JsValue, cmd: &str, ports: &FakePorts, scanner: &Scanner) -> Option<String> {
     let input = input_of(case, cmd);
     let env = RunEnv {
-        cwd: PathBuf::from("/"),
-        style: Posix,
-        plugin_data: None,
-        temp_dir: PathBuf::from("/tmp"),
         home: PathBuf::from(text(case, "home").unwrap_or_default()),
-        remote_session: None,
-        temper_base: None,
-        pid: 4242,
-        plugin_version: None,
-        disabled: false,
+        ..RunEnv::at("/", Posix)
     };
     let call = crate::hooks::HookCall {
         ports,

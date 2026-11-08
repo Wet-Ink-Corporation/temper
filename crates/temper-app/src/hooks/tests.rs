@@ -58,7 +58,8 @@ fn agent_key_and_session_segment_follow_1x() {
         .iter()
         .map(|(json, _, _)| {
             let input = input(json);
-            (agent_key(&input), session_segment(&input))
+            let segment = session_segment(&input).expect("each case converts");
+            (agent_key(&input).expect("each case converts"), segment)
         })
         .collect();
     let want: Vec<(String, String)> = cases
@@ -69,6 +70,109 @@ fn agent_key_and_session_segment_follow_1x() {
     assert_eq!(
         got, want,
         "per UTF-16 unit, as `.replace(/[^\\w.-]/g, '_')`"
+    );
+}
+
+/// `String(session_id)` throws on an object with its own `toString` key, also inside an
+/// array (Invariant 4), where `sessionDir` and `markerDir` convert it.
+#[test]
+fn a_session_id_1x_cannot_convert_is_an_error() {
+    let ids = [
+        r#"{"toString":1}"#,
+        r#"[{"toString":1}]"#,
+        r#"{"a":{"toString":1}}"#,
+    ];
+
+    let converted = ids.map(|id| {
+        let input = input(&format!(r#"{{"session_id":{id}}}"#));
+        session_segment(&input).is_ok()
+    });
+
+    assert_eq!(
+        converted,
+        [false, false, true],
+        "only an own `toString` key, at the top or in an array, throws"
+    );
+}
+
+/// `agentKey`'s `String(agent_id)` throws as `sessionDir`'s does, where `markerDir` names
+/// the skill marker (Invariant 4).
+#[test]
+fn an_agent_id_1x_cannot_convert_is_an_error_and_the_marker_is_not_written() {
+    let ports = FakePorts::new(FakeFiles::new(Posix));
+    let env = env_with_data(Some("/data"));
+
+    let failed = post_tool(
+        &ports,
+        &env,
+        r#"{"tool_name":"Skill","session_id":"s1","agent_id":{"toString":1},"tool_input":{"skill":"rust-craft"}}"#,
+    );
+
+    assert!(
+        matches!(failed, Err(HookError::InputType(_))),
+        "1.x's `agentKey` throws: {failed:?}"
+    );
+    assert_eq!(ports.files.paths(), Vec::<String>::new(), "no marker");
+}
+
+/// Every hook that names the session's directory fails where 1.x's `sessionDir` or
+/// `markerDir` throws, and writes nothing (Invariant 4).
+#[test]
+fn hooks_fail_on_a_session_id_1x_cannot_convert_and_write_nothing() {
+    let sid = r#""session_id":{"toString":1},"cwd":"/ws""#;
+    let calls = [
+        (
+            HookEvent::SessionStart,
+            format!(r#"{{{sid},"source":"startup"}}"#),
+        ),
+        (HookEvent::UserPrompt, format!("{{{sid}}}")),
+        (
+            HookEvent::PostTool,
+            format!(r#"{{{sid},"tool_name":"Skill","tool_input":{{"skill":"rust-craft"}}}}"#),
+        ),
+        (
+            HookEvent::PreEdit,
+            format!(
+                r#"{{{sid},"tool_name":"Write","tool_input":{{"file_path":"/ws/src/lib.rs","content":""}}}}"#
+            ),
+        ),
+    ];
+    let env = env_with_data(Some("/data"));
+
+    let outcomes: Vec<(bool, Vec<String>)> = calls
+        .iter()
+        .map(|(event, json)| {
+            let ports = FakePorts::new(workspace(&[]));
+            let failed = matches!(
+                run(&ports, &env, *event, &input(json)),
+                Err(HookError::InputType(_))
+            );
+            (failed, ports.files.paths())
+        })
+        .collect();
+
+    let untouched = vec![(true, vec!["/ws/Cargo.toml".to_owned()]); calls.len()];
+    assert_eq!(outcomes, untouched, "1.x's `String(sid)` throws first");
+}
+
+/// 1.x's `sessionStart` writes its telemetry row and logs the lost gates before
+/// `skillLoaded`, the first call that throws on an agent id `String` cannot convert.
+#[test]
+fn session_start_logs_its_row_before_an_agent_id_1x_cannot_convert_fails_it() {
+    let ports = FakePorts::new(workspace(&[]));
+    let env = env_with_data(Some("/data"));
+    let json = r#"{"session_id":"s1","cwd":"/ws","source":"startup","agent_id":{"toString":1}}"#;
+
+    let failed = run(&ports, &env, HookEvent::SessionStart, &input(json));
+
+    assert!(
+        matches!(failed, Err(HookError::InputType(_))),
+        "1.x's `agentKey` throws in `skillLoaded`: {failed:?}"
+    );
+    let rows = ports.files.text("/ws/target/temper/telemetry.jsonl");
+    assert!(
+        rows.is_some_and(|rows| rows.contains(r#""event":"session-start""#)),
+        "the row is written first"
     );
 }
 

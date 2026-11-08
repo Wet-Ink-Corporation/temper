@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use temper_domain::{PathStyle, Timestamp};
+use temper_domain::{ModTime, PathStyle, Timestamp};
 
 use crate::engine::RunEnv;
 use crate::ports::{
@@ -37,6 +37,10 @@ pub(crate) struct FakeFiles {
     read_only: Vec<String>,
     /// Paths that hold something other than a file or directory: a FIFO, a socket, a device.
     specials: Vec<String>,
+    /// Modification times `stat` reports, by path; a path without one reports none.
+    mtimes: RefCell<BTreeMap<String, ModTime>>,
+    /// Sizes `stat` reports instead of the text's length, so a test needs no large text.
+    lens: BTreeMap<String, u64>,
     /// How many times `real_path` was asked.
     real_paths: Cell<usize>,
     /// How many bytes of path `real_path` was asked about, which a real `realpath` reads.
@@ -54,6 +58,8 @@ impl FakeFiles {
             unresolvable: Vec::new(),
             read_only: Vec::new(),
             specials: Vec::new(),
+            mtimes: RefCell::new(BTreeMap::new()),
+            lens: BTreeMap::new(),
             real_paths: Cell::new(0),
             real_path_bytes: Cell::new(0),
         }
@@ -119,6 +125,18 @@ impl FakeFiles {
     /// `path` holds a FIFO, a socket or a device: it exists, and is neither file nor directory.
     pub(crate) fn with_special(mut self, path: &str) -> Self {
         self.specials.push(path.to_owned());
+        self
+    }
+
+    /// `stat` of `path` reports `modified` as its modification time.
+    pub(crate) fn with_mtime(self, path: &str, modified: ModTime) -> Self {
+        self.mtimes.borrow_mut().insert(path.to_owned(), modified);
+        self
+    }
+
+    /// `stat` of `path` reports `len` bytes, whatever its text.
+    pub(crate) fn with_len(mut self, path: &str, len: u64) -> Self {
+        self.lens.insert(path.to_owned(), len);
         self
     }
 
@@ -270,9 +288,15 @@ impl Files for FakeFiles {
             None if self.is_dir(&real) => (EntryKind::Dir, 0),
             None => return Ok(None),
         };
+        let len = self
+            .lens
+            .get(&real)
+            .copied()
+            .unwrap_or_else(|| u64::try_from(len).unwrap_or(u64::MAX));
         Ok(Some(FileMeta {
             kind,
-            len: u64::try_from(len).unwrap_or(u64::MAX),
+            len,
+            modified: self.mtimes.borrow().get(&real).copied(),
         }))
     }
 
@@ -354,6 +378,39 @@ impl Files for FakeFiles {
             None if self.is_dir(&real) => Ok(ReadInto::NotAFile),
             None => Ok(ReadInto::NotFound),
         }
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), FsError> {
+        let real = self.unlinked(&text_of(path));
+        self.check_writable(FsOp::Remove, &real)?;
+        if self.files.borrow_mut().remove(&real).is_some() {
+            self.mtimes.borrow_mut().remove(&real);
+            Ok(())
+        } else if self.is_dir(&real) {
+            Err(failure(FsOp::Remove, &real, io::ErrorKind::IsADirectory))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remove_all(&self, path: &Path) -> Result<(), FsError> {
+        let real = self.unlinked(&text_of(path));
+        self.check_writable(FsOp::Remove, &real)?;
+        let gone = |p: &str| p == real || self.below(p, &real).is_some();
+        self.files.borrow_mut().retain(|p, _| !gone(p));
+        self.dirs.borrow_mut().retain(|p| !gone(p));
+        self.mtimes.borrow_mut().retain(|p, _| !gone(p));
+        Ok(())
+    }
+
+    fn create_new(&self, path: &Path) -> Result<(), FsError> {
+        let real = self.unlinked(&text_of(path));
+        self.check_writable(FsOp::Create, &real)?;
+        if self.exists(&real) {
+            return Err(failure(FsOp::Create, &real, io::ErrorKind::AlreadyExists));
+        }
+        self.files.borrow_mut().insert(real, Some(String::new()));
+        Ok(())
     }
 }
 
@@ -532,6 +589,10 @@ impl RunEnv {
             pid: 4242,
             plugin_version: None,
             disabled: false,
+            plugin_root: None,
+            env_file: None,
+            temper_bin: None,
+            runtime_warnings: Vec::new(),
         }
     }
 }

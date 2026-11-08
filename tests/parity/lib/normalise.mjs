@@ -114,3 +114,49 @@ export function maskFailureText(stdout) {
   });
   return { text, count };
 }
+
+/** Port 3d: a session's `started` file, the epoch ms when its base was set, becomes `<MS>`. */
+export function maskStartedTime(text) {
+  return /^\d+$/.test(text) ? '<MS>' : text;
+}
+
+/**
+ * Port 3d: a `gate-lost` row's `foundMs` is the time the hook found the gate less the gate's start,
+ * so each engine's own clock; a number there becomes `"<MS>"`. Every other key is compared.
+ */
+export function maskFoundMs(text) {
+  return text.replace(/^(.*"event":"gate-lost".*"foundMs":)-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/gm, '$1"<MS>"');
+}
+
+/**
+ * D16(w), OC-6 A (wi-168ff8): 2.0's `CLAUDE_ENV_FILE` gains `export TEMPER_BIN="…"` and
+ * `export PATH="…:$PATH"` after 1.x's lines (D17). Those lines, and only whole lines of that shape,
+ * are dropped and counted, so the caller can assert two per env-file write on Rust's side and none
+ * on 1.x's, as `maskFailureText`'s count is.
+ */
+export function maskD17Lines(text) {
+  let count = 0;
+  const drop = () => {
+    count += 1;
+    return '';
+  };
+  const out = text.replace(/^export TEMPER_BIN="(?:[^"\\]|\\.)*"\n/gm, drop).replace(/^export PATH="(?:[^"\\]|\\.)*:\$PATH"\n/gm, drop);
+  return { text: out, count };
+}
+
+/**
+ * OC-5 A (wi-018023): 2.0's `SessionStart` context ends with `- Config: unreadable (<why>): defaults
+ * in use.` when `.claude/temper.json` cannot be read, where 1.x says nothing. Inside the hook's JSON
+ * the line follows an escaped newline; that newline and line are dropped.
+ */
+export function maskConfigLine(text) {
+  return text.replace(/\\n- Config: unreadable \((?:[^"\\]|\\.)*?\): defaults in use\./g, '');
+}
+
+/**
+ * Port 3d: a tree record is named by its checkout's id, a hash of the checkout's path, which differs
+ * between the two engines' copies; `tree-<12 hex>-` in a written file's name becomes `tree-<ID>-`.
+ */
+export function maskTreeIds(files) {
+  return Object.fromEntries(Object.entries(files).map(([rel, text]) => [rel.replace(/\/tree-[0-9a-f]{12}-([^/]*)$/, '/tree-<ID>-$1'), text]));
+}

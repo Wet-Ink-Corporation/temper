@@ -17,7 +17,8 @@ import { DEAD_PID, applySetup, expandPlaceholders, runHookCase, runInFreshCopy, 
 import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from './lib/corpus.mjs';
 import { UsageError, parseArgs } from './corpus.mjs';
 import {
-  byteOrderHits, dropLoneSurrogateTail, maskFailureText, maskMarkerTime, maskRoots, maskTelemetryTimes,
+  byteOrderHits, dropLoneSurrogateTail, maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskRoots,
+  maskStartedTime, maskTelemetryTimes, maskTreeIds,
 } from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -279,6 +280,31 @@ test('maskTelemetryTimes and maskMarkerTime (§2.2): only an ISO time, and only 
   for (const kept of ['2024-10-27T03:33:20.123Z\n', 'x', '']) assert.equal(maskMarkerTime(kept), kept);
 });
 
+test('maskStartedTime and maskFoundMs (port 3d): a session\'s start time, and only a gate-lost row\'s foundMs', () => {
+  assert.equal(maskStartedTime('1794097889864'), '<MS>');
+  for (const kept of ['1794097889864\n', 'x', '', '-1']) assert.equal(maskStartedTime(kept), kept);
+  const rows = '{"t":"<T>","event":"gate-lost","pid":7,"ranMs":0,"foundMs":60012.5,"timeoutMs":1}\n{"event":"x","foundMs":3}\n';
+  assert.equal(maskFoundMs(rows), '{"t":"<T>","event":"gate-lost","pid":7,"ranMs":0,"foundMs":"<MS>","timeoutMs":1}\n{"event":"x","foundMs":3}\n');
+  assert.equal(maskFoundMs('{"event":"gate-lost","foundMs":null}\n'), '{"event":"gate-lost","foundMs":null}\n', 'NaN stays');
+});
+
+test('maskD17Lines (D16(w), OC-6 A): only the TEMPER_BIN and PATH lines after 1.x\'s, counted', () => {
+  const env = 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\nexport TEMPER_BIN="/t/temper"\nexport PATH="/t:$PATH"\n';
+  assert.deepEqual(maskD17Lines(env), { text: 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n', count: 2 });
+  assert.deepEqual(maskD17Lines(env + env), { text: 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n'.repeat(2), count: 4 }, 'two writes');
+  for (const kept of ['export TEMPER_CLI="/p"\n', 'export PATH="/t"\n', 'x export TEMPER_BIN="/t"\n', '']) {
+    assert.deepEqual(maskD17Lines(kept), { text: kept, count: 0 });
+  }
+});
+
+test('maskConfigLine (OC-5 A) and maskTreeIds (port 3d)', () => {
+  const said = '{"hookSpecificOutput":{"additionalContext":"- Session base revision: x. Current state: y.\\n- Config: unreadable (unreadable JSON: \\"x\\" at 1): defaults in use."}}';
+  assert.equal(maskConfigLine(said), '{"hookSpecificOutput":{"additionalContext":"- Session base revision: x. Current state: y."}}');
+  assert.equal(maskConfigLine('- Config: unreadable'), '- Config: unreadable');
+  assert.deepEqual(maskTreeIds({ 'tree/.git/temper/sessions/s1/tree-0123456789ab-session.json': '{}', 'tree/tree-x-session.json': 'k' }),
+    { 'tree/.git/temper/sessions/s1/tree-<ID>-session.json': '{}', 'tree/tree-x-session.json': 'k' });
+});
+
 test('maskFailureText (OC-3 (p)): the text after "failed: " in a whole systemMessage, counted', () => {
   assert.deepEqual(maskFailureText('{"systemMessage":"temper hook post-tool failed: EACCES: \\"x\\" denied"}'),
     { text: '{"systemMessage":"temper hook post-tool failed: <MSG>"}', count: 1 });
@@ -446,7 +472,7 @@ test('expandPlaceholders: the root, the pids, and times before now as ISO text o
   assert.equal(text, `/r/x /r ${process.pid} ${DEAD_PID} 2026-01-01T00:00:00.000Z ${now - 500} <ISO:-x>`);
 });
 
-test('applySetup: same commit ids in two copies, writes with parents, base64, removals, ages; an unknown action throws', () => {
+test('applySetup: same commit ids in two copies, writes with parents, base64, removals, ages, placeholders in paths; an unknown action throws', () => {
   const now = Date.now();
   const heads = [0, 1].map(() => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-harness-setup-'));
@@ -458,7 +484,11 @@ test('applySetup: same commit ids in two copies, writes with parents, base64, re
         { age: { 'a/b.txt': 60_000 } },
         { git: ['add', '-A'] },
         { git: ['commit', '-qm', 'one'] },
+        { write: { 'claim-<MS:-60000>': '', 'drop-<DEADPID>': '' } },
+        { remove: ['drop-<DEADPID>'] },
       ], { now, ceiling: path.dirname(dir) });
+      assert.equal(fs.existsSync(path.join(dir, `claim-${now - 60_000}`)), true);
+      assert.equal(fs.existsSync(path.join(dir, `drop-${DEAD_PID}`)), false);
       assert.equal(fs.readFileSync(path.join(dir, 'a/b.txt'), 'utf8'), String(now));
       assert.deepEqual([...fs.readFileSync(path.join(dir, 'bin'))], [0xff, 0]);
       assert.equal(fs.existsSync(path.join(dir, 'gone')), false);

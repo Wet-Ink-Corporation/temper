@@ -6,10 +6,13 @@ use std::path::Path;
 
 use temper_domain::{PathStyle, js_trim, temper_base_note};
 
+use crate::changes::fingerprint;
+use crate::engine::HookError;
 use crate::git;
+use crate::hooks::{HookCall, session_segment};
 use crate::paths;
-use crate::ports::{Ports, ProcessRunner};
-use crate::project::Workspace;
+use crate::ports::{Clock, Files, Ports, ProcessRunner};
+use crate::project::{Workspace, exists};
 use crate::state::read_js_text;
 
 /// 1.x `sessionDir(proj, sid)` for a session id that is a non-empty string: its directory,
@@ -41,6 +44,62 @@ pub(crate) fn base_rev(
     recorded
         .and_then(|rev| resolve(ports.process(), ws, rev))
         .or_else(|| head(ports.process(), ws))
+}
+
+/// Whether [`set_base`] replaces a base the session already has (API-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Force {
+    /// Always: a session that starts afresh (`startup`, `clear`, `fork`).
+    Always,
+    /// Only when the session has none yet: a resume or a compaction keeps its base.
+    IfAbsent,
+}
+
+/// 1.x `setBase(proj, sid, force)`: records HEAD as the session's base (empty without one),
+/// the time now as `started`, and the tree's fingerprint against HEAD as `start-fp`, in that
+/// order; with [`Force::IfAbsent`], nothing when a base is recorded.
+///
+/// The session is the call's `session_id` ([`session_segment`]).
+///
+/// # Errors
+///
+/// [`HookError::InputType`] when the session id is a value 1.x's `String` throws on, before
+/// anything is read or written; [`HookError::Files`] when a write fails, as 1.x's
+/// `writeAtomic` throws, so the first that fails ends it.
+pub(crate) fn set_base(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    force: Force,
+) -> Result<(), HookError> {
+    let HookCall { ports, env, input } = *call;
+    let style = env.style;
+    let dir = session_dir(style, ws, &session_segment(input)?);
+    let base = paths::join(style, &dir, "base");
+    if force == Force::IfAbsent && exists(ports.files(), &base) {
+        return Ok(());
+    }
+    let head = head(ports.process(), ws);
+    let files = ports.files();
+    files.write_atomic(Path::new(&base), head.as_deref().unwrap_or(""))?;
+    let now = ports.clock().now().unix_millis().to_string();
+    files.write_atomic(Path::new(&paths::join(style, &dir, "started")), &now)?;
+    let start = fingerprint(ports, env, ws, head.as_deref()).to_string();
+    files.write_atomic(Path::new(&paths::join(style, &dir, "start-fp")), &start)?;
+    Ok(())
+}
+
+/// 1.x `startFingerprint(proj, sid)`: the session's `start-fp`, trimmed, unless it is missing,
+/// unreadable or empty.
+pub(crate) fn start_fingerprint(
+    files: &impl Files,
+    style: PathStyle,
+    ws: &Workspace,
+    sid: &str,
+) -> Option<String> {
+    let path = paths::join(style, &session_dir(style, ws, sid), "start-fp");
+    read_js_text(files, &path)
+        .filter(|text| !text.is_empty())
+        .map(|text| js_trim(&text).to_owned())
 }
 
 /// What a command run outside a hook compares with, and the note it may print.
@@ -88,3 +147,6 @@ fn resolve(process: &impl ProcessRunner, ws: &Workspace, rev: &str) -> Option<St
 fn head(process: &impl ProcessRunner, ws: &Workspace) -> Option<String> {
     git::head_rev(process, Path::new(ws.git_root()?))
 }
+
+#[cfg(test)]
+mod tests;

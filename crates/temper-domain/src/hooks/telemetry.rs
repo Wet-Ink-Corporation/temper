@@ -6,7 +6,7 @@ mod redact;
 
 pub(crate) use redact::Redactor;
 
-use super::{RaiseFlag, SkillVia};
+use super::{LostGate, RaiseFlag, SkillVia};
 use crate::js::{Value, js_json, json_string};
 use crate::time::Timestamp;
 
@@ -102,6 +102,14 @@ pub enum TelemetryEvent {
     ProtectedAsk {
         /// The first change.
         change: ProtectedChange,
+    },
+    /// `gate-lost`: a gate run of this session whose hook was killed (from `SessionStart`).
+    GateLost(LostGate),
+    /// `session-start`: a session started, resumed, was cleared, forked or compacted.
+    SessionStart {
+        /// The input's `source` as `JSON.stringify` writes it, any JSON value; `None` when
+        /// the input has none, which leaves the key out as `undefined` does.
+        source: Option<String>,
     },
 }
 
@@ -213,6 +221,8 @@ impl TelemetryEvent {
             Self::DenyShellWrite { .. } | Self::DenyShellWriteVia { .. } => "deny-shell-write",
             Self::DenyBaselineRaise { .. } => "deny-baseline-raise",
             Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
+            Self::GateLost(_) => "gate-lost",
+            Self::SessionStart { .. } => "session-start",
         }
     }
 
@@ -261,18 +271,31 @@ impl TelemetryEvent {
             }
             Self::DenyIgnoreRustVersion { cmd } => push_field(out, "cmd", &json_string(cmd)),
             Self::ShellAsk { via } => push_field(out, "via", &json_string(via.name())),
-            Self::ProtectedAsk { change } => {
-                let (via, file) = match change {
-                    ProtectedChange::Written(file) => ("shell-write-protected", Some(file)),
-                    ProtectedChange::Deleted(file) => ("shell-delete-protected", Some(file)),
-                    ProtectedChange::UnreadPatch => ("shell-patch-unread", None),
-                };
-                push_field(out, "via", &json_string(via));
-                if let Some(file) = file {
-                    push_field(out, "file", &json_string(file));
+            Self::ProtectedAsk { change } => push_protected(out, change),
+            Self::GateLost(lost) => {
+                for (key, value) in lost.detail() {
+                    push_field(out, key, &js_json(value));
+                }
+            }
+            Self::SessionStart { source } => {
+                if let Some(source) = source {
+                    push_field(out, "source", source);
                 }
             }
         }
+    }
+}
+
+/// Appends a protected-configuration `ask` row's `via` and its file, if any.
+fn push_protected(out: &mut String, change: &ProtectedChange) {
+    let (via, file) = match change {
+        ProtectedChange::Written(file) => ("shell-write-protected", Some(file)),
+        ProtectedChange::Deleted(file) => ("shell-delete-protected", Some(file)),
+        ProtectedChange::UnreadPatch => ("shell-patch-unread", None),
+    };
+    push_field(out, "via", &json_string(via));
+    if let Some(file) = file {
+        push_field(out, "file", &json_string(file));
     }
 }
 

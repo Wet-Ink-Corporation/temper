@@ -2,12 +2,13 @@
 
 use std::path::Path;
 
-use temper_domain::{TelemetryEvent, TelemetryRow};
+use temper_domain::{JsTypeError, JsValue, PathStyle, TelemetryEvent, TelemetryRow};
 
 use crate::hooks::HookCall;
 use crate::paths;
 use crate::ports::{Clock, Files, FsError, Ports};
 use crate::project::Workspace;
+use crate::state::read_js_text;
 
 const LOG: &str = "telemetry.jsonl";
 const ROTATED: &str = "telemetry.1.jsonl";
@@ -24,6 +25,21 @@ const ROTATE_AT: u64 = 1024 * 1024;
 pub(crate) fn log(
     call: &HookCall<'_, impl Ports>,
     workspace: &Workspace,
+    event: &TelemetryEvent,
+) -> Result<(), FsError> {
+    log_as(call, workspace, call.input.given("agent_type"), event)
+}
+
+/// [`log`] with `agent` for the input's `agent_type` (`None` writes `"main"`): 1.x's
+/// `telemetry(proj, who, …)` for a `who` that is the input with another agent.
+///
+/// # Errors
+///
+/// As [`log`].
+pub(crate) fn log_as(
+    call: &HookCall<'_, impl Ports>,
+    workspace: &Workspace,
+    agent: Option<&JsValue>,
     event: &TelemetryEvent,
 ) -> Result<(), FsError> {
     let HookCall { ports, env, input } = *call;
@@ -45,7 +61,7 @@ pub(crate) fn log(
         at: ports.clock().now(),
         sid: input.raw("session_id"),
         ccr: env.remote_session.as_deref(),
-        agent: input.given("agent_type"),
+        agent,
         event,
     };
     let appended = files.append_line(Path::new(&log), &row.to_json());
@@ -54,6 +70,41 @@ pub(crate) fn log(
         // appends, as 1.x does.
         Ok(()) | Err(_) => appended,
     }
+}
+
+/// 1.x `sessionTelemetry(proj, sid)`: the rows of session `sid`, the rotated file first. Only
+/// lines that hold `JSON.stringify(String(sid))` are parsed; a line that does not parse, a
+/// falsy row and a row whose `sid` is not `=== sid` are skipped. A falsy `sid` has none.
+///
+/// # Errors
+///
+/// [`JsTypeError`] where 1.x's `String(sid)` throws.
+pub(crate) fn session_rows(
+    files: &impl Files,
+    style: PathStyle,
+    workspace: &Workspace,
+    sid: Option<&JsValue>,
+) -> Result<Vec<JsValue>, JsTypeError> {
+    let Some(sid) = sid.filter(|sid| sid.is_truthy()) else {
+        return Ok(Vec::new());
+    };
+    let id = JsValue::String(sid.to_js_string_checked()?.into_owned()).to_json();
+    let mut rows = Vec::new();
+    for name in [ROTATED, LOG] {
+        // A missing or unreadable file has no rows (`String(readText(…) ?? '')`).
+        let Some(text) = read_js_text(files, &paths::join(style, &workspace.state_dir, name))
+        else {
+            continue;
+        };
+        let parsed = text
+            .split('\n')
+            .filter(|line| line.contains(&id))
+            // A line that does not parse is skipped (1.x's `catch { return null; }`).
+            .filter_map(|line| JsValue::from_json(line).ok())
+            .filter(|row| row.is_truthy() && row.get("sid").is_some_and(|r| r.strict_equals(sid)));
+        rows.extend(parsed);
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]

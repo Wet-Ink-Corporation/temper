@@ -158,7 +158,7 @@ fn decision(outcome: &HookOutcome) -> &'static str {
     match outcome {
         HookOutcome::Deny { .. } => "deny",
         HookOutcome::Ask { .. } => "ask",
-        HookOutcome::Context { .. } => "context",
+        HookOutcome::Context { .. } | HookOutcome::ContextWithNotice { .. } => "context",
         HookOutcome::Pass => "none",
         HookOutcome::Notice { .. } => "notice",
     }
@@ -170,7 +170,9 @@ fn reason(outcome: &HookOutcome) -> String {
         HookOutcome::Deny { reason, context } | HookOutcome::Ask { reason, context } => {
             format!("{reason}\n{}", context.as_deref().unwrap_or(""))
         }
-        HookOutcome::Context { text, .. } => format!("\n{text}"),
+        HookOutcome::Context { text, .. } | HookOutcome::ContextWithNotice { text, .. } => {
+            format!("\n{text}")
+        }
         HookOutcome::Pass | HookOutcome::Notice { .. } => "\n".to_owned(),
     }
 }

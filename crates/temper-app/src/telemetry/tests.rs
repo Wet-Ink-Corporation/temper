@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use temper_domain::PathStyle::Posix;
-use temper_domain::{Config, SkillVia, TelemetryEvent};
+use temper_domain::{Config, JsValue, SkillVia, TelemetryEvent};
 
-use super::{ROTATE_AT, log};
+use super::{ROTATE_AT, log, session_rows};
 use crate::engine::RunEnv;
 use crate::fakes::{FakeFiles, FakePorts};
 use crate::hooks::{HookCall, HookInput};
@@ -84,6 +84,41 @@ fn telemetry_below_the_cap_appends_and_at_the_cap_rotates_keeping_one_old_file()
         [sids(files.text(ROTATED)), sids(files.text(LOG))],
         [vec!["marker".to_owned()], vec!["s3".to_owned()]],
         "the oldest file is dropped on the second rotation"
+    );
+}
+
+/// 1.x `sessionTelemetry(proj, sid)`: the rotated file first, lines naming the session parsed,
+/// unparsable and falsy rows skipped, and `r.sid === sid`.
+#[test]
+fn session_rows_are_the_session_s_own_oldest_file_first() {
+    let files = FakeFiles::new(Posix)
+        .with_file(ROTATED, "{\"sid\":\"s1\",\"n\":1}\n\n")
+        .with_file(
+            LOG,
+            concat!(
+                "{\"sid\":\"s1\",\"n\":2}\r\n",
+                "{\"sid\":\"s12\",\"n\":3}\n",
+                "{\"sid\":\"other\",\"agent\":\"s1\",\"n\":4}\n",
+                "not JSON \"s1\"\n",
+                "\"s1\"\n",
+                "{\"sid\":\"s1\",\"n\":5}",
+            ),
+        );
+    let sid = |text: &str| JsValue::String(text.to_owned());
+
+    let rows = session_rows(&files, Posix, &workspace(), Some(&sid("s1"))).expect("no throw");
+    let none = session_rows(&files, Posix, &workspace(), Some(&sid(""))).expect("no throw");
+    let object = JsValue::from_json(r#"{"toString":1}"#).expect("JSON");
+
+    assert_eq!(
+        rows.iter().map(|r| r.get("n")).collect::<Vec<_>>(),
+        [1.0, 2.0, 5.0].map(JsValue::Number).each_ref().map(Some),
+        "1.x sessionTelemetry"
+    );
+    assert_eq!(none, Vec::<JsValue>::new(), "`if (!sid) return []`");
+    assert!(
+        session_rows(&files, Posix, &workspace(), Some(&object)).is_err(),
+        "String(sid) throws"
     );
 }
 

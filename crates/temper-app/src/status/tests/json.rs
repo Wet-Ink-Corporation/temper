@@ -278,6 +278,7 @@ fn with_proc(files: FakeFiles) -> FakeFiles {
     files
         .with_file("/proc/4242/status", "")
         .with_listing("/proc", &[("77", EntryKind::Dir), ("4242", EntryKind::Dir)])
+        .with_link("/proc/self", "/proc/4242")
 }
 
 /// A progress file for `fp` at `pid`, started a second before the fakes' clock.

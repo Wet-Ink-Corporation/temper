@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { route, resolveBinary, engineKey, runBinary, runEngine, RUST_READY } from '../scripts/launch.mjs';
+import { route, resolveBinary, engineKey, runBinary, runEngine, withRuntimeWarnings, RUST_READY } from '../scripts/launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const LAUNCH = path.join(here, '..', 'scripts', 'launch.mjs');
@@ -26,6 +26,7 @@ function stubEngine(dir) {
       stdin: Buffer.concat(chunks).toString('utf8'),
       root: process.env.TEMPER_PLUGIN_ROOT,
       version: process.env.TEMPER_PLUGIN_VERSION,
+      warnings: process.env.TEMPER_RUNTIME_WARNINGS,
     }));
     if (process.env.STUB_SIGNAL) process.kill(process.pid, process.env.STUB_SIGNAL);
     process.exitCode = Number(process.env.STUB_EXIT || 0);
@@ -45,8 +46,9 @@ test('route: 1.x runs everything until a subcommand graduates; --version goes to
   assert.equal(route(['hook', 'pre-bash'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 2f');
   assert.equal(route(['status', '--json'], {}), 'node', 'graduated, but not opted in');
   assert.equal(route(['status', '--json'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3c');
+  assert.equal(route(['hook', 'session-start'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3d');
   assert.equal(route(['status'], { TEMPER_ENGINE: 'rust', TEMPER_DISABLE: '1' }), 'engine', 'TEMPER_DISABLE marks the document; it does not skip status');
-  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash, 3c status');
+  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status', 'hook session-start'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash, 3c status, 3d session-start');
 });
 
 test('route: TEMPER_DISABLE=1 on a hook exits without an engine', () => {
@@ -164,6 +166,44 @@ test("runEngine: below the Node minimum, a command gets 1.x's warning and still 
   const quiet = await run({ TEMPER_DISABLE: '1' });
   assert.equal(quiet.err, '', 'no warning under TEMPER_DISABLE');
   assert.equal(quiet.code, 4, 'engine exit code');
+});
+
+/** runEngine of the stub for `hook session-start` as if on Node `nodeVersion`: its exit code, what the stub saw, and stdout. */
+async function startOnNode(nodeVersion, { stdin, runtime = {}, env = {} }) {
+  const dir = tmp();
+  const stub = stubEngine(dir);
+  const out = [];
+  const env0 = { ...process.env, ...env };
+  delete env0.TEMPER_RUNTIME_WARNINGS;
+  delete env0.TEMPER_DISABLE;
+  const code = await runEngine(process.execPath, ['hook', 'session-start'], {
+    env: env0, pluginRoot: '/plugin', version: '2.0.0', nodeVersion, stdin, runtime, binArgs: [stub],
+    onStdout: (c) => out.push(c), writeStderr: () => {},
+  });
+  const text = Buffer.concat(out).toString('utf8');
+  return { code, seen: text ? JSON.parse(text) : null };
+}
+
+test('runEngine: below the Node minimum, hook session-start reads stdin once, judges the workspace by its cwd, and pipes the same bytes to the engine', async () => {
+  const norust = tmp();
+  const raw = JSON.stringify({ cwd: norust, session_id: 's1', source: 'startup', note: 'é' });
+  let reads = 0;
+  const readStdin = () => { reads += 1; return Promise.resolve(raw); };
+  const r = await startOnNode('16.20.2', { stdin: 'inherit', runtime: { canRun: false, readStdin } });
+  assert.equal(reads, 1, 'read once');
+  assert.equal(r.code, 0);
+  assert.deepEqual([r.seen.argv, r.seen.stdin], [['hook', 'session-start'], raw], 'the engine gets the input the check read');
+});
+
+test('runEngine: hook session-start gets the runtime warnings for the launcher\'s Node; other commands do not', async () => {
+  const raw = JSON.stringify({ session_id: 's1', source: 'startup' });
+  const old = await startOnNode('17.9.1', { stdin: raw, runtime: { canRun: true } });
+  assert.match(old.seen.warnings, /^temper: Node 17\.9\.1 is older than the documented minimum, Node 18\.0\.0 /);
+  assert.equal(old.seen.stdin, raw, 'stdin unchanged');
+  const now = await startOnNode(process.versions.node, { stdin: raw });
+  assert.equal(now.seen.warnings, '', 'none on a current Node, and none inherited');
+  assert.deepEqual(withRuntimeWarnings(['status'], { A: '1' }, ['w']), { A: '1' }, 'only hook session-start');
+  assert.deepEqual(withRuntimeWarnings(['hook', 'session-start'], { A: '1' }, ['w1', 'w2']), { A: '1', TEMPER_RUNTIME_WARNINGS: 'w1\nw2' });
 });
 
 // The launcher passes only its own argv to the engine, so these process tests point TEMPER_BIN at a

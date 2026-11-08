@@ -1588,7 +1588,7 @@
     },
     {
       "source": "tests/telemetry.test.mjs",
-      "pending": "port Phase 3 (verdictProblems, the verdict rows and SessionStart's gate-lost rows), Phase 4 (the gate heartbeat, step times and hookTimeoutMs) and Phase 7 (temper stats)",
+      "pending": "port Phase 3 (verdictProblems and the verdict rows), Phase 4 (the gate heartbeat, step times and hookTimeoutMs) and Phase 7 (temper stats)",
       "tests": [
         {
           "node": "redactCommand: likely secrets become ***, and the rest of the command stays readable",
@@ -1639,12 +1639,41 @@
           "rust": [
             "hooks::pre_bash::tests::rows::shell_deny_rows_carry_the_command_redacted_and_clipped"
           ]
+        },
+        {
+          "node": "lostGateRow: timeout when last seen alive near the deadline; interrupted when seen to stop short of it",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::lost_gate::tests::timeout_near_the_deadline_interrupted_short_of_it"
+          ]
+        },
+        {
+          "node": "openGateStarts: a gate-start stays open until an outcome or gate-lost of the same agent and pid",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::lost_gate::tests::a_gate_start_stays_open_until_an_outcome_or_gate_lost_of_the_same_agent_and_pid"
+          ]
+        },
+        {
+          "node": "SessionStart on resume logs gate-lost for the session's killed gates, once, with the step and heartbeat",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::lost_gates::tests::the_session_s_killed_gates_are_logged_once_with_the_step_and_heartbeat"
+          ]
+        },
+        {
+          "node": "a lost gate another hook has claimed is not logged again; another session's startup keeps its progress file",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::lost_gates::tests::a_gate_another_hook_has_claimed_is_not_logged_and_keeps_its_progress_file",
+            "hooks::lost_gates::tests::a_progress_file_of_another_pid_stays"
+          ]
         }
       ]
     },
     {
       "source": "tests/handlers.test.mjs",
-      "pending": "port Phase 3 (SessionStart, SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript) and Phase 4 (Stop, the implementer branch of SubagentStop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
+      "pending": "port Phase 3 (SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript, and the SessionStart compact test, which needs noteTree from 3e) and Phase 4 (Stop, the implementer branch of SubagentStop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
       "tests": [
         {
           "node": "skill gate: a Rust edit is refused until rust-craft is loaded through the Skill tool",
@@ -1709,12 +1738,61 @@
           "rust": [
             "status_json::a_git_ignored_temper_json_still_counts"
           ]
+        },
+        {
+          "node": "SessionStart: records the session base and start fingerprint and describes the state",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::records_the_session_base_and_start_fingerprint_and_describes_the_state"
+          ]
+        },
+        {
+          "node": "SessionStart: resume keeps the base; startup, clear and fork reset it",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::resume_keeps_the_base_and_startup_clear_and_fork_reset_it"
+          ]
+        },
+        {
+          "node": "SessionStart: reports the cached gate and the recorded review for the tree",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::reports_the_cached_gate_and_the_recorded_review_for_the_tree"
+          ]
+        },
+        {
+          "node": "SessionStart: CLAUDE_ENV_FILE gains TEMPER_CLI and TEMPER_BASE",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::the_env_file_gains_temper_cli_and_temper_base_then_d17_s_lines"
+          ]
+        },
+        {
+          "node": "SessionStart: an old runtime adds the warning for the human and for the model, and nothing else",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::session::tests::an_old_runtime_adds_the_warning_for_the_human_and_the_model"
+          ]
+        },
+        {
+          "node": "SessionStart on a current Node adds no warning",
+          "crate": "temper-domain",
+          "rust": [
+            "hooks::session::tests::on_a_current_node_no_warning_is_added"
+          ]
+        },
+        {
+          "node": "SessionStart outside a Rust project does nothing",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::outside_a_rust_project_it_does_nothing"
+          ]
         }
       ]
     },
     {
       "source": "tests/messages.test.mjs",
-      "pending": "port Phase 3 (the SessionStart runtime warnings), Phase 4 (the fmt summary), Phase 7 (setup and vendor) and Phase 8 (the Node-minimum cases, which go to the launcher tests, §5.1)",
+      "pending": "port Phase 4 (the fmt summary), Phase 7 (setup and vendor) and Phase 8 (the Node-minimum cases, which go to the launcher tests, §5.1); the Node 17 test's launcher half is the parity test of the same name in tests/parity/hooks.test.mjs",
       "tests": [
         {
           "node": "the skill-gate denial lists every Iron rule, H-01 to H-16",
@@ -1728,6 +1806,13 @@
           "crate": "temper-cli",
           "rust": [
             "hooks::a_hook_given_malformed_input_says_nothing_was_checked_and_still_exits_0_with_no_decision"
+          ]
+        },
+        {
+          "node": "the CLI on a simulated Node 17: SessionStart runs in full and adds the warning",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::a_runtime_warning_goes_to_the_human_and_the_model"
           ]
         }
       ]
@@ -1754,13 +1839,83 @@
     },
     {
       "source": "tests/state-retention.test.mjs",
-      "pending": "port Phase 3 (prune, SessionStart) and Phase 7 (temper stats)",
+      "pending": "port Phase 7 (temper stats)",
       "tests": [
         {
           "node": "telemetry: below the cap it appends; at the cap it rotates to telemetry.1.jsonl, keeping one old file",
           "crate": "temper-app",
           "rust": [
             "telemetry::tests::telemetry_below_the_cap_appends_and_at_the_cap_rotates_keeping_one_old_file"
+          ]
+        },
+        {
+          "node": "retention limits are stated and ordered: verdicts outlive gate results, whose logs go with them",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::retention_limits_are_stated_and_ordered"
+          ]
+        },
+        {
+          "node": "prune: gate results, verdicts and logs past their age go; fresher ones stay",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::records_past_their_age_go_and_fresher_ones_stay"
+          ]
+        },
+        {
+          "node": "prune: a busy repository keeps only the newest gate runs, each with all its logs",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::a_busy_repository_keeps_only_the_newest_gate_runs_each_with_all_its_logs"
+          ]
+        },
+        {
+          "node": "prune: a kept gate result keeps the logs it cites (a red result from hours ago, 40 gate runs since)",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::a_kept_gate_result_keeps_the_logs_it_cites"
+          ]
+        },
+        {
+          "node": "prune: a gate run another worktree has in progress, its logs written within the grace period, is not touched",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::a_gate_run_in_progress_within_the_grace_period_is_not_touched"
+          ]
+        },
+        {
+          "node": "prune: past the byte budget the oldest gate runs go whole, result and logs together",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::past_the_byte_budget_the_oldest_gate_runs_go_whole"
+          ]
+        },
+        {
+          "node": "prune: the newest gate run stays even when it alone is over the byte budget",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::the_newest_gate_run_stays_even_alone_over_the_byte_budget"
+          ]
+        },
+        {
+          "node": "prune: the records of the current fingerprint stay, however old, and count toward no cap",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::the_records_of_the_current_fingerprint_stay_and_count_toward_no_cap"
+          ]
+        },
+        {
+          "node": "prune: leaves sessions, the findings cache, telemetry and a missing state dir alone",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::sessions_the_findings_cache_telemetry_and_a_missing_state_dir_are_left_alone"
+          ]
+        },
+        {
+          "node": "SessionStart startup prunes old records but keeps the tree it starts on; resume prunes nothing",
+          "crate": "temper-cli",
+          "rust": [
+            "session_start::startup_prunes_old_records_but_keeps_the_tree_it_starts_on_and_resume_prunes_nothing"
           ]
         }
       ]
@@ -1829,13 +1984,20 @@
     },
     {
       "source": "tests/gate-progress.test.mjs",
-      "pending": "port Phase 3d (pruning) and Phase 4 (the gate that writes the progress file)",
+      "pending": "port Phase 4 (the gate that writes the progress file)",
       "tests": [
         {
           "node": "gate progress: a file whose process is gone, or whose step is older than the step timeout, is stale",
           "crate": "temper-domain",
           "rust": [
             "state::progress::tests::a_progress_file_whose_process_is_gone_or_whose_step_is_too_old_is_stale"
+          ]
+        },
+        {
+          "node": "gate progress: pruning removes files over a day old, and keeps younger ones of gates that are gone for their session to read",
+          "crate": "temper-app",
+          "rust": [
+            "retention::tests::gate_progress_files_over_a_day_old_go_and_younger_ones_stay"
           ]
         }
       ]

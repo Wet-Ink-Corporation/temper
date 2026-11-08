@@ -5,6 +5,7 @@
 //! as its source text, so a TOML datetime is a [`Value::String`] here too; only JSON has `null`.
 
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 use super::JsTypeError;
@@ -105,6 +106,39 @@ impl Value {
     #[must_use]
     pub fn to_js_string(&self) -> Cow<'_, str> {
         js_string(self)
+    }
+
+    /// The number when it is an integer (`Number.isInteger`, which converts nothing).
+    #[must_use]
+    pub fn as_integer(&self) -> Option<f64> {
+        match *self {
+            Self::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(n),
+            _ => None,
+        }
+    }
+
+    /// JS `===` between two values parsed from JSON: objects and arrays are never equal,
+    /// since each parse makes its own, and NaN is not itself.
+    #[must_use]
+    pub fn strict_equals(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Null, Self::Null) => true,
+            (Self::Bool(x), Self::Bool(y)) => x == y,
+            // `-0 === 0`, and NaN is unordered.
+            (Self::Number(x), Self::Number(y)) => x.partial_cmp(y) == Some(Ordering::Equal),
+            (Self::String(x), Self::String(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    /// JS `String(value)` where V8 throws: an object with its own `toString` key, also inside
+    /// an array.
+    ///
+    /// # Errors
+    ///
+    /// [`JsTypeError`] where 1.x's `String(value)` throws.
+    pub fn to_js_string_checked(&self) -> Result<Cow<'_, str>, JsTypeError> {
+        js_string_checked(self)
     }
 
     /// JS `JSON.stringify(value)`.

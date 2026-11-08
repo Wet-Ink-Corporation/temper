@@ -20,11 +20,13 @@ mod ports;
 mod procs;
 mod project;
 mod relpath;
+mod retention;
 mod scan;
 mod session;
 mod state;
 mod status;
 mod telemetry;
+mod trees;
 
 pub use engine::{
     CommandError, CommandOutput, Engine, Exit, HookError, OutputFormat, RunEnv, ScanArgs,

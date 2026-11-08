@@ -24,8 +24,9 @@ fn number(n: f64) -> JsValue {
     JsValue::Number(n)
 }
 
-/// `/proc` with this process and pid 77 in it, and entries that are not pids.
-fn proc_files() -> FakeFiles {
+/// `/proc` with this process and pid 77 in it, and entries that are not pids, without its
+/// `self` link.
+fn proc_without_self() -> FakeFiles {
     FakeFiles::new(Posix)
         .with_file("/proc/4242/status", "")
         .with_listing(
@@ -39,6 +40,11 @@ fn proc_files() -> FakeFiles {
                 ("0x10", EntryKind::Dir),
             ],
         )
+}
+
+/// [`proc_without_self`] with `/proc/self` resolving to this process.
+fn proc_files() -> FakeFiles {
+    proc_without_self().with_link("/proc/self", "/proc/4242")
 }
 
 #[test]
@@ -81,6 +87,27 @@ fn a_proc_without_this_process_is_not_read() {
     let pids = live_pids(&ports, &RunEnv::at("/w", Posix));
 
     assert_eq!(pids, LivePids::Known([9, OWN].into_iter().collect()));
+}
+
+#[test]
+fn a_proc_whose_self_is_another_pid_is_unknown_and_runs_no_probe() {
+    // A host `/proc` bind-mounted into a pid-unshared sandbox (wi-e29ccf F1): `/proc/4242` is
+    // an unrelated host process, and `ps` would read the same `/proc`.
+    for self_link in [Some("/proc/9"), None] {
+        let mut files = proc_without_self().with_file("/proc/9/status", "");
+        if let Some(target) = self_link {
+            files = files.with_link("/proc/self", target);
+        }
+        let ports = FakePorts {
+            process: ps_answers(ran("4242\n")),
+            ..FakePorts::new(files)
+        };
+
+        let pids = live_pids(&ports, &RunEnv::at("/w", Posix));
+
+        assert_eq!(pids, LivePids::Unknown, "/proc/self is {self_link:?}");
+        assert_eq!(ports.process.calls(), 0, "no ps");
+    }
 }
 
 #[test]
