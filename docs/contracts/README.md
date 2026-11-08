@@ -21,10 +21,12 @@ Each finding's `key` is `<kind>:<stable subject>`, so a caller can tell an old f
 
 | Subcommand | Finding kinds | assay source today |
 |---|---|---|
-| `check raised` | `raised`, `crate-moved` (and `unreadable` in every check) | `temper/baseline.rs`, `ratchet.rs` |
+| `check raised` | `raised`, `crate-moved` | `temper/baseline.rs`, `ratchet.rs` |
 | `check exceptions` | `exception`, `multi-lint-expect`, `blind-spot` | `temper/exceptions.rs`, `statics.rs`, `reach.rs`, `cargo_targets.rs` |
 | `check gate-config` | `gate-config` | `temper/gate_config.rs` |
 | `check tests` | `test-inventory`, `manifest-switch`, `manifest-unreadable`, `lints-table`, `lint-inheritance` | `temper/inventory.rs`, `switches.rs`, `manifests.rs` |
+
+Every check also has the kind `unreadable`, for the exit-70 envelope above.
 
 What a check admits comes from the **base** revision, never the head, so a pull request cannot admit its own change. Today assay reads base `.assay/exceptions.toml`: `[[exception]]` (path, lint, reason), `[[gate_config]]` (key, base and head values, reason), and `[[test_inventory]]` and `[[manifest_switch]]` (path, base and head blob ids, reason). Where that allowlist lives once Redkiln Rust owns the checks is open: under `.redkiln/rust/` beside the moved config (rust.md call E) is the likely answer.
 

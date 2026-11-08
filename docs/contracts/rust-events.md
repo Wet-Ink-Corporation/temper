@@ -30,7 +30,7 @@ Each name maps one to one, with a `rust.` prefix, kebab case turned to snake cas
 | `handback` | `rust.handback` | `type`, `reviewer` |
 | `verdict` | folded into durable `rust.verdict` | `via`, `agent_id`, `verdict`, `fp`, `stale`, `findings`, `kept` |
 | `verdict-invalid` | `rust.verdict_invalid` | `via`, `problems`, `kinds`, `agent_id` |
-| `verdict-invalid-final` | `rust.verdict_invalid_final` | as `verdict-invalid`, on the retry that ends the turn |
+| `verdict-invalid-final` | `rust.verdict_invalid_final` | `problems`, `kinds`, `agent_id` (as `verdict-invalid` without `via`), on the retry that ends the turn |
 | `gate-start` | `rust.gate_started` | `pid`, `agent_id`, `timeoutMs`, `afterMs?`, `tree?` |
 | `gate-lost` | `rust.gate_lost` | `pid`, `reason` (`timeout`, `interrupted`, `unknown`), `ranMs`, `foundMs`, `timeoutMs`, `heartbeat`, `progress`, `step`, `steps` (`lostGateRow`; gate-lost detection reads `gate-start`'s `pid`, `timeoutMs` and `afterMs`) |
 | `gate-unavailable` | `rust.gate_unavailable` | timing: `ms`, `cached`, `pid`, step times, `tree?` |
