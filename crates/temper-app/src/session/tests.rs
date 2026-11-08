@@ -3,10 +3,10 @@ use temper_domain::PathStyle::Posix;
 
 use super::{Force, set_base, start_fingerprint};
 use crate::changes::fingerprint;
-use crate::engine::RunEnv;
+use crate::engine::{HookError, RunEnv};
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, NOW, Reply};
 use crate::hooks::{HookCall, HookInput};
-use crate::ports::{ExitKind, FsError, FsOp, Ports};
+use crate::ports::{ExitKind, FsOp, Ports};
 use crate::project::Workspace;
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
@@ -56,14 +56,38 @@ fn session_input() -> HookInput {
 }
 
 /// [`set_base`] for session `s1`, run from `/w`.
-fn set(ports: &FakePorts, ws: &Workspace, force: Force) -> Result<(), FsError> {
-    let input = session_input();
+fn set(ports: &FakePorts, ws: &Workspace, force: Force) -> Result<(), HookError> {
+    set_for(ports, ws, force, &session_input())
+}
+
+/// [`set_base`] for `input`'s session, run from `/w`.
+fn set_for(
+    ports: &FakePorts,
+    ws: &Workspace,
+    force: Force,
+    input: &HookInput,
+) -> Result<(), HookError> {
     let call = HookCall {
         ports,
         env: &RunEnv::at("/w", Posix),
-        input: &input,
+        input,
     };
     set_base(&call, ws, force)
+}
+
+#[test]
+fn a_session_id_1x_cannot_convert_fails_before_anything_is_read_or_written() {
+    let ports = repo(FakeFiles::new(Posix), Some(HEAD));
+    let input = HookInput::parse(r#"{"session_id":[{"toString":1}]}"#).expect("JSON");
+
+    let error = set_for(&ports, &workspace(), Force::Always, &input);
+
+    assert!(
+        matches!(error, Err(HookError::InputType(_))),
+        "1.x's `sessionDir` throws (Invariant 4): {error:?}"
+    );
+    assert_eq!(ports.files.paths(), Vec::<String>::new(), "nothing written");
+    assert_eq!(ports.process.calls(), 0, "not even HEAD is asked");
 }
 
 #[test]
@@ -146,7 +170,10 @@ fn a_write_failure_is_an_error_with_nothing_after_it_written() {
 
     let error = set(&ports, &workspace(), Force::Always).expect_err("started fails");
 
-    assert_eq!(error.op(), FsOp::Write, "1.x's writeAtomic throws");
+    assert!(
+        matches!(&error, HookError::Files(e) if e.op() == FsOp::Write),
+        "1.x's writeAtomic throws: {error:?}"
+    );
     assert_eq!(
         file(&ports, "base").as_deref(),
         Some(HEAD),

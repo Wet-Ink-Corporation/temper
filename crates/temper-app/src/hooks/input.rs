@@ -84,11 +84,12 @@ pub(crate) fn agent_key_of(agent_id: Option<&JsValue>) -> Result<String, JsTypeE
 }
 
 /// The session's directory name, as 1.x's `sessionDir` and `markerDir` make it:
-/// `String(session_id || 'unknown')` made safe for a file name.
-pub(crate) fn session_segment(input: &HookInput) -> String {
+/// `String(session_id || 'unknown')` made safe for a file name, failing where that `String`
+/// throws (Invariant 4).
+pub(crate) fn session_segment(input: &HookInput) -> Result<String, JsTypeError> {
     match input.raw("session_id").filter(|sid| sid.is_truthy()) {
-        Some(sid) => file_safe(&sid.to_js_string()),
-        None => "unknown".to_owned(),
+        Some(sid) => Ok(file_safe(&sid.to_js_string_checked()?)),
+        None => Ok("unknown".to_owned()),
     }
 }
 

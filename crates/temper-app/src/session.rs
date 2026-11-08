@@ -7,10 +7,11 @@ use std::path::Path;
 use temper_domain::{PathStyle, js_trim, temper_base_note};
 
 use crate::changes::fingerprint;
+use crate::engine::HookError;
 use crate::git;
 use crate::hooks::{HookCall, session_segment};
 use crate::paths;
-use crate::ports::{Clock, Files, FsError, Ports, ProcessRunner};
+use crate::ports::{Clock, Files, Ports, ProcessRunner};
 use crate::project::{Workspace, exists};
 use crate::state::read_js_text;
 
@@ -58,16 +59,21 @@ pub(crate) enum Force {
 /// the time now as `started`, and the tree's fingerprint against HEAD as `start-fp`, in that
 /// order; with [`Force::IfAbsent`], nothing when a base is recorded.
 ///
-/// The session is the call's `session_id` ([`session_segment`]). Each write is 1.x's
-/// `writeAtomic`, which throws, so the first that fails ends it.
+/// The session is the call's `session_id` ([`session_segment`]).
+///
+/// # Errors
+///
+/// [`HookError::InputType`] when the session id is a value 1.x's `String` throws on, before
+/// anything is read or written; [`HookError::Files`] when a write fails, as 1.x's
+/// `writeAtomic` throws, so the first that fails ends it.
 pub(crate) fn set_base(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     force: Force,
-) -> Result<(), FsError> {
+) -> Result<(), HookError> {
     let HookCall { ports, env, input } = *call;
     let style = env.style;
-    let dir = session_dir(style, ws, &session_segment(input));
+    let dir = session_dir(style, ws, &session_segment(input)?);
     let base = paths::join(style, &dir, "base");
     if force == Force::IfAbsent && exists(ports.files(), &base) {
         return Ok(());
@@ -78,7 +84,8 @@ pub(crate) fn set_base(
     let now = ports.clock().now().unix_millis().to_string();
     files.write_atomic(Path::new(&paths::join(style, &dir, "started")), &now)?;
     let start = fingerprint(ports, env, ws, head.as_deref()).to_string();
-    files.write_atomic(Path::new(&paths::join(style, &dir, "start-fp")), &start)
+    files.write_atomic(Path::new(&paths::join(style, &dir, "start-fp")), &start)?;
+    Ok(())
 }
 
 /// 1.x `startFingerprint(proj, sid)`: the session's `start-fp`, trimmed, unless it is missing,

@@ -134,7 +134,7 @@ fn checked(
     let manifest = is_named(rel, "Cargo.toml");
     // 1.x notes the tree here (`noteTree`); that waits for port Phase 3 (2-2).
     let config = &workspace.config;
-    if (rust || manifest) && config.skill_gate() && !preloaded(call) && !skill_loaded(call) {
+    if (rust || manifest) && config.skill_gate() && !preloaded(call) && !skill_loaded(call)? {
         // The row stores the path.
         let event = TelemetryEvent::DenySkillGate {
             file: rel.to_owned(),

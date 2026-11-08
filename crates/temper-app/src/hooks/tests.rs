@@ -58,7 +58,8 @@ fn agent_key_and_session_segment_follow_1x() {
         .iter()
         .map(|(json, _, _)| {
             let input = input(json);
-            (agent_key(&input), session_segment(&input))
+            let segment = session_segment(&input).expect("each case converts");
+            (agent_key(&input), segment)
         })
         .collect();
     let want: Vec<(String, String)> = cases
@@ -70,6 +71,68 @@ fn agent_key_and_session_segment_follow_1x() {
         got, want,
         "per UTF-16 unit, as `.replace(/[^\\w.-]/g, '_')`"
     );
+}
+
+/// `String(session_id)` throws on an object with its own `toString` key, also inside an
+/// array (Invariant 4), where `sessionDir` and `markerDir` convert it.
+#[test]
+fn a_session_id_1x_cannot_convert_is_an_error() {
+    let ids = [
+        r#"{"toString":1}"#,
+        r#"[{"toString":1}]"#,
+        r#"{"a":{"toString":1}}"#,
+    ];
+
+    let converted = ids.map(|id| {
+        let input = input(&format!(r#"{{"session_id":{id}}}"#));
+        session_segment(&input).is_ok()
+    });
+
+    assert_eq!(
+        converted,
+        [false, false, true],
+        "only an own `toString` key, at the top or in an array, throws"
+    );
+}
+
+/// Every hook that names the session's directory fails where 1.x's `sessionDir` or
+/// `markerDir` throws, and writes nothing (Invariant 4).
+#[test]
+fn hooks_fail_on_a_session_id_1x_cannot_convert_and_write_nothing() {
+    let sid = r#""session_id":{"toString":1},"cwd":"/ws""#;
+    let calls = [
+        (
+            HookEvent::SessionStart,
+            format!(r#"{{{sid},"source":"startup"}}"#),
+        ),
+        (HookEvent::UserPrompt, format!("{{{sid}}}")),
+        (
+            HookEvent::PostTool,
+            format!(r#"{{{sid},"tool_name":"Skill","tool_input":{{"skill":"rust-craft"}}}}"#),
+        ),
+        (
+            HookEvent::PreEdit,
+            format!(
+                r#"{{{sid},"tool_name":"Write","tool_input":{{"file_path":"/ws/src/lib.rs","content":""}}}}"#
+            ),
+        ),
+    ];
+    let env = env_with_data(Some("/data"));
+
+    let outcomes: Vec<(bool, Vec<String>)> = calls
+        .iter()
+        .map(|(event, json)| {
+            let ports = FakePorts::new(workspace(&[]));
+            let failed = matches!(
+                run(&ports, &env, *event, &input(json)),
+                Err(HookError::InputType(_))
+            );
+            (failed, ports.files.paths())
+        })
+        .collect();
+
+    let untouched = vec![(true, vec!["/ws/Cargo.toml".to_owned()]); calls.len()];
+    assert_eq!(outcomes, untouched, "1.x's `String(sid)` throws first");
 }
 
 #[test]

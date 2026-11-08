@@ -56,7 +56,11 @@ pub(crate) fn log_lost_gates(call: &HookCall<'_, impl Ports>, ws: &Workspace) ->
         return done;
     }
     let progress = progress_files(files, style, ws);
-    let dir = session_dir(style, ws, &session_segment(input));
+    // `sessionDir`'s `String(sid)` throws only where `session_rows`' did, inside the same `try`.
+    let Ok(sid) = session_segment(input) else {
+        return done;
+    };
+    let dir = session_dir(style, ws, &sid);
     if files.create_dir_all(Path::new(&dir)).is_err() {
         return done;
     }

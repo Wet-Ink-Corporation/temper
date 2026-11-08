@@ -33,8 +33,9 @@ const FRESH: [&str; 3] = ["startup", "clear", "fork"];
 ///
 /// [`HookError::NullInput`] for `null` input; [`HookError::Files`] when the base or the tree
 /// record cannot be written, as 1.x's `writeAtomic` throws (fail-open F1); and
-/// [`HookError::InputType`] when the recorded review's `verdict` is a value 1.x's template
-/// literal throws on.
+/// [`HookError::InputType`] when the session id is a value 1.x's `sessionDir` throws on,
+/// before anything is written, or when the recorded review's `verdict` is a value 1.x's
+/// template literal throws on.
 pub(crate) fn session_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
     let HookCall { ports, env, input } = *call;
     input.require_object("cwd")?;
@@ -50,7 +51,7 @@ pub(crate) fn session_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutco
         Force::IfAbsent
     };
     set_base(call, &ws, force)?;
-    let sid = session_segment(input);
+    let sid = session_segment(input)?;
     if is("startup") {
         prune_sessions(ports, style, &ws);
         prune_markers(ports, env);
@@ -66,7 +67,7 @@ pub(crate) fn session_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutco
     // 1.x builds the state line, which can throw, before its telemetry row, and reads the skill
     // marker after its lost gates, which never touch the markers.
     let text = session_start_context(&SessionStartFacts {
-        skill_loaded: skill_loaded(call),
+        skill_loaded: skill_loaded(call)?,
         gate_command: &gate_command,
         cli_exported: cli_path(env).is_some(),
         base,

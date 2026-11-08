@@ -128,5 +128,20 @@
       "",
       ""
     ]
+  },
+  {
+    "name": "a session id 1.x's String() throws on fails the hook (Invariant 4)",
+    "fixture": "workspace",
+    "pluginData": true,
+    "maskFailure": 1,
+    "event": "user-prompt",
+    "stdin": "{\"session_id\":[{\"toString\":1}]}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook user-prompt failed: <MSG>\"}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
+    ]
   }
 ]
