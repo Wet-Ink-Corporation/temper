@@ -113,16 +113,28 @@ function isFile(file) {
  * The engine route once a binary resolves: 1.x's early warning below the Node minimum (#89),
  * unchanged, since the launcher itself still runs on Node, then the engine.
  */
-export async function runEngine(bin, argv, { env, pluginRoot, version, nodeVersion, stdin = 'inherit', onStdout = null, writeStderr }) {
-  const { earlyNodeCheck } = await import('./lib/requirements.mjs');
-  // When `hook session-start` graduates, the stdin read here must be handed to the engine.
-  const early = await earlyNodeCheck(nodeVersion, argv, env);
+export async function runEngine(bin, argv, { env, pluginRoot, version, nodeVersion, stdin = 'inherit', onStdout = null, writeStderr, runtime = {}, binArgs = [] }) {
+  const { earlyNodeCheck, runtimeWarnings } = await import('./lib/requirements.mjs');
+  const read = stdin === 'inherit' ? readStdin : () => Promise.resolve(stdin);
+  const early = await earlyNodeCheck(nodeVersion, argv, env, { readStdin: read, ...runtime });
   if (early && early.stderr) writeStderr(early.stderr);
   if (early && early.stdout !== undefined) {
     await new Promise((done) => { process.stdout.write(early.stdout, done); });
     return early.exit;
   }
-  return runBinary(bin, argv, { env, pluginRoot, version, stdin, onStdout });
+  // The check read the hook input to judge the workspace by its cwd (3-11): the engine gets it.
+  const input = early && early.stdin !== undefined ? early.stdin : stdin;
+  const engineEnv = withRuntimeWarnings(argv, env, runtimeWarnings({ node: nodeVersion }));
+  return runBinary(bin, [...binArgs, ...argv], { env: engineEnv, pluginRoot, version, stdin: input, onStdout });
+}
+
+/**
+ * The engine's environment: `hook session-start` gets 1.x's runtime warnings for the Node that runs
+ * the launcher in TEMPER_RUNTIME_WARNINGS, one per line, which the handler adds to its answer (#89,
+ * port plan 3-11). Any other command's environment is unchanged.
+ */
+export function withRuntimeWarnings(argv, env, warnings) {
+  return keyOf(argv) === 'hook session-start' ? { ...env, TEMPER_RUNTIME_WARNINGS: warnings.join('\n') } : env;
 }
 
 async function readStdin() {
@@ -172,7 +184,7 @@ async function main() {
       // The hook input is read once here, so an engine that becomes available still gets it.
       const stdin = await readStdin();
       // 1.x's Node check first, with the input already read, so an old Node never waits on a build.
-      const { earlyNodeCheck } = await import('./lib/requirements.mjs');
+      const { earlyNodeCheck, runtimeWarnings } = await import('./lib/requirements.mjs');
       const early = await earlyNodeCheck(process.versions.node, argv, process.env, { readStdin: () => Promise.resolve(stdin) });
       const write = (text) => new Promise((done) => { process.stdout.write(text, done); });
       if (early && early.stdout !== undefined) {
@@ -184,7 +196,8 @@ async function main() {
       });
       if (r.bin) {
         try {
-          return await runBinary(r.bin, argv, { env: process.env, pluginRoot, version, stdin });
+          const env = withRuntimeWarnings(argv, process.env, runtimeWarnings({ node: process.versions.node }));
+          return await runBinary(r.bin, argv, { env, pluginRoot, version, stdin });
         } catch (error) {
           // Invariant 4: a hook that cannot run its engine is a notice with exit 0.
           await write(JSON.stringify({ systemMessage: `temper hook ${argv[1]} failed: cannot run the engine at ${r.bin} (${error.code ?? error.message})` }));
