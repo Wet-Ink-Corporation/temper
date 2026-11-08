@@ -51,6 +51,25 @@ impl Object {
         Some(self.0.remove(at).1)
     }
 
+    /// JS `obj[key] = value`, as an object spread assigns: a key the object has keeps its place
+    /// and takes `value`; a new integer-like key goes among the others in ascending order, and
+    /// any other new key goes last.
+    pub(crate) fn insert(&mut self, key: &str, value: Value) {
+        if let Some((_, slot)) = self.0.iter_mut().find(|(k, _)| k == key) {
+            *slot = value;
+            return;
+        }
+        let at = match array_index(key) {
+            Some(index) => self
+                .0
+                .iter()
+                .position(|(k, _)| array_index(k).is_none_or(|other| other > index))
+                .unwrap_or(self.0.len()),
+            None => self.0.len(),
+        };
+        self.0.insert(at, (key.to_owned(), value));
+    }
+
     /// `Object.keys(obj).length === 0`.
     #[must_use]
     pub fn is_empty(&self) -> bool {

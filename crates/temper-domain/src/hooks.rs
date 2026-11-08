@@ -34,13 +34,16 @@ pub use session::{
     with_runtime_warnings,
 };
 pub use setup::PolicySetupError;
-pub use skill::{SKILL_NOT_LOADED, SkillVia, is_reviewer, skill_load_via, skill_preloaded};
+pub use skill::{
+    SKILL_NOT_LOADED, SkillVia, is_implementer, is_reviewer, skill_load_via, skill_preloaded,
+};
 pub use subagent::{
     CachedGate, OtherTree, ReviewerExtras, SubagentStartFacts, Target, subagent_start_context,
     tree_gate_command,
 };
 pub use telemetry::{
-    ProtectedChange, ShellAskVia, ShellDenyVia, ShellWriteFile, TelemetryEvent, TelemetryRow,
+    InvalidVerdict, ProtectedChange, ShellAskVia, ShellDenyVia, ShellWriteFile, TelemetryEvent,
+    TelemetryRow, VerdictRow, VerdictVia,
 };
 
 #[cfg(test)]

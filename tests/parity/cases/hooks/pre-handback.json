@@ -1,0 +1,625 @@
+[
+ {
+  "name": "pre-handback: an implementer's hand-back is not checked; the handback row says so",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"done\"},\"agent_type\":\"temper:rust-implementer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a reviewer's report without a verdict block is denied",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Looks fine to me.\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a fingerprint that is not 16 hex is denied with the problem list",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"nothex\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a verdict block that does not parse is denied (D16(a))",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\": 1, \\\"verdict\\\": }\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ],
+  "maskParse": 1
+ },
+ {
+  "name": "pre-handback: a valid approval is recorded, with verdict-<agent>, its hash and the verdict row",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "args": [
+     "status",
+     "--session",
+     "s1"
+    ]
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: without an agent id the session files are the main agent's and agent_id is left out",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a verdict for a fingerprint that is no longer the tree's is recorded stale",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"fedcba9876543210\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a minor-only changes request keeps an approval and goes to history",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"OWN-08\\\",\\\"severity\\\":\\\"minor\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.clone()\\\",\\\"fix\\\":\\\"borrow it\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv2\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a blocker overturns an approval",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"H-02\\\",\\\"severity\\\":\\\"blocker\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.unwrap()\\\",\\\"fix\\\":\\\"propagate with ?\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv2\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: files_read that misses a changed file is denied",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/Cargo.toml\\\"],\\\"commands_run\\\":[\\\"gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: an approval with a blocker, a low score and a failing gate entry is denied",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"H-02\\\",\\\"severity\\\":\\\"blocker\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.unwrap()\\\",\\\"fix\\\":\\\"propagate with ?\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":2,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"fail\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: an agent type of another JSON type is converted as String() and written as given",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"x\"},\"agent_type\":5,\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"x\"},\"agent_type\":[\"temper:rust-reviewer\"],\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: a message that is not a string is converted with String(); a null tool_input has none",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":5},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"tool_input\":null}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: outside a Rust project nothing is checked",
+  "fixture": "workspace",
+  "git": false,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [],
+  "steps": [
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\": \"s1\", \"cwd\": \"/\", \"agent_type\": \"temper:rust-reviewer\", \"tool_input\": {\"message\": \"x\"}}"
+   }
+  ]
+ },
+ {
+  "name": "pre-handback: an agent id String() cannot convert fails after the record is written (F3)",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":{\"toString\":1}}"
+   }
+  ],
+  "maskFailure": 1
+ },
+ {
+  "name": "pre-handback: null input fails as 1.x reads input.cwd",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "pre-handback",
+    "stdin": "null"
+   }
+  ],
+  "maskFailure": 1
+ }
+]

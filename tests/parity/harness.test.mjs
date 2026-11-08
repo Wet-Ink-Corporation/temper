@@ -18,7 +18,7 @@ import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from 
 import { UsageError, parseArgs } from './corpus.mjs';
 import {
   byteOrderHits, dropLoneSurrogateTail, maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskRoots,
-  maskGitIndex, maskStartedTime, maskTelemetryTimes, maskTreeAt, maskTreeIds,
+  maskGitIndex, maskRecordedAt, maskStartedTime, maskTelemetryTimes, maskTreeAt, maskTreeIds, maskVerdictParse,
 } from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -315,6 +315,40 @@ test('runHookCase: a step\'s before actions shape the copy just before it runs (
   const r = runHookCase(stub(script), src, { steps, now });
   assert.deepEqual(r.steps.map((s) => s.stdout), ['none', String(now)]);
   assert.equal(r.files['tree/late.txt'], String(now), 'a before action is a change the comparison sees');
+});
+
+test('runHookCase: <FP> is the fingerprint the reference engine\'s status --json prints in the copy, and engineFor picks each step\'s engine (port 3f)', (t) => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tree-'));
+  t.after(() => fs.rmSync(src, { recursive: true, force: true }));
+  writeTree(src, { 'Cargo.toml': '' });
+  const echo = (tag) => stub(`let s = ""; process.stdin.on("data", (c) => { s += c; }).on("end", () => process.stdout.write("${tag}:" + s));`);
+  const reference = stub('process.stdout.write(process.argv.includes("status") && process.argv.includes("--json") ? JSON.stringify({ fingerprint: "00000000000000fa" }) + "\\n" : "no")');
+  const [a, b] = [echo('a'), echo('b')];
+  const steps = [{ event: 'x', stdin: '{"fp":"<FP>"}' }, { event: 'y', stdin: 'plain', engine: 'other' }];
+  const r = runHookCase(a, src, { steps, fpEngine: reference, engineFor: (step) => (step.engine === 'other' ? b : a) });
+  assert.deepEqual(r.steps.map((s) => s.stdout), ['a:{"fp":"00000000000000fa"}', 'b:plain']);
+  assert.throws(() => runHookCase(a, src, { steps: [{ event: 'x', stdin: '<FP>' }], fpEngine: a }), HarnessError, 'no fingerprint printed');
+});
+
+test('maskRecordedAt and maskVerdictParse (port 3f): a verdict record\'s time, and the D16(a) parse text, counted', () => {
+  const pretty = '{\n  "temper_verdict": 1,\n  "recorded_at": "2026-11-08T10:00:00.000Z",\n  "stale": false\n}';
+  assert.equal(maskRecordedAt(pretty), '{\n  "temper_verdict": 1,\n  "recorded_at": "<T>",\n  "stale": false\n}');
+  const row = '{"verdict":"approved","recorded_at":"2026-11-08T10:00:00.000Z","kept":"approved"}\n';
+  assert.equal(maskRecordedAt(row), '{"verdict":"approved","recorded_at":"<T>","kept":"approved"}\n');
+  const context = 'recorded: changes-requested at 2026-11-08T10:00:00.000Z.\\n';
+  assert.equal(maskRecordedAt(context), 'recorded: changes-requested at <T>.\\n');
+  for (const kept of ['"recorded_at": "x"', '"recorded_at":null', 'at 2026-11-08T10:00:00.000Z']) assert.equal(maskRecordedAt(kept), kept);
+  const denied = '{"hookSpecificOutput":{"permissionDecisionReason":"temper: the review verdict is invalid, so the report was not delivered:\\n- verdict JSON does not parse: Unexpected token \\"}\\" at 3\\nFix the verdict block and hand back again."}}';
+  assert.deepEqual(maskVerdictParse(denied), {
+    text: '{"hookSpecificOutput":{"permissionDecisionReason":"temper: the review verdict is invalid, so the report was not delivered:\\n- verdict JSON does not parse: <MSG>\\nFix the verdict block and hand back again."}}',
+    count: 1,
+  });
+  const v8 = '{"decision":"block","reason":"temper: your review verdict is invalid:\\n- verdict JSON does not parse: Unexpected token \'}\', \\"{\\n}\\" is not valid JSON\\nEnd your final report with a corrected ```json verdict block."}';
+  assert.deepEqual(maskVerdictParse(v8), {
+    text: '{"decision":"block","reason":"temper: your review verdict is invalid:\\n- verdict JSON does not parse: <MSG>\\nEnd your final report with a corrected ```json verdict block."}',
+    count: 1,
+  });
+  assert.deepEqual(maskVerdictParse('{"decision":"block","reason":"x"}'), { text: '{"decision":"block","reason":"x"}', count: 0 });
 });
 
 test('maskTreeAt (port 3e): a tree record\'s Date.now() time, not the session record\'s 0', () => {

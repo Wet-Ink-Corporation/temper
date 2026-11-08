@@ -5,15 +5,17 @@ mod coverage;
 mod extract;
 mod history;
 mod problems;
+mod record;
 mod summary;
 mod texts;
 mod valid;
 
-pub use extract::{ExtractedVerdict, extract_verdict};
+pub use extract::{ExtractedVerdict, extract_verdict, extract_verdict_from};
 pub use history::recorded_after;
 pub use problems::{
     GateState, ProblemKind, VerdictContext, VerdictProblem, problem_kinds, verdict_problems,
 };
+pub use record::{kept_record, verdict_record};
 pub use summary::{earlier_review, summarize_findings};
 pub use texts::{handback_denial, verdict_block};
 pub use valid::{ValidVerdict, VerdictOutcome, VerdictRejected};

@@ -1588,7 +1588,7 @@
     },
     {
       "source": "tests/telemetry.test.mjs",
-      "pending": "port Phase 3 (verdictProblems and the verdict rows), Phase 4 (the gate heartbeat, step times and hookTimeoutMs) and Phase 7 (temper stats)",
+      "pending": "port Phase 4 (the gate heartbeat, step times and hookTimeoutMs) and Phase 7 (temper stats)",
       "tests": [
         {
           "node": "redactCommand: likely secrets become ***, and the rest of the command stays readable",
@@ -1668,12 +1668,26 @@
             "hooks::lost_gates::tests::a_gate_another_hook_has_claimed_is_not_logged_and_keeps_its_progress_file",
             "hooks::lost_gates::tests::a_progress_file_of_another_pid_stays"
           ]
+        },
+        {
+          "node": "verdictProblems: a stable kind per problem, with the same messages validateVerdict gives",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::a_stable_kind_per_problem_with_the_same_messages"
+          ]
+        },
+        {
+          "node": "verdict-invalid rows name the problem kinds; verdict rows carry the reviewer's agent_id",
+          "crate": "temper-cli",
+          "rust": [
+            "pre_handback::verdict_invalid_rows_name_the_problem_kinds_and_verdict_rows_carry_the_agent_id"
+          ]
         }
       ]
     },
     {
       "source": "tests/handlers.test.mjs",
-      "pending": "port Phase 3 (the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript, and the telemetry test of SubagentStart and SubagentStop, whose SubagentStart half 3e ports as subagent_start::every_agent_type_is_recorded_in_telemetry_before_filtering) and Phase 4 (Stop, the implementer branch of SubagentStop, the SessionStart compact test, which asserts through Stop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
+      "pending": "port Phase 4 (Stop, the implementer branch of SubagentStop, the SessionStart compact test, which asserts through Stop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
       "tests": [
         {
           "node": "skill gate: a Rust edit is refused until rust-craft is loaded through the Skill tool",
@@ -1829,6 +1843,92 @@
           "rust": [
             "subagent_start::a_reviewer_of_a_tree_with_a_verdict_is_told_the_earlier_verdict_and_its_findings",
             "subagent_start::the_kept_history_after_an_approval_is_counted"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): an invalid verdict blocks, and is let through on the stop_hook_active repeat",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::an_invalid_verdict_blocks_and_is_let_through_on_the_stop_hook_active_repeat"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): an approval is refused while the cached gate for its fingerprint is red",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::an_approval_is_refused_while_the_cached_gate_for_its_fingerprint_is_red"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): a valid verdict is recorded, flagged stale when the tree moved",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::a_valid_verdict_is_recorded_flagged_stale_when_the_tree_moved"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): changes requested without a blocker or major finding keep an approval of the same tree (#136)",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::changes_requested_without_a_blocker_or_major_finding_keep_an_approval_of_the_same_tree"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): a resumed reviewer's new verdict on the same tree is checked and recorded (#136)",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::a_resumed_reviewer_s_new_verdict_on_the_same_tree_is_checked_and_recorded"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): a resumed reviewer repeating its own verdict after another approved the tree is recorded (#136)",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::a_resumed_reviewer_repeating_its_own_verdict_after_another_approved_is_recorded"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): a verdict the hand-back recorded is not recorded again from the transcript (#136)",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::a_verdict_the_hand_back_recorded_is_not_recorded_again_from_the_transcript"
+          ]
+        },
+        {
+          "node": "SubagentStop: other agent types are not checked",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::other_agent_types_are_not_checked"
+          ]
+        },
+        {
+          "node": "SubagentStart and SubagentStop: every agent type is recorded in telemetry before filtering",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_start::every_agent_type_is_recorded_in_telemetry_before_filtering",
+            "subagent_stop::every_agent_type_is_recorded_in_telemetry_before_filtering"
+          ]
+        },
+        {
+          "node": "reportFromTranscript: the last hand-back message, else the last assistant text",
+          "crate": "temper-app",
+          "rust": [
+            "hooks::transcript::tests::the_last_hand_back_message_else_the_last_assistant_text"
+          ]
+        },
+        {
+          "node": "SubagentStop (reviewer): without last_assistant_message the verdict is read from the hand-back in the transcript",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_stop::without_last_assistant_message_the_verdict_is_read_from_the_hand_back_in_the_transcript"
+          ]
+        },
+        {
+          "node": "SubagentHandback: only the reviewer is checked; an invalid verdict is denied with the problem list",
+          "crate": "temper-cli",
+          "rust": [
+            "pre_handback::only_the_reviewer_is_checked_and_an_invalid_verdict_is_denied_with_the_problem_list",
+            "subagent_stop::after_a_hand_back_the_stop_without_a_message_passes"
           ]
         }
       ]
@@ -2041,6 +2141,173 @@
           "crate": "temper-app",
           "rust": [
             "retention::tests::gate_progress_files_over_a_day_old_go_and_younger_ones_stay"
+          ]
+        }
+      ]
+    },
+    {
+      "source": "tests/verdict.test.mjs",
+      "tests": [
+        {
+          "node": "extractVerdict: null without text or without a temper_verdict block",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::extract::none_without_text_or_without_a_temper_verdict_block"
+          ]
+        },
+        {
+          "node": "extractVerdict: parses a fenced json block, with or without the language tag",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::extract::parses_a_fenced_json_block_with_or_without_the_language_tag"
+          ]
+        },
+        {
+          "node": "extractVerdict: the last block containing temper_verdict wins",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::extract::the_last_block_containing_temper_verdict_wins"
+          ]
+        },
+        {
+          "node": "extractVerdict: JSON that does not parse is reported, not thrown",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::extract::json_that_does_not_parse_is_reported_not_thrown"
+          ]
+        },
+        {
+          "node": "validateVerdict: a well-formed approval has no problems",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::a_well_formed_approval_has_no_problems"
+          ]
+        },
+        {
+          "node": "validateVerdict: no verdict block",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::no_verdict_block"
+          ]
+        },
+        {
+          "node": "validateVerdict: header fields",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::header_fields"
+          ]
+        },
+        {
+          "node": "validateVerdict: each finding needs a rule ID, a severity, a file, evidence and a fix",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::each_finding_needs_a_rule_id_a_severity_a_file_evidence_and_a_fix"
+          ]
+        },
+        {
+          "node": "validateVerdict: every dimension needs a score of 0-4 or \"n/a\"",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::every_dimension_needs_a_score_of_0_to_4_or_na"
+          ]
+        },
+        {
+          "node": "validateVerdict: evidence lists the files read and the commands run",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::evidence_lists_the_files_read_and_the_commands_run"
+          ]
+        },
+        {
+          "node": "validateVerdict: a changed .rs file missing from files_read is reported",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::a_changed_rs_file_missing_from_files_read_is_reported"
+          ]
+        },
+        {
+          "node": "validateVerdict: files_read covers a changed file by whole path components, not by a bare suffix",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::files_read_covers_a_changed_file_by_whole_path_components_not_by_a_bare_suffix",
+            "verdict::coverage::tests::the_index_answers_as_1x_on_the_ported_rows"
+          ]
+        },
+        {
+          "node": "validateVerdict: the paths SubagentStart lists, as given or absolute, cover the changed files",
+          "crate": "temper-cli",
+          "rust": [
+            "pre_handback::the_paths_subagent_start_lists_as_given_or_absolute_cover_the_changed_files"
+          ]
+        },
+        {
+          "node": "validateVerdict: every verdict rates correctness, escape_hatches, craft with an integer score",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::every_verdict_rates_correctness_escape_hatches_and_craft_with_an_integer_score"
+          ]
+        },
+        {
+          "node": "validateVerdict: \"approved\" must agree with the findings, the scores and the gate",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::problems::approved_must_agree_with_the_findings_the_scores_and_the_gate"
+          ]
+        },
+        {
+          "node": "recordVerdict and verdictFor round-trip by fingerprint",
+          "crate": "temper-app",
+          "rust": [
+            "state::verdicts::tests::record_verdict_and_verdict_for_round_trip_by_fingerprint"
+          ]
+        },
+        {
+          "node": "recordVerdict: a changes-requested verdict without a blocker or major finding keeps an approval of the same tree (#136)",
+          "crate": "temper-app",
+          "rust": [
+            "state::verdicts::tests::a_changes_request_without_a_blocker_or_major_finding_keeps_an_approval_of_the_same_tree"
+          ]
+        },
+        {
+          "node": "recordVerdict: changes requested for a score below 3 or a failing gate entry replace an approval, without any finding (#136)",
+          "crate": "temper-app",
+          "rust": [
+            "state::verdicts::tests::changes_requested_for_a_low_score_or_a_failing_gate_entry_replace_an_approval"
+          ]
+        },
+        {
+          "node": "earlierReview: the earlier verdict, when, its blocker and major findings, and how to treat them (#136)",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::summary::earlier_review_gives_the_earlier_verdict_when_its_serious_findings_and_how_to_treat_them"
+          ]
+        },
+        {
+          "node": "summarizeFindings and earlierReview keep each finding on one line",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::summary::summarize_findings_and_earlier_review_keep_each_finding_on_one_line"
+          ]
+        },
+        {
+          "node": "earlierReview: an approval says how many later verdicts were kept as history beside it (#136)",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::summary::an_approval_says_how_many_later_verdicts_were_kept_as_history_beside_it"
+          ]
+        },
+        {
+          "node": "verdictHash: the same verdict hashes the same whatever its key order; a different one does not",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::hash::the_same_verdict_hashes_the_same_whatever_its_key_order_a_different_one_does_not"
+          ]
+        },
+        {
+          "node": "summarizeFindings lists blockers and majors and counts the rest",
+          "crate": "temper-domain",
+          "rust": [
+            "verdict::tests::summary::summarize_findings_lists_blockers_and_majors_and_counts_the_rest"
           ]
         }
       ]

@@ -1,6 +1,8 @@
 //! The verdict block of a reviewer's report (1.x `extractVerdict`).
 
-use crate::js::{Value, is_js_space};
+use crate::js::{JsTypeError, Object, Value, is_js_space, truthy};
+
+use super::verdict_hash;
 
 /// The last fenced block of a report that contains `temper_verdict`, read as `JSON.parse` reads
 /// it.
@@ -25,6 +27,43 @@ impl ExtractedVerdict {
             Self::Parsed(value) => value.get(key),
             Self::Unparseable { .. } => None,
         }
+    }
+
+    /// 1.x `verdictHash(v)` of the extracted verdict: an unparseable block is hashed as the
+    /// `{ __parseError: message }` object 1.x stores, with Rust's message (D16(a)).
+    #[must_use]
+    pub fn hash(&self) -> String {
+        match self {
+            Self::Parsed(value) => verdict_hash(value),
+            Self::Unparseable { message } => {
+                let error: Object =
+                    std::iter::once(("__parseError".to_owned(), Value::String(message.clone())))
+                        .collect();
+                verdict_hash(&Value::Object(error))
+            }
+        }
+    }
+}
+
+/// 1.x `extractVerdict(report)` for a report that is any JSON value.
+///
+/// The report is a hook input's `last_assistant_message`: a string is read as
+/// [`extract_verdict`] reads it, and a falsy value or none has no verdict
+/// (`if (!text) return null`).
+///
+/// # Errors
+///
+/// [`JsTypeError`] for any other value: 1.x calls `text.matchAll`, which a number, a boolean,
+/// an array or an object does not have.
+pub fn extract_verdict_from(
+    report: Option<&Value>,
+) -> Result<Option<ExtractedVerdict>, JsTypeError> {
+    match report {
+        Some(Value::String(text)) => Ok(extract_verdict(text)),
+        Some(value) if truthy(value) => Err(JsTypeError::new(
+            "the report is not a string, and 1.x's text.matchAll throws on it",
+        )),
+        Some(_) | None => Ok(None),
     }
 }
 

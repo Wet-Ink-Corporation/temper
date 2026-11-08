@@ -4,11 +4,10 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use temper_domain::JsValue;
 
-use crate::support::{TestResult, git, git_init};
+use crate::support::{TestResult, git, git_init, temper_command};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -50,13 +49,10 @@ impl Tree {
     /// `temper status --json <args>` here, without the caller's `TEMPER_BASE` or
     /// `TEMPER_DISABLE`: the document.
     fn doc(&self, args: &[&str]) -> Res<JsValue> {
-        let output = Command::new(env!("CARGO_BIN_EXE_temper"))
+        let output = temper_command()
             .args(["status", "--json"])
             .args(args)
             .current_dir(self.path())
-            .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir())
-            .env_remove("TEMPER_BASE")
-            .env_remove("TEMPER_DISABLE")
             .output()?;
         if output.status.code() != Some(0) {
             return Err(String::from_utf8_lossy(&output.stderr).into_owned().into());

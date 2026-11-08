@@ -6,6 +6,7 @@ mod canonical;
 mod compare;
 mod json;
 mod map;
+mod pretty;
 mod replace;
 mod translate;
 mod utf8;

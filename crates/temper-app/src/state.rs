@@ -1,5 +1,9 @@
 //! Reads of the files temper keeps, with 1.x's fallbacks (`readText` and the readers on it).
 
+mod verdicts;
+
+pub(crate) use verdicts::{RecordMeta, record_verdict};
+
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -29,7 +33,23 @@ pub(crate) fn cached_gate(
     ws: &Workspace,
     fp: Fingerprint,
 ) -> Option<GateRecord> {
-    let text = record_text(files, style, &paths::join(style, &ws.state_dir, "gate"), fp)?;
+    cached_gate_named(files, style, ws, &fp.to_string())
+}
+
+/// 1.x `cachedGate(proj, fp)` for an `fp` given as text: `gate/${fp}.json`, whatever `fp` is,
+/// as a verdict's `fingerprint` names it before it is checked.
+pub(crate) fn cached_gate_named(
+    files: &impl Files,
+    style: PathStyle,
+    ws: &Workspace,
+    name: &str,
+) -> Option<GateRecord> {
+    let text = record_text(
+        files,
+        style,
+        &paths::join(style, &ws.state_dir, "gate"),
+        name,
+    )?;
     GateRecord::from_json(&text)
 }
 
@@ -45,7 +65,7 @@ pub(crate) fn verdict_for(
         files,
         style,
         &paths::join(style, &ws.state_dir, "verdicts"),
-        fp,
+        &fp.to_string(),
     )?;
     // Not JSON is 1.x's `catch { return null; }` (D16(n), OC-3 A).
     JsValue::from_json(&text).ok()
@@ -109,7 +129,7 @@ pub(crate) fn read_baseline(
 
 /// The text of `<dir>/<fp>.json`, unless it is missing, unreadable or empty (1.x's
 /// `if (!t) return null`).
-fn record_text(files: &impl Files, style: PathStyle, dir: &str, fp: Fingerprint) -> Option<String> {
+fn record_text(files: &impl Files, style: PathStyle, dir: &str, fp: &str) -> Option<String> {
     let path = paths::join(style, dir, &format!("{fp}.json"));
     read_js_text(files, &path).filter(|text| !text.is_empty())
 }

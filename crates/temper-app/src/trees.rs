@@ -17,7 +17,7 @@ use crate::ports::{Clock, Files, Ports};
 use crate::project::{Workspace, exists};
 use crate::session::{Force, base_rev, session_dir, start_fingerprint};
 
-pub(crate) use scope::{Checkout, DueTree, Scope, Tree, Widen, due_trees, own_tree};
+pub(crate) use scope::{Checkout, DueTree, Scope, Tree, Widen, due_trees, own_tree, reviewed_tree};
 
 /// 1.x `noteTree(proj, input)`: records that this agent context changes Rust in `ws`'s
 /// checkout, as `tree-<checkout>-<agent>.json`, once: an existing record is kept.

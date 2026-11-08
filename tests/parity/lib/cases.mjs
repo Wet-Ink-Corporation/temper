@@ -127,12 +127,14 @@ export function applySetup(copy, actions = [], { now, ceiling, gitCalls = 0 }) {
  * none (the tmpdir fallback). `setup` actions are applied first (`applySetup`), a step's `before`
  * actions just before it runs (port 3e: a change the case makes between two hooks), and a step with
  * `args` runs `temper <args>` instead of a hook. In `stdin`, `env` and `args`, the placeholders
- * of `expandPlaceholders` are expanded (with `now`), `<ROOT>` JSON-escaped in `stdin`. Returns `{ steps: [{ exit, stdout, stderr, ms }], files }`: the streams decoded as
+ * of `expandPlaceholders` are expanded (with `now`), `<ROOT>` JSON-escaped in `stdin`, and `<FP>`
+ * in `stdin` is the copy's fingerprint (`currentFingerprint`, port 3f). `engineFor(step)` is the
+ * engine of each step (port 3f: a cross-read case mixes them), the case's `engine` by default. Returns `{ steps: [{ exit, stdout, stderr, ms }], files }`: the streams decoded as
  * UTF-8 with the copy and scratch roots masked, and `files` the copy's changed files as
  * `tree/<rel>` and everything in the scratch directory as `scratch/<rel>`, with `maskFile` applied
  * as in `treeContents`.
  */
-export function runHookCase(engine, src, { steps, cwd = '.', git = false, pluginData, env = {}, maskFile, setup = [], now = Date.now() }) {
+export function runHookCase(engine, src, { steps, cwd = '.', git = false, pluginData, env = {}, maskFile, setup = [], now = Date.now(), engineFor = () => engine, fpEngine = engine }) {
   const copy = freshCopy(src, { skip: [] });
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-parity-scratch-'));
   try {
@@ -151,11 +153,12 @@ export function runHookCase(engine, src, { steps, cwd = '.', git = false, plugin
     const out = steps.map((step) => {
       gitCalls = applySetup(copy, step.before, { now, ceiling: path.dirname(copy), gitCalls });
       const stepEnv = Object.fromEntries(Object.entries({ ...base, ...step.env }).map(([k, v]) => [k, expandPlaceholders(v, { root: copy, now })]));
-      const input = typeof step.stdin === 'string' ? expandPlaceholders(step.stdin, { root: jsonEscaped(copy), now }) : undefined;
+      let input = typeof step.stdin === 'string' ? expandPlaceholders(step.stdin, { root: jsonEscaped(copy), now }) : undefined;
+      if (input?.includes('<FP>')) input = input.replaceAll('<FP>', currentFingerprint(fpEngine, copy, stepEnv));
       // A CLI step (`args`) runs `temper <args>`; a hook step runs `temper hook <event>`.
       const args = step.args ? step.args.map((a) => expandPlaceholders(a, { root: copy, now }))
         : step.event == null ? ['hook'] : ['hook', step.event];
-      const r = runEngine(engine, args, path.join(copy, cwd), { ceiling: path.dirname(copy), input, env: stepEnv, timeoutMs: 60_000 });
+      const r = runEngine(engineFor(step), args, path.join(copy, cwd), { ceiling: path.dirname(copy), input, env: stepEnv, timeoutMs: 60_000 });
       return { exit: r.exit, stdout: mask(r.stdout), stderr: mask(r.stderr), ms: r.ms };
     });
     const tree = treeContents(copy, roots, { prefix: 'tree/', maskFile });
@@ -167,6 +170,21 @@ export function runHookCase(engine, src, { steps, cwd = '.', git = false, plugin
     fs.rmSync(copy, { recursive: true, force: true });
     fs.rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Port 3f: the fingerprint `fpEngine`'s `temper status --json` prints in `copy` (its base is HEAD,
+ * the session base a case's `session-start` records), for a verdict a step names before the case
+ * can know it. The reference engine is 1.x for both sides of a case, so a Rust fingerprint that
+ * differed would show as a different verdict file, never as a matching one. Nothing printed is
+ * a HarnessError.
+ */
+function currentFingerprint(fpEngine, copy, env) {
+  const r = runEngine(fpEngine, ['status', '--json'], copy, { ceiling: path.dirname(copy), env, timeoutMs: 60_000 });
+  let fp = null;
+  try { fp = JSON.parse(r.stdout.toString('utf8')).fingerprint; } catch { /* reported below */ }
+  if (typeof fp !== 'string') throw new HarnessError(`<FP>: status --json printed no fingerprint in ${copy}: ${r.stderr}`);
+  return fp;
 }
 
 export function runInFreshCopy(engine, src, { args, cwd = '.', git = false, skip = [] }) {

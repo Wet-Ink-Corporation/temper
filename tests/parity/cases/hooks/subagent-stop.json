@@ -1,0 +1,490 @@
+[
+ {
+  "name": "subagent-stop: a reviewer's final message without a verdict blocks",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Looks fine to me.\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: the stop_hook_active repeat lets an invalid verdict through with the final row",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Looks fine to me.\",\"stop_hook_active\":true}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: a valid approval is recorded; a later message without a verdict passes",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Done.\"}"
+   },
+   {
+    "args": [
+     "status",
+     "--session",
+     "s1"
+    ]
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: a resumed reviewer's new verdict on the same tree replaces its approval",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"H-02\\\",\\\"severity\\\":\\\"blocker\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.unwrap()\\\",\\\"fix\\\":\\\"propagate with ?\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: a minor-only changes request keeps another reviewer's approval",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv2\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"OWN-08\\\",\\\"severity\\\":\\\"minor\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.clone()\\\",\\\"fix\\\":\\\"borrow it\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: the hand-back's report read back is not recorded twice, and its hash is removed",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"OWN-08\\\",\\\"severity\\\":\\\"minor\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.clone()\\\",\\\"fix\\\":\\\"borrow it\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[{\\\"rule\\\":\\\"OWN-08\\\",\\\"severity\\\":\\\"minor\\\",\\\"file\\\":\\\"crates/core/src/lib.rs\\\",\\\"line\\\":10,\\\"evidence\\\":\\\"x.clone()\\\",\\\"fix\\\":\\\"borrow it\\\"}],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Done.\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: after a hand-back a stop without a message passes",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "pre-handback",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"SubagentHandback\",\"tool_input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"<FP>\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"},\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: the hand-back in the transcript is read when there is no final message",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   },
+   {
+    "write": {
+     ".temper/agent.jsonl": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"review the change\"}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Working on it.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"SubagentHandback\",\"input\":{\"message\":\"Looks fine to me.\"}}]}}\n",
+     ".temper/old.jsonl": "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"review the change\"}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Working on it.\"}]}}\n{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"SubagentHandback\",\"input\":{\"message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"changes-requested\\\",\\\"fingerprint\\\":\\\"fedcba9876543210\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}}]}}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"agent_transcript_path\":\"<ROOT>/.temper/agent.jsonl\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv2\",\"agent_transcript_path\":\"<ROOT>/.temper/old.jsonl\"}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: other agent types and none are not checked, and each gets the row",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"general-purpose\",\"agent_id\":\"rv1\",\"agent_transcript_path\":\"/nowhere.jsonl\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-architect\",\"agent_id\":\"rv1\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_id\":\"rv1\",\"last_assistant_message\":5}"
+   }
+  ]
+ },
+ {
+  "name": "subagent-stop: a report that is a number fails as text.matchAll throws; 0 is no report",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":5}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":0}"
+   }
+  ],
+  "maskFailure": 1
+ },
+ {
+  "name": "subagent-stop: an approval of a fingerprint whose cached gate is red is blocked",
+  "fixture": "workspace",
+  "git": true,
+  "pluginData": true,
+  "env": {
+   "CLAUDE_PLUGIN_ROOT": "/plugin"
+  },
+  "setup": [
+   {
+    "git": [
+     "add",
+     "-A"
+    ]
+   },
+   {
+    "git": [
+     "commit",
+     "-qm",
+     "init"
+    ]
+   },
+   {
+    "write": {
+     "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+    }
+   },
+   {
+    "write": {
+     ".git/temper/gate/fedcba9876543210.json": "{\"ok\":false,\"steps\":[{\"name\":\"clippy\",\"ok\":false}]}"
+    }
+   }
+  ],
+  "steps": [
+   {
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+   },
+   {
+    "event": "subagent-stop",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_type\":\"temper:rust-reviewer\",\"agent_id\":\"rv1\",\"last_assistant_message\":\"Review done.\\n\\n```json\\n{\\\"temper_verdict\\\":1,\\\"verdict\\\":\\\"approved\\\",\\\"fingerprint\\\":\\\"fedcba9876543210\\\",\\\"findings\\\":[],\\\"scores\\\":{\\\"correctness\\\":4,\\\"escape_hatches\\\":4,\\\"ownership\\\":4,\\\"errors\\\":4,\\\"api\\\":4,\\\"architecture\\\":4,\\\"tests\\\":4,\\\"performance\\\":4,\\\"concurrency\\\":4,\\\"observability\\\":4,\\\"craft\\\":4,\\\"docs\\\":4},\\\"gate\\\":{\\\"fmt\\\":\\\"pass\\\",\\\"clippy\\\":\\\"pass\\\",\\\"test\\\":\\\"pass\\\",\\\"doc\\\":\\\"pass\\\"},\\\"evidence\\\":{\\\"files_read\\\":[\\\"crates/core/src/lib.rs\\\"],\\\"commands_run\\\":[\\\"temper gate\\\"]}}\\n```\\n\"}"
+   }
+  ]
+ }
+]

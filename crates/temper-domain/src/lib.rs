@@ -48,15 +48,15 @@ pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
     BashPolicy, CachedGate, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck,
     EditFacts, EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome,
-    IRON_RULES, InterpreterCode, LazyExemptions, LostGate, LostGateFacts, LostReason, ManifestEdit,
-    OpaqueKind, OtherTree, PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange,
-    RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites, SKILL_NOT_LOADED,
-    STATE_DIR_DENIAL, SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia, ShellWriteFile,
-    SkillVia, SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState,
-    UnknownHookEvent, Unread, apply_edit, edit_policy, env_file_lines, is_reviewer,
-    lockfile_denial, lost_gate_claim, lost_gate_row, open_gate_starts, session_start_context,
-    skill_gate_denial, skill_load_via, skill_preloaded, subagent_start_context, tree_gate_command,
-    with_runtime_warnings,
+    IRON_RULES, InterpreterCode, InvalidVerdict, LazyExemptions, LostGate, LostGateFacts,
+    LostReason, ManifestEdit, OpaqueKind, OtherTree, PolicyDecision, PolicySetupError,
+    ProgressSeen, ProtectedChange, RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites,
+    SKILL_NOT_LOADED, STATE_DIR_DENIAL, SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia,
+    ShellWriteFile, SkillVia, SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState,
+    UnknownHookEvent, Unread, VerdictRow, VerdictVia, apply_edit, edit_policy, env_file_lines,
+    is_implementer, is_reviewer, lockfile_denial, lost_gate_claim, lost_gate_row, open_gate_starts,
+    session_start_context, skill_gate_denial, skill_load_via, skill_preloaded,
+    subagent_start_context, tree_gate_command, with_runtime_warnings,
 };
 pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{
@@ -83,6 +83,7 @@ pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
     VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
-    extract_verdict, handback_denial, problem_kinds, recorded_after, summarize_findings,
-    verdict_block, verdict_hash, verdict_problems,
+    extract_verdict, extract_verdict_from, handback_denial, kept_record, problem_kinds,
+    recorded_after, summarize_findings, verdict_block, verdict_hash, verdict_problems,
+    verdict_record,
 };

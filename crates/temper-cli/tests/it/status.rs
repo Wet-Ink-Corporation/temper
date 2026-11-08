@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use crate::support::{TestResult, git};
+use crate::support::{TestResult, git, temper_command};
 
 const MANIFEST: &str = "[package]\nname = \"w\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
@@ -15,13 +15,8 @@ fn status_in(
     args: &[&str],
     base: Option<&str>,
 ) -> Result<(Option<i32>, String, String), Box<dyn std::error::Error>> {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_temper"));
-    command
-        .arg("status")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir())
-        .env_remove("TEMPER_BASE");
+    let mut command = temper_command();
+    command.arg("status").args(args).current_dir(dir);
     if let Some(base) = base {
         command.env("TEMPER_BASE", base);
     }
@@ -150,10 +145,9 @@ fn a_garbage_temper_base_gives_head_and_a_note() -> TestResult {
 fn the_temper_base_note_comes_before_the_lines_on_a_merged_stream() -> TestResult {
     let dir = repo()?;
     let (mut reader, writer) = std::io::pipe()?;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_temper"))
+    let mut child = temper_command()
         .arg("status")
         .current_dir(dir.path())
-        .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir())
         .env("TEMPER_BASE", "not-a-commit-at-all")
         .stdout(writer.try_clone()?)
         .stderr(writer)

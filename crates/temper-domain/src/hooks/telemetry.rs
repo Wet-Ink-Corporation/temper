@@ -3,8 +3,10 @@
 use std::fmt::Write as _;
 
 mod redact;
+mod verdict;
 
 pub(crate) use redact::Redactor;
+pub use verdict::{InvalidVerdict, VerdictRow, VerdictVia};
 
 use super::{LostGate, RaiseFlag, SkillVia};
 use crate::js::{Value, js_json, json_string};
@@ -115,6 +117,34 @@ pub enum TelemetryEvent {
     SubagentStart {
         /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
         agent_type: String,
+    },
+    /// `handback`: a subagent called `SubagentHandback`, of any type, before the hook filters by
+    /// type.
+    Handback {
+        /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
+        agent_type: String,
+        /// Whether that is temper's reviewer.
+        reviewer: bool,
+    },
+    /// `verdict`: a valid review verdict was recorded.
+    Verdict(VerdictRow),
+    /// `verdict-invalid`: a review verdict was refused.
+    VerdictInvalid {
+        /// Which hook refused it.
+        via: VerdictVia,
+        /// What was wrong.
+        invalid: InvalidVerdict,
+    },
+    /// `verdict-invalid-final`: an invalid verdict let through on the `stop_hook_active` repeat.
+    VerdictInvalidFinal(InvalidVerdict),
+    /// `subagent-stop`: a subagent stopped, of any type, before the hook filters by type.
+    SubagentStop {
+        /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
+        agent_type: String,
+        /// Whether `last_assistant_message` is a string.
+        msg: bool,
+        /// Whether `agent_transcript_path` is truthy.
+        transcript: bool,
     },
 }
 
@@ -229,6 +259,11 @@ impl TelemetryEvent {
             Self::GateLost(_) => "gate-lost",
             Self::SessionStart { .. } => "session-start",
             Self::SubagentStart { .. } => "subagent-start",
+            Self::Handback { .. } => "handback",
+            Self::Verdict(_) => "verdict",
+            Self::VerdictInvalid { .. } => "verdict-invalid",
+            Self::VerdictInvalidFinal(_) => "verdict-invalid-final",
+            Self::SubagentStop { .. } => "subagent-stop",
         }
     }
 
@@ -236,20 +271,18 @@ impl TelemetryEvent {
     fn push_detail(&self, out: &mut String) {
         match self {
             Self::SkillLoaded { via } => push_field(out, "via", &json_string(via.name())),
-            Self::DenyLockfile { file } | Self::DenySkillGate { file } => {
-                push_field(out, "file", &json_string(file));
-            }
+            Self::DenyLockfile { file } | Self::DenySkillGate { file } => push_file(out, file),
             Self::DenyManifest { file, rules } | Self::DenyScan { file, rules } => {
-                push_field(out, "file", &json_string(file));
+                push_file(out, file);
                 push_rules(out, rules);
             }
             Self::Ask { file, count } => {
-                push_field(out, "file", &json_string(file));
+                push_file(out, file);
                 push_field(out, "count", &count.to_string());
             }
             Self::DenyShellWrite { file, cmd } => {
                 if let Some(file) = file.name() {
-                    push_field(out, "file", &json_string(file));
+                    push_file(out, file);
                 }
                 push_field(out, "cmd", &json_string(cmd));
             }
@@ -263,33 +296,64 @@ impl TelemetryEvent {
                 push_field(out, "via", r#""shell-copy""#);
                 push_field(out, "count", &count.to_string());
             }
-            Self::DenyShellLockfile { cmd } => {
-                push_field(out, "via", r#""shell""#);
-                push_field(out, "cmd", &json_string(cmd));
-            }
+            Self::DenyShellLockfile { cmd } => push_via_cmd(out, "shell", cmd),
             Self::DenyBaselineRaise { flag, cmd } => {
-                push_field(
-                    out,
-                    "via",
-                    &json_string(&format!("baseline {}", flag.flag())),
-                );
-                push_field(out, "cmd", &json_string(cmd));
+                push_via_cmd(out, &format!("baseline {}", flag.flag()), cmd);
             }
             Self::DenyIgnoreRustVersion { cmd } => push_field(out, "cmd", &json_string(cmd)),
             Self::ShellAsk { via } => push_field(out, "via", &json_string(via.name())),
             Self::ProtectedAsk { change } => push_protected(out, change),
-            Self::GateLost(lost) => {
-                for (key, value) in lost.detail() {
-                    push_field(out, key, &js_json(value));
-                }
+            Self::GateLost(lost) => push_values(out, lost.detail()),
+            Self::SessionStart { source: None } => {}
+            Self::SessionStart {
+                source: Some(source),
+            } => push_field(out, "source", source),
+            Self::SubagentStart { agent_type } => push_typed(out, agent_type, &[]),
+            Self::Handback {
+                agent_type,
+                reviewer,
+            } => push_typed(out, agent_type, &[("reviewer", *reviewer)]),
+            Self::Verdict(row) => verdict::push_verdict(out, row),
+            Self::VerdictInvalid { via, invalid } => {
+                verdict::push_invalid(out, Some(*via), invalid);
             }
-            Self::SessionStart { source } => {
-                if let Some(source) = source {
-                    push_field(out, "source", source);
-                }
-            }
-            Self::SubagentStart { agent_type } => push_field(out, "type", agent_type),
+            Self::VerdictInvalidFinal(invalid) => verdict::push_invalid(out, None, invalid),
+            Self::SubagentStop {
+                agent_type,
+                msg,
+                transcript,
+            } => push_typed(
+                out,
+                agent_type,
+                &[("msg", *msg), ("transcript", *transcript)],
+            ),
         }
+    }
+}
+
+/// Appends `,"file":` and the file name as a JSON string.
+fn push_file(out: &mut String, file: &str) {
+    push_field(out, "file", &json_string(file));
+}
+
+/// Appends each `(key, value)` with the value as 1.x's `JSON.stringify` writes it.
+fn push_values<'a>(out: &mut String, pairs: impl Iterator<Item = (&'a str, &'a Value)>) {
+    for (key, value) in pairs {
+        push_field(out, key, &js_json(value));
+    }
+}
+
+/// Appends a shell row's `via` (a plain string) and its `cmd`.
+fn push_via_cmd(out: &mut String, via: &str, cmd: &str) {
+    push_field(out, "via", &json_string(via));
+    push_field(out, "cmd", &json_string(cmd));
+}
+
+/// Appends an agent row's `type` (already JSON) and its boolean `flags`, in order.
+fn push_typed(out: &mut String, agent_type: &str, flags: &[(&str, bool)]) {
+    push_field(out, "type", agent_type);
+    for &(key, flag) in flags {
+        push_field(out, key, js_bool(flag));
     }
 }
 
@@ -321,6 +385,11 @@ fn push_via(out: &mut String, via: ShellDenyVia, cmd: Option<&str>) {
     if let Some(cmd) = cmd {
         push_field(out, "cmd", &json_string(cmd));
     }
+}
+
+/// `JSON.stringify` of a boolean.
+const fn js_bool(b: bool) -> &'static str {
+    if b { "true" } else { "false" }
 }
 
 /// Appends `,"key":json`.

@@ -172,6 +172,27 @@ fn a_file_write_drops_the_work_tree_answers_only() {
     );
 }
 
+/// #210 review nit: `show :path` and `rev-parse :path` read the index, which a run can change,
+/// so they hold only as long as a work-tree answer.
+#[test]
+fn a_ref_question_that_names_the_index_holds_only_until_a_write() {
+    const STAGED: &[&str] = &["git", "show", ":src/lib.rs"];
+    const STAGE_0: &[&str] = &["git", "rev-parse", ":0:src/lib.rs"];
+    let fake = ports(FakeProcess::new().otherwise(exit(0, "x")));
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(&fake, &memo);
+
+    let first = [STAGED, STAGE_0].map(|c| run(ports.process(), c, "/r").ok());
+    let wrote = ports
+        .files()
+        .write_atomic(Path::new("/r/.git/temper/x.json"), "{}");
+    let second = [STAGED, STAGE_0].map(|c| run(ports.process(), c, "/r").ok());
+
+    assert_eq!(wrote.ok(), Some(()), "the write went through");
+    assert_eq!(first, second, "the same answers");
+    assert_eq!(fake.process.calls(), 4, "both ran again after the write");
+}
+
 #[test]
 fn a_run_that_failed_or_timed_out_is_never_replayed() {
     let fake = ports(
@@ -210,6 +231,37 @@ fn a_run_that_failed_or_timed_out_is_never_replayed() {
         "{answers:?}"
     );
     assert_eq!(fake.process.calls(), 4, "each ran");
+}
+
+/// #210 review nit: only an exit code is an answer; a git a signal ended is asked again.
+#[test]
+fn a_run_a_signal_ended_is_never_replayed() {
+    let fake = ports(FakeProcess::new().otherwise(Reply::Exit {
+        status: ExitKind::Signal,
+        stdout: String::new(),
+    }));
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(&fake, &memo);
+
+    let answers = [HEAD, HEAD].map(|c| run(ports.process(), c, "/r"));
+
+    assert!(
+        matches!(
+            answers,
+            [
+                Ok(ProcessOutput {
+                    status: ExitKind::Signal,
+                    ..
+                }),
+                Ok(ProcessOutput {
+                    status: ExitKind::Signal,
+                    ..
+                }),
+            ]
+        ),
+        "{answers:?}"
+    );
+    assert_eq!(fake.process.calls(), 2, "each ran");
 }
 
 #[test]
