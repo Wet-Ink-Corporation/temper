@@ -4,6 +4,10 @@
 //! answer costs a process start. 1.x asks each time; the memo answers a repeated question
 //! from the first answer, where nothing can have changed that answer in between.
 //!
+//! Measured (PERF-01): on Windows CI the four reviewer parity cases with worktrees took 2441 to
+//! 2661 ms per Rust step, spawning 59 to 63 git processes each, as 1.x does; with the memo they
+//! spawn 27 to 33 (the plan's Progress has the counts per case).
+//!
 //! What can change an answer during a run decides how long it is kept:
 //! - `rev-parse`, `symbolic-ref`, `merge-base`, `rev-list` and `show` read only refs and
 //!   objects, which a hook run never writes: kept for the whole run.
