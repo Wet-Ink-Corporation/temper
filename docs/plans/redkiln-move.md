@@ -10,8 +10,12 @@ temper moves into the `Wet-Ink-Corporation/redkiln` monorepo as Redkiln Rust (in
 | Crate split | The language-neutral half moves to the kits: the completion gate, verdict validation, fingerprint, baseline ratchet and gate cache to `redkiln-craft`; the shell reader and protected globs to `redkiln-guard`. The scanner, lexer, manifest rules and cargo steps stay in Redkiln Rust's crates | wi-59cb6e (amends D3) |
 | Install story | The suite's `libexec/` launcher replaces D13 (install-action), D14 (`.claude/temper-version`) and D17 (binary on PATH). `TEMPER_BIN` stays only if the lens plugin still needs it | wi-12d8ef |
 | Old state | Invariant 3 is narrowed: 2.0 reads 1.x state until it imports that state once into the shared log; after that the Core store is the source of truth | wi-f4c3ac |
+| npm packages | Retired for 2.0; builds ship in `libexec/<target>/` behind the shared launcher. The premise is that the libexec-in-Cowork spike passes | wi-02195d (amends D1) |
+| crates.io | The crates are not published; the reserved names are kept | wi-0eea27 (amends D2) |
+| MSRV | The port's crates take the root's `rust-version` 1.98.1 at the import | wi-a2240a (amends D4) |
+| Dependencies | The port takes the suite's set (`redkiln-core`, `clap`, `time`, and what Core brings) at the import | wi-fa59d1 (amends D10) |
 
-The other port-plan clashes (D1, D2, D4, D10, the telemetry branch, #193 and whether #172/#173 are built in 1.x) are open Weigh-In questions (wi-02195d, wi-0eea27, wi-a2240a, wi-fa59d1, wi-b1bfb5, wi-39f19a, wi-0924e6). `docs/history/decisions.md` lists each once it is answered.
+The other clashes (the telemetry branch, #193 and whether #172/#173 are built in 1.x) are open Weigh-In questions (wi-b1bfb5, wi-39f19a, wi-0924e6). `docs/history/decisions.md` lists each once it is answered.
 
 ## Placement
 
@@ -20,7 +24,7 @@ The other port-plan clashes (D1, D2, D4, D10, the telemetry branch, #193 and whe
 | From (temper) | To (redkiln) | Notes |
 |---|---|---|
 | `crates/temper-domain/`, `crates/temper-app/`, `crates/temper-host/`, `crates/temper-cli/` | `crates/rust/<crate>/` | As they are (wi-187aa7). The kit-bound modules move to `redkiln-craft` and `redkiln-guard` later (wi-59cb6e); each crate's `AGENTS.md` names them. Each crate keeps its licence copies (`cargo xtask check-licenses`) |
-| `xtask/` | Not placed as a crate | Its tasks (`check-licenses`, `versions`, `check-npm-lock`, `npm-pack`) become redkiln `cargo xtask` tasks or are dropped with npm (D1, wi-02195d). Reachable through the second parent |
+| `xtask/` | Not placed as a crate | Its tasks (`check-licenses`, `versions`, `check-npm-lock`, `npm-pack`) become redkiln `cargo xtask` tasks, or go with npm (`check-npm-lock`, `npm-pack`; wi-02195d retired npm). Reachable through the second parent |
 | `skills/`, `agents/`, `hooks/`, `.claude-plugin/plugin.json` | `plugins/rust/` | The plugin. `hooks/hooks.json` runs `node scripts/temper.mjs hook <event>` until the 2.0 cutover, then `${CLAUDE_PLUGIN_ROOT}/libexec/temper hook <event>` |
 | `skills/rust-craft/references/rules.md` and its sources | `plugins/rust/skills/rust-craft/references/` | Unchanged. Rule IDs are permanent and never renumbered |
 | `templates/workspace/`, `templates/crate/` | `plugins/rust/templates/` | What `/temper:setup` installs |
@@ -47,8 +51,8 @@ All of it stays reachable through the import's second parent, and in the archive
 
 | Path | Why |
 |---|---|
-| Tags (`v1.1.0` to `v1.6.0`, `v2.0.0-alpha.2`) | Tags are not imported; redkiln tags `rk-rust--v<version>` |
-| `.github/` (`ci.yml`, `changelog.yml`, `corpus.yml`, `release.yml`, `release-2.yml`, `runner-probe.yml`, the PR template, Dependabot) | Rewritten into redkiln's `ci.yml` under `ok` and its release workflow |
+| Tags (`v1.0.0` to `v1.6.0`, `v2.0.0-alpha.2`) | Tags are not imported; redkiln tags `rk-rust--v<version>` |
+| `.github/` (`ci.yml`, `changelog.yml`, `corpus.yml`, `release.yml`, `release-2.yml`, `runner-probe.yml`, the PR template, `ISSUE_TEMPLATE/`, `CODEOWNERS`, Dependabot) | Rewritten into redkiln's `ci.yml` under `ok` and its release workflow |
 | `templates/example-workspace/.claude/temper/`, `plugins/temper-lens/scripts/`, `plugins/temper-lens/references/rules.md` | Vendored copies. redkiln's root runs temper vendored once; legacy findings are re-baselined at the new paths |
 | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `clippy.toml`, `rustfmt.toml`, `deny.toml`, `.cargo/` | The root's copies govern. Anything below that the root lacks is a decision for Ryan |
 | `.claude-plugin/marketplace.json` | The suite's release repository assembles the marketplace |
@@ -63,11 +67,11 @@ The port's crates build today under temper's root. Diff each item against redkil
 
 | temper root has | Used by | redkiln |
 |---|---|---|
-| `[workspace.dependencies]`: `regex` 1.13 (`std`, `perf`, `unicode`), `toml` 1.1 (`std`, `parse`, `preserve_order`), `sha2` 0.11, `wait-timeout` 0.2.1, `serde` 1.0 (`std`, no `derive`), `serde_json` 1.0 (`std`, `float_roundtrip`) | The port's crates (D10, wi-b03273, and the 2026-11-01 and 2026-11-02 rows of `AGENTS.md`'s decisions log) | At redkiln `6bfe6c5`: `toml` **0.9.12** (`std`, `parse`, `serde`), `sha2` **0.10**, `serde` with `derive`, `serde_json` without `float_roundtrip`. Missing: `regex`, `wait-timeout`. Two version splits (`toml` 1.1 against 0.9, `sha2` 0.11 against 0.10) mean either the port steps down or the root steps up, which is an H-16 call. `float_roundtrip` matters, because the fingerprint and verdict parity cases depend on it, and Cargo unifies features, so turning it on changes it for every crate that uses `serde_json` |
+| `[workspace.dependencies]`: `regex` 1.13 (`std`, `perf`, `unicode`), `toml` 1.1 (`std`, `parse`, `preserve_order`), `sha2` 0.11, `wait-timeout` 0.2.1, `serde` 1.0 (`std`, no `derive`), `serde_json` 1.0 (`std`, `float_roundtrip`) | The port's crates (D10, wi-b03273, and the 2026-11-01 and 2026-11-02 rows of `AGENTS.md`'s decisions log) | At redkiln `6bfe6c5`: `toml` **0.9.12** (`std`, `parse`, `serde`), `sha2` **0.10**, `serde` with `derive`, `serde_json` without `float_roundtrip`. Missing: `regex`, `wait-timeout`, and the dev-dependency `proptest` 1.12. temper's `sha2` has `default-features = false`; redkiln's keeps the defaults. Two version splits (`toml` 1.1 against 0.9, `sha2` 0.11 against 0.10) mean either the port steps down or the root steps up, which is an H-16 call; wi-fa59d1 (the suite's set) admits `clap` and `time` but settles neither split nor adding `regex` and `wait-timeout` to the root. `float_roundtrip` matters, because the fingerprint and verdict parity cases depend on it, and Cargo unifies features, so turning it on changes it for every crate that uses `serde_json` |
 | `[workspace.lints]` from the template | Every crate | Same template (temper 1.4.0's), so expect no gap; check for lints added in 1.5.0 and 1.6.0 |
 | `rust-version = "1.96"` | D4 | 1.98.1, the root's single pin (wi-a2240a) |
 | `clippy.toml`, `deny.toml` | The gate | redkiln's are temper 1.4.0's; diff against temper 1.6.0's template |
-| `exclude` of `templates/*` | Keeps the templates' own workspaces out | Needs the same `exclude` for `plugins/rust/templates/` |
+| `exclude` of `templates`, `tests`, `docs`, `evals` | Keeps the templates' own workspaces out | Needs the same `exclude` for `plugins/rust/templates/` |
 | CI on Linux, Windows and macOS for every code-touching change (wi-e85ef8) | The engine's path and process code | redkiln's `ci.yml` jobs |
 
 ## State imported once
@@ -78,7 +82,7 @@ Read by 2.0 until imported, then never written again and never deleted (wi-f4c3a
 |---|---|
 | `<git-common-dir>/temper/gate/<fp>.json` | `rust.gate_run` events (`docs/contracts/rust-events.md`) |
 | `<git-common-dir>/temper/verdicts/<fp>.json` | `rust.verdict` events |
-| `<git-common-dir>/temper/telemetry.jsonl` and `.old` | `rust.*` telemetry, within the 30-day window |
+| `<git-common-dir>/temper/telemetry.jsonl` and `telemetry.1.jsonl` | `rust.*` telemetry. 1.x rotates by size (1 MiB), not by age, so the 30-day window is Core's filter on import |
 | `${CLAUDE_PLUGIN_DATA}/sessions/`, skill markers | Nothing: per-session projections are rebuilt |
 | `.claude/temper.json`, `.claude/temper-baseline.json` | Committed config, moved to `.redkiln/rust/` at the cutover (rust.md call E). Read from the old path as a fallback through 2.x |
 
@@ -92,7 +96,7 @@ Read by 2.0 until imported, then never written again and never deleted (wi-f4c3a
 | #172 check subcommands with a findings contract | Keep, transfer | Contracts in `docs/contracts/`; the subcommands are built in 1.x or in 2.0 (wi-0924e6) |
 | #173 `gate --base --findings-out`, compare blobs | Keep, transfer | The same CI-oracle work as #172 |
 | #190 forbid H-rule lints on the rustc command line | Keep, transfer | assay ships the backstop first; Redkiln Rust takes it over |
-| #23 release environment and trusted publishing | Close once D1 and D2 are answered | Publishing moves to the suite's release flow (wi-02195d, wi-0eea27) |
+| #23 release environment and trusted publishing | Close: D1 and D2 are answered (wi-02195d, wi-0eea27) | Publishing moves to the suite's release flow (wi-02195d, wi-0eea27) |
 | #193 OCI artifact on GHCR for assay | Close once answered | Review pins temper inside the monorepo (wi-39f19a) |
 | #24 tiered CI and required checks | Closed 2026-11-08 | Workflows are not imported; redkiln's `ok` check governs |
 

@@ -17,7 +17,7 @@ These come from state files, not from `telemetry.jsonl`.
 
 ## Telemetry
 
-The 1.x code calls `telemetry(proj, input, '<name>', detail)` (`scripts/lib/project.mjs`) under 24 names. `deny-scan` and `ask` are the scan's own events. The other 22 are the "22 telemetry names" in redkiln's briefing. Every row carries `t`, `sid`, `ccr` (cloud session), `agent` and `event`. In the envelope, those become `ts`, the `session` tag, a `ccr` field and an `agent` field, and the type itself.
+The 1.x code calls `telemetry(proj, input, '<name>', detail)` (`scripts/lib/project.mjs`) under 25 names. redkiln's briefing (`references/docs/rust.md`) counts "22 telemetry names"; that count leaves out the scan's own `deny-scan` and `ask` and the manifest scan's `deny-manifest`, and this table is the full list. Every row carries `t`, `sid`, `ccr` (cloud session), `agent` and `event`. In the envelope, those become `ts`, the `session` tag, a `ccr` field and an `agent` field, and the type itself.
 
 Each name maps one to one, with a `rust.` prefix, kebab case turned to snake case, and verbs in the past tense where the 1.x name is a noun phrase. This keeps `temper stats` and its 2.0 successor counting the same things. Collapsing the six `stop-*` names into one `rust.stop` type with an `outcome` field would read better. It would also change every stats query, so it is left to the redkiln side to decide when it defines the types.
 
@@ -30,10 +30,10 @@ Each name maps one to one, with a `rust.` prefix, kebab case turned to snake cas
 | `handback` | `rust.handback` | `type`, `reviewer` |
 | `verdict` | folded into durable `rust.verdict` | `via`, `agent_id`, `verdict`, `fp`, `stale`, `findings`, `kept` |
 | `verdict-invalid` | `rust.verdict_invalid` | `via`, `problems`, `kinds`, `agent_id` |
-| `verdict-invalid-final` | `rust.verdict_invalid_final` | none |
-| `gate-start` | `rust.gate_started` | none |
-| `gate-lost` | `rust.gate_lost` | none |
-| `gate-unavailable` | `rust.gate_unavailable` | none |
+| `verdict-invalid-final` | `rust.verdict_invalid_final` | as `verdict-invalid`, on the retry that ends the turn |
+| `gate-start` | `rust.gate_started` | `pid`, `agent_id`, `timeoutMs`, `afterMs?`, `tree?` |
+| `gate-lost` | `rust.gate_lost` | `pid`, `reason` (`timeout`, `interrupted`, `unknown`), `ranMs`, `foundMs`, `timeoutMs`, `heartbeat`, `progress`, `step`, `steps` (`lostGateRow`; gate-lost detection reads `gate-start`'s `pid`, `timeoutMs` and `afterMs`) |
+| `gate-unavailable` | `rust.gate_unavailable` | timing: `ms`, `cached`, `pid`, step times, `tree?` |
 | `stop-green` | `rust.stop_green` | `fp`, timing |
 | `stop-blocked` | `rust.stop_blocked` | `reason` (`gate`, `pending`, `changes-requested`, `no-review`), `fp`, timing or `tree` |
 | `stop-declared` | `rust.stop_declared` | `status` |
@@ -41,6 +41,7 @@ Each name maps one to one, with a `rust.` prefix, kebab case turned to snake cas
 | `stop-allowed-unreviewed` | `rust.stop_allowed_unreviewed` | `fp`, timing |
 | `stop-advisory-unreviewed` | `rust.stop_advisory_unreviewed` | `fp`, timing |
 | `deny-scan` | `rust.scan_denied` | `file` or `via`, `rules`, `cmd` (redacted) |
+| `deny-manifest` | `rust.manifest_denied` | `file`, `rules` (the MOD-* manifest checks) |
 | `ask` | `rust.scan_asked` | `file`, `count`, or `via` (`shell-copy`, `cargo-deps`, `TEMPER_ALLOW_RAISE`, `git-restore-claude`, `shell-patch-unread`, `shell-write-protected`, `shell-delete-protected`) |
 | `deny-shell-write` | `rust.shell_write_denied` | `via` or `file`, `files`, `cmd` (redacted) |
 | `deny-lockfile` | `rust.lockfile_denied` | `file` or `via`, `cmd` (redacted) |

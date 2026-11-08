@@ -35,20 +35,46 @@ def type_ok(value: object, name: str) -> bool:
     return isinstance(value, TYPES[name])
 
 
-def validate(value: object, schema: dict, path: str = "$") -> list[str]:
+def same(a: object, b: object) -> bool:
+    """JSON equality: unlike Python's ==, true is not 1 and false is not 0."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    return a == b
+
+
+def pattern_ok(pattern: str, value: str) -> bool:
+    """ECMA-262's `$` matches only at the end, where Python's also matches before a final newline.
+
+    Every unescaped `$` becomes `\\Z`; the schemas use `$` only as the end anchor."""
+    return re.search(re.sub(r"(?<!\\)\$", r"\\Z", pattern), value) is not None
+
+
+def unsupported(schema: dict, path: str = "$") -> list[str]:
+    """Every subschema that uses a keyword the validator does not implement, reached or not."""
+    errors = []
     unknown = set(schema) - SUPPORTED
     if unknown:
-        return [f"{path}: schema uses unsupported keywords {sorted(unknown)}"]
+        errors.append(f"{path}: schema uses unsupported keywords {sorted(unknown)}")
+    for key, sub in schema.get("properties", {}).items():
+        errors += unsupported(sub, f"{path}.{key}")
+    if isinstance(schema.get("items"), dict):
+        errors += unsupported(schema["items"], f"{path}[]")
+    for i, sub in enumerate(schema.get("allOf", [])):
+        errors += unsupported(sub, f"{path}.allOf[{i}]")
+    return errors
+
+
+def validate(value: object, schema: dict, path: str = "$") -> list[str]:
     errors: list[str] = []
     if "type" in schema:
         names = schema["type"] if isinstance(schema["type"], list) else [schema["type"]]
         if not any(type_ok(value, n) for n in names):
             return [f"{path}: expected {'/'.join(names)}, got {type(value).__name__}"]
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and not same(value, schema["const"]):
         errors.append(f"{path}: expected {schema['const']!r}")
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(same(value, e) for e in schema["enum"]):
         errors.append(f"{path}: {value!r} is not one of {schema['enum']}")
-    if "pattern" in schema and isinstance(value, str) and not re.search(schema["pattern"], value):
+    if "pattern" in schema and isinstance(value, str) and not pattern_ok(schema["pattern"], value):
         errors.append(f"{path}: {value!r} does not match {schema['pattern']}")
     if "minimum" in schema and type_ok(value, "number") and value < schema["minimum"]:
         errors.append(f"{path}: {value} is below {schema['minimum']}")
@@ -79,7 +105,8 @@ def check_example(path: Path) -> list[str]:
     if not schema_path.is_file():
         return [f"{path.name}: no schema {schema_path.name}"]
     doc = json.loads(path.read_text(encoding="utf-8"))
-    errors = validate(doc, json.loads(schema_path.read_text(encoding="utf-8")))
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    errors = unsupported(schema) or validate(doc, schema)
     if stem.startswith("rust.") and isinstance(doc, dict):
         if doc.get("ok") != (doc.get("findings") == []):
             errors.append("$: ok must be true exactly when findings is empty")
@@ -93,6 +120,8 @@ def self_test() -> int:
             "a": {"type": "integer", "minimum": 1},
             "b": {"type": ["string", "null"], "pattern": "^x"},
             "c": {"type": "array", "items": {"enum": ["p", "q"]}},
+            "d": {"const": 1},
+            "e": {"type": "string", "pattern": "^[^\\n]*$"},
         },
     }
     cases = [
@@ -103,11 +132,16 @@ def self_test() -> int:
         ({"a": True}, False),
         ({"a": 1, "b": "yx"}, False),
         ({"a": 1, "c": ["r"]}, False),
-        ({"a": 1, "d": 2}, False),
+        ({"a": 1, "z": 2}, False),
+        ({"a": 1, "d": 1, "e": "one line"}, True),
+        ({"a": 1, "d": True}, False),
+        ({"a": 1, "e": "x\n"}, False),
     ]
     bad = [doc for doc, want in cases if (not validate(doc, schema)) != want]
-    if validate({}, {"oneOf": []}) == []:
-        bad.append("unsupported keyword accepted")
+    if not unsupported({"properties": {"a": {"minimun": 1}}}):
+        bad.append("unsupported keyword in an unreached subschema accepted")
+    if same(False, 0) or same(1, True):
+        bad.append("a boolean equal to a number")
     for b in bad:
         print(f"contracts self-test: wrong answer for {b!r}")
     if not bad:

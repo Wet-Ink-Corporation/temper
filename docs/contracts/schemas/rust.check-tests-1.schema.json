@@ -60,7 +60,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "pattern": "^(test-inventory|manifest-switch|manifest-unreadable|lints-table|lint-inheritance):",
+            "pattern": "^(test-inventory|manifest-switch|manifest-unreadable|lints-table|lint-inheritance|unreadable):",
             "description": "<kind>:<stable subject>, stable across runs"
           },
           "message": {

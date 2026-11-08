@@ -71,7 +71,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "pattern": "^(gate-config):",
+            "pattern": "^(gate-config|unreadable):",
             "description": "<kind>:<stable subject>, stable across runs"
           },
           "message": {

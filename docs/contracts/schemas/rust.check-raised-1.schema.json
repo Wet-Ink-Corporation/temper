@@ -105,7 +105,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "pattern": "^(raised|crate-moved):",
+            "pattern": "^(raised|crate-moved|unreadable):",
             "description": "<kind>:<stable subject>, stable across runs"
           },
           "message": {

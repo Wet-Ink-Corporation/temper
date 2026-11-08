@@ -15,13 +15,13 @@ Machine-readable output that other products build against. Review (assay, moving
 
 ## The `check` subcommands
 
-These come from temper#172 (assay's interim checks as temper subcommands) and redkiln's `references/docs/rust.md`, call D. Each takes `--base REV` (a full commit id) and compares base with head. Each answers in redkiln's CLI envelope (SPEC CLI-01 to CLI-04): one JSON object on stdout with `schema`, `ok`, `command`, `data`, `findings`, `proves` and `does_not_prove`. `ok` is true exactly when the exit code is 0, which is exactly when `findings` is empty. A check that cannot read what it needs exits 70 with the envelope when it can write one. It never passes with fewer checks than it reports (temper#173). The schema ids use the `rust` namespace that the 2.0 binary will carry.
+These come from temper#172 (assay's interim checks as temper subcommands) and redkiln's `references/docs/rust.md`, call D. Each takes `--base REV` (a full commit id) and compares base with head. Each answers in redkiln's CLI envelope (SPEC CLI-01 to CLI-04): one JSON object on stdout with `schema`, `ok`, `command`, `data`, `findings`, `proves` and `does_not_prove`. `ok` is true exactly when the exit code is 0, which is exactly when `findings` is empty. A check that cannot read what it needs exits 70 with the envelope when it can write one; that envelope has `ok: false` and at least one `unreadable:<what>` finding (for example `unreadable:base-baseline`), so the rule above holds for it too. It never passes with fewer checks than it reports (temper#173). The schema ids use the `rust` namespace that the 2.0 binary will carry.
 
 Each finding's `key` is `<kind>:<stable subject>`, so a caller can tell an old finding from a new one. The kinds are the rule ids assay's adapter reports today (`crates/review-gates/src/temper/findings.rs` and `static_findings.rs`), so Review's mapping into its own findings stays one table:
 
 | Subcommand | Finding kinds | assay source today |
 |---|---|---|
-| `check raised` | `raised`, `crate-moved` | `temper/baseline.rs`, `ratchet.rs` |
+| `check raised` | `raised`, `crate-moved` (and `unreadable` in every check) | `temper/baseline.rs`, `ratchet.rs` |
 | `check exceptions` | `exception`, `multi-lint-expect`, `blind-spot` | `temper/exceptions.rs`, `statics.rs`, `reach.rs`, `cargo_targets.rs` |
 | `check gate-config` | `gate-config` | `temper/gate_config.rs` |
 | `check tests` | `test-inventory`, `manifest-switch`, `manifest-unreadable`, `lints-table`, `lint-inheritance` | `temper/inventory.rs`, `switches.rs`, `manifests.rs` |

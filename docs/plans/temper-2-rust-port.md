@@ -4,23 +4,9 @@
 
 temper's enforcement engine (the `temper` CLI and every hook handler: about 5,650 lines of Node (1.3.0) in `scripts/`, plus the copy vendored into user repositories) becomes a Rust workspace in this repository that follows the rust-craft standard. It ships as per-platform npm packages that Claude Code installs itself (exact pins, `--ignore-scripts`), with a `cargo build --release --locked` fallback into `${CLAUDE_PLUGIN_DATA}`. Hooks, messages, exit codes and on-disk state behave exactly as in the last 1.x release before the port (1.3.0 today), except for a short list of divergences a human approves (D16). User repositories stop vendoring a Node copy and install a pinned `temper` binary instead.
 
-Settled by Weigh-In wi-30ed25 (`.kb/_intake/decisions/wi-30ed25-port-temper-s-cli-and-hooks-to-rust-shipped-as.md`) and not reopened here: Rust engine, per-platform npm packages with a cargo fallback, a small Node launcher, hooks in exec form (`node <launcher> ...`).
+Settled by Weigh-In wi-30ed25 (`.kb/_intake/decisions/wi-30ed25-port-temper-s-cli-and-hooks-to-rust-shipped-as.md`) and not reopened here: Rust engine, per-platform npm packages with a cargo fallback, a small Node launcher, hooks in exec form (`node <launcher> ...`). **Paused after Phase 3 and amended for the redkiln monorepo on 2026-11-08: read [Status and monorepo amendments](#status-and-monorepo-amendments-2026-11-08) at the end first.**
 
 ---
-
-## Status and monorepo amendments (2026-11-08)
-
-**The port is paused after Phase 3** (merged through #211; wi-14cf95). Phases 4 to 8 are built in the `Wet-Ink-Corporation/redkiln` monorepo as Redkiln Rust (`rk-rust` 2.0), on Core 1.0, after redkiln's Move 2. temper keeps shipping 1.x from this repository until then, and the 1.x engine stays the parity oracle. How the move is done is in [`redkiln-move.md`](redkiln-move.md).
-
-This plan was decided for a standalone repository. The decisions below amend it for the monorepo. The original text is kept as it was decided, so read each amended decision through this table.
-
-| Decision | Amended to | Record |
-|---|---|---|
-| Where the code lands | The history-preserving read-tree import of `main`; the crates come as they are after Phase 3 | wi-187aa7 |
-| D3 · crate split | The language-neutral half (completion gate, verdict validation, fingerprint, baseline ratchet, gate cache; shell reader, protected globs) moves to the `redkiln-craft` and `redkiln-guard` kits; the scanner, lexer, manifest rules and cargo steps stay in Redkiln Rust's crates | wi-59cb6e |
-| D13, D14, D17 · install, version pin, PATH | Superseded by the suite's `libexec/` launcher and install story; `TEMPER_BIN` stays only if the lens plugin still needs it | wi-12d8ef |
-| Invariant 3 · state both ways | Narrowed: 2.0 reads 1.x state until it imports it once into the shared log; after that the Core store is the source of truth | wi-f4c3ac |
-| D1 npm, D2 crates.io, D4 MSRV, D10 dependencies; the telemetry branch | Open questions for the owner | wi-02195d, wi-0eea27, wi-a2240a, wi-fa59d1, wi-b1bfb5 |
 
 ## Decisions needed (H-16), up front
 
@@ -1053,4 +1039,22 @@ Phase 8: cutover
 - 2026-11-02: Phase 2d built on `wip-2d` (plan `.temper/plans/port-phase-2.md`): the binary answers the shell-independent `hook pre-bash` checks in 1.x's order. The domain gains `BashPolicy` (the `shellWrites` targets with `fromFirst`'s linear form, `TEMPER_ALLOW_RAISE`, `baselineRaise` with D16(g)'s `temper.exe` and absolute path, `claudeRestore`, `--ignore-rust-version`, `blankProse` with `--no-verify` and lint lowering, `cargo add/remove` and `cargo insta`), `PolicySetupError`, the `redactCommand` port (`Redactor`, `pub(crate)`) and the shell telemetry rows. The JS look-arounds and back-references are rewritten (2-16), each checked red against a naive translation, except `SHELL_WRITE_VENDORED`'s, an equivalence that both naive forms answer identically on every row. After review (#200), the hand-written matchers stay linear: `GIT_COMMIT_N`'s walk is shared by every `git` and its tail and stop are forward-only cursors, `baselineCall` matches its sticky rest anchored where the CLI ends, and here-document closing lines are indexed once per pass; the reviewer's long shapes take 54 to 84 ms through the release binary, against 1.x's 0.4 to 6.3 s. The app's `pre-bash` handler leaves the reviewer, copy, state-dir and protected branches to 2e and 2f, so `pre-bash` stays out of `RUST_READY` until 2f. The #199 review's F1 and F2 are folded in (wi-5911c1). OC-4 A retires three wall-clock bounds into the parity harness budget (D16(k)). 35 parity cases; a local differential over every Bash command of `hooks.test.mjs` agreed with 1.x wherever no 2e or 2f branch decides.
 - 2026-11-02: Phase 2f built on `wip-2f` and `wip-2f2` (plan `.temper/plans/port-phase-2.md`): the binary answers every `hook pre-bash` check in 1.x's order. Part 1 stores the reader's directories as shared parent handles and words as shared pieces (#201, #202). Part 2 adds `opaque_patch` and the interpreter-code patterns, the reviewer branch, `shellRustWrites` with its `rest` merge (`RustWrites` in the domain), and `pre-bash` in `RUST_READY`; `hooks.json` is untouched, so users see no change until the Phase 8 cutover.
 - Next: Phase 0a (adds `LICENSE-APACHE`), after 1.5.0 (v1 went live on 2026-10-19) and the pre-port steps in v1-readiness Phase 5 (#22 to #24): fold in the pilot findings; set up the npm and crates.io trusted publishers (D12; the `release` environment exists, #23); add the port's CI jobs as required checks. The npm org, the crate names and the arm64 runners are done (v1-readiness 0.8, 0.9; #23).
-- 2026-11-08: The port paused after Phase 3 (#211; wi-14cf95). The owner amended the plan for the redkiln monorepo: the read-tree import of `main` (wi-187aa7), D3's split into the kits (wi-59cb6e), D13, D14 and D17 superseded by `libexec/` (wi-12d8ef), and Invariant 3 narrowed (wi-f4c3ac). See "Status and monorepo amendments" at the top and `redkiln-move.md`.
+- 2026-11-08: The port paused after Phase 3 (#211; wi-14cf95). The owner amended the plan for the redkiln monorepo: the read-tree import of `main` (wi-187aa7), D3's split into the kits (wi-59cb6e), D13, D14 and D17 superseded by `libexec/` (wi-12d8ef), Invariant 3 narrowed (wi-f4c3ac), npm retired (wi-02195d), crates not published (wi-0eea27), MSRV 1.98.1 (wi-a2240a) and the suite's dependency set (wi-fa59d1). See "Status and monorepo amendments" below and `redkiln-move.md`.
+
+## Status and monorepo amendments (2026-11-08)
+
+**The port is paused after Phase 3** (merged through #211; wi-14cf95). Phases 4 to 8 are built in the `Wet-Ink-Corporation/redkiln` monorepo as Redkiln Rust (`rk-rust` 2.0), on Core 1.0, after redkiln's Move 2. temper keeps shipping 1.x from this repository until then, and the 1.x engine stays the parity oracle. How the move is done is in [`redkiln-move.md`](redkiln-move.md).
+
+This plan was decided for a standalone repository. The decisions below amend it for the monorepo. The original text is kept as it was decided, so read each amended decision through this table.
+
+| Decision | Amended to | Record |
+|---|---|---|
+| Where the code lands | The history-preserving read-tree import of `main`; the crates come as they are after Phase 3 | wi-187aa7 |
+| D3 · crate split | The language-neutral half (completion gate, verdict validation, fingerprint, baseline ratchet, gate cache; shell reader, protected globs) moves to the `redkiln-craft` and `redkiln-guard` kits; the scanner, lexer, manifest rules and cargo steps stay in Redkiln Rust's crates | wi-59cb6e |
+| D13, D14, D17 · install, version pin, PATH | Superseded by the suite's `libexec/` launcher and install story; `TEMPER_BIN` stays only if the lens plugin still needs it | wi-12d8ef |
+| Invariant 3 · state both ways | Narrowed: 2.0 reads 1.x state until it imports it once into the shared log; after that the Core store is the source of truth | wi-f4c3ac |
+| D1 · npm packages | Retired for 2.0: builds ship in `libexec/<target>/` behind the shared launcher | wi-02195d |
+| D2 · crates.io | Not published; the reserved names are kept | wi-0eea27 |
+| D4 · MSRV | 1.98.1, the suite's single pin, from the import | wi-a2240a |
+| D10 · dependencies | The suite's set (`redkiln-core`, `clap`, `time`) from the import | wi-fa59d1 |
+| The telemetry branch | Open question for the owner | wi-b1bfb5 |

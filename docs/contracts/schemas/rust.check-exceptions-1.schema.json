@@ -68,7 +68,7 @@
         "properties": {
           "key": {
             "type": "string",
-            "pattern": "^(exception|multi-lint-expect|blind-spot):",
+            "pattern": "^(exception|multi-lint-expect|blind-spot|unreadable):",
             "description": "<kind>:<stable subject>, stable across runs"
           },
           "message": {

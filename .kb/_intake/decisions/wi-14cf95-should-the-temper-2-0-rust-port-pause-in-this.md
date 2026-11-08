@@ -28,7 +28,7 @@ tree_hash: "399982f750973183e425fbd74a37d0c4550b3336"
 
 Should the temper 2.0 Rust port pause in this repository after Phase 3 (merged through #211), with Phases 4 to 8 built in the redkiln monorepo on Core 1.0 after Move 2?
 
-Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-14cf95`. Anchor: `docs/plans/temper-2-rust-port.md:801`.
+Raised by an agent (sweep) as a call and captured by Weigh-In as `wi-14cf95`. Anchor: `docs/plans/temper-2-rust-port.md:1042`.
 
 ## Decision outcome
 
