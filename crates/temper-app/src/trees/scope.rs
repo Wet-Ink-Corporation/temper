@@ -5,7 +5,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use temper_domain::{Fingerprint, JsTypeError, TreeRecord};
+use temper_domain::{Fingerprint, JsTypeError, JsValue, TreeRecord};
 
 use super::{checkout_id, has_session};
 use crate::changes::{fingerprint, rust_changes};
@@ -390,6 +390,54 @@ pub(crate) fn due_trees<'a>(
         .zip(keep)
         .filter_map(|(tree, fp)| Some(DueTree { tree, fp: fp? }))
         .collect())
+}
+
+/// 1.x `reviewedTree(proj, input, fp)`: the checkout whose current tree has fingerprint `fp`
+/// (a verdict's `fingerprint`, any JSON value). This checkout against its own base, then
+/// against the main agent's widened base (#157), then the first other checkout of the session
+/// whose tree matches; otherwise, and when `fp` is falsy, this checkout against its own base.
+/// Only a string can equal a fingerprint (`===`), but 1.x asks every candidate either way.
+///
+/// # Errors
+///
+/// As [`own_tree`] and [`other_trees`] (F5).
+pub(crate) fn reviewed_tree<'a>(
+    call: &HookCall<'_, impl Ports>,
+    ws: &'a Workspace,
+    fp: Option<&JsValue>,
+) -> Result<Tree<'a>, JsTypeError> {
+    let HookCall { ports, env, .. } = *call;
+    let base = own_tree(call, ws, Widen::No)?.base;
+    let own = |base: Option<String>| Tree {
+        ws: Cow::Borrowed(ws),
+        scope: Scope {
+            base,
+            start_fp: None,
+        },
+        checkout: Checkout::Here,
+    };
+    let Some(fp) = fp.filter(|fp| fp.is_truthy()) else {
+        return Ok(own(base));
+    };
+    let matches = |tree: &Workspace, base: Option<&str>| {
+        fp.as_str() == Some(fingerprint(ports, env, tree, base).to_string().as_str())
+    };
+    let widened = own_tree(call, ws, Widen::ToSessionBase)?.base;
+    if matches(ws, base.as_deref()) {
+        return Ok(own(base));
+    }
+    // `new Set([base, widened])`: a widened base equal to the own one is not asked again.
+    if widened != base && matches(ws, widened.as_deref()) {
+        return Ok(own(widened));
+    }
+    let others = other_trees(call, ws)?;
+    match others
+        .into_iter()
+        .find(|t| matches(&t.ws, t.scope.base.as_deref()))
+    {
+        Some(tree) => Ok(tree),
+        None => Ok(own(base)),
+    }
 }
 
 #[cfg(test)]
