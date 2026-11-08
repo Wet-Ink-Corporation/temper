@@ -1057,4 +1057,4 @@ This plan was decided for a standalone repository. The decisions below amend it 
 | D2 · crates.io | Not published; the reserved names are kept | wi-0eea27 |
 | D4 · MSRV | 1.98.1, the suite's single pin, from the import | wi-a2240a |
 | D10 · dependencies | The suite's set (`redkiln-core`, `clap`, `time`) from the import | wi-fa59d1 |
-| The telemetry branch | Open question for the owner | wi-b1bfb5 |
+| The telemetry branch | Retired for new adoptions; existing adoptions keep it until the cutover; replaced by the SPEC's journals and not imported | wi-b1bfb5 |
