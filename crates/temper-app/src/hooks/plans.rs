@@ -26,7 +26,8 @@ pub(crate) fn list_plans(files: &impl Files, style: PathStyle, root: &str) -> Ve
     let names = entries
         .iter()
         .map(|entry| entry.name.to_string_lossy())
-        .filter(|name| name.ends_with(".md"));
+        // 1.x's case-sensitive `f.endsWith('.md')`.
+        .filter(|name| name.strip_suffix(".md").is_some());
     for name in names {
         let path = paths::join(style, &dir, &name);
         let Ok(Some(meta)) = files.stat(Path::new(&path)) else {

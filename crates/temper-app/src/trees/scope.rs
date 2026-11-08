@@ -142,7 +142,8 @@ fn earliest_with_head(
     let names = entries
         .iter()
         .filter_map(|entry| entry.name.to_str())
-        .filter(|name| name.starts_with(prefix) && name.ends_with(".json"));
+        // 1.x's case-sensitive `x.endsWith('.json')`.
+        .filter(|name| name.starts_with(prefix) && name.strip_suffix(".json").is_some());
     for name in names {
         let Some(rec) = read_js_text(files, &paths::join(style, dir, name))
             .and_then(|text| TreeRecord::from_json(&text))
@@ -195,7 +196,6 @@ pub(crate) fn other_trees<'a>(
     };
     let cwd = env.cwd.to_string_lossy();
     let here = paths::resolve(style, &cwd, &ws.root);
-    // Keyed by the root as written; a `BTreeMap` iterates in UTF-8 byte order (OC-4 A).
     let mut by_root: BTreeMap<String, TreeRecord> = BTreeMap::new();
     let names = entries
         .iter()
@@ -207,50 +207,78 @@ pub(crate) fn other_trees<'a>(
         else {
             continue;
         };
-        let Some(root) = rec.root()? else {
-            continue;
-        };
-        if paths::resolve(style, &cwd, root) == here {
-            continue;
-        }
-        let replace = match by_root.get(root) {
-            None => true,
-            Some(seen) => rec.earlier_than(seen)?,
-        };
-        if replace {
-            // The map stores its key: the root is copied out of the record it keeps.
-            by_root.insert(root.to_owned(), rec);
-        }
+        keep_earliest(&mut by_root, rec, |root| {
+            paths::resolve(style, &cwd, root) == here
+        })?;
     }
     let mut out = Vec::with_capacity(by_root.len());
     for (root, rec) in &by_root {
-        let resolved = paths::resolve(style, &cwd, root);
-        if !exists(files, &resolved) {
-            continue;
-        }
-        let Some(tree) = discover_at(ports, env, &resolved) else {
-            continue;
-        };
-        if paths::resolve(style, &cwd, &tree.root) != resolved || tree.state_dir != ws.state_dir {
-            continue;
-        }
-        let resolved_head = match (tree.git_root(), rec.head_rev()?) {
-            (Some(git_root), Some(head)) => {
-                git::resolve_rev(ports.process(), Path::new(git_root), &head)
-            }
-            (Some(_) | None, None) | (None, Some(_)) => None,
-        };
-        let base = resolved_head.or_else(|| base_rev(ports, style, &tree, &sid));
-        out.push(Tree {
-            scope: Scope {
-                base,
-                start_fp: rec.start_fp().map(str::to_owned),
-            },
-            ws: Cow::Owned(tree),
-            checkout: Checkout::Other,
-        });
+        out.extend(tree_at(call, ws, root, rec)?);
     }
     Ok(out)
+}
+
+/// 1.x's `byRoot.set(rec.root, rec)` when `rec` is the first or earliest record of its root,
+/// keyed by the root as written; a `BTreeMap` iterates in UTF-8 byte order (OC-4 A). A record
+/// without a truthy root, or of this checkout (`is_here`), is skipped.
+fn keep_earliest(
+    by_root: &mut BTreeMap<String, TreeRecord>,
+    rec: TreeRecord,
+    is_here: impl Fn(&str) -> bool,
+) -> Result<(), JsTypeError> {
+    let Some(root) = rec.root()? else {
+        return Ok(());
+    };
+    if is_here(root) {
+        return Ok(());
+    }
+    let replace = match by_root.get(root) {
+        None => true,
+        Some(seen) => rec.earlier_than(seen)?,
+    };
+    if replace {
+        // The map stores its key: the root is copied out of the record it keeps.
+        by_root.insert(root.to_owned(), rec);
+    }
+    Ok(())
+}
+
+/// The checkout a record names, when its root still exists and is a checkout of `ws`'s
+/// repository: its base is the record's head when that resolves there, else the session's.
+fn tree_at<'a>(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+    root: &str,
+    rec: &TreeRecord,
+) -> Result<Option<Tree<'a>>, JsTypeError> {
+    let HookCall { ports, env, input } = *call;
+    let style = env.style;
+    let cwd = env.cwd.to_string_lossy();
+    let resolved = paths::resolve(style, &cwd, root);
+    if !exists(ports.files(), &resolved) {
+        return Ok(None);
+    }
+    let Some(tree) = discover_at(ports, env, &resolved) else {
+        return Ok(None);
+    };
+    if paths::resolve(style, &cwd, &tree.root) != resolved || tree.state_dir != ws.state_dir {
+        return Ok(None);
+    }
+    let resolved_head = match (tree.git_root(), rec.head_rev()?) {
+        (Some(git_root), Some(head)) => {
+            git::resolve_rev(ports.process(), Path::new(git_root), &head)
+        }
+        (Some(_) | None, None) | (None, Some(_)) => None,
+    };
+    let base = resolved_head.or_else(|| base_rev(ports, style, &tree, &session_segment(input)));
+    Ok(Some(Tree {
+        scope: Scope {
+            base,
+            start_fp: rec.start_fp().map(str::to_owned),
+        },
+        ws: Cow::Owned(tree),
+        checkout: Checkout::Other,
+    }))
 }
 
 /// 1.x's `/^tree-[0-9a-f]{12}-.+\.json$/`, where `.` is anything but a line terminator.
@@ -268,23 +296,23 @@ fn is_record_name(name: &str) -> bool {
     })
 }
 
-/// 1.x `coversBase(proj, base, treeBase, tree)`: does a scope from `base` hold all of `tree`'s
-/// own commits (those after `tree_base`)? Counted with `git rev-list --count` at `ws`'s root;
-/// a failed count is not covered (#157).
+/// 1.x `coversBase(proj, base, t.base, t.proj)`: does a scope from `base` hold all of `tree`'s
+/// own commits (those after its base)? Counted with `git rev-list --count` at `ws`'s root; a
+/// failed count is not covered (#157).
 pub(crate) fn covers_base(
     process: &impl ProcessRunner,
     ws: &Workspace,
     base: Option<&str>,
-    tree_base: Option<&str>,
-    tree: &Workspace,
+    tree: &Tree<'_>,
 ) -> bool {
-    let Some(tree_base) = tree_base.filter(|b| !b.is_empty()) else {
+    let Some(tree_base) = tree.scope.base.as_deref().filter(|b| !b.is_empty()) else {
         return true;
     };
     let Some(base) = base.filter(|b| !b.is_empty()) else {
         return false;
     };
     let Some(head) = tree
+        .ws
         .git_root()
         .and_then(|root| git::resolve_rev(process, Path::new(root), "HEAD"))
     else {
@@ -353,7 +381,7 @@ pub(crate) fn due_trees<'a>(
         let held_here = t.checkout == Checkout::Other
             && main_due
             && merged_into(call, &t.ws, ws)
-            && covers_base(ports.process(), ws, main_base, base, &t.ws);
+            && covers_base(ports.process(), ws, main_base, t);
         keep.push((!unchanged && !held_here).then_some(fp));
     }
     Ok(candidates

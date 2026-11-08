@@ -117,17 +117,18 @@ fn a_gate_record_reads_green_red_with_its_failed_steps_or_not_run() {
 
 #[test]
 fn a_red_gate_whose_steps_1x_cannot_filter_is_an_error() {
-    for json in [
-        r#"{"steps":"abc"}"#,
-        "{}",
-        r#"{"steps":[null]}"#,
-        r#"{"steps":{"filter":1}}"#,
-        r#"{"steps":[{"name":{"toString":1}}]}"#,
+    for (json, why) in [
+        (r#"{"steps":"abc"}"#, "not an array"),
+        ("{}", "not an array"),
+        (r#"{"steps":[null]}"#, "null"),
+        (r#"{"steps":{"filter":1}}"#, "not an array"),
+        (r#"{"steps":[{"name":{"toString":1}}]}"#, "toString"),
     ] {
         let gate = GateRecord::from_json(json).expect("JSON");
+        let text = subagent_start_context(&facts(Some(&gate), &[]));
         assert!(
-            subagent_start_context(&facts(Some(&gate), &[])).is_err(),
-            "{json}"
+            matches!(&text, Err(error) if error.message().contains(why)),
+            "{json}: {text:?}"
         );
     }
 }

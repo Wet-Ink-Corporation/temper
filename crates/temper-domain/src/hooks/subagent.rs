@@ -147,34 +147,46 @@ pub fn subagent_start_context(facts: &SubagentStartFacts<'_>) -> Result<String, 
     } else {
         format!("- Plans: {}", facts.plans.join(", "))
     });
-    for t in facts.also {
-        lines.push(format!(
-            "- Also changed in this session: the worktree {} (fingerprint {}, {} Rust file(s)). Its scope is `git -C \"{}\" diff {}` plus its untracked files, and its gate runs inside it (`cd \"{}\" && {}`); a review of it uses that fingerprint.",
-            t.label,
-            t.fingerprint,
-            t.rust_files,
-            t.at,
-            t.base.unwrap_or(""),
-            t.at,
-            t.gate_command
-        ));
-    }
+    lines.extend(facts.also.iter().map(also_line));
     if let Some(reviewer) = facts.reviewer {
-        let or_listed = if facts.also.is_empty() {
-            ""
-        } else {
-            ", or, if you were asked to review one of the worktrees listed above, that worktree's fingerprint"
-        };
-        lines.push(format!(
-            "- Your verdict's \"fingerprint\" field must be {}{or_listed}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.",
-            facts.fingerprint
-        ));
-        lines.extend(reviewer.earlier.map(str::to_owned));
-        if !reviewer.diff_stat.is_empty() {
-            lines.push(format!("- Diff stat:\n{}", last_lines(reviewer.diff_stat)));
-        }
+        push_reviewer_lines(&mut lines, facts, reviewer);
     }
     Ok(lines.join("\n"))
+}
+
+/// 1.x's `- Also changed in this session: …` line for another worktree.
+fn also_line(t: &OtherTree<'_>) -> String {
+    format!(
+        "- Also changed in this session: the worktree {} (fingerprint {}, {} Rust file(s)). Its scope is `git -C \"{}\" diff {}` plus its untracked files, and its gate runs inside it (`cd \"{}\" && {}`); a review of it uses that fingerprint.",
+        t.label,
+        t.fingerprint,
+        t.rust_files,
+        t.at,
+        t.base.unwrap_or(""),
+        t.at,
+        t.gate_command
+    )
+}
+
+/// A reviewer's lines: the fingerprint its verdict names, the earlier review, the diff stat.
+fn push_reviewer_lines(
+    lines: &mut Vec<String>,
+    facts: &SubagentStartFacts<'_>,
+    reviewer: ReviewerExtras<'_>,
+) {
+    let or_listed = if facts.also.is_empty() {
+        ""
+    } else {
+        ", or, if you were asked to review one of the worktrees listed above, that worktree's fingerprint"
+    };
+    lines.push(format!(
+        "- Your verdict's \"fingerprint\" field must be {}{or_listed}. If the tree changes during your review the verdict is recorded as stale and a new review will be needed.",
+        facts.fingerprint
+    ));
+    lines.extend(reviewer.earlier.map(str::to_owned));
+    if !reviewer.diff_stat.is_empty() {
+        lines.push(format!("- Diff stat:\n{}", last_lines(reviewer.diff_stat)));
+    }
 }
 
 /// `stat.split('\n').slice(-25).join('\n')`.

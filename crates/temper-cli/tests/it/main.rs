@@ -6,5 +6,6 @@ mod scan;
 mod session_start;
 mod status;
 mod status_json;
+mod subagent_start;
 #[cfg(test)]
 mod support;

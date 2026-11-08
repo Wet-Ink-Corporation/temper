@@ -233,6 +233,36 @@ pub(crate) fn show_at(
     succeeded(process, git_root, &["show", &spec])
 }
 
+/// The git half of 1.x `diffStat(proj, base)`: `git diff --stat=120 --no-color [base] -- .
+/// :(exclude)..`'s stdout as lossy UTF-8, whatever its exit code, as 1.x reads `r.stdout`;
+/// empty when git does not start or a stream overflows (1.x keeps the part read before
+/// `maxBuffer`, past 256 MiB of stat).
+pub(crate) fn diff_stat(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    base: Option<&str>,
+) -> String {
+    let excludes = EXCLUDED_DIRS.map(|dir| format!(":(exclude){dir}"));
+    let mut args = vec!["diff", "--stat=120", "--no-color"];
+    args.extend(base);
+    args.extend(["--", "."]);
+    args.extend(excludes.iter().map(String::as_str));
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let request = ProcessRequest {
+        program: "git",
+        args: &args,
+        cwd: git_root,
+        stdout: StdoutSink::Capture(CAP),
+        stderr_cap: CAP,
+        timeout: TIMEOUT,
+    };
+    match process.run(request) {
+        Ok(output) => lossy(output.stdout),
+        // 1.x's `r.stdout ?? ''` for a git that did not start.
+        Err(_) => String::new(),
+    }
+}
+
 /// A name in one of the directories git's change lists leave out: 1.x's
 /// `EXCLUDE.some((x) => f === x || f.startsWith(`${x}/`))`.
 fn excluded(name: &str) -> bool {

@@ -1,10 +1,12 @@
 //! The scopes of the session's checkouts, over the fakes. Real git runs in `temper-cli`'s
 //! `subagent_start` tests and the parity cases.
 
+use std::borrow::Cow;
+
 use temper_domain::PathStyle::Posix;
 use temper_domain::{Config, tree_id};
 
-use super::{Checkout, Scope, Widen, covers_base, other_trees, own_tree};
+use super::{Checkout, Scope, Tree, Widen, covers_base, other_trees, own_tree};
 use crate::engine::RunEnv;
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, Reply};
 use crate::hooks::{HookCall, HookInput};
@@ -328,7 +330,6 @@ fn times_js_cannot_compare_give_the_session_s_scope_as_1x_s_try_does() {
 #[test]
 fn covers_base_counts_the_tree_s_own_commits_and_a_failed_count_is_not_covered() {
     let main = workspace(MAIN);
-    let tree = workspace(WT);
     let count = |n: &str| ran(&format!("{n}\n"));
     let ports = |all: Reply, not_base: Reply| {
         resolving(FakeProcess::new(), WT, "HEAD", H3)
@@ -341,7 +342,15 @@ fn covers_base_counts_the_tree_s_own_commits_and_a_failed_count_is_not_covered()
             .otherwise(failed())
     };
     let covers = |process: &FakeProcess, base: Option<&str>, tree_base: Option<&str>| {
-        covers_base(process, &main, base, tree_base, &tree)
+        let tree = Tree {
+            ws: Cow::Owned(workspace(WT)),
+            scope: Scope {
+                base: tree_base.map(str::to_owned),
+                start_fp: None,
+            },
+            checkout: Checkout::Other,
+        };
+        covers_base(process, &main, base, &tree)
     };
 
     assert!(

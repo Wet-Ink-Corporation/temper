@@ -49,5 +49,8 @@ fn string_to_number_follows_the_spec_grammar() {
     ] {
         assert!(string_to_number(text).is_nan(), "{text:?}");
     }
-    assert_eq!(string_to_number("-Infinity"), f64::NEG_INFINITY);
+    assert_eq!(
+        string_to_number("-Infinity").to_bits(),
+        f64::NEG_INFINITY.to_bits()
+    );
 }

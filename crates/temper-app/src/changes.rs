@@ -9,13 +9,13 @@ use std::path::Path;
 
 use temper_domain::{
     EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, Fingerprint, FingerprintHasher, TEMPER_CONFIG_FILE,
-    gate_config, in_fingerprint, is_rust_relevant, js_sort,
+    gate_config, in_fingerprint, is_rust_relevant, js_sort, js_trim,
 };
 
 use crate::engine::RunEnv;
 use crate::git;
 use crate::paths::{self, PathEnv};
-use crate::ports::{Files, Ports, ReadInto};
+use crate::ports::{Files, Ports, ProcessRunner, ReadInto};
 use crate::project::{self, Workspace};
 use crate::relpath::{LongPaths, Relater};
 use crate::state::read_js_text;
@@ -100,6 +100,31 @@ pub(crate) fn rust_changes(
         changes.push(TEMPER_CONFIG_FILE.to_owned());
     }
     changes
+}
+
+/// 1.x `diffStat(proj, base)`: `git diff --stat` against `base` (whatever its exit), trimmed,
+/// then `untracked: <files>` for the untracked Rust-relevant files, all trimmed; empty
+/// outside git.
+pub(crate) fn diff_stat(
+    process: &impl ProcessRunner,
+    ws: &Workspace,
+    base: Option<&str>,
+) -> String {
+    let Some(git_root) = ws.git_root() else {
+        return String::new();
+    };
+    let at = Path::new(git_root);
+    let stat = git::diff_stat(process, at, base.filter(|base| !base.is_empty()));
+    let untracked: Vec<String> = git::untracked(process, at)
+        .into_iter()
+        .filter(|name| is_rust_relevant(&paths::norm(name)))
+        .collect();
+    let mut out = js_trim(&stat).to_owned();
+    if !untracked.is_empty() {
+        out.push_str("\nuntracked: ");
+        out.push_str(&untracked.join(", "));
+    }
+    js_trim(&out).to_owned()
 }
 
 /// The git half of [`fingerprint`], before the gate config.

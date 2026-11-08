@@ -107,7 +107,10 @@ mod tests {
             assert_eq!(record(falsy).root(), Ok(None), "{falsy}");
         }
         for odd in [r#"{"root":5}"#, r#"{"root":["/w"]}"#, r#"{"root":true}"#] {
-            assert!(record(odd).root().is_err(), "{odd}");
+            assert!(
+                matches!(record(odd).root(), Err(error) if error.message().contains("root")),
+                "{odd}"
+            );
         }
     }
 
@@ -129,7 +132,10 @@ mod tests {
                 .as_deref(),
             Some("12")
         );
-        assert!(record(r#"{"head":{"toString":1}}"#).head_rev().is_err());
+        assert!(matches!(
+            record(r#"{"head":{"toString":1}}"#).head_rev(),
+            Err(error) if error.message().contains("toString")
+        ));
         assert!(!record(r#"{"head":""}"#).has_head());
         assert!(
             record(r#"{"head":null}"#)

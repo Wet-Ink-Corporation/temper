@@ -8,6 +8,7 @@ mod pre_edit;
 mod session_start;
 mod shell;
 mod skill;
+mod subagent_start;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
@@ -42,10 +43,10 @@ pub(crate) fn run<P: Ports>(
         HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
         HookEvent::PreBash => pre_bash::pre_bash(call, scanner),
         HookEvent::SessionStart => session_start::session_start(call),
-        HookEvent::PreHandback
-        | HookEvent::Stop
-        | HookEvent::SubagentStop
-        | HookEvent::SubagentStart => Err(HookError::NotPorted { event }),
+        HookEvent::SubagentStart => subagent_start::subagent_start(call),
+        HookEvent::PreHandback | HookEvent::Stop | HookEvent::SubagentStop => {
+            Err(HookError::NotPorted { event })
+        }
     }
 }
 
@@ -63,14 +64,14 @@ fn logged(
     }
 }
 
-/// The outcome `then` gives, after a telemetry row for `event`: `then` may log rows of its own,
-/// which follow this one.
-fn logged_then(
+/// What `then` gives (an outcome, or the rest of a handler), after a telemetry row for `event`:
+/// `then` may log rows of its own, which follow this one.
+fn logged_then<T>(
     call: &HookCall<'_, impl Ports>,
     workspace: &Workspace,
     event: &TelemetryEvent,
-    then: impl FnOnce() -> HookOutcome,
-) -> HookOutcome {
+    then: impl FnOnce() -> T,
+) -> T {
     match telemetry::log(call, workspace, event) {
         // Best effort, as in `logged`.
         Ok(()) | Err(_) => then(),
