@@ -6,7 +6,7 @@ mod redact;
 
 pub(crate) use redact::Redactor;
 
-use super::{RaiseFlag, SkillVia};
+use super::{LostGate, RaiseFlag, SkillVia};
 use crate::js::{Value, js_json, json_string};
 use crate::time::Timestamp;
 
@@ -103,6 +103,8 @@ pub enum TelemetryEvent {
         /// The first change.
         change: ProtectedChange,
     },
+    /// `gate-lost`: a gate run of this session whose hook was killed (from `SessionStart`).
+    GateLost(LostGate),
 }
 
 /// The change a protected-configuration `ask` row names (its `via` and `file`).
@@ -213,6 +215,7 @@ impl TelemetryEvent {
             Self::DenyShellWrite { .. } | Self::DenyShellWriteVia { .. } => "deny-shell-write",
             Self::DenyBaselineRaise { .. } => "deny-baseline-raise",
             Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
+            Self::GateLost(_) => "gate-lost",
         }
     }
 
@@ -270,6 +273,11 @@ impl TelemetryEvent {
                 push_field(out, "via", &json_string(via));
                 if let Some(file) = file {
                     push_field(out, "file", &json_string(file));
+                }
+            }
+            Self::GateLost(lost) => {
+                for (key, value) in lost.detail() {
+                    push_field(out, key, &js_json(value));
                 }
             }
         }

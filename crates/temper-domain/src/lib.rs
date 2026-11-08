@@ -46,14 +46,14 @@ pub use fingerprint::{
 };
 pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
-    BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EnvExports,
-    EditFacts,
-    EditOp, EditStep, EditTarget, EditTool, HookEvent, HookOutcome, IRON_RULES, InterpreterCode,
-    LazyExemptions, ManifestEdit, OpaqueKind, PolicyDecision, PolicySetupError, ProtectedChange,
-    RaiseFlag, Replacements, RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, ShellAskVia,
-    ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent, Unread,
-    apply_edit, edit_policy, env_file_lines, is_reviewer, lockfile_denial, skill_gate_denial, skill_load_via,
-    skill_preloaded,
+    BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
+    EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome, IRON_RULES,
+    InterpreterCode, LazyExemptions, LostGate, LostGateFacts, LostReason, ManifestEdit, OpaqueKind,
+    PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange, RaiseFlag, Replacements,
+    RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, ShellAskVia, ShellDenyVia,
+    ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent, Unread, apply_edit,
+    edit_policy, env_file_lines, is_reviewer, lockfile_denial, lost_gate_row, open_gate_starts,
+    skill_gate_denial, skill_load_via, skill_preloaded,
 };
 pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{
