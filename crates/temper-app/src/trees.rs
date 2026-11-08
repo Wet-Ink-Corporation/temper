@@ -32,10 +32,7 @@ pub(crate) use scope::{Checkout, DueTree, Scope, Tree, Widen, due_trees, own_tre
 ///
 /// [`HookError::Files`] when the record cannot be written, as 1.x's `writeAtomic` throws (F2,
 /// F5); [`HookError::InputType`] when the session or agent id is a value 1.x's `String` throws on.
-pub(crate) fn note_tree(
-    call: &HookCall<'_, impl Ports>,
-    ws: &Workspace,
-) -> Result<(), HookError> {
+pub(crate) fn note_tree(call: &HookCall<'_, impl Ports>, ws: &Workspace) -> Result<(), HookError> {
     let HookCall { ports, env, input } = *call;
     let style = env.style;
     let Some(git_root) = ws.git_root() else {

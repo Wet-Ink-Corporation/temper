@@ -262,5 +262,9 @@ fn a_write_failure_is_the_handler_s_error() {
 
     let error = note(&ports, &workspace(true), r#"{"session_id":"s1"}"#);
 
-    assert_eq!(error, Err(Some(FsOp::Write)), "1.x's writeAtomic throws (F2)");
+    assert_eq!(
+        error,
+        Err(Some(FsOp::Write)),
+        "1.x's writeAtomic throws (F2)"
+    );
 }
