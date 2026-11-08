@@ -16,7 +16,7 @@ import { nodeEngine, rustEngine } from './lib/engines.mjs';
 import { HOOK_FIXTURES, writeTree } from './lib/fixtures.mjs';
 import {
   maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeAt,
-  maskGitIndex, maskTreeIds,
+  maskGitIndex, maskRecordedAt, maskTreeIds, maskVerdictParse,
 } from './lib/normalise.mjs';
 
 // Invariant 5 (H-12): without the binary the file fails; it never skips.
@@ -59,6 +59,7 @@ function fileMask() {
     if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
     if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
     if (/\/sessions\/[^/]+\/tree-[^/]+\.json$/.test(rel)) return maskTreeAt(text);
+    if (/\/verdicts\/[^/]+\.(json|history\.jsonl)$/.test(rel)) return maskRecordedAt(text);
     if (/^tree\/\.git\/(worktrees\/[^/]+\/)?index$/.test(rel)) return maskGitIndex(text);
     if (/(^|\/)env\.sh$/.test(rel)) {
       const m = maskD17Lines(text);
@@ -71,15 +72,22 @@ function fileMask() {
 }
 
 /**
- * One engine's run of a case, masked; `failures` counts OC-3 (p)'s masked texts and `d17` D16(w)'s
- * masked env-file lines.
+ * One engine's run of a case, masked; `failures` counts OC-3 (p)'s masked texts, `parse` D16(a)'s
+ * verdict parse texts and `d17` D16(w)'s masked env-file lines. `engineFor` picks each step's
+ * engine (port 3f's cross-read cases); `<FP>` is always 1.x's fingerprint.
  */
-function run(engine, c, steps, now) {
+function run(engine, c, steps, now, engineFor = () => engine) {
   const { mask, counts } = fileMask();
-  const r = runHookCase(engine, dirs[c.fixture], { steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile: mask, setup: c.setup, now });
+  const r = runHookCase(engine, dirs[c.fixture], {
+    steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile: mask, setup: c.setup, now, engineFor, fpEngine: engines[0],
+  });
   let failures = 0;
+  let parse = 0;
   const out = r.steps.map((s) => {
-    let { stdout } = s;
+    let stdout = maskRecordedAt(s.stdout);
+    const p = maskVerdictParse(stdout);
+    parse += p.count;
+    stdout = p.text;
     if (c.maskFailure) {
       const m = maskFailureText(stdout);
       failures += m.count;
@@ -88,7 +96,7 @@ function run(engine, c, steps, now) {
     // OC-5 A: only 2.0 says that the config is unreadable; a no-op elsewhere.
     return { exit: s.exit, stdout: maskConfigLine(stdout), stderr: s.stderr };
   });
-  return { out, files: maskTreeIds(r.files), failures, d17: counts.d17, ms: r.steps.map((s) => s.ms) };
+  return { out, files: maskTreeIds(r.files), failures, parse, d17: counts.d17, ms: r.steps.map((s) => s.ms) };
 }
 
 /** OC-6 A (wi-168ff8): D17's two lines per env-file write on Rust's side, none on 1.x's. */
@@ -97,11 +105,11 @@ function assertD17(rust, node, writes) {
   assert.equal(rust.d17, 2 * writes, `D17: two lines per env-file write (${writes})`);
 }
 
-test('the hook cases: unique names, known fixtures, and the 3e floor of 192 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 27, subagent-start: 20)', () => {
+test('the hook cases: unique names, known fixtures, and the 3f floor of 224 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 27, subagent-start: 20, pre-handback: 16, subagent-stop: 11, verdict cross-reads: 5)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 192, `${cases.length} cases`);
+  assert.ok(cases.length >= 224, `${cases.length} cases`);
 });
 
 for (const c of cases) {
@@ -109,10 +117,16 @@ for (const c of cases) {
     const steps = c.steps ?? [{ event: c.event, stdin: c.stdin }];
     // One `now` per case, so both engines see the same placeholder times.
     const now = Date.now();
-    const [node, rust] = engines.map((engine) => run(engine, c, steps, now));
+    // A cross-read case (port 3f) runs its `engine: "node"` steps with 1.x on the Rust side too,
+    // and is compared with the same case run by 1.x alone.
+    const [nodeEngine1x, rustEngine2] = engines;
+    const node = run(nodeEngine1x, c, steps, now);
+    const rust = run(rustEngine2, c, steps, now, (step) => (step.engine === 'node' ? nodeEngine1x : rustEngine2));
     assert.deepStrictEqual(rust.out, node.out, 'exit, stdout and stderr per step');
     assert.deepStrictEqual(rust.files, node.files, 'written files');
     assert.equal(rust.failures, node.failures, 'OC-3 (p) masks on each side');
+    assert.equal(rust.parse, node.parse, 'D16(a) verdict parse masks on each side');
+    if (c.maskParse) assert.equal(rust.parse, c.maskParse, 'D16(a) masked texts');
     if (c.maskFailure) assert.equal(rust.failures, c.maskFailure, 'OC-3 (p) masked texts');
     assertD17(rust, node, c.envFileWrites ?? 0);
     if (c.stdout) assert.deepEqual(node.out.map((s) => s.stdout), c.stdout, 'the pinned stdout');

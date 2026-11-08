@@ -178,3 +178,31 @@ export function maskTreeAt(text) {
 export function maskGitIndex(text) {
   return text.startsWith('DIRC') ? '<GIT INDEX>' : text;
 }
+
+const ISO = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z`;
+
+/**
+ * Port 3f (§2.2 lists it): a verdict record's `recorded_at` is `new Date().toISOString()` when the
+ * hook ran, so each engine's own clock. As a pretty or compact JSON key (`verdicts/<fp>.json`, a
+ * history row, `status --json`'s `review`) and in the earlier-review line a reviewer's context
+ * quotes (`recorded: <verdict> at <time>`), an ISO time becomes `<T>`. Every other key is compared.
+ */
+export function maskRecordedAt(text) {
+  return text
+    .replace(new RegExp(String.raw`("recorded_at": ?")${ISO}"`, 'g'), '$1<T>"')
+    .replace(new RegExp(String.raw`(recorded: (?:approved|changes-requested) at )${ISO}`, 'g'), '$1<T>');
+}
+
+/**
+ * D16(a), port 3f: the text after `verdict JSON does not parse: ` in a hook's JSON answer is
+ * `serde_json`'s, not V8's (whose text quotes the block, newlines included), so it becomes `<MSG>`
+ * up to the denial's or the block's last line, which follow the only problem 1.x then reports. Counted, like `maskFailureText`, so a case can pin how many.
+ */
+export function maskVerdictParse(text) {
+  let count = 0;
+  const out = text.replace(/(verdict JSON does not parse: )(?:[^"\\]|\\.)*?(?=\\n(?:Fix the verdict block|End your final report))/g, (_, head) => {
+    count += 1;
+    return `${head}<MSG>`;
+  });
+  return { text: out, count };
+}
