@@ -10,7 +10,7 @@ use temper_domain::JsValue;
 use crate::subagent_start::{
     LIB, LIB_RS_2, context, fingerprint, head, hook, json_str, repo, start,
 };
-use crate::support::{TestResult, git, write_tree};
+use crate::support::{TestResult, git, real_path, write_tree};
 
 /// `LIB_RS_2` with a third function.
 fn lib_rs_3() -> String {
@@ -34,7 +34,7 @@ fn worktree(dir: &Path, name: &str) -> Result<PathBuf, Box<dyn std::error::Error
         dir,
         &["worktree", "add", "-q", "--detach", &at.to_string_lossy()],
     )?;
-    Ok(fs::canonicalize(at)?)
+    real_path(&at)
 }
 
 /// 1.x `subagentEdits(w, sid, agent_id, rel, text)`: a general-purpose subagent's `Write`

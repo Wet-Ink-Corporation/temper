@@ -4,11 +4,22 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Outcome of a test; `?` works on every error type.
 pub(crate) type TestResult = Result<(), Box<dyn Error>>;
+
+/// `path`'s real path as the engine spells it: canonicalized, without the `\\?\` prefix that
+/// `fs::canonicalize` adds on Windows and 1.x's `unverbatim` strips.
+pub(crate) fn real_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let real = fs::canonicalize(path)?;
+    let text = real.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if cfg!(windows) => Ok(PathBuf::from(rest)),
+        _ => Ok(real),
+    }
+}
 
 /// What one run of the binary produced.
 #[derive(Debug, PartialEq, Eq)]
