@@ -2,9 +2,12 @@
 
 mod cli;
 mod hooks;
+mod pre_edit_trees;
 mod scan;
 mod session_start;
 mod status;
 mod status_json;
+mod subagent_start;
+mod subagent_worktrees;
 #[cfg(test)]
 mod support;

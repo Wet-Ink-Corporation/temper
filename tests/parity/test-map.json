@@ -1673,7 +1673,7 @@
     },
     {
       "source": "tests/handlers.test.mjs",
-      "pending": "port Phase 3 (SubagentStart, the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript, and the SessionStart compact test, which needs noteTree from 3e) and Phase 4 (Stop, the implementer branch of SubagentStop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
+      "pending": "port Phase 3 (the reviewer branch of SubagentStop, SubagentHandback, reportFromTranscript, and the telemetry test of SubagentStart and SubagentStop, whose SubagentStart half 3e ports as subagent_start::every_agent_type_is_recorded_in_telemetry_before_filtering) and Phase 4 (Stop, the implementer branch of SubagentStop, the SessionStart compact test, which asserts through Stop, and the Stop halves of the change-detection tests, whose status halves 3c ports)",
       "tests": [
         {
           "node": "skill gate: a Rust edit is refused until rust-craft is loaded through the Skill tool",
@@ -1786,6 +1786,49 @@
           "crate": "temper-cli",
           "rust": [
             "session_start::outside_a_rust_project_it_does_nothing"
+          ]
+        },
+        {
+          "node": "SubagentStart (reviewer): with changes in the main checkout and a worktree, the main tree is the target and the worktree is listed",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_worktrees::a_reviewer_with_changes_in_the_main_checkout_and_a_worktree_targets_the_main_tree"
+          ]
+        },
+        {
+          "node": "SubagentStart: parallel agents in their own worktrees each keep their own tree as the target",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_worktrees::parallel_agents_in_their_own_worktrees_each_keep_their_own_tree"
+          ]
+        },
+        {
+          "node": "coversBase: a failed git rev-list does not count as covered (#157)",
+          "crate": "temper-app",
+          "rust": [
+            "trees::scope::tests::covers_base_counts_the_tree_s_own_commits_and_a_failed_count_is_not_covered"
+          ]
+        },
+        {
+          "node": "SubagentStart (reviewer): a worktree on a later commit than the session base names its own base to the gate",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_worktrees::a_worktree_on_a_later_commit_than_the_session_base_names_its_own_base"
+          ]
+        },
+        {
+          "node": "SubagentStart: the reviewer, implementer and architect get the fingerprint and base; other agents get nothing",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_start::the_reviewer_implementer_and_architect_get_the_fingerprint_and_base_others_nothing"
+          ]
+        },
+        {
+          "node": "SubagentStart: a reviewer of a tree that already has a verdict is told the earlier verdict and its findings (#136)",
+          "crate": "temper-cli",
+          "rust": [
+            "subagent_start::a_reviewer_of_a_tree_with_a_verdict_is_told_the_earlier_verdict_and_its_findings",
+            "subagent_start::the_kept_history_after_an_approval_is_counted"
           ]
         }
       ]

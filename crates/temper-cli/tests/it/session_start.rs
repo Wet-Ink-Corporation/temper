@@ -257,8 +257,9 @@ fn drive_folded(line: &str) -> String {
     match line.strip_prefix(HEAD).map(str::as_bytes) {
         Some([drive, b':', ..]) if cfg!(windows) && drive.is_ascii_alphabetic() => {
             let mut out = line.to_owned();
-            out.get_mut(HEAD.len()..=HEAD.len())
-                .map(str::make_ascii_lowercase);
+            if let Some(drive) = out.get_mut(HEAD.len()..=HEAD.len()) {
+                drive.make_ascii_lowercase();
+            }
             out
         }
         _ => line.to_owned(),

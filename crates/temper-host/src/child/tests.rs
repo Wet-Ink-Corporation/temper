@@ -3,8 +3,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use temper_app::{
-    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink,
-    Stream,
+    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StderrSink,
+    StdoutSink, Stream,
 };
 
 use super::{Captured, StdProcess, read_capped};
@@ -39,7 +39,7 @@ fn run(command: &[&str], limits: Limits) -> Result<ProcessOutput, ProcessError> 
         args: &args,
         cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
         stdout: StdoutSink::Capture(limits.stdout_cap),
-        stderr_cap: limits.stderr_cap,
+        stderr: StderrSink::Capture(limits.stderr_cap),
         timeout: limits.timeout,
     })
 }
@@ -165,7 +165,7 @@ fn a_streamed_stdout_goes_to_the_sink_and_stderr_keeps_its_cap() -> TestResult {
         args: &args,
         cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
         stdout: StdoutSink::Stream(&mut sink),
-        stderr_cap: ROOMY,
+        stderr: StderrSink::Capture(ROOMY),
         timeout: PATIENT,
     })?;
     let bad = [OsString::from("--no-such-flag")];
@@ -174,7 +174,7 @@ fn a_streamed_stdout_goes_to_the_sink_and_stderr_keeps_its_cap() -> TestResult {
         args: &bad,
         cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
         stdout: StdoutSink::Stream(&mut Vec::new()),
-        stderr_cap: ByteCap::new(4),
+        stderr: StderrSink::Capture(ByteCap::new(4)),
         timeout: PATIENT,
     });
 
@@ -194,6 +194,45 @@ fn a_streamed_stdout_goes_to_the_sink_and_stderr_keeps_its_cap() -> TestResult {
             })
         ),
         "{overflow:?}"
+    );
+    Ok(())
+}
+
+/// Review F2 (H-13): with both streams null, nothing reads a pipe, so a grandchild that outlives
+/// its killed parent keeps no reader waiting. The test returning at all is the evidence, as in
+/// the timeout test above (TST-10): with pipes, `run` would wait the grandchild's 60 s. The
+/// child writes to both streams first, and the output holds neither.
+///
+/// On Unix `sh` must wait for its `sleep` (it prints `late` after it), so the `sleep` is a
+/// grandchild that inherits both streams; on Windows `cmd` runs `ping` as its child.
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot spawn processes")]
+fn null_streams_keep_no_reader_waiting_on_a_grandchild() -> TestResult {
+    let (program, args): (&str, Vec<OsString>) = if cfg!(windows) {
+        let script = "echo out & echo err 1>&2 & ping -n 60 127.0.0.1 & echo late";
+        ("cmd", vec![OsString::from("/c"), OsString::from(script)])
+    } else {
+        let script = "echo out; echo err >&2; sleep 60; echo late";
+        ("sh", vec![OsString::from("-c"), OsString::from(script)])
+    };
+
+    let output = StdProcess.run(ProcessRequest {
+        program,
+        args: &args,
+        cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
+        stdout: StdoutSink::Null,
+        stderr: StderrSink::Null,
+        timeout: Duration::from_millis(500),
+    })?;
+
+    assert_eq!(
+        output,
+        ProcessOutput {
+            status: ExitKind::TimedOut,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        },
+        "killed at its timeout, with nothing read from either stream"
     );
     Ok(())
 }

@@ -153,7 +153,7 @@ fn cli_path(env: &RunEnv) -> Option<String> {
 
 /// 1.x `gateCmd()`: `node "<cli>" gate`; `temper gate` for the binary run without a plugin
 /// root (OC-6 A).
-fn gate_command(env: &RunEnv) -> String {
+pub(super) fn gate_command(env: &RunEnv) -> String {
     match cli_path(env) {
         Some(cli) => format!("node \"{cli}\" gate"),
         None => "temper gate".to_owned(),

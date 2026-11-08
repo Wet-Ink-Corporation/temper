@@ -215,3 +215,5 @@ fn a_session_id_1x_cannot_convert_is_the_handler_s_error() {
     assert_eq!(error, Err(None), "1.x's `sessionDir` throws (Invariant 4)");
     assert_eq!(ports.files.paths(), Vec::<String>::new(), "nothing written");
 }
+
+mod note_tree;

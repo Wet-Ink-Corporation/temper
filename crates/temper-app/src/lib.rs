@@ -15,6 +15,7 @@ mod fakes;
 mod git;
 mod hooks;
 mod manifests;
+mod memo;
 mod paths;
 mod ports;
 mod procs;
@@ -35,5 +36,6 @@ pub use engine::{
 pub use hooks::{HookInput, HookInputError};
 pub use ports::{
     ByteCap, Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports,
-    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
+    ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StderrSink, StdoutSink,
+    Stream,
 };

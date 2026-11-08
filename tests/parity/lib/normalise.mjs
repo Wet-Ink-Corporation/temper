@@ -160,3 +160,76 @@ export function maskConfigLine(text) {
 export function maskTreeIds(files) {
   return Object.fromEntries(Object.entries(files).map(([rel, text]) => [rel.replace(/\/tree-[0-9a-f]{12}-([^/]*)$/, '/tree-<ID>-$1'), text]));
 }
+
+/**
+ * Port 3e: a tree record's `at` is `Date.now()` when the hook ran, so each engine's own clock; a
+ * whole record ending in `"at":<n>}` with `n` not 0 has it become `"at":"<MS>"`. The session
+ * record's `"at":0` (the session base's, port 3d) and every other key are compared.
+ */
+export function maskTreeAt(text) {
+  return text.replace(/^(\{.*"at":)[1-9]\d*\}$/s, '$1"<MS>"}');
+}
+
+/**
+ * Port 3e, narrowed by the #210 review (F1): a git index holds each file's stat data (ctime,
+ * mtime, dev, ino, uid, gid and size), which differ between the two copies when a case's git call
+ * rewrites the index, and whose size git zeroes for a racily clean entry. `buf` (an index's raw
+ * bytes, `DIRC` first, version 2, 3 or 4, SHA-1 oids) becomes `<GIT INDEX v<n>>` and one line per
+ * entry: its mode, oid, flags (stage, name length and the v3 bits) and path, so everything but the
+ * stat data is compared. Extensions and the trailing checksum are left out: the checksum covers
+ * the stat data, and the untracked cache holds stat data too. A buffer that is not an index or
+ * does not decode is returned as text, unmasked, so it is compared whole.
+ */
+export function maskGitIndex(buf) {
+  const entries = indexEntries(buf);
+  return entries ? [`<GIT INDEX v${buf.readUInt32BE(4)}>`, ...entries].join('\n') : buf.toString('utf8');
+}
+
+/** The entries of a git index as `mode oid flags path` lines, or null when `buf` does not decode as one. */
+function indexEntries(buf) {
+  if (buf.length < 12 || buf.toString('latin1', 0, 4) !== 'DIRC') return null;
+  const version = buf.readUInt32BE(4);
+  if (![2, 3, 4].includes(version)) return null;
+  const count = buf.readUInt32BE(8);
+  const lines = [];
+  let at = 12;
+  let previous = Buffer.alloc(0);
+  for (let i = 0; i < count; i++) {
+    // ctime, mtime, dev and ino (24 bytes), mode, uid, gid and size (16), the oid (20), flags (2).
+    if (at + 62 > buf.length) return null;
+    const mode = buf.readUInt32BE(at + 24).toString(8);
+    const oid = buf.toString('hex', at + 40, at + 60);
+    let flags = buf.readUInt16BE(at + 60).toString(16).padStart(4, '0');
+    let p = at + 62;
+    if (version >= 3 && buf.readUInt16BE(at + 60) & 0x4000) {
+      if (p + 2 > buf.length) return null;
+      flags += buf.readUInt16BE(p).toString(16).padStart(4, '0');
+      p += 2;
+    }
+    let name;
+    if (version === 4) {
+      // The name is the previous one less N trailing bytes (a varint), then a NUL-terminated suffix.
+      let strip = 0;
+      let byte;
+      do {
+        if (p >= buf.length) return null;
+        byte = buf[p++];
+        strip = (strip << 7) | (byte & 0x7f);
+        if (byte & 0x80) strip += 1;
+      } while (byte & 0x80);
+      const end = buf.indexOf(0, p);
+      if (end < 0 || strip > previous.length) return null;
+      name = Buffer.concat([previous.subarray(0, previous.length - strip), buf.subarray(p, end)]);
+      at = end + 1;
+    } else {
+      const end = buf.indexOf(0, p);
+      if (end < 0) return null;
+      name = buf.subarray(p, end);
+      // Each entry is NUL-padded to a multiple of 8 bytes, with at least one NUL.
+      at += Math.ceil((end + 1 - at) / 8) * 8;
+    }
+    previous = name;
+    lines.push(`${mode} ${oid} ${flags} ${name.toString('utf8')}`);
+  }
+  return at <= buf.length ? lines : null;
+}

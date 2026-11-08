@@ -12,7 +12,7 @@ use temper_domain::{ModTime, PathStyle, Timestamp};
 use crate::engine::RunEnv;
 use crate::ports::{
     Clock, DirEntry, EntryKind, ExitKind, FileMeta, Files, FsError, FsOp, Ports, ProcessError,
-    ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StdoutSink, Stream,
+    ProcessOutput, ProcessRequest, ProcessRunner, ReadInto, StderrSink, StdoutSink, Stream,
 };
 
 /// A file tree held as text paths in one [`PathStyle`]. A directory exists when a file is below
@@ -434,6 +434,8 @@ pub(crate) struct FakeProcess {
     otherwise: Option<Reply>,
     /// How many requests it has answered.
     calls: Cell<usize>,
+    /// Each request's program, arguments and directory, in order.
+    requests: RefCell<Vec<(String, Vec<OsString>, PathBuf)>>,
 }
 
 impl FakeProcess {
@@ -460,11 +462,21 @@ impl FakeProcess {
     pub(crate) fn calls(&self) -> usize {
         self.calls.get()
     }
+
+    /// Each request so far: its program, arguments and directory, in order.
+    pub(crate) fn requests(&self) -> Vec<(String, Vec<OsString>, PathBuf)> {
+        self.requests.borrow().clone()
+    }
 }
 
 impl ProcessRunner for FakeProcess {
     fn run(&self, request: ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
         self.calls.set(self.calls.get().saturating_add(1));
+        self.requests.borrow_mut().push((
+            request.program.to_owned(),
+            request.args.to_vec(),
+            request.cwd.to_path_buf(),
+        ));
         let program = request.program.to_owned();
         let reply = self
             .replies
@@ -478,6 +490,11 @@ impl ProcessRunner for FakeProcess {
             (Some(Reply::Exit { status, stdout }), StdoutSink::Capture(_)) => Ok(ProcessOutput {
                 status: *status,
                 stdout: stdout.as_bytes().to_vec(),
+                stderr: Vec::new(),
+            }),
+            (Some(Reply::Exit { status, .. }), StdoutSink::Null) => Ok(ProcessOutput {
+                status: *status,
+                stdout: Vec::new(),
                 stderr: Vec::new(),
             }),
             (Some(Reply::Exit { status, stdout }), StdoutSink::Stream(sink)) => {
@@ -498,11 +515,12 @@ impl ProcessRunner for FakeProcess {
             (Some(Reply::Overflows(stream)), stdout) => Err(ProcessError::Overflow {
                 program,
                 stream: *stream,
-                cap: match (stream, stdout) {
-                    (Stream::Stdout, StdoutSink::Capture(cap)) => cap.get(),
-                    // A streamed stdout has no cap; the fake reports none.
-                    (Stream::Stdout, StdoutSink::Stream(_)) => usize::MAX,
-                    (Stream::Stderr, _) => request.stderr_cap.get(),
+                cap: match (stream, stdout, request.stderr) {
+                    (Stream::Stdout, StdoutSink::Capture(cap), _)
+                    | (Stream::Stderr, _, StderrSink::Capture(cap)) => cap.get(),
+                    // A streamed or null stream has no cap; the fake reports none.
+                    (Stream::Stdout, StdoutSink::Stream(_) | StdoutSink::Null, _)
+                    | (Stream::Stderr, _, StderrSink::Null) => usize::MAX,
                 },
             }),
             (Some(Reply::SpawnFails) | None, _) => Err(ProcessError::Spawn {

@@ -4,11 +4,49 @@ use std::error::Error;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+use temper_domain::{PathStyle, unverbatim};
 
 /// Outcome of a test; `?` works on every error type.
 pub(crate) type TestResult = Result<(), Box<dyn Error>>;
+
+/// `path`'s real path as the engine spells it: canonicalized, without the verbatim prefix that
+/// `fs::canonicalize` adds on Windows and 1.x's `unverbatim` strips.
+pub(crate) fn real_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let real = fs::canonicalize(path)?;
+    if cfg!(windows) {
+        Ok(engine_spelling(&real.to_string_lossy()))
+    } else {
+        Ok(real)
+    }
+}
+
+/// A Windows path without its verbatim prefix, as 1.x's `unverbatim` (the domain's) spells it:
+/// `\\?\UNC\server\share` becomes `\\server\share`, and `\\?\C:\x` becomes `C:\x`.
+fn engine_spelling(path: &str) -> PathBuf {
+    PathBuf::from(unverbatim(path, PathStyle::Windows).as_ref())
+}
+
+/// #210 review F4: a verbatim UNC path is the share's own `\\server\share` spelling, not
+/// `UNC\server\share` with the `\\?\` cut off; a verbatim drive path loses the prefix only.
+#[test]
+fn a_verbatim_path_is_spelled_as_the_engine_spells_it() {
+    let cases = [
+        (r"\\?\UNC\server\share\dir", r"\\server\share\dir"),
+        (r"\\?\C:\Users\u", r"C:\Users\u"),
+        (r"C:\plain", r"C:\plain"),
+    ];
+
+    for (verbatim, spelled) in cases {
+        assert_eq!(
+            engine_spelling(verbatim),
+            PathBuf::from(spelled),
+            "{verbatim}"
+        );
+    }
+}
 
 /// What one run of the binary produced.
 #[derive(Debug, PartialEq, Eq)]
@@ -22,6 +60,14 @@ pub(crate) struct Run {
 /// temporary directory, so a test's tree is a repository only when the test makes it one.
 fn temper_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_temper"));
+    // The tests' own temper session (TEMPER_CLI, TEMPER_BASE, CLAUDE_PLUGIN_ROOT, ...) must
+    // not reach the engine: it changes the gate command and the base the engine reports.
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("TEMPER_") || text.starts_with("CLAUDE") {
+            command.env_remove(&name);
+        }
+    }
     command.env("GIT_CEILING_DIRECTORIES", std::env::temp_dir());
     command
 }

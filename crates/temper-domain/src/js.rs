@@ -3,6 +3,7 @@
 
 mod add;
 mod canonical;
+mod compare;
 mod json;
 mod map;
 mod replace;
@@ -13,6 +14,7 @@ mod value;
 pub(crate) use add::Sum;
 pub(crate) use canonical::canonical;
 pub use canonical::js_sort;
+pub(crate) use compare::js_less;
 pub use json::JsonParseError;
 pub(crate) use map::JsMap;
 pub(crate) use replace::{Replacement, next_boundary, replace_all};

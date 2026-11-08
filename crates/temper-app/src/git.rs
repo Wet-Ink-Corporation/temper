@@ -8,7 +8,9 @@ use std::time::Duration;
 use temper_domain::{EXCLUDED_DIRS, PathStyle, js_trim};
 
 use crate::paths;
-use crate::ports::{ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink};
+use crate::ports::{
+    ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StderrSink, StdoutSink,
+};
 
 /// Every git call's timeout. 1.x set none; 2.0 bounds every child (D16(f), H-13).
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -51,7 +53,7 @@ pub(crate) fn short(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> 
         args: &args,
         cwd,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: SHORT,
     };
     match process.run(request) {
@@ -121,6 +123,39 @@ pub(crate) fn head_rev(process: &impl ProcessRunner, git_root: &Path) -> Option<
     succeeded(process, git_root, &["rev-parse", "HEAD"]).map(|sha| js_trim(&sha).to_owned())
 }
 
+/// 1.x `noteTree`'s `git symbolic-ref --short -q HEAD`: the checkout's branch, trimmed, or
+/// `None` when HEAD is detached, git fails or the name is empty (`stdout.trim() || null`).
+pub(crate) fn symbolic_ref_short(process: &impl ProcessRunner, git_root: &Path) -> Option<String> {
+    let args = ["symbolic-ref", "--short", "-q", "HEAD"];
+    let branch = succeeded(process, git_root, &args)?;
+    Some(js_trim(&branch).to_owned()).filter(|branch| !branch.is_empty())
+}
+
+/// 1.x `isAncestor(proj, a, b)`: `git merge-base --is-ancestor a b` exits 0, so commit `a` is
+/// an ancestor of commit `b` (or is `b`). Any other outcome is not.
+pub(crate) fn is_ancestor(process: &impl ProcessRunner, git_root: &Path, a: &str, b: &str) -> bool {
+    succeeded(process, git_root, &["merge-base", "--is-ancestor", a, b]).is_some()
+}
+
+/// 1.x `coversBase`'s `count(...)`: `git rev-list --count <revs>` as a number, or `None` when
+/// git fails or its answer is not an integer (1.x's `NaN`). The answer is trimmed, and an empty
+/// one is 0, as JS's `Number('')` is.
+pub(crate) fn rev_list_count(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    revs: &[&str],
+) -> Option<u64> {
+    let mut args = vec!["rev-list", "--count"];
+    args.extend_from_slice(revs);
+    let out = succeeded(process, git_root, &args)?;
+    let count = js_trim(&out);
+    if count.is_empty() {
+        return Some(0);
+    }
+    // git writes a decimal count; anything else is 1.x's `NaN`, which never counts as covered.
+    count.parse().ok()
+}
+
 /// How a streamed git call ended. Either way, what reached the sink counts, as 1.x's
 /// `fingerprint` hashes `git diff`'s stdout without looking at the exit code, and `spawnSync`
 /// returns the output read before an error; the caller names both outcomes (#207 review F2).
@@ -146,7 +181,7 @@ pub(crate) fn stream_into(
         args: &args,
         cwd: git_root,
         stdout: StdoutSink::Stream(sink),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {
@@ -200,6 +235,36 @@ pub(crate) fn show_at(
     succeeded(process, git_root, &["show", &spec])
 }
 
+/// The git half of 1.x `diffStat(proj, base)`: `git diff --stat=120 --no-color [base] -- .
+/// :(exclude)..`'s stdout as lossy UTF-8, whatever its exit code, as 1.x reads `r.stdout`;
+/// empty when git does not start or a stream overflows (1.x keeps the part read before
+/// `maxBuffer`, past 256 MiB of stat).
+pub(crate) fn diff_stat(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    base: Option<&str>,
+) -> String {
+    let excludes = EXCLUDED_DIRS.map(|dir| format!(":(exclude){dir}"));
+    let mut args = vec!["diff", "--stat=120", "--no-color"];
+    args.extend(base);
+    args.extend(["--", "."]);
+    args.extend(excludes.iter().map(String::as_str));
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let request = ProcessRequest {
+        program: "git",
+        args: &args,
+        cwd: git_root,
+        stdout: StdoutSink::Capture(CAP),
+        stderr: StderrSink::Capture(CAP),
+        timeout: TIMEOUT,
+    };
+    match process.run(request) {
+        Ok(output) => lossy(output.stdout),
+        // 1.x's `r.stdout ?? ''` for a git that did not start.
+        Err(_) => String::new(),
+    }
+}
+
 /// A name in one of the directories git's change lists leave out: 1.x's
 /// `EXCLUDE.some((x) => f === x || f.startsWith(`${x}/`))`.
 fn excluded(name: &str) -> bool {
@@ -217,7 +282,7 @@ fn succeeded(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> Option<
         args: &args,
         cwd,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {

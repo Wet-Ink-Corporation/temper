@@ -1,6 +1,8 @@
 //! A cached gate result, `gate/<fingerprint>.json` (1.x `cachedGate`).
 
-use crate::js::Value;
+use std::borrow::Cow;
+
+use crate::js::{JsTypeError, Value, js_string_checked};
 
 /// A cached gate result as 1.x's `cachedGate` returns it: whatever JSON the file holds.
 ///
@@ -43,5 +45,36 @@ impl GateRecord {
     #[must_use]
     pub fn ok(&self) -> bool {
         self.0.get("ok").is_some_and(Value::is_truthy)
+    }
+
+    /// 1.x `g.steps.filter((s) => !s.ok).map((s) => s.name).join(', ')`: the names of the
+    /// steps that did not pass, a missing or `null` name as nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`JsTypeError`] where 1.x throws: `steps` not an array, a `null` step, or a name that
+    /// cannot be converted to a string.
+    pub fn failed_steps(&self) -> Result<String, JsTypeError> {
+        let Some(Value::Array(steps)) = self.0.get("steps") else {
+            return Err(JsTypeError::new(
+                "the gate record's steps is not an array, which 1.x's filter throws on",
+            ));
+        };
+        let mut names = Vec::new();
+        for step in steps {
+            if matches!(step, Value::Null) {
+                return Err(JsTypeError::new(
+                    "a gate record's step is null, which 1.x's s.ok throws on",
+                ));
+            }
+            if step.get("ok").is_some_and(Value::is_truthy) {
+                continue;
+            }
+            names.push(match step.get("name") {
+                None | Some(Value::Null) => Cow::Borrowed(""),
+                Some(name) => js_string_checked(name)?,
+            });
+        }
+        Ok(names.join(", "))
     }
 }

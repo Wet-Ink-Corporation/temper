@@ -111,6 +111,11 @@ pub enum TelemetryEvent {
         /// the input has none, which leaves the key out as `undefined` does.
         source: Option<String>,
     },
+    /// `subagent-start`: a subagent started, of any type, before the hook filters by type.
+    SubagentStart {
+        /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
+        agent_type: String,
+    },
 }
 
 /// The change a protected-configuration `ask` row names (its `via` and `file`).
@@ -223,6 +228,7 @@ impl TelemetryEvent {
             Self::DenyIgnoreRustVersion { .. } => "deny-ignore-rust-version",
             Self::GateLost(_) => "gate-lost",
             Self::SessionStart { .. } => "session-start",
+            Self::SubagentStart { .. } => "subagent-start",
         }
     }
 
@@ -282,6 +288,7 @@ impl TelemetryEvent {
                     push_field(out, "source", source);
                 }
             }
+            Self::SubagentStart { agent_type } => push_field(out, "type", agent_type),
         }
     }
 }

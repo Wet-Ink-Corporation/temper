@@ -35,8 +35,8 @@ function stubEngine(dir) {
 }
 
 test('route: 1.x runs everything until a subcommand graduates; --version goes to the engine', () => {
-  assert.equal(route(['hook', 'pre-edit'], {}), 'node', 'not opted in');
-  assert.equal(route(['hook', 'pre-edit'], { TEMPER_ENGINE: 'rust' }), 'node', 'not graduated yet');
+  assert.equal(route(['hook', 'subagent-stop'], {}), 'node', 'not opted in');
+  assert.equal(route(['hook', 'subagent-stop'], { TEMPER_ENGINE: 'rust' }), 'node', 'not graduated yet');
   assert.equal(route(['gate'], { TEMPER_ENGINE: 'rust' }), 'node', 'gate not graduated');
   assert.equal(route(['--version'], {}), 'engine', '--version is new in 2.0 (D16(g))');
   assert.equal(route([], {}), 'node', 'usage text from 1.x');
@@ -47,8 +47,11 @@ test('route: 1.x runs everything until a subcommand graduates; --version goes to
   assert.equal(route(['status', '--json'], {}), 'node', 'graduated, but not opted in');
   assert.equal(route(['status', '--json'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3c');
   assert.equal(route(['hook', 'session-start'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3d');
+  assert.equal(route(['hook', 'pre-edit'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3e');
+  assert.equal(route(['hook', 'subagent-start'], { TEMPER_ENGINE: 'rust' }), 'engine', 'graduated in Phase 3e');
+  assert.equal(route(['hook', 'subagent-start'], {}), 'node', 'graduated, but not opted in');
   assert.equal(route(['status'], { TEMPER_ENGINE: 'rust', TEMPER_DISABLE: '1' }), 'engine', 'TEMPER_DISABLE marks the document; it does not skip status');
-  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status', 'hook session-start'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash, 3c status, 3d session-start');
+  assert.deepEqual([...RUST_READY], ['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status', 'hook session-start', 'hook pre-edit', 'hook subagent-start'], 'Phase 2b graduates post-tool and user-prompt, 2f pre-bash, 3c status, 3d session-start, 3e pre-edit and subagent-start');
 });
 
 test('route: TEMPER_DISABLE=1 on a hook exits without an engine', () => {

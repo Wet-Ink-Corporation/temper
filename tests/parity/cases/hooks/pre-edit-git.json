@@ -1,0 +1,579 @@
+[
+  {
+    "name": "a denied Rust edit by the main agent records its checkout: HEAD, the branch and the start fingerprint",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a manifest edit records the checkout; an edit of another file does not",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s-other\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/README.md\",\"content\":\"hello\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s-manifest\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/Cargo.toml\",\"content\":\"[package]\\nname = \\\"core\\\"\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a second edit by the same agent keeps the first record",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Again.\\n\"}}",
+        "before": [
+          {
+            "write": {
+              "crates/core/src/lib.rs": "//! Core.\n\n/// Two.\n#[must_use]\npub fn two() -> u8 {\n    2\n}\n"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "each subagent records its own, its id made safe for a file name; a falsy id is the main agent",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_id\":\"im1\",\"agent_type\":\"temper:rust-implementer\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_id\":\"a/b c\",\"agent_type\":\"general-purpose\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_id\":0,\"agent_type\":\"general-purpose\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "without a session id nothing is recorded",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "outside git nothing is recorded",
+    "fixture": "workspace",
+    "git": false,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "the main agent entering a worktree it did not start in widens to the session base",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "README.md": "later\n"
+        }
+      },
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "later"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "--detach",
+          ".claude/worktrees/w1"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1\n"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/.claude/worktrees/w1\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/.claude/worktrees/w1/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a subagent in that worktree keeps its own HEAD",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "README.md": "later\n"
+        }
+      },
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "later"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "--detach",
+          ".claude/worktrees/w1"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1\n"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/.claude/worktrees/w1\",\"agent_id\":\"w1\",\"agent_type\":\"general-purpose\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/.claude/worktrees/w1/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a session started in the worktree is not widened",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "README.md": "later\n"
+        }
+      },
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "later"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "--detach",
+          ".claude/worktrees/w1"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/.claude/worktrees/w1\",\"source\":\"startup\"}",
+        "before": [
+          {
+            "write": {
+              ".git/temper/sessions/s1/base": "HEAD~1\n"
+            }
+          }
+        ]
+      },
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/.claude/worktrees/w1\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/.claude/worktrees/w1/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a session base that is not an ancestor is not widened",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "git": [
+          "switch",
+          "-qc",
+          "side"
+        ]
+      },
+      {
+        "write": {
+          "README.md": "later\n"
+        }
+      },
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "later"
+        ]
+      },
+      {
+        "git": [
+          "switch",
+          "-q",
+          "-"
+        ]
+      },
+      {
+        "write": {
+          "NOTES.md": "main\n"
+        }
+      },
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "main"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "--detach",
+          ".claude/worktrees/w1",
+          "side"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD\n"
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/.claude/worktrees/w1\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/.claude/worktrees/w1/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "with the skill gate off the edit is recorded and then checked",
+    "fixture": "no-skill-gate",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// One.\\npub fn one(v: &[u8]) -> u8 {\\n    *v.first().unwrap()\\n}\\n\"}}"
+      }
+    ]
+  },
+  {
+    "name": "a record that cannot be written fails the hook open",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s-blocked": ""
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s-blocked\",\"cwd\":\"<ROOT>\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ],
+    "maskFailure": 1
+  },
+  {
+    "name": "an agent id whose String() throws fails the hook open",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "pre-edit",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"agent_id\":{\"toString\":1},\"agent_type\":\"general-purpose\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"<ROOT>/crates/core/src/lib.rs\",\"content\":\"//! Core.\\n\\n/// Two.\\n#[must_use]\\npub fn two() -> u8 {\\n    2\\n}\\n\"}}"
+      }
+    ],
+    "maskFailure": 1
+  }
+]

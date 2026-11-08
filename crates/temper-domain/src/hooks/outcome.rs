@@ -13,6 +13,8 @@ pub enum ContextEvent {
     PreToolUse,
     /// `SessionStart`.
     SessionStart,
+    /// `SubagentStart`.
+    SubagentStart,
 }
 
 impl ContextEvent {
@@ -21,6 +23,7 @@ impl ContextEvent {
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::PreToolUse => "PreToolUse",
             Self::SessionStart => "SessionStart",
+            Self::SubagentStart => "SubagentStart",
         }
     }
 }

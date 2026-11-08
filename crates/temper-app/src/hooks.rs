@@ -2,16 +2,18 @@
 
 mod input;
 mod lost_gates;
+mod plans;
 mod pre_bash;
 mod pre_edit;
 mod session_start;
 mod shell;
 mod skill;
+mod subagent_start;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
-pub(crate) use input::session_segment;
 pub use input::{HookInput, HookInputError};
+pub(crate) use input::{agent_key, session_segment};
 pub(crate) use skill::markers_root;
 
 use crate::engine::{HookError, RunEnv};
@@ -41,10 +43,10 @@ pub(crate) fn run<P: Ports>(
         HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
         HookEvent::PreBash => pre_bash::pre_bash(call, scanner),
         HookEvent::SessionStart => session_start::session_start(call),
-        HookEvent::PreHandback
-        | HookEvent::Stop
-        | HookEvent::SubagentStop
-        | HookEvent::SubagentStart => Err(HookError::NotPorted { event }),
+        HookEvent::SubagentStart => subagent_start::subagent_start(call),
+        HookEvent::PreHandback | HookEvent::Stop | HookEvent::SubagentStop => {
+            Err(HookError::NotPorted { event })
+        }
     }
 }
 

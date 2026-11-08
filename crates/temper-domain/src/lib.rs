@@ -46,15 +46,17 @@ pub use fingerprint::{
 };
 pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
-    BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
-    EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome, IRON_RULES,
-    InterpreterCode, LazyExemptions, LostGate, LostGateFacts, LostReason, ManifestEdit, OpaqueKind,
-    PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange, RaiseFlag, Replacements,
-    RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, SessionStartFacts, SessionState,
-    ShellAskVia, ShellDenyVia, ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, TreeState,
+    BashPolicy, CachedGate, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck,
+    EditFacts, EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome,
+    IRON_RULES, InterpreterCode, LazyExemptions, LostGate, LostGateFacts, LostReason, ManifestEdit,
+    OpaqueKind, OtherTree, PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange,
+    RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites, SKILL_NOT_LOADED,
+    STATE_DIR_DENIAL, SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia, ShellWriteFile,
+    SkillVia, SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState,
     UnknownHookEvent, Unread, apply_edit, edit_policy, env_file_lines, is_reviewer,
     lockfile_denial, lost_gate_claim, lost_gate_row, open_gate_starts, session_start_context,
-    skill_gate_denial, skill_load_via, skill_preloaded, with_runtime_warnings,
+    skill_gate_denial, skill_load_via, skill_preloaded, subagent_start_context, tree_gate_command,
+    with_runtime_warnings,
 };
 pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{
@@ -70,7 +72,9 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
-pub use state::{BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, gate_progress};
+pub use state::{
+    BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, TreeRecord, gate_progress,
+};
 pub use status::{
     BaselineLine, STATUS_USAGE, StatusDoc, StatusFacts, render_no_project_json, render_status_json,
     render_status_text, temper_base_note,
@@ -79,6 +83,6 @@ pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
     VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
-    extract_verdict, handback_denial, problem_kinds, summarize_findings, verdict_block,
-    verdict_hash, verdict_problems,
+    extract_verdict, handback_denial, problem_kinds, recorded_after, summarize_findings,
+    verdict_block, verdict_hash, verdict_problems,
 };

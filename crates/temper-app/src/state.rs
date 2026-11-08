@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use temper_domain::{
-    BaselineParseError, BaselineSummary, Fingerprint, GateRecord, JsValue, ModTime, PathStyle,
+    BaselineParseError, BaselineSummary, Fingerprint, GateRecord, JsTypeError, JsValue, ModTime,
+    PathStyle, recorded_after,
 };
 
 use crate::paths;
@@ -48,6 +49,50 @@ pub(crate) fn verdict_for(
     )?;
     // Not JSON is 1.x's `catch { return null; }` (D16(n), OC-3 A).
     JsValue::from_json(&text).ok()
+}
+
+/// Whose verdict history [`history_for`] reads: fingerprint `fp`'s, in `ws`'s state dir.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HistoryOf<'a> {
+    pub(crate) style: PathStyle,
+    pub(crate) ws: &'a Workspace,
+    pub(crate) fp: Fingerprint,
+}
+
+/// 1.x `historyFor(proj, fp, since).length`: how many rows of
+/// `<state dir>/verdicts/<fp>.history.jsonl` parse and were recorded after `since` (`None` is
+/// 1.x's default `''`). A missing or unreadable file has none; a line that does not parse is
+/// skipped.
+///
+/// # Errors
+///
+/// [`JsTypeError`] where 1.x's filter throws on a row ([`recorded_after`]): a `null` row, or a
+/// time V8 cannot convert (F5).
+pub(crate) fn history_for(
+    files: &impl Files,
+    of: HistoryOf<'_>,
+    since: Option<&JsValue>,
+) -> Result<usize, JsTypeError> {
+    let HistoryOf { style, ws, fp } = of;
+    let dir = paths::join(style, &ws.state_dir, "verdicts");
+    let Some(text) = read_js_text(
+        files,
+        &paths::join(style, &dir, &format!("{fp}.history.jsonl")),
+    ) else {
+        // 1.x's `readText(…) ?? ''`: no rows.
+        return Ok(0);
+    };
+    let mut count = 0;
+    for line in text.split('\n').filter(|line| !line.is_empty()) {
+        // A line that does not parse is 1.x's `catch { return []; }` (D16(n), OC-3 A).
+        let Ok(row) = JsValue::from_json(line) else {
+            continue;
+        };
+        if recorded_after(&row, since)? {
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 /// 1.x `readBaseline(root)`: `None` without a readable file, else the summary or why 1.x's

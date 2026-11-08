@@ -15,7 +15,8 @@ import { runHookCase } from './lib/cases.mjs';
 import { nodeEngine, rustEngine } from './lib/engines.mjs';
 import { HOOK_FIXTURES, writeTree } from './lib/fixtures.mjs';
 import {
-  maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeIds,
+  maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeAt,
+  maskGitIndex, maskTreeIds,
 } from './lib/normalise.mjs';
 
 // Invariant 5 (H-12): without the binary the file fails; it never skips.
@@ -48,15 +49,18 @@ after(() => {
 
 /**
  * A written file after §2.2's masks: telemetry row times (and a gate-lost row's `foundMs`), a skill
- * marker's time, a session's start time (port 3d), and D16(w)'s lines in an env file, which
- * `counts.d17` counts (OC-6 A).
+ * marker's time, a session's start time (port 3d), a tree record's time and the stat data of a git
+ * index a case's git call rewrote (port 3e; only the stat data since the #210 review), and D16(w)'s
+ * lines in an env file, which `counts.d17` counts (OC-6 A).
  */
 function fileMask() {
   const counts = { d17: 0 };
-  const mask = (rel, text) => {
+  const mask = (rel, text, bytes) => {
     if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
     if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
     if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
+    if (/\/sessions\/[^/]+\/tree-[^/]+\.json$/.test(rel)) return maskTreeAt(text);
+    if (/^tree\/\.git\/(worktrees\/[^/]+\/)?index$/.test(rel)) return maskGitIndex(bytes);
     if (/(^|\/)env\.sh$/.test(rel)) {
       const m = maskD17Lines(text);
       counts.d17 += m.count;
@@ -94,11 +98,11 @@ function assertD17(rust, node, writes) {
   assert.equal(rust.d17, 2 * writes, `D17: two lines per env-file write (${writes})`);
 }
 
-test('the hook cases: unique names, known fixtures, and the 3d floor of 159 (protocol, post-tool and user-prompt: 34, pre-edit: 31, pre-bash: 67, session-start: 27)', () => {
+test('the hook cases: unique names, known fixtures, and the 3e floor of 192 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 27, subagent-start: 20)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 159, `${cases.length} cases`);
+  assert.ok(cases.length >= 192, `${cases.length} cases`);
 });
 
 for (const c of cases) {
@@ -115,7 +119,10 @@ for (const c of cases) {
     if (c.stdout) assert.deepEqual(node.out.map((s) => s.stdout), c.stdout, 'the pinned stdout');
     if (c.wrote) assert.deepEqual(Object.keys(node.files).sort(), [...c.wrote].sort(), 'the pinned files');
     for (const [rel, parts] of Object.entries(c.has ?? {})) for (const p of parts) assert.ok(node.files[rel]?.includes(p), `${rel} has ${p}`);
-    for (const [rel, parts] of Object.entries(c.lacks ?? {})) for (const p of parts) assert.ok(!node.files[rel]?.includes(p), `${rel} lacks ${p}`);
+    for (const [rel, parts] of Object.entries(c.lacks ?? {})) {
+      assert.ok(rel in node.files, `${rel} was written`);
+      for (const p of parts) assert.ok(!node.files[rel].includes(p), `${rel} lacks ${p}`);
+    }
     const slow = rust.ms.filter((ms) => ms >= BUDGET_MS);
     assert.deepEqual(slow, [], `a Rust step took ${BUDGET_MS} ms or more (OC-4 A)`);
   });

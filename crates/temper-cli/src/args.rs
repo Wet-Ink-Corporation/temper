@@ -139,14 +139,12 @@ fn hook(event: Option<OsString>) -> Command {
             | HookEvent::UserPrompt
             | HookEvent::PreEdit
             | HookEvent::PreBash
-            | HookEvent::SessionStart),
+            | HookEvent::SessionStart
+            | HookEvent::SubagentStart),
         ) => Command::Hook(Ok(event)),
-        Ok(
-            HookEvent::PreHandback
-            | HookEvent::Stop
-            | HookEvent::SubagentStop
-            | HookEvent::SubagentStart,
-        ) => Command::Usage(UsageExit::Unknown),
+        Ok(HookEvent::PreHandback | HookEvent::Stop | HookEvent::SubagentStop) => {
+            Command::Usage(UsageExit::Unknown)
+        }
         Err(unknown) => Command::Hook(Err(unknown)),
     }
 }
