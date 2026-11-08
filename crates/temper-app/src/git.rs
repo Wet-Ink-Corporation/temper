@@ -121,6 +121,20 @@ pub(crate) fn head_rev(process: &impl ProcessRunner, git_root: &Path) -> Option<
     succeeded(process, git_root, &["rev-parse", "HEAD"]).map(|sha| js_trim(&sha).to_owned())
 }
 
+/// 1.x `noteTree`'s `git symbolic-ref --short -q HEAD`: the checkout's branch, trimmed, or
+/// `None` when HEAD is detached, git fails or the name is empty (`stdout.trim() || null`).
+pub(crate) fn symbolic_ref_short(process: &impl ProcessRunner, git_root: &Path) -> Option<String> {
+    let args = ["symbolic-ref", "--short", "-q", "HEAD"];
+    let branch = succeeded(process, git_root, &args)?;
+    Some(js_trim(&branch).to_owned()).filter(|branch| !branch.is_empty())
+}
+
+/// 1.x `isAncestor(proj, a, b)`: `git merge-base --is-ancestor a b` exits 0, so commit `a` is
+/// an ancestor of commit `b` (or is `b`). Any other outcome is not.
+pub(crate) fn is_ancestor(process: &impl ProcessRunner, git_root: &Path, a: &str, b: &str) -> bool {
+    succeeded(process, git_root, &["merge-base", "--is-ancestor", a, b]).is_some()
+}
+
 /// How a streamed git call ended. Either way, what reached the sink counts, as 1.x's
 /// `fingerprint` hashes `git diff`'s stdout without looking at the exit code, and `spawnSync`
 /// returns the output read before an error; the caller names both outcomes (#207 review F2).

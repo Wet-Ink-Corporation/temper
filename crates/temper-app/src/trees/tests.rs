@@ -191,3 +191,5 @@ fn a_write_failure_is_the_handler_s_error() {
 
     assert_eq!(error, Err(FsOp::Write), "1.x's writeAtomic throws (F1)");
 }
+
+mod note_tree;
