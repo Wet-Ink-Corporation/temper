@@ -65,8 +65,11 @@ fn line_report(rec: &JsValue) -> Result<Option<String>, JsTypeError> {
     });
     if let Some(hb) = hand_back {
         let message = given(given(Some(hb), "input"), "message");
-        let report = message.map_or(Ok("".into()), JsValue::to_js_string_checked)?;
-        return Ok(Some(report.into_owned()));
+        let report = match message {
+            Some(message) => message.to_js_string_checked()?.into_owned(),
+            None => String::new(),
+        };
+        return Ok(Some(report));
     }
     let mut text = String::new();
     for (i, c) in content.iter().filter(|c| is(c, "text")).enumerate() {

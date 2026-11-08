@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
-use temper_domain::{JsValue, PathStyle, ValidVerdict, kept_record, verdict_record};
+use temper_domain::{JsValue, ValidVerdict, kept_record, verdict_record};
 
 use super::verdict_for;
 use crate::engine::HookError;
+use crate::hooks::HookCall;
 use crate::paths;
 use crate::ports::{Clock, Files, Ports};
 use crate::project::Workspace;
@@ -31,12 +32,12 @@ pub(crate) struct RecordMeta<'a> {
 /// `mkdirSync`, `appendFileSync` and `writeAtomic` throw; [`HookError::InputType`] where 1.x's
 /// `overturns(v)` throws, before anything is written.
 pub(crate) fn record_verdict(
-    ports: &impl Ports,
-    style: PathStyle,
+    call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     verdict: &ValidVerdict,
     meta: RecordMeta<'_>,
 ) -> Result<JsValue, HookError> {
+    let (ports, style) = (call.ports, call.env.style);
     let rec = verdict_record(verdict, ports.clock().now(), meta.agent_id, meta.stale);
     let files = ports.files();
     let dir = paths::join(style, &ws.state_dir, "verdicts");

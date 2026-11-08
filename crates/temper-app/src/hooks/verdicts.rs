@@ -49,7 +49,8 @@ pub(super) fn check_verdict(
         None => None,
     };
     let mut changed = rust_changes(ports, env, &tree.ws, tree.scope.base.as_deref());
-    changed.retain(|f| f.ends_with(".rs"));
+    // 1.x `f.endsWith('.rs')`, case-sensitive.
+    changed.retain(|f| f.strip_suffix(".rs").is_some());
     let ctx = VerdictContext {
         changed_rust: &changed,
         gate: gate.map_or(GateState::NotRed, |g| g.state()),
@@ -92,15 +93,14 @@ pub(super) fn store_verdict(
     via: VerdictVia,
 ) -> Result<(), HookError> {
     let HookCall { ports, env, input } = *call;
-    let style = env.style;
     let fp = verdict.fingerprint();
     let named = JsValue::String(fp.to_string());
     let tree = reviewed_tree(call, ws, Some(&named))?;
     let stale = fp != fingerprint(ports, env, &tree.ws, tree.scope.base.as_deref());
     let agent_id = input.raw("agent_id");
-    let rec = record_verdict(ports, style, ws, verdict, RecordMeta { agent_id, stale })?;
-    let dir = session_dir(style, ws, &session_segment(input)?);
-    let marker = paths::join(style, &dir, &format!("verdict-{}", agent_key(input)?));
+    let rec = record_verdict(call, ws, verdict, RecordMeta { agent_id, stale })?;
+    let dir = session_dir(env.style, ws, &session_segment(input)?);
+    let marker = paths::join(env.style, &dir, &format!("verdict-{}", agent_key(input)?));
     let files = ports.files();
     files.write_atomic(Path::new(&marker), &fp.to_string())?;
     if via == VerdictVia::Handback {

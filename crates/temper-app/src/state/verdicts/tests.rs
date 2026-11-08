@@ -10,8 +10,9 @@ use temper_domain::{
 };
 
 use super::{RecordMeta, record_verdict};
-use crate::engine::HookError;
+use crate::engine::{HookError, RunEnv};
 use crate::fakes::{FakeFiles, FakePorts, NOW};
+use crate::hooks::{HookCall, HookInput};
 use crate::project::Workspace;
 use crate::state::verdict_for;
 
@@ -77,13 +78,32 @@ fn id(text: &str) -> JsValue {
     JsValue::String(text.to_owned())
 }
 
+fn empty_input() -> HookInput {
+    HookInput::parse("{}").expect("JSON")
+}
+
+/// [`record_verdict`] run from `/w`; `meta` carries the agent id, so the input is empty.
+fn record_with(
+    ports: &FakePorts,
+    v: &ValidVerdict,
+    meta: RecordMeta<'_>,
+) -> Result<JsValue, HookError> {
+    let input = empty_input();
+    let call = HookCall {
+        ports,
+        env: &RunEnv::at("/w", Posix),
+        input: &input,
+    };
+    record_verdict(&call, &workspace(), v, meta)
+}
+
 fn record(ports: &FakePorts, v: &ValidVerdict, agent: &str, stale: bool) -> JsValue {
     let agent = id(agent);
     let meta = RecordMeta {
         agent_id: Some(&agent),
         stale,
     };
-    record_verdict(ports, Posix, &workspace(), v, meta).expect("recorded")
+    record_with(ports, v, meta).expect("recorded")
 }
 
 fn recorded(ports: &FakePorts) -> Option<JsValue> {
@@ -139,7 +159,7 @@ fn a_changes_request_without_a_blocker_or_major_finding_keeps_an_approval_of_the
     );
     assert_eq!(recorded(&ports), Some(approval_rec));
     let rows = history(&ports);
-    assert_eq!(rows, [minor.clone()]);
+    assert_eq!(rows, std::slice::from_ref(&minor));
     assert_eq!(
         ports.files.text(HISTORY),
         Some(format!("{}\n", minor.to_json()))
@@ -205,7 +225,7 @@ fn an_absent_agent_id_is_left_out_of_the_record() {
         agent_id: None,
         stale: true,
     };
-    let rec = record_verdict(&ports, Posix, &workspace(), &approval(), meta).expect("recorded");
+    let rec = record_with(&ports, &approval(), meta).expect("recorded");
     assert_eq!(rec.get("agent_id"), None);
     assert!(
         !ports
@@ -223,7 +243,7 @@ fn a_write_that_fails_fails_the_record_as_1x_throws() {
         agent_id: None,
         stale: false,
     };
-    let result = record_verdict(&ports, Posix, &workspace(), &approval(), meta);
+    let result = record_with(&ports, &approval(), meta);
     assert!(matches!(result, Err(HookError::Files(_))), "{result:?}");
     // the history append of a kept verdict fails the same way
     let approved = format!(r#"{{"verdict":"approved","stale":false,"fingerprint":"{FP}"}}"#);
@@ -231,7 +251,7 @@ fn a_write_that_fails_fails_the_record_as_1x_throws() {
         .with_file(RECORD, &approved)
         .with_read_only("/w/.git/temper/verdicts");
     let ports = FakePorts::new(files);
-    let result = record_verdict(&ports, Posix, &workspace(), &changes("[]"), meta);
+    let result = record_with(&ports, &changes("[]"), meta);
     assert!(matches!(result, Err(HookError::Files(_))), "{result:?}");
     assert_eq!(ports.files.text(HISTORY), None);
 }

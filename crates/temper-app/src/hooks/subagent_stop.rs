@@ -79,13 +79,12 @@ fn reviewer(call: &HookCall<'_, impl Ports>, ws: &Workspace) -> Result<HookOutco
     let marker = paths::join(style, &dir, &format!("verdict-{}", agent_key(input)?));
     let already = read_js_text(files, &marker).is_some_and(|text| !text.is_empty());
     let transcribed;
-    let report = match input.given("last_assistant_message") {
-        Some(message) => Some(message),
-        None => {
-            transcribed = report_from_transcript(files, env, input.raw("agent_transcript_path"))?
-                .map(JsValue::String);
-            transcribed.as_ref()
-        }
+    let report = if let Some(message) = input.given("last_assistant_message") {
+        Some(message)
+    } else {
+        transcribed = report_from_transcript(files, env, input.raw("agent_transcript_path"))?
+            .map(JsValue::String);
+        transcribed.as_ref()
     };
     let verdict = extract_verdict_from(report)?;
     let hash_file = format!("{marker}.hash");

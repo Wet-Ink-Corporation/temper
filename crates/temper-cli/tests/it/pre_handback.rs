@@ -1,7 +1,7 @@
 //! `temper hook pre-handback` end to end, with real git (port Phase 3f). Ported from 1.x
-//! `handlers.test.mjs`'s "SubagentHandback: only the reviewer is checked; an invalid verdict is
-//! denied with the problem list" and `verdict.test.mjs`'s "validateVerdict: the paths
-//! SubagentStart lists, as given or absolute, cover the changed files".
+//! `handlers.test.mjs`'s "`SubagentHandback`: only the reviewer is checked; an invalid verdict
+//! is denied with the problem list" and `verdict.test.mjs`'s "`validateVerdict`: the paths
+//! `SubagentStart` lists, as given or absolute, cover the changed files".
 
 use std::fs;
 use std::path::Path;
@@ -36,7 +36,7 @@ pub(crate) fn verdict(fp: &str, over: &[(&str, &str)]) -> String {
     .collect();
     for (key, value) in over {
         match props.iter_mut().find(|(k, _)| k == key) {
-            Some(prop) => prop.1 = (*value).to_owned(),
+            Some(prop) => (*value).clone_into(&mut prop.1),
             None => props.push(((*key).to_owned(), (*value).to_owned())),
         }
     }
@@ -242,7 +242,7 @@ fn the_paths_subagent_start_lists_as_given_or_absolute_cover_the_changed_files()
 }
 
 /// Ported from 1.x `telemetry.test.mjs` "verdict-invalid rows name the problem kinds; verdict
-/// rows carry the reviewer's agent_id".
+/// rows carry the reviewer's `agent_id`".
 #[test]
 fn verdict_invalid_rows_name_the_problem_kinds_and_verdict_rows_carry_the_agent_id() -> TestResult {
     let r = repo()?;

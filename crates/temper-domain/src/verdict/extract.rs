@@ -45,9 +45,11 @@ impl ExtractedVerdict {
     }
 }
 
-/// 1.x `extractVerdict(report)` for a report that is any JSON value (a hook input's
-/// `last_assistant_message`): a string is read as [`extract_verdict`] reads it, and a falsy
-/// value or none has no verdict (`if (!text) return null`).
+/// 1.x `extractVerdict(report)` for a report that is any JSON value.
+///
+/// The report is a hook input's `last_assistant_message`: a string is read as
+/// [`extract_verdict`] reads it, and a falsy value or none has no verdict
+/// (`if (!text) return null`).
 ///
 /// # Errors
 ///

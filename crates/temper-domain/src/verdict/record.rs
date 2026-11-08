@@ -7,10 +7,11 @@ use crate::js::{JsTypeError, Object, Value, truthy};
 use super::summary::overturns;
 use super::{ValidVerdict, VerdictOutcome};
 
-/// 1.x `{ ...v, recorded_at: new Date().toISOString(), ...meta }` with
-/// `meta = { agent_id: input.agent_id, stale }`: the verdict's own properties in their order,
-/// then `recorded_at`, `agent_id` and `stale`, each keeping its place when the verdict already
-/// has it.
+/// The verdict's record: 1.x `{ ...v, recorded_at: new Date().toISOString(), ...meta }`.
+///
+/// `meta` is `{ agent_id: input.agent_id, stale }`: the verdict's own properties come in their
+/// order, then `recorded_at`, `agent_id` and `stale`, each keeping its place when the verdict
+/// already has it.
 ///
 /// An absent `agent_id` is JS's `undefined`, which `JSON.stringify` leaves out, so a verdict's
 /// own `agent_id` is dropped.

@@ -1,9 +1,9 @@
 //! `temper hook subagent-stop`'s reviewer branch end to end, with real git (port Phase 3f).
-//! Ported from 1.x `handlers.test.mjs`'s `SubagentStop (reviewer)` tests, "SubagentStop: other
-//! agent types are not checked", the `SubagentStop` half of "SubagentStart and SubagentStop:
-//! every agent type is recorded in telemetry before filtering", and the `subagentStop` tail of
-//! "SubagentHandback: only the reviewer is checked…". The implementer branch (1.x
-//! `completionGate`) waits for port Phase 4.
+//! Ported from 1.x `handlers.test.mjs`'s `SubagentStop (reviewer)` tests, "`SubagentStop`:
+//! other agent types are not checked", the `SubagentStop` half of "`SubagentStart` and
+//! `SubagentStop`: every agent type is recorded in telemetry before filtering", and the
+//! `subagentStop` tail of "`SubagentHandback`: only the reviewer is checked…". The implementer
+//! branch (1.x `completionGate`) waits for port Phase 4.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -301,6 +301,30 @@ fn a_resumed_reviewer_repeating_its_own_verdict_after_another_approved_is_record
     Ok(())
 }
 
+/// A `verdict` row's `via` and `kept`.
+type ViaKept = (Option<String>, Option<String>);
+
+/// Each `verdict` row's `via` and `kept`, in order.
+fn via_and_kept(dir: &Path, sid: &str) -> Result<Vec<ViaKept>> {
+    let pick = |row: &JsValue, key: &str| field(Some(row), key).map(str::to_owned);
+    Ok(rows(dir, sid, "verdict")?
+        .iter()
+        .map(|row| (pick(row, "via"), pick(row, "kept")))
+        .collect())
+}
+
+/// The context `subagent-start` gives reviewer `agent` in session `sid`.
+fn reviewer_context(dir: &Path, sid: &str, agent: &str) -> Result<String> {
+    let start = format!(r#",{REVIEWER},"agent_id":"{agent}""#);
+    let context = hook(dir, "subagent-start", &input(dir, sid, &start))?;
+    Ok(context
+        .get("hookSpecificOutput")
+        .and_then(|s| s.get("additionalContext"))
+        .and_then(JsValue::as_str)
+        .unwrap_or_default()
+        .to_owned())
+}
+
 #[test]
 fn a_verdict_the_hand_back_recorded_is_not_recorded_again_from_the_transcript() -> TestResult {
     let (r, fp) = changed()?;
@@ -338,31 +362,16 @@ fn a_verdict_the_hand_back_recorded_is_not_recorded_again_from_the_transcript() 
             .join("verdict-agent-rv1.hash")
             .exists()
     );
-    let verdicts: Vec<_> = rows(dir, sid, "verdict")?
-        .iter()
-        .map(|row| {
-            (
-                field(Some(row), "via").map(str::to_owned),
-                field(Some(row), "kept").map(str::to_owned),
-            )
-        })
-        .collect();
     let some = |s: &str| Some(s.to_owned());
     assert_eq!(
-        verdicts,
+        via_and_kept(dir, sid)?,
         [
             (some("subagent-stop"), None),
             (some("handback"), some("approved"))
         ]
     );
     // the reviewer's context counts the verdict kept as history
-    let start = format!(r#",{REVIEWER},"agent_id":"rv2""#);
-    let context = hook(dir, "subagent-start", &input(dir, sid, &start))?;
-    let text = context
-        .get("hookSpecificOutput")
-        .and_then(|s| s.get("additionalContext"))
-        .and_then(JsValue::as_str)
-        .unwrap_or_default();
+    let text = reviewer_context(dir, sid, "rv2")?;
     assert!(
         text.contains("1 later changes-requested verdict(s) gave no reason to overturn it"),
         "{text}"
