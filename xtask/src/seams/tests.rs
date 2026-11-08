@@ -1,4 +1,4 @@
-use super::{DOMAIN, Kit, Seam, Violation, check_file, kit_of, references};
+use super::{DOMAIN, Kit, Seam, Violation, check_file, kit_of, references, unmatched_modules};
 
 /// The references of a file of the module `memo` (a file directly under `src/`).
 fn refs(text: &str) -> Vec<(usize, String)> {
@@ -46,6 +46,66 @@ fn comments_are_skipped() {
     let text = "// use crate::project::x;\nlet a = 1; // crate::hooks::y\n//! temper_domain::z\n\
                 /* crate::a /* nested */ crate::b */ crate::glob::G;\n";
     assert_eq!(refs(text), pairs(&[(4, "crate::glob::G")]));
+}
+
+#[test]
+fn other_literal_forms_are_skipped() {
+    let text = "let a = '\\u{1F600}'; crate::project::a();\n\
+                let b = b\"x\\\"crate::project::hidden\\\"\"; crate::project::b();\n\
+                let c = r##\"x\"#crate::project::hidden\"##; crate::project::c();\n\
+                let d = cr\"x\\\"; crate::project::d();\n\
+                let e = cr#\"crate::project::hidden\"#; crate::project::e();\n";
+    assert_eq!(
+        refs(text),
+        pairs(&[
+            (1, "crate::project::a"),
+            (2, "crate::project::b"),
+            (3, "crate::project::c"),
+            (4, "crate::project::d"),
+            (5, "crate::project::e"),
+        ])
+    );
+}
+
+#[test]
+fn unclosed_input_runs_to_the_end_without_a_reference() {
+    for text in [
+        "crate::glob::a; \"crate::project::x",
+        "crate::glob::a; /* crate::project::x",
+        "crate::glob::a; r#\"crate::project::x\"",
+        "crate::glob::a; '\\",
+    ] {
+        assert_eq!(refs(text), pairs(&[(1, "crate::glob::a")]), "{text}");
+    }
+}
+
+#[test]
+fn self_before_super_is_read() {
+    assert_eq!(
+        references("use self::super::x;", &["hooks", "shell"]),
+        pairs(&[(1, "crate::hooks::x")])
+    );
+}
+
+#[test]
+fn a_renamed_super_is_its_bare_path() {
+    assert_eq!(refs("use super as up;"), pairs(&[(1, "crate")]));
+    assert_eq!(
+        references("use super::super;", &["hooks", "shell", "git"]),
+        pairs(&[(1, "crate::hooks")])
+    );
+    assert_eq!(
+        references("use super::super as up;", &["hooks", "shell", "git"]),
+        pairs(&[(1, "crate::hooks")])
+    );
+}
+
+#[test]
+fn a_listed_module_with_no_file_is_reported() {
+    let files = ["m.rs".to_owned(), "other.rs".to_owned()];
+    assert_eq!(unmatched_modules(&SEAM, &files), vec!["hooks/shell"]);
+    let files = ["m/x.rs".to_owned(), "hooks/shell/git.rs".to_owned()];
+    assert_eq!(unmatched_modules(&SEAM, &files), Vec::<&str>::new());
 }
 
 #[test]
