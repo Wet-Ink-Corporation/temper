@@ -414,7 +414,7 @@ fn calls_system(code: &str) -> bool {
         let rest = code.get(at.saturating_add(6)..).unwrap_or("");
         !before
             && rest
-                .trim_start_matches(crate::project::is_js_space)
+                .trim_start_matches(temper_domain::is_js_space)
                 .starts_with('(')
     })
 }

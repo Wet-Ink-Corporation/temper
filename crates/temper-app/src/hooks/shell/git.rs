@@ -389,7 +389,7 @@ impl GitOptions {
             return Next::Git(self.ends(String::new(), rest, false).unread());
         }
         let mut words: Vec<Word> = def
-            .split(crate::project::is_js_space)
+            .split(temper_domain::is_js_space)
             .filter(|part| !part.is_empty())
             .map(Word::literal)
             .collect();

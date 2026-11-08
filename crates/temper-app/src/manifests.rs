@@ -7,7 +7,8 @@ use temper_domain::{Config, Glob, GlobError, Manifest, OwnLints};
 
 use crate::paths::{self, PathEnv, clean_rel};
 use crate::ports::Files;
-use crate::project::{after_line_start, is_js_space};
+use crate::project::after_line_start;
+use temper_domain::is_js_space;
 
 /// The workspace root that governs a package manifest.
 #[derive(Debug)]

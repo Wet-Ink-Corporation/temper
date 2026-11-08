@@ -10,7 +10,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use crate::project::is_js_space;
+use temper_domain::is_js_space;
 
 /// What one part of a word is.
 #[derive(Debug, Clone, PartialEq, Eq)]

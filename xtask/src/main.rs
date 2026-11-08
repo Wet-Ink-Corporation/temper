@@ -1,11 +1,12 @@
 //! `cargo xtask <task>`: temper's repository tooling. Never published.
 //!
-//! Tasks: `check-licenses`, `versions --check [X]`, `versions --set X`, `check-npm-lock`,
-//! `npm-pack X --bins DIR`.
+//! Tasks: `check-licenses`, `check-seams`, `versions --check [X]`, `versions --set X`,
+//! `check-npm-lock`, `npm-pack X --bins DIR`.
 
 mod licenses;
 mod npm;
 mod pack;
+mod seams;
 mod versions;
 
 use std::fmt;
@@ -19,6 +20,7 @@ use versions::Site;
 
 const USAGE: &str = "usage: cargo xtask <task>
   check-licenses           every crate's LICENSE-MIT and LICENSE-APACHE equal the root's
+  check-seams              the modules bound for redkiln's kits reach only what the kit will hold
   versions --check [X]     every version site agrees (and equals X)
   versions --set X         set every version site to X
   check-npm-lock           package.json and package-lock.json install one engine safely
@@ -28,6 +30,7 @@ const USAGE: &str = "usage: cargo xtask <task>
 #[derive(Debug, PartialEq, Eq)]
 enum Task {
     CheckLicenses,
+    CheckSeams,
     VersionsCheck(Option<String>),
     VersionsSet(String),
     CheckNpmLock,
@@ -46,6 +49,7 @@ fn parse_task(args: impl IntoIterator<Item = std::ffi::OsString>) -> Option<Task
     let version = |v: &str| npm::is_exact_version(v).then(|| v.to_owned());
     match words.as_slice() {
         ["check-licenses"] => Some(Task::CheckLicenses),
+        ["check-seams"] => Some(Task::CheckSeams),
         ["versions", "--check"] => Some(Task::VersionsCheck(None)),
         ["versions", "--check", v] => version(v).map(|v| Task::VersionsCheck(Some(v))),
         ["versions", "--set", v] => version(v).map(Task::VersionsSet),
@@ -87,6 +91,7 @@ fn main() -> ExitCode {
     let root = workspace_root();
     let (name, outcome) = match task {
         Task::CheckLicenses => ("check-licenses", check_licenses(&root)),
+        Task::CheckSeams => ("check-seams", check_seams(&root)),
         Task::VersionsCheck(expected) => ("versions", versions_check(&root, expected.as_deref())),
         Task::VersionsSet(version) => ("versions", versions_set(&root, &version)),
         Task::CheckNpmLock => ("check-npm-lock", check_npm_lock(&root)),
@@ -285,6 +290,66 @@ fn npm_pack(root: &Path, version: &str, bins: &Path) -> Result<Outcome, XtaskErr
     )))
 }
 
+fn check_seams(root: &Path) -> Result<Outcome, XtaskError> {
+    let mut violations = Vec::new();
+    let mut files = 0_usize;
+    for seam in &seams::SEAMS {
+        let src = root.join("crates").join(seam.krate).join("src");
+        for rel in rust_files(&src)? {
+            let Some(kit) = seams::kit_of(seam, &rel) else {
+                continue;
+            };
+            if seams::is_test_file(&rel) {
+                continue;
+            }
+            files = files.saturating_add(1);
+            let text = read(&src.join(&rel))?;
+            let shown = format!("crates/{}/src/{rel}", seam.krate);
+            violations.extend(seams::check_file(seam, &shown, kit, &text));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(Outcome::pass(format!(
+            "{files} kit-bound files reach only their seams"
+        )));
+    }
+    Ok(Outcome::fail(
+        violations.iter().map(ToString::to_string).collect(),
+    ))
+}
+
+/// Every `.rs` file under `dir`, as a sorted `/`-separated path relative to it. A name that is
+/// not UTF-8 is skipped: no Rust module can have one.
+fn rust_files(dir: &Path) -> Result<Vec<String>, XtaskError> {
+    let mut out = Vec::new();
+    let mut pending = vec![(dir.to_path_buf(), String::new())];
+    while let Some((path, prefix)) = pending.pop() {
+        let unreadable = |source| XtaskError::Read {
+            path: path.clone(),
+            source,
+        };
+        for entry in fs::read_dir(&path).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
+            let kind = entry.file_type().map_err(unreadable)?;
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let rel = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            if kind.is_dir() {
+                pending.push((entry.path(), rel));
+            } else if kind.is_file() && Path::new(&rel).extension().is_some_and(|e| e == "rs") {
+                out.push(rel);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
 fn read(path: &Path) -> Result<String, XtaskError> {
     fs::read_to_string(path).map_err(|source| XtaskError::Read {
         path: path.to_path_buf(),
@@ -386,6 +451,7 @@ mod tests {
 
     #[test]
     fn tasks_parse() {
+        assert_eq!(parse(&["check-seams"]), Some(Task::CheckSeams));
         assert_eq!(
             parse(&["check-licenses"]),
             Some(Task::CheckLicenses),

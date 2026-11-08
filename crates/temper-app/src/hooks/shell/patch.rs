@@ -354,7 +354,7 @@ fn git_name_at(
     at: usize,
     then: impl Fn(usize) -> Option<usize>,
 ) -> Option<(usize, usize)> {
-    use crate::project::is_js_space;
+    use temper_domain::is_js_space;
     if let Some(close) = quoted_at(text, at)
         && let Some(end) = then(close)
     {
@@ -459,7 +459,7 @@ pub(crate) fn patch_files(text: &str) -> Vec<String> {
 
 /// 1.x's `.replace(/^"|"$/g, '').replace(/\s+\d{4}-\d\d-\d\d[ \t].*$/, '').trim()`.
 fn clean_name(name: &str) -> String {
-    use crate::project::is_js_space;
+    use temper_domain::is_js_space;
     let name = name.strip_prefix('"').unwrap_or(name);
     let name = name.strip_suffix('"').unwrap_or(name);
     let mut cut = name.len();

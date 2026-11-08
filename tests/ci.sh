@@ -3,7 +3,7 @@
 #
 #   tests/ci.sh            # all checks
 #   tests/ci.sh --quick    # skip the steps that compile Rust (the workspace's clippy, tests,
-#                          # scan, hook and status parity cases, test map, docs and licence check, doc
+#                          # scan, hook and status parity cases, test map, docs, licence and seam checks, doc
 #                          # examples, brownfield e2e, example workspace gate)
 #
 # Needs node 22+, python 3.11+, git, and the toolchain pinned in
@@ -102,6 +102,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --lock
 
 step "each crate carries both licence texts, equal to the root's"
 cargo xtask check-licenses
+
+step "the modules bound for redkiln's kits reach only their seams"
+cargo xtask check-seams
 
 step "the workspace's version sites agree"
 cargo xtask versions --check
