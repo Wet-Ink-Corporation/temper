@@ -58,12 +58,19 @@ pub(crate) struct Run {
 
 /// The `temper` binary, with git kept from looking for a repository above the system's
 /// temporary directory, so a test's tree is a repository only when the test makes it one.
-fn temper_command() -> Command {
+pub(crate) fn temper_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_temper"));
     // The tests' own temper session (TEMPER_CLI, TEMPER_BASE, CLAUDE_PLUGIN_ROOT, ...) must
     // not reach the engine: it changes the gate command and the base the engine reports.
     for (name, _) in std::env::vars_os() {
         let text = name.to_string_lossy();
+        // Windows reads variable names without regard to case, so `Temper_Base` is
+        // `TEMPER_BASE` there.
+        let text = if cfg!(windows) {
+            text.to_ascii_uppercase()
+        } else {
+            text.into_owned()
+        };
         if text.starts_with("TEMPER_") || text.starts_with("CLAUDE") {
             command.env_remove(&name);
         }

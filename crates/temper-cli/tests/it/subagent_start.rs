@@ -8,7 +8,7 @@ use std::process::Command;
 
 use temper_domain::JsValue;
 
-use crate::support::{TestResult, git, hook_in, write_tree};
+use crate::support::{TestResult, git, hook_in, temper_command, write_tree};
 
 const ROOT: &str = "[workspace]\nresolver = \"3\"\nmembers = [\"crates/*\"]\n\n[workspace.package]\nedition = \"2024\"\nversion = \"0.1.0\"\npublish = false\n";
 const MEMBER: &str = "[package]\nname = \"core\"\nedition.workspace = true\nversion.workspace = true\npublish.workspace = true\n";
@@ -98,10 +98,9 @@ pub(crate) fn context(json: &JsValue) -> String {
 
 /// The fingerprint `temper status --session <sid>` prints for the checkout at `dir`.
 pub(crate) fn fingerprint(dir: &Path, sid: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let out = Command::new(env!("CARGO_BIN_EXE_temper"))
+    let out = temper_command()
         .args(["status", "--session", sid])
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", std::env::temp_dir())
         .output()?;
     let stdout = String::from_utf8(out.stdout)?;
     let line = stdout
