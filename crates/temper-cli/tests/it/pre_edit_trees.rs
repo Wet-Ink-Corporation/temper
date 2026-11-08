@@ -7,7 +7,7 @@ use std::path::Path;
 use temper_domain::{JsValue, tree_id};
 
 use crate::subagent_start::{LIB, LIB_RS_2, head, hook, json_str, repo, state};
-use crate::support::TestResult;
+use crate::support::{TestResult, real_path};
 
 /// `hook pre-edit` for a `Write` of `content` to `rel` under `dir`, by the main agent of
 /// session `sid`.
@@ -28,7 +28,7 @@ fn write(
 }
 
 fn record_path(dir: &Path, sid: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let root = fs::canonicalize(dir)?;
+    let root = real_path(dir)?;
     let id = tree_id(&root.to_string_lossy());
     Ok(state(dir)
         .join("sessions")
