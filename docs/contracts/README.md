@@ -30,4 +30,4 @@ Every check also has the kind `unreadable`, for the exit-70 envelope above.
 
 What a check admits comes from the **base** revision, never the head, so a pull request cannot admit its own change. Today assay reads base `.assay/exceptions.toml`: `[[exception]]` (path, lint, reason), `[[gate_config]]` (key, base and head values, reason), and `[[test_inventory]]` and `[[manifest_switch]]` (path, base and head blob ids, reason). Where that allowlist lives once Redkiln Rust owns the checks is open: under `.redkiln/rust/` beside the moved config (rust.md call E) is the likely answer.
 
-Not built in 1.x. Building these in Node would mean a 1.7.0 release, and whether to do that is an open question (wi-0924e6). The schemas fix the shape so Review can write its runner against them now. Vendored-copy drift (assay `vendored.rs`) has no subcommand, because the vendored copies go away in the monorepo.
+Not built in 1.x: the Rust engine implements them in redkiln (wi-0924e6). The schemas fix the shape so Review can write its runner against them now. Vendored-copy drift (assay `vendored.rs`) has no subcommand, because the vendored copies go away in the monorepo.

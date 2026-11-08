@@ -15,7 +15,7 @@ temper moves into the `Wet-Ink-Corporation/redkiln` monorepo as Redkiln Rust (in
 | MSRV | The port's crates take the root's `rust-version` 1.98.1 at the import | wi-a2240a (amends D4) |
 | Dependencies | The port takes the suite's set (`redkiln-core`, `clap`, `time`, and what Core brings) at the import | wi-fa59d1 (amends D10) |
 
-The other clashes (the telemetry branch, #193 and whether #172/#173 are built in 1.x) are open Weigh-In questions (wi-b1bfb5, wi-39f19a, wi-0924e6). `docs/history/decisions.md` lists each once it is answered.
+The other clashes are decided too (`docs/history/decisions.md`): the telemetry branch is retired for new adoptions (wi-b1bfb5), #193 is closed as superseded (wi-39f19a), and #172/#173 stay contracts only in 1.x, built in 2.0 (wi-0924e6).
 
 ## Placement
 
@@ -93,11 +93,11 @@ Read by 2.0 until imported, then never written again and never deleted (wi-f4c3a
 | #21 2.0 tracking | Keep, transfer | Re-scoped to Redkiln Rust 2.0; its phase list continues in redkiln |
 | #101 evals for the orchestration loop | Keep, transfer | Moves with `evals/` |
 | #103 setup recognises older templates | Keep, transfer | Part of 2.0's `setup --migrate` (D15) |
-| #172 check subcommands with a findings contract | Keep, transfer | Contracts in `docs/contracts/`; the subcommands are built in 1.x or in 2.0 (wi-0924e6) |
+| #172 check subcommands with a findings contract | Keep, transfer | Contracts in `docs/contracts/`; the subcommands are built in 2.0, not in 1.x (wi-0924e6) |
 | #173 `gate --base --findings-out`, compare blobs | Keep, transfer | The same CI-oracle work as #172 |
 | #190 forbid H-rule lints on the rustc command line | Keep, transfer | assay ships the backstop first; Redkiln Rust takes it over |
 | #23 release environment and trusted publishing | Close: D1 and D2 are answered (wi-02195d, wi-0eea27) | Publishing moves to the suite's release flow (wi-02195d, wi-0eea27) |
-| #193 OCI artifact on GHCR for assay | Close once answered | Review pins temper inside the monorepo (wi-39f19a) |
+| #193 OCI artifact on GHCR for assay | Closed as superseded | Review pins temper inside the monorepo (wi-39f19a) |
 | #24 tiered CI and required checks | Closed 2026-11-08 | Workflows are not imported; redkiln's `ok` check governs |
 
 ## While the move waits
