@@ -291,27 +291,36 @@ fn npm_pack(root: &Path, version: &str, bins: &Path) -> Result<Outcome, XtaskErr
 }
 
 fn check_seams(root: &Path) -> Result<Outcome, XtaskError> {
-    let mut violations = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
     let mut files = 0_usize;
     for seam in &seams::SEAMS {
         let src = root.join("crates").join(seam.krate).join("src");
-        for rel in rust_files(&src)? {
-            let Some(kit) = seams::kit_of(seam, &rel) else {
+        let all = rust_files(&src)?;
+        problems.extend(seams::unmatched_modules(seam, &all).into_iter().map(|module| {
+            format!(
+                "crates/{}/src/{module}: listed in xtask/src/seams.rs, but no such module exists",
+                seam.krate
+            )
+        }));
+        for rel in &all {
+            let Some(kit) = seams::kit_of(seam, rel) else {
                 continue;
             };
             files = files.saturating_add(1);
-            let text = read(&src.join(&rel))?;
-            violations.extend(seams::check_file(seam, &rel, kit, &text));
+            let text = read(&src.join(rel))?;
+            problems.extend(
+                seams::check_file(seam, rel, kit, &text)
+                    .iter()
+                    .map(ToString::to_string),
+            );
         }
     }
-    if violations.is_empty() {
+    if problems.is_empty() {
         return Ok(Outcome::pass(format!(
             "{files} kit-bound files reach only their seams"
         )));
     }
-    Ok(Outcome::fail(
-        violations.iter().map(ToString::to_string).collect(),
-    ))
+    Ok(Outcome::fail(problems))
 }
 
 /// Every `.rs` file under `dir`, as a sorted `/`-separated path relative to it. A name that is

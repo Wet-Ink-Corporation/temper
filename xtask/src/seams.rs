@@ -137,6 +137,24 @@ pub(crate) fn kit_of(seam: &Seam, rel: &str) -> Option<Kit> {
         .map(|&(_, kit)| kit)
 }
 
+/// The listed modules of `seam` that none of `files` (paths under `src/`) belongs to: a module
+/// renamed or deleted without its entry, which would otherwise go unchecked.
+pub(crate) fn unmatched_modules<'s>(seam: &'s Seam, files: &[String]) -> Vec<&'s str> {
+    seam.modules
+        .iter()
+        .filter(|&&(module, _)| {
+            !files.iter().any(|file| {
+                let stem = file.strip_suffix(".rs").unwrap_or(file);
+                stem == module
+                    || stem
+                        .strip_prefix(module)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+        })
+        .map(|&(module, _)| module)
+        .collect()
+}
+
 /// The violations in the text of one kit-bound file, `rel` under its crate's `src/`
 /// (`/`-separated). Its tests are checked too: they move with the kit.
 pub(crate) fn check_file(seam: &Seam, rel: &str, kit: Kit, text: &str) -> Vec<Violation> {
@@ -280,20 +298,40 @@ fn root_paths(
             return Some((vec![root.to_owned()], after.saturating_add(2)));
         }
     }
-    let mut supers = 0_usize;
     let mut i = at;
+    // `self::super::x` is `super::x`.
+    if starts_word(code, i, "self") {
+        let after = skip_space(code, i.saturating_add(4));
+        let next = skip_space(code, after.saturating_add(2));
+        if starts_with(code, after, "::") && starts_word(code, next, "super") {
+            i = next;
+        }
+    }
+    let mut supers = 0_usize;
+    let mut renamed = None;
     while starts_word(code, i, "super") {
+        supers = supers.saturating_add(1);
         let after = skip_space(code, i.saturating_add(5));
-        if !starts_with(code, after, "::") {
+        if starts_word(code, after, "as") {
+            renamed = Some(after.saturating_add(2));
             break;
         }
-        supers = supers.saturating_add(1);
+        if !starts_with(code, after, "::") {
+            // The chain names a module itself (`use super::super;`).
+            renamed = Some(i.saturating_add(5));
+            break;
+        }
         i = skip_space(code, after.saturating_add(2));
     }
     if supers == 0 {
         return None;
     }
-    let (paths, end) = parse_path(code, i);
+    // A chain that ends in `super` (renamed or not) names its whole module, so it is reported
+    // bare, as `crate as` is.
+    let (paths, end) = match renamed {
+        Some(end) => (vec![String::new()], end),
+        None => parse_path(code, i),
+    };
     let base: Vec<&str> = module.iter().copied().chain(scope.names()).collect();
     let resolved = base
         .len()
