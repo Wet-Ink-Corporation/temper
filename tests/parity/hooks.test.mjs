@@ -48,19 +48,32 @@ after(() => {
 
 /**
  * A written file after §2.2's masks: telemetry row times (and a gate-lost row's `foundMs`), a skill
- * marker's time, a session's start time (port 3d), and D16(w)'s lines in an env file.
+ * marker's time, a session's start time (port 3d), and D16(w)'s lines in an env file, which
+ * `counts.d17` counts (OC-6 A).
  */
-function maskFile(rel, text) {
-  if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
-  if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
-  if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
-  if (/(^|\/)env\.sh$/.test(rel)) return maskD17Lines(text);
-  return text;
+function fileMask() {
+  const counts = { d17: 0 };
+  const mask = (rel, text) => {
+    if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
+    if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
+    if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
+    if (/(^|\/)env\.sh$/.test(rel)) {
+      const m = maskD17Lines(text);
+      counts.d17 += m.count;
+      return m.text;
+    }
+    return text;
+  };
+  return { mask, counts };
 }
 
-/** One engine's run of a case, masked; `failures` counts OC-3 (p)'s masked texts. */
+/**
+ * One engine's run of a case, masked; `failures` counts OC-3 (p)'s masked texts and `d17` D16(w)'s
+ * masked env-file lines.
+ */
 function run(engine, c, steps, now) {
-  const r = runHookCase(engine, dirs[c.fixture], { steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile, setup: c.setup, now });
+  const { mask, counts } = fileMask();
+  const r = runHookCase(engine, dirs[c.fixture], { steps, cwd: c.cwd, git: c.git, pluginData: c.pluginData, env: c.env, maskFile: mask, setup: c.setup, now });
   let failures = 0;
   const out = r.steps.map((s) => {
     let { stdout } = s;
@@ -72,7 +85,13 @@ function run(engine, c, steps, now) {
     // OC-5 A: only 2.0 says that the config is unreadable; a no-op elsewhere.
     return { exit: s.exit, stdout: maskConfigLine(stdout), stderr: s.stderr };
   });
-  return { out, files: maskTreeIds(r.files), failures, ms: r.steps.map((s) => s.ms) };
+  return { out, files: maskTreeIds(r.files), failures, d17: counts.d17, ms: r.steps.map((s) => s.ms) };
+}
+
+/** OC-6 A (wi-168ff8): D17's two lines per env-file write on Rust's side, none on 1.x's. */
+function assertD17(rust, node, writes) {
+  assert.equal(node.d17, 0, 'D17: 1.x writes no TEMPER_BIN or PATH line');
+  assert.equal(rust.d17, 2 * writes, `D17: two lines per env-file write (${writes})`);
 }
 
 test('the hook cases: unique names, known fixtures, and the 3d floor of 154 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 67, session-start: 25)', () => {
@@ -92,6 +111,7 @@ for (const c of cases) {
     assert.deepStrictEqual(rust.files, node.files, 'written files');
     assert.equal(rust.failures, node.failures, 'OC-3 (p) masks on each side');
     if (c.maskFailure) assert.equal(rust.failures, c.maskFailure, 'OC-3 (p) masked texts');
+    assertD17(rust, node, c.envFileWrites ?? 0);
     if (c.stdout) assert.deepEqual(node.out.map((s) => s.stdout), c.stdout, 'the pinned stdout');
     if (c.wrote) assert.deepEqual(Object.keys(node.files).sort(), [...c.wrote].sort(), 'the pinned files');
     const slow = rust.ms.filter((ms) => ms >= BUDGET_MS);
@@ -117,6 +137,7 @@ test('the CLI on a simulated Node 17: SessionStart runs in full and adds the war
   const [node, rust] = [onNode17('1.x', 'temper.mjs'), onNode17('launch', 'launch.mjs')].map((engine) => run(engine, c, steps, now));
   assert.deepStrictEqual(rust.out, node.out, 'exit, stdout and stderr');
   assert.deepStrictEqual(rust.files, node.files, 'written files');
+  assertD17(rust, node, 1);
   const json = JSON.parse(node.out[0].stdout);
   assert.match(json.systemMessage, /^temper: Node 17\.9\.1 is older than the documented minimum, Node 18\.0\.0/);
   const context = json.hookSpecificOutput.additionalContext;

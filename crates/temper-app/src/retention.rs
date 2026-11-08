@@ -118,6 +118,7 @@ struct Group {
 }
 
 /// The regular files of `dirs` grouped by fingerprint, in first-seen order: one `stat` each.
+/// A file without a modification time is left out, so it is never removed.
 fn groups(files: &impl Files, style: PathStyle, dirs: &[String]) -> Vec<Group> {
     let mut out: Vec<Group> = Vec::new();
     let mut at: HashMap<String, usize> = HashMap::new();
@@ -130,8 +131,13 @@ fn groups(files: &impl Files, style: PathStyle, dirs: &[String]) -> Vec<Group> {
         // fails, so it is skipped there too.
         for name in entries.iter().filter_map(|entry| entry.name.to_str()) {
             let path = paths::join(style, dir, name);
-            let meta = match files.stat(Path::new(&path)) {
-                Ok(Some(meta)) if meta.kind == EntryKind::File => meta,
+            let (modified, len) = match files.stat(Path::new(&path)) {
+                Ok(Some(meta)) if meta.kind == EntryKind::File => match meta.modified {
+                    Some(t) => (t.millis(), meta.len),
+                    // No modification time on this platform: err toward keeping, as the
+                    // sessions and progress files do; it joins no group.
+                    None => continue,
+                },
                 // Gone, unreadable or not a file: 1.x's `continue`.
                 Ok(_) | Err(_) => continue,
             };
@@ -147,10 +153,8 @@ fn groups(files: &impl Files, style: PathStyle, dirs: &[String]) -> Vec<Group> {
             });
             if let Some(group) = out.get_mut(index) {
                 group.files.push(path);
-                if let Some(t) = meta.modified {
-                    group.newest = group.newest.max(t.millis());
-                }
-                group.size = group.size.saturating_add(meta.len);
+                group.newest = group.newest.max(modified);
+                group.size = group.size.saturating_add(len);
             }
         }
     }

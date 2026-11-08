@@ -179,5 +179,35 @@
     "pluginData": true,
     "event": "post-tool",
     "stdin": "{\"tool_name\": \"Skill\", \"session_id\": \"s1\", \"tool_input\": {\"skill\": \"temper:rust-craft\"}}"
+  },
+  {
+    "name": "a session id 1.x's String() throws on fails the hook and writes no marker (Invariant 4)",
+    "fixture": "workspace",
+    "pluginData": true,
+    "maskFailure": 1,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\":\"Skill\",\"session_id\":{\"toString\":1},\"tool_input\":{\"skill\":\"temper:rust-craft\"}}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook post-tool failed: <MSG>\"}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
+    ]
+  },
+  {
+    "name": "an agent id 1.x's String() throws on fails the hook and writes no marker (Invariant 4)",
+    "fixture": "workspace",
+    "pluginData": true,
+    "maskFailure": 1,
+    "event": "post-tool",
+    "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"s1\",\"agent_id\":{\"toString\":1},\"tool_input\":{\"skill\":\"temper:rust-craft\"}}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook post-tool failed: <MSG>\"}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
+    ]
   }
 ]

@@ -139,7 +139,7 @@ fn checked(
         note_tree(call, workspace)?;
     }
     let config = &workspace.config;
-    if (rust || manifest) && config.skill_gate() && !preloaded(call) && !skill_loaded(call) {
+    if (rust || manifest) && config.skill_gate() && !preloaded(call) && !skill_loaded(call)? {
         // The row stores the path.
         let event = TelemetryEvent::DenySkillGate {
             file: rel.to_owned(),

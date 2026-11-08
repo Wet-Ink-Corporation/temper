@@ -418,6 +418,7 @@
       "CLAUDE_PLUGIN_ROOT": "/plugin",
       "CLAUDE_ENV_FILE": "<ROOT>/.temper/env.sh"
     },
+    "envFileWrites": 1,
     "setup": [
       {
         "git": [
@@ -476,6 +477,7 @@
       "CLAUDE_PLUGIN_ROOT": "/plugin",
       "CLAUDE_ENV_FILE": "<ROOT>/.temper/env.sh"
     },
+    "envFileWrites": 1,
     "setup": [
       {
         "write": {
@@ -802,6 +804,40 @@
         "event": "session-start",
         "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/wt\",\"source\":\"resume\"}"
       }
+    ]
+  },
+  {
+    "name": "a session id 1.x's String() throws on fails the hook before anything is written (Invariant 4)",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "maskFailure": 1,
+    "event": "session-start",
+    "stdin": "{\"session_id\":{\"toString\":1},\"cwd\":\"<ROOT>\",\"source\":\"startup\"}",
+    "stdout": [
+      "{\"systemMessage\":\"temper hook session-start failed: <MSG>\"}"
+    ],
+    "wrote": [
+      "scratch/data/",
+      "scratch/tmp/"
     ]
   }
 ]

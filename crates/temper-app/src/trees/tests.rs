@@ -2,7 +2,7 @@ use temper_domain::PathStyle::Posix;
 use temper_domain::{Config, JsValue, tree_id};
 
 use super::note_session_tree;
-use crate::engine::RunEnv;
+use crate::engine::{HookError, RunEnv};
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, Reply};
 use crate::hooks::{HookCall, HookInput};
 use crate::ports::{ExitKind, FsOp};
@@ -67,7 +67,9 @@ fn parsed(input: &str) -> HookInput {
     HookInput::parse(input).expect("JSON")
 }
 
-fn note(ports: &FakePorts, ws: &Workspace, input: &str, force: Force) -> Result<(), FsOp> {
+/// [`note_session_tree`], its error as the failed file operation, or `None` for an input
+/// that is not a file error.
+fn note(ports: &FakePorts, ws: &Workspace, input: &str, force: Force) -> Result<(), Option<FsOp>> {
     let input = parsed(input);
     let env = RunEnv::at(ROOT, Posix);
     let call = HookCall {
@@ -75,7 +77,10 @@ fn note(ports: &FakePorts, ws: &Workspace, input: &str, force: Force) -> Result<
         env: &env,
         input: &input,
     };
-    note_session_tree(&call, ws, force).map_err(|error| error.op())
+    note_session_tree(&call, ws, force).map_err(|error| match error {
+        HookError::Files(error) => Some(error.op()),
+        _ => None,
+    })
 }
 
 const SID: &str = r#"{"session_id":"s1"}"#;
@@ -189,7 +194,26 @@ fn a_write_failure_is_the_handler_s_error() {
 
     let error = note(&ports, &workspace(true), SID, Force::Always);
 
-    assert_eq!(error, Err(FsOp::Write), "1.x's writeAtomic throws (F1)");
+    assert_eq!(
+        error,
+        Err(Some(FsOp::Write)),
+        "1.x's writeAtomic throws (F1)"
+    );
+}
+
+#[test]
+fn a_session_id_1x_cannot_convert_is_the_handler_s_error() {
+    let ports = ports(FakeFiles::new(Posix), LINKED, true);
+
+    let error = note(
+        &ports,
+        &workspace(true),
+        r#"{"session_id":{"toString":1}}"#,
+        Force::Always,
+    );
+
+    assert_eq!(error, Err(None), "1.x's `sessionDir` throws (Invariant 4)");
+    assert_eq!(ports.files.paths(), Vec::<String>::new(), "nothing written");
 }
 
 mod note_tree;

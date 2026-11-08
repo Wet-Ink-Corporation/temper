@@ -9,11 +9,11 @@ use std::path::Path;
 use temper_domain::{JsValue, TreeId, tree_id};
 
 use crate::changes::fingerprint;
-use crate::engine::RunEnv;
+use crate::engine::{HookError, RunEnv};
 use crate::git;
 use crate::hooks::{HookCall, HookInput, agent_key, session_segment};
 use crate::paths;
-use crate::ports::{Clock, Files, FsError, Ports};
+use crate::ports::{Clock, Files, Ports};
 use crate::project::{Workspace, exists};
 use crate::session::{Force, base_rev, session_dir, start_fingerprint};
 
@@ -30,8 +30,12 @@ pub(crate) use scope::{Checkout, DueTree, Scope, Tree, Widen, due_trees, own_tre
 ///
 /// # Errors
 ///
-/// [`FsError`] when the record cannot be written, as 1.x's `writeAtomic` throws (F2, F5).
-pub(crate) fn note_tree(call: &HookCall<'_, impl Ports>, ws: &Workspace) -> Result<(), FsError> {
+/// [`HookError::Files`] when the record cannot be written, as 1.x's `writeAtomic` throws (F2,
+/// F5); [`HookError::InputType`] when the session or agent id is a value 1.x's `String` throws on.
+pub(crate) fn note_tree(
+    call: &HookCall<'_, impl Ports>,
+    ws: &Workspace,
+) -> Result<(), HookError> {
     let HookCall { ports, env, input } = *call;
     let style = env.style;
     let Some(git_root) = ws.git_root() else {
@@ -40,10 +44,10 @@ pub(crate) fn note_tree(call: &HookCall<'_, impl Ports>, ws: &Workspace) -> Resu
     if !has_session(input) {
         return Ok(());
     }
-    let sid = session_segment(input);
+    let sid = session_segment(input)?;
     let dir = session_dir(style, ws, &sid);
     let id = checkout_id(env, ws);
-    let agent = agent_key(input);
+    let agent = agent_key(input)?;
     let path = paths::join(style, &dir, &format!("tree-{id}-{agent}.json"));
     let files = ports.files();
     if exists(files, &path) {
@@ -88,7 +92,8 @@ pub(crate) fn note_tree(call: &HookCall<'_, impl Ports>, ws: &Workspace) -> Resu
         .map(|(key, value)| (key.to_owned(), value))
         .collect(),
     );
-    files.write_atomic(Path::new(&path), &record.to_json())
+    files.write_atomic(Path::new(&path), &record.to_json())?;
+    Ok(())
 }
 
 /// The input has a truthy `session_id`.
@@ -115,12 +120,13 @@ fn checkout_id(env: &RunEnv, ws: &Workspace) -> TreeId {
 ///
 /// # Errors
 ///
-/// [`FsError`] when the record cannot be written, as 1.x's `writeAtomic` throws (F1).
+/// [`HookError::Files`] when the record cannot be written, as 1.x's `writeAtomic` throws
+/// (F1); [`HookError::InputType`] when the session id is a value 1.x's `sessionDir` throws on.
 pub(crate) fn note_session_tree(
     call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
     force: Force,
-) -> Result<(), FsError> {
+) -> Result<(), HookError> {
     let HookCall { ports, env, input } = *call;
     let style = env.style;
     let Some(git_root) = ws.git_root() else {
@@ -129,7 +135,7 @@ pub(crate) fn note_session_tree(
     if !has_session(input) || !git::is_linked(ports.process(), style, git_root) {
         return Ok(());
     }
-    let sid = session_segment(input);
+    let sid = session_segment(input)?;
     let dir = session_dir(style, ws, &sid);
     let id = checkout_id(env, ws);
     let files = ports.files();
@@ -164,7 +170,8 @@ pub(crate) fn note_session_tree(
         .collect(),
     );
     let path = paths::join(style, &dir, &format!("tree-{id}-session.json"));
-    files.write_atomic(Path::new(&path), &record.to_json())
+    files.write_atomic(Path::new(&path), &record.to_json())?;
+    Ok(())
 }
 
 #[cfg(test)]

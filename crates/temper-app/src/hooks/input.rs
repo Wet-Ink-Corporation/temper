@@ -66,12 +66,9 @@ pub(crate) fn js_string_or_empty(value: Option<&JsValue>) -> Cow<'_, str> {
 }
 
 /// 1.x `agentKey(input)`: `agent-<agent_id>` with the id made safe for a file name, or `main`
-/// when the id is missing or falsy.
-pub(crate) fn agent_key(input: &HookInput) -> String {
-    match input.raw("agent_id").filter(|id| id.is_truthy()) {
-        Some(id) => format!("agent-{}", file_safe(&id.to_js_string())),
-        None => "main".to_owned(),
-    }
+/// when the id is missing or falsy; failing where its `String(agent_id)` throws (Invariant 4).
+pub(crate) fn agent_key(input: &HookInput) -> Result<String, JsTypeError> {
+    agent_key_of(input.raw("agent_id"))
 }
 
 /// [`agent_key`] of a `who` whose `agent_id` is `agent_id` (a telemetry row's), failing where
@@ -84,11 +81,12 @@ pub(crate) fn agent_key_of(agent_id: Option<&JsValue>) -> Result<String, JsTypeE
 }
 
 /// The session's directory name, as 1.x's `sessionDir` and `markerDir` make it:
-/// `String(session_id || 'unknown')` made safe for a file name.
-pub(crate) fn session_segment(input: &HookInput) -> String {
+/// `String(session_id || 'unknown')` made safe for a file name, failing where that `String`
+/// throws (Invariant 4).
+pub(crate) fn session_segment(input: &HookInput) -> Result<String, JsTypeError> {
     match input.raw("session_id").filter(|sid| sid.is_truthy()) {
-        Some(sid) => file_safe(&sid.to_js_string()),
-        None => "unknown".to_owned(),
+        Some(sid) => Ok(file_safe(&sid.to_js_string_checked()?)),
+        None => Ok("unknown".to_owned()),
     }
 }
 

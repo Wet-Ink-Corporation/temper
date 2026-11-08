@@ -82,7 +82,7 @@ pub(crate) fn own_tree(
 ) -> Result<Scope, JsTypeError> {
     let HookCall { ports, env, input } = *call;
     let style = env.style;
-    let sid = session_segment(input);
+    let sid = session_segment(input)?;
     let session = Scope {
         base: base_rev(ports, style, ws, &sid),
         start_fp: start_fingerprint(ports.files(), style, ws, &sid),
@@ -187,7 +187,7 @@ pub(crate) fn other_trees<'a>(
     if ws.git_root().is_none() || !has_session(input) {
         return Ok(Vec::new());
     }
-    let sid = session_segment(input);
+    let sid = session_segment(input)?;
     let dir = session_dir(style, ws, &sid);
     let files = ports.files();
     let Ok(entries) = files.read_dir(Path::new(&dir)) else {
@@ -270,7 +270,8 @@ fn tree_at<'a>(
         }
         (Some(_) | None, None) | (None, Some(_)) => None,
     };
-    let base = resolved_head.or_else(|| base_rev(ports, style, &tree, &session_segment(input)));
+    let sid = session_segment(input)?;
+    let base = resolved_head.or_else(|| base_rev(ports, style, &tree, &sid));
     Ok(Some(Tree {
         scope: Scope {
             base,

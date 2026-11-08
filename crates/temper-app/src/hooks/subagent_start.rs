@@ -141,7 +141,7 @@ fn context(
     let plans = list_plans(files, style, &ws.root);
     let gate_in = GateIn {
         command: gate_command(env),
-        session_base: base_rev(ports, style, ws, &session_segment(input)),
+        session_base: base_rev(ports, style, ws, &session_segment(input)?),
         linked,
         role,
     };

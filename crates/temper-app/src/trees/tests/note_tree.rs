@@ -5,7 +5,7 @@ use temper_domain::{JsValue, tree_id};
 
 use super::{HEAD, LINKED, ROOT, SESSION, failed, parsed, ran, workspace};
 use crate::changes::fingerprint;
-use crate::engine::RunEnv;
+use crate::engine::{HookError, RunEnv};
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, NOW};
 use crate::hooks::HookCall;
 use crate::ports::FsOp;
@@ -90,7 +90,8 @@ fn with_base(files: FakeFiles) -> FakeFiles {
     files.with_file(&format!("{SESSION}/base"), "B\n")
 }
 
-fn note(ports: &FakePorts, ws: &Workspace, input: &str) -> Result<(), FsOp> {
+/// `note_tree`, its error as the file operation that failed (`None`: not a file error).
+fn note(ports: &FakePorts, ws: &Workspace, input: &str) -> Result<(), Option<FsOp>> {
     let input = parsed(input);
     let env = RunEnv::at(ROOT, Posix);
     let call = HookCall {
@@ -98,7 +99,10 @@ fn note(ports: &FakePorts, ws: &Workspace, input: &str) -> Result<(), FsOp> {
         env: &env,
         input: &input,
     };
-    note_tree(&call, ws).map_err(|error| error.op())
+    note_tree(&call, ws).map_err(|error| match error {
+        HookError::Files(error) => Some(error.op()),
+        _ => None,
+    })
 }
 
 fn record(ports: &FakePorts, agent: &str) -> JsValue {
@@ -258,5 +262,5 @@ fn a_write_failure_is_the_handler_s_error() {
 
     let error = note(&ports, &workspace(true), r#"{"session_id":"s1"}"#);
 
-    assert_eq!(error, Err(FsOp::Write), "1.x's writeAtomic throws (F2)");
+    assert_eq!(error, Err(Some(FsOp::Write)), "1.x's writeAtomic throws (F2)");
 }

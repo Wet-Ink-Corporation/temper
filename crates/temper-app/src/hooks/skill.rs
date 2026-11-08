@@ -5,14 +5,15 @@
 use std::path::Path;
 
 use temper_domain::{
-    ContextEvent, HookOutcome, PathStyle, SKILL_NOT_LOADED, TelemetryEvent, skill_load_via,
+    ContextEvent, HookOutcome, JsTypeError, PathStyle, SKILL_NOT_LOADED, TelemetryEvent,
+    skill_load_via,
 };
 
 use super::HookCall;
 use super::input::{agent_key, given, js_string_or_empty, session_segment};
 use crate::engine::{HookError, RunEnv};
 use crate::paths;
-use crate::ports::{Clock, Files, FsError, Ports};
+use crate::ports::{Clock, Files, Ports};
 use crate::project::exists;
 use crate::telemetry;
 
@@ -47,7 +48,7 @@ pub(crate) fn user_prompt(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome
     call.input.require_object("session_id")?;
     // 1.x looks for the marker again after `discover`; the marker path does not depend on the
     // project, so one look answers both.
-    if skill_loaded(call) {
+    if skill_loaded(call)? {
         return Ok(HookOutcome::Pass);
     }
     match call.workspace() {
@@ -60,16 +61,21 @@ pub(crate) fn user_prompt(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome
 }
 
 /// 1.x `skillLoaded(proj, input)`: has the skill been loaded in this session and agent context?
-pub(crate) fn skill_loaded<P: Ports>(call: &HookCall<'_, P>) -> bool {
-    exists(call.ports.files(), &marker_path(call))
+///
+/// # Errors
+///
+/// [`JsTypeError`] where 1.x's `markerDir` throws on the session id, or `agentKey` on the
+/// agent id.
+pub(crate) fn skill_loaded<P: Ports>(call: &HookCall<'_, P>) -> Result<bool, JsTypeError> {
+    Ok(exists(call.ports.files(), &marker_path(call)?))
 }
 
 /// 1.x `markSkillLoaded`: writes the marker, holding the time.
-fn mark_skill_loaded(call: &HookCall<'_, impl Ports>) -> Result<(), FsError> {
+fn mark_skill_loaded(call: &HookCall<'_, impl Ports>) -> Result<(), HookError> {
+    let path = marker_path(call)?;
     let now = call.ports.clock().now().to_string();
-    call.ports
-        .files()
-        .write_atomic(Path::new(&marker_path(call)), &now)
+    call.ports.files().write_atomic(Path::new(&path), &now)?;
+    Ok(())
 }
 
 /// Where the skill markers' `sessions` directory lives: 1.x's
@@ -87,7 +93,9 @@ pub(crate) fn markers_root(env: &RunEnv) -> String {
 
 /// `path.join(markerDir(input), 'skill-<agent key>')`, resolved against the working directory
 /// as the file system reads it: per session and agent context, independent of the project.
-fn marker_path<P>(call: &HookCall<'_, P>) -> String {
+/// It fails where `markerDir`'s `String(session_id)` or `agentKey`'s `String(agent_id)`
+/// throws, in that order.
+fn marker_path<P>(call: &HookCall<'_, P>) -> Result<String, JsTypeError> {
     let env = call.env;
     let base = markers_root(env);
     let sep = match env.style {
@@ -96,8 +104,12 @@ fn marker_path<P>(call: &HookCall<'_, P>) -> String {
     };
     let marker = format!(
         "{base}{sep}sessions{sep}{}{sep}skill-{}",
-        session_segment(call.input),
-        agent_key(call.input)
+        session_segment(call.input)?,
+        agent_key(call.input)?
     );
-    paths::resolve(env.style, &env.cwd.to_string_lossy(), &marker)
+    Ok(paths::resolve(
+        env.style,
+        &env.cwd.to_string_lossy(),
+        &marker,
+    ))
 }

@@ -279,6 +279,29 @@ fn the_newest_gate_run_stays_even_alone_over_the_byte_budget() {
     );
 }
 
+/// A file whose modification time the platform does not give errs toward keeping, as
+/// [`prune_sessions`] and the progress files do: it joins no group, so it is never removed
+/// and counts toward no cap.
+#[test]
+fn a_file_without_a_modification_time_is_kept() {
+    let undated = format!("{STATE}/gate/{}.json", fp(1));
+    let undated_log = format!("{STATE}/logs/{}-test.log", fp(1));
+    let files = FakeFiles::new(Posix)
+        .with_file(&undated, "{}")
+        .with_file(&undated_log, "x");
+    // Past the age limit, so the prune runs and removes a dated run.
+    let files = put(files, &format!("gate/{}.json", fp(2)), 31 * DAY, "{}");
+
+    let ports = prune(files, None);
+
+    assert_eq!(list(&ports, "gate"), [format!("{}.json", fp(1))], "kept");
+    assert_eq!(
+        list(&ports, "logs"),
+        [format!("{}-test.log", fp(1))],
+        "with its log"
+    );
+}
+
 #[test]
 fn the_records_of_the_current_fingerprint_stay_and_count_toward_no_cap() {
     let cur = fp(0xabc);

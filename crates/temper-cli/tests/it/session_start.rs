@@ -240,18 +240,55 @@ fn the_env_file_gains_temper_cli_and_temper_base_then_d17_s_lines() -> TestResul
         lines.get(1).copied(),
         Some(format!("export TEMPER_BASE=\"{}\"", head(dir)?).as_str())
     );
-    assert!(
-        lines
-            .get(2)
-            .is_some_and(|l| l.starts_with("export TEMPER_BIN=\"")),
-        "{text}"
-    );
-    assert!(
-        lines.get(3).is_some_and(|l| l.ends_with(":$PATH\"")),
+    let (bin, path) = d17_lines()?;
+    assert_eq!(
+        lines.get(2..4),
+        Some([bin.as_str(), path.as_str()].as_slice()),
         "{text}"
     );
     assert_eq!(lines.get(4).copied(), Some(""), "one newline after each");
     Ok(())
+}
+
+/// D17's two lines (OC-6 A) for this test's binary: `TEMPER_BIN` is its real path and `PATH`
+/// gains its directory, each with `/` separators and quoted for the shell, the directory in
+/// Git Bash's `/c/x` form on Windows.
+fn d17_lines() -> Result<(String, String), Box<dyn std::error::Error>> {
+    let exe = fs::canonicalize(env!("CARGO_BIN_EXE_temper"))?;
+    let dir = exe.parent().ok_or("the binary has a directory")?;
+    let bin = slashed(&exe);
+    let dir = slashed(dir);
+    let dir = match dir.as_bytes() {
+        [drive, b':', rest @ ..] if cfg!(windows) && drive.is_ascii_alphabetic() => {
+            let rest = std::str::from_utf8(rest)?;
+            let rest = if rest.is_empty() { "/" } else { rest };
+            format!("/{}{rest}", char::from(drive.to_ascii_lowercase()))
+        }
+        _ => dir,
+    };
+    Ok((
+        format!("export TEMPER_BIN=\"{}\"", shell_quoted(&bin)),
+        format!("export PATH=\"{}:$PATH\"", shell_quoted(&dir)),
+    ))
+}
+
+/// `path` with `/` separators, without the `\\?\` prefix `canonicalize` gives on Windows,
+/// which `current_exe` does not.
+fn slashed(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    text.replace('\\', "/")
+}
+
+/// `"`, `$` and `` ` `` escaped with a backslash, as inside a double-quoted shell word.
+fn shell_quoted(text: &str) -> String {
+    text.chars().fold(String::new(), |mut out, c| {
+        if matches!(c, '\\' | '"' | '$' | '`') {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    })
 }
 
 #[test]
