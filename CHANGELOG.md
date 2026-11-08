@@ -4,6 +4,8 @@
 
 **The README says where temper is going.** temper will become Redkiln Rust (`rk-rust` 2.0) in the redkiln monorepo, after redkiln's Core 1.0. 1.x keeps shipping from this repository until then, so adopters change nothing. The move is planned in `docs/plans/redkiln-move.md`.
 
+**The telemetry branch is no longer recommended for new adoptions (wi-b1bfb5).** Redkiln's journals replace `telemetry.branch` at the 2.0 move, so the README now says new adoptions should leave it off. Repositories that already push to a `temper-telemetry` branch keep working unchanged until then.
+
 **The 2.0 release workflow publishes its npm tarballs by path (port Phase 0b).** `release-2.yml` now runs `npm publish ./tarballs/<file>.tgz`. Without the `./`, npm read the path as a GitHub `user/repo` shorthand and failed before publishing anything, which stopped the first `2.0.0-alpha.1` run.
 
 **The 2.0 release workflow verifies installs on Windows and links Windows engines reproducibly (port Phase 0b).** Two fixes found by the `2.0.0-alpha.1` run:
