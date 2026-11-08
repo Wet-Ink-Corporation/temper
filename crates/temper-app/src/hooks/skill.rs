@@ -64,7 +64,8 @@ pub(crate) fn user_prompt(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome
 ///
 /// # Errors
 ///
-/// [`JsTypeError`] where 1.x's `markerDir` throws on the session id.
+/// [`JsTypeError`] where 1.x's `markerDir` throws on the session id, or `agentKey` on the
+/// agent id.
 pub(crate) fn skill_loaded<P: Ports>(call: &HookCall<'_, P>) -> Result<bool, JsTypeError> {
     Ok(exists(call.ports.files(), &marker_path(call)?))
 }
@@ -92,7 +93,8 @@ pub(crate) fn markers_root(env: &RunEnv) -> String {
 
 /// `path.join(markerDir(input), 'skill-<agent key>')`, resolved against the working directory
 /// as the file system reads it: per session and agent context, independent of the project.
-/// It fails where `markerDir`'s `String(session_id)` throws.
+/// It fails where `markerDir`'s `String(session_id)` or `agentKey`'s `String(agent_id)`
+/// throws, in that order.
 fn marker_path<P>(call: &HookCall<'_, P>) -> Result<String, JsTypeError> {
     let env = call.env;
     let base = markers_root(env);
