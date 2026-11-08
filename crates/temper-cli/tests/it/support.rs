@@ -60,6 +60,14 @@ pub(crate) struct Run {
 /// temporary directory, so a test's tree is a repository only when the test makes it one.
 fn temper_command() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_temper"));
+    // The tests' own temper session (TEMPER_CLI, TEMPER_BASE, CLAUDE_PLUGIN_ROOT, ...) must
+    // not reach the engine: it changes the gate command and the base the engine reports.
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if text.starts_with("TEMPER_") || text.starts_with("CLAUDE") {
+            command.env_remove(&name);
+        }
+    }
     command.env("GIT_CEILING_DIRECTORIES", std::env::temp_dir());
     command
 }
