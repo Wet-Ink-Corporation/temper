@@ -103,7 +103,7 @@ fn marker_path<P>(call: &HookCall<'_, P>) -> Result<String, JsTypeError> {
     let marker = format!(
         "{base}{sep}sessions{sep}{}{sep}skill-{}",
         session_segment(call.input)?,
-        agent_key(call.input)
+        agent_key(call.input)?
     );
     Ok(paths::resolve(
         env.style,

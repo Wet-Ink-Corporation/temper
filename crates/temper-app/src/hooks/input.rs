@@ -66,12 +66,9 @@ pub(crate) fn js_string_or_empty(value: Option<&JsValue>) -> Cow<'_, str> {
 }
 
 /// 1.x `agentKey(input)`: `agent-<agent_id>` with the id made safe for a file name, or `main`
-/// when the id is missing or falsy.
-pub(crate) fn agent_key(input: &HookInput) -> String {
-    match input.raw("agent_id").filter(|id| id.is_truthy()) {
-        Some(id) => format!("agent-{}", file_safe(&id.to_js_string())),
-        None => "main".to_owned(),
-    }
+/// when the id is missing or falsy; failing where its `String(agent_id)` throws (Invariant 4).
+pub(crate) fn agent_key(input: &HookInput) -> Result<String, JsTypeError> {
+    agent_key_of(input.raw("agent_id"))
 }
 
 /// [`agent_key`] of a `who` whose `agent_id` is `agent_id` (a telemetry row's), failing where

@@ -59,7 +59,7 @@ fn agent_key_and_session_segment_follow_1x() {
         .map(|(json, _, _)| {
             let input = input(json);
             let segment = session_segment(&input).expect("each case converts");
-            (agent_key(&input), segment)
+            (agent_key(&input).expect("each case converts"), segment)
         })
         .collect();
     let want: Vec<(String, String)> = cases
@@ -93,6 +93,26 @@ fn a_session_id_1x_cannot_convert_is_an_error() {
         [false, false, true],
         "only an own `toString` key, at the top or in an array, throws"
     );
+}
+
+/// `agentKey`'s `String(agent_id)` throws as `sessionDir`'s does, where `markerDir` names
+/// the skill marker (Invariant 4).
+#[test]
+fn an_agent_id_1x_cannot_convert_is_an_error_and_the_marker_is_not_written() {
+    let ports = FakePorts::new(FakeFiles::new(Posix));
+    let env = env_with_data(Some("/data"));
+
+    let failed = post_tool(
+        &ports,
+        &env,
+        r#"{"tool_name":"Skill","session_id":"s1","agent_id":{"toString":1},"tool_input":{"skill":"rust-craft"}}"#,
+    );
+
+    assert!(
+        matches!(failed, Err(HookError::InputType(_))),
+        "1.x's `agentKey` throws: {failed:?}"
+    );
+    assert_eq!(ports.files.paths(), Vec::<String>::new(), "no marker");
 }
 
 /// Every hook that names the session's directory fails where 1.x's `sessionDir` or
