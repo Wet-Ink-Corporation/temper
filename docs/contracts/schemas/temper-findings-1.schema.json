@@ -1,0 +1,329 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wet-Ink-Corporation/temper/docs/contracts/schemas/temper-findings-1.schema.json",
+  "title": "temper findings, version 1",
+  "description": "What `temper baseline --check --findings-out FILE` writes (temper 1.x, scripts/lib/findings.mjs collectFindings plus scripts/lib/baseline.mjs ratchet). Additive within version 1: readers ignore keys they do not know.",
+  "type": "object",
+  "required": [
+    "temper_findings",
+    "at",
+    "commit",
+    "toolchain",
+    "host",
+    "sources",
+    "workspace_root",
+    "crates",
+    "findings",
+    "errors"
+  ],
+  "properties": {
+    "temper_findings": {
+      "const": 1
+    },
+    "at": {
+      "type": "string",
+      "description": "RFC 3339 time of the run"
+    },
+    "commit": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "toolchain": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "host": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "clippy",
+          "rustdoc",
+          "scan"
+        ]
+      }
+    },
+    "workspace_root": {
+      "type": "string",
+      "description": "The Cargo workspace root, relative to the project root ('.' when they coincide)"
+    },
+    "crates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "dir",
+          "lints_inherited",
+          "charter"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "lints_inherited": {
+            "type": "boolean"
+          },
+          "charter": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "tool",
+          "lint",
+          "crate",
+          "file",
+          "line",
+          "message",
+          "rules",
+          "severity"
+        ],
+        "properties": {
+          "tool": {
+            "enum": [
+              "clippy",
+              "rustdoc",
+              "scan"
+            ]
+          },
+          "lint": {
+            "type": "string",
+            "description": "clippy::<name>, rustdoc::<name>, a rustc lint, or scan:<key>"
+          },
+          "crate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "column": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "message": {
+            "type": "string"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "severity": {
+            "enum": [
+              "must",
+              "should",
+              "consider",
+              "unmapped"
+            ]
+          },
+          "exception": {
+            "type": "string",
+            "description": "Present on a scan hit at ask level (an #[expect] or other exception the human must admit)"
+          }
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "tool",
+          "message"
+        ],
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ratchet": {
+      "type": "object",
+      "required": [
+        "ok",
+        "mode",
+        "base",
+        "new_code",
+        "increases",
+        "fixed",
+        "fixed_count",
+        "legacy_total",
+        "baseline_total",
+        "raised",
+        "errors",
+        "notes"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "strict",
+            "diff+totals",
+            "totals"
+          ],
+          "description": "strict: no baseline, zero findings; diff+totals: changed lines and counts; totals: counts only (the diff could not run, named in notes)"
+        },
+        "base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_code": {
+          "type": "array",
+          "description": "Findings on changed lines (same shape as findings[])"
+        },
+        "increases": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "type": "object",
+                "required": [
+                  "crate",
+                  "lint"
+                ],
+                "properties": {
+                  "crate": {
+                    "type": "string"
+                  },
+                  "lint": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "baseline",
+                  "current"
+                ]
+              }
+            ]
+          }
+        },
+        "fixed": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "type": "object",
+                "required": [
+                  "crate",
+                  "lint"
+                ],
+                "properties": {
+                  "crate": {
+                    "type": "string"
+                  },
+                  "lint": {
+                    "type": "string"
+                  }
+                }
+              },
+              {
+                "required": [
+                  "baseline",
+                  "current"
+                ]
+              }
+            ]
+          }
+        },
+        "fixed_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "legacy_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "baseline_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "raised": {
+          "type": "array",
+          "description": "Baseline entries that rose against the merge base",
+          "items": {
+            "type": "object",
+            "required": [
+              "crate",
+              "lint"
+            ],
+            "properties": {
+              "crate": {
+                "type": "string"
+              },
+              "lint": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "errors": {
+          "type": "array"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wet-Ink-Corporation/temper/docs/contracts/schemas/rust.check-tests-1.schema.json",
+  "title": "rust.check-tests/1",
+  "description": "Compares base and head: test-family attributes per file (unconditional and per condition), new #[ignore] or cfg_attr(.., ignore), module gates and dropped test modules; and the manifest switches of H-12 and H-16 (test, doctest, harness, autotests, required-features, [patch], [replace], exclude, rust-version, edition, members, default-members, workspace, path, profile) and lint tables. A change the base allowlist does not admit by exact blob ids is a finding (assay `temper/inventory.rs`, `switches.rs`, `manifests.rs`; temper#172 asks 3 and 4). The result envelope is redkiln SPEC CLI-01 to CLI-04. Proposed: no temper release implements it yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "command",
+    "data",
+    "findings",
+    "proves",
+    "does_not_prove"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rust.check-tests/1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "true exactly when the exit code is 0, which is exactly when findings is empty"
+    },
+    "command": {
+      "const": "check tests"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "base",
+        "head",
+        "files"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Rust and manifest files compared"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(test-inventory|manifest-switch|manifest-unreadable|lints-table|lint-inheritance):",
+            "description": "<kind>:<stable subject>, stable across runs"
+          },
+          "message": {
+            "type": "string",
+            "pattern": "^[^\\n]*$"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "note"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "description": "worktree-relative path, optionally :line or :line:col"
+          }
+        }
+      }
+    },
+    "proves": {
+      "type": "string"
+    },
+    "does_not_prove": {
+      "type": "string"
+    }
+  }
+}

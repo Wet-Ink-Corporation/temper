@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wet-Ink-Corporation/temper/docs/contracts/schemas/rust.check-raised-1.schema.json",
+  "title": "rust.check-raised/1",
+  "description": "Compares .claude/temper-baseline.json at base and head: any (crate, lint) count that rises or appears, and any crate added to or moved in `crates`, is a finding (assay `temper/baseline.rs`, temper#172 ask 1). The result envelope is redkiln SPEC CLI-01 to CLI-04. Proposed: no temper release implements it yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "command",
+    "data",
+    "findings",
+    "proves",
+    "does_not_prove"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rust.check-raised/1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "true exactly when the exit code is 0, which is exactly when findings is empty"
+    },
+    "command": {
+      "const": "check raised"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "base",
+        "head",
+        "raises",
+        "crates_changed"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "raises": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "crate",
+              "lint",
+              "from",
+              "to"
+            ],
+            "properties": {
+              "crate": {
+                "type": "string"
+              },
+              "lint": {
+                "type": "string"
+              },
+              "from": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "to": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "crates_changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "dir"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "dir": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(raised|crate-moved):",
+            "description": "<kind>:<stable subject>, stable across runs"
+          },
+          "message": {
+            "type": "string",
+            "pattern": "^[^\\n]*$"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "note"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "description": "worktree-relative path, optionally :line or :line:col"
+          }
+        }
+      }
+    },
+    "proves": {
+      "type": "string"
+    },
+    "does_not_prove": {
+      "type": "string"
+    }
+  }
+}

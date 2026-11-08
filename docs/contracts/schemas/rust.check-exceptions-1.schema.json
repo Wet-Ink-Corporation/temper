@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Wet-Ink-Corporation/temper/docs/contracts/schemas/rust.check-exceptions-1.schema.json",
+  "title": "rust.check-exceptions/1",
+  "description": "Scans the head tree; every ask-level hit the base allowlist does not admit, every #[expect] naming more than one lint, and every place the scan cannot see (cfg_attr suppressions, #[path], include!, modules without files, non-.rs build or target paths, skipped directories, submodules, symlinks) is a finding (assay `temper/exceptions.rs`, `statics.rs`, `reach.rs`, `cargo_targets.rs`; temper#172 ask 2). The result envelope is redkiln SPEC CLI-01 to CLI-04. Proposed: no temper release implements it yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "command",
+    "data",
+    "findings",
+    "proves",
+    "does_not_prove"
+  ],
+  "properties": {
+    "schema": {
+      "const": "rust.check-exceptions/1"
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "true exactly when the exit code is 0, which is exactly when findings is empty"
+    },
+    "command": {
+      "const": "check exceptions"
+    },
+    "data": {
+      "type": "object",
+      "required": [
+        "base",
+        "head",
+        "allowlist",
+        "admitted"
+      ],
+      "properties": {
+        "base": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "allowlist": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The base revision's allowlist file, or null when it has none"
+        },
+        "admitted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ask-level hits the base allowlist admits"
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "message"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^(exception|multi-lint-expect|blind-spot):",
+            "description": "<kind>:<stable subject>, stable across runs"
+          },
+          "message": {
+            "type": "string",
+            "pattern": "^[^\\n]*$"
+          },
+          "severity": {
+            "enum": [
+              "error",
+              "warning",
+              "note"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "description": "worktree-relative path, optionally :line or :line:col"
+          }
+        }
+      }
+    },
+    "proves": {
+      "type": "string"
+    },
+    "does_not_prove": {
+      "type": "string"
+    }
+  }
+}
