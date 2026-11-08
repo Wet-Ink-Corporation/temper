@@ -178,7 +178,7 @@ fn an_old_runtime_adds_the_warning_for_the_human_and_the_model() {
         text: "line one".to_owned(),
     };
 
-    let warned = with_runtime_warnings(out.clone(), &[warning.to_owned()]);
+    let warned = with_runtime_warnings(out, &[warning.to_owned()]);
 
     assert_eq!(
         warned.to_json().as_deref(),
@@ -187,7 +187,17 @@ fn an_old_runtime_adds_the_warning_for_the_human_and_the_model() {
         ),
         "1.x's spread keeps hookSpecificOutput first"
     );
-    assert_eq!(with_runtime_warnings(out.clone(), &[]), out, "no warning");
+}
+
+/// Ported from `handlers.test.mjs` "`SessionStart` on a current Node adds no warning".
+#[test]
+fn on_a_current_node_no_warning_is_added() {
+    let out = HookOutcome::Context {
+        event: ContextEvent::SessionStart,
+        text: "line one".to_owned(),
+    };
+
+    assert_eq!(with_runtime_warnings(out.clone(), &[]), out);
 }
 
 const NONE: EnvExports<'static> = EnvExports {

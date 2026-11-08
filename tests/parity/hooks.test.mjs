@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { runHookCase } from './lib/cases.mjs';
 import { nodeEngine, rustEngine } from './lib/engines.mjs';
 import { HOOK_FIXTURES, writeTree } from './lib/fixtures.mjs';
-import { maskFailureText, maskMarkerTime, maskTelemetryTimes } from './lib/normalise.mjs';
+import {
+  maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeIds,
+} from './lib/normalise.mjs';
 
 // Invariant 5 (H-12): without the binary the file fails; it never skips.
 const bin = process.env.TEMPER_BIN;
@@ -44,10 +46,15 @@ after(() => {
   for (const d of Object.values(dirs)) fs.rmSync(d, { recursive: true, force: true });
 });
 
-/** A written file after §2.2's masks: telemetry row times, and a skill marker's time. */
+/**
+ * A written file after §2.2's masks: telemetry row times (and a gate-lost row's `foundMs`), a skill
+ * marker's time, a session's start time (port 3d), and D16(w)'s lines in an env file.
+ */
 function maskFile(rel, text) {
-  if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskTelemetryTimes(text);
+  if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
   if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
+  if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
+  if (/(^|\/)env\.sh$/.test(rel)) return maskD17Lines(text);
   return text;
 }
 
@@ -62,16 +69,17 @@ function run(engine, c, steps, now) {
       failures += m.count;
       stdout = m.text;
     }
-    return { exit: s.exit, stdout, stderr: s.stderr };
+    // OC-5 A: only 2.0 says that the config is unreadable; a no-op elsewhere.
+    return { exit: s.exit, stdout: maskConfigLine(stdout), stderr: s.stderr };
   });
-  return { out, files: r.files, failures, ms: r.steps.map((s) => s.ms) };
+  return { out, files: maskTreeIds(r.files), failures, ms: r.steps.map((s) => s.ms) };
 }
 
-test('the hook cases: unique names, known fixtures, and the 2f floor of 129 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 67)', () => {
+test('the hook cases: unique names, known fixtures, and the 3d floor of 154 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 67, session-start: 25)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 129, `${cases.length} cases`);
+  assert.ok(cases.length >= 154, `${cases.length} cases`);
 });
 
 for (const c of cases) {
@@ -90,3 +98,33 @@ for (const c of cases) {
     assert.deepEqual(slow, [], `a Rust step took ${BUDGET_MS} ms or more (OC-4 A)`);
   });
 }
+
+// Ported from messages.test.mjs, "the CLI on a simulated Node 17: SessionStart runs in full and adds
+// the warning" (port-phase-3 item 36): 1.x's CLI against launch.mjs with TEMPER_ENGINE=rust, both on
+// a Node that reports 17.9.1, so the launcher passes the warning in TEMPER_RUNTIME_WARNINGS.
+test('the CLI on a simulated Node 17: SessionStart runs in full and adds the warning, through launch.mjs as through 1.x', () => {
+  const fake = 'data:text/javascript,Object.defineProperty(process.versions,"node",{value:"17.9.1"});';
+  const onNode17 = (name, script) => ({ name, cmd: process.execPath, pre: ['--import', fake, path.join(REPO, 'scripts', script)] });
+  const c = {
+    fixture: 'workspace',
+    git: true,
+    pluginData: true,
+    env: { CLAUDE_PLUGIN_ROOT: '/plugin', CLAUDE_ENV_FILE: '<ROOT>/.temper/env.sh', TEMPER_ENGINE: 'rust', TEMPER_BIN: path.resolve(bin) },
+    setup: [{ git: ['add', '-A'] }, { git: ['commit', '-qm', 'init'] }, { write: { '.temper/env.sh': '' } }],
+  };
+  const steps = [{ event: 'session-start', stdin: '{"cwd":"<ROOT>","session_id":"s-node17","source":"startup","hook_event_name":"SessionStart"}' }];
+  const now = Date.now();
+  const [node, rust] = [onNode17('1.x', 'temper.mjs'), onNode17('launch', 'launch.mjs')].map((engine) => run(engine, c, steps, now));
+  assert.deepStrictEqual(rust.out, node.out, 'exit, stdout and stderr');
+  assert.deepStrictEqual(rust.files, node.files, 'written files');
+  const json = JSON.parse(node.out[0].stdout);
+  assert.match(json.systemMessage, /^temper: Node 17\.9\.1 is older than the documented minimum, Node 18\.0\.0/);
+  const context = json.hookSpecificOutput.additionalContext;
+  assert.match(context, /governed by the temper plugin/);
+  assert.match(context, /- Gate command: /);
+  assert.ok(context.endsWith(`\n- ${json.systemMessage}`), context);
+  assert.match(node.files['tree/.temper/env.sh'], /^export TEMPER_CLI="/);
+  // The launcher did hand the hook to the engine: without one it fails as it cannot run it.
+  const missing = run(onNode17('launch', 'launch.mjs'), { ...c, env: { ...c.env, TEMPER_BIN: path.join(REPO, 'target', 'no-such-temper') } }, steps, now);
+  assert.match(missing.out[0].stderr, /^temper: cannot run the engine at /, 'routed to the engine');
+});

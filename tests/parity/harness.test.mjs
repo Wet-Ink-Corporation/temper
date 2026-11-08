@@ -17,7 +17,8 @@ import { DEAD_PID, applySetup, expandPlaceholders, runHookCase, runInFreshCopy, 
 import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from './lib/corpus.mjs';
 import { UsageError, parseArgs } from './corpus.mjs';
 import {
-  byteOrderHits, dropLoneSurrogateTail, maskFailureText, maskMarkerTime, maskRoots, maskTelemetryTimes,
+  byteOrderHits, dropLoneSurrogateTail, maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskRoots,
+  maskStartedTime, maskTelemetryTimes, maskTreeIds,
 } from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -277,6 +278,28 @@ test('maskTelemetryTimes and maskMarkerTime (§2.2): only an ISO time, and only 
   assert.equal(maskTelemetryTimes(rows), '{"t":"<T>","sid":"s"}\n{"t":"+275760-09-13T00:00:00.000Z"}\n{"sid":"s","t":"2024-10-27T03:33:20.123Z"}\n');
   assert.equal(maskMarkerTime('2024-10-27T03:33:20.123Z'), '<T>');
   for (const kept of ['2024-10-27T03:33:20.123Z\n', 'x', '']) assert.equal(maskMarkerTime(kept), kept);
+});
+
+test('maskStartedTime and maskFoundMs (port 3d): a session\'s start time, and only a gate-lost row\'s foundMs', () => {
+  assert.equal(maskStartedTime('1794097889864'), '<MS>');
+  for (const kept of ['1794097889864\n', 'x', '', '-1']) assert.equal(maskStartedTime(kept), kept);
+  const rows = '{"t":"<T>","event":"gate-lost","pid":7,"ranMs":0,"foundMs":60012.5,"timeoutMs":1}\n{"event":"x","foundMs":3}\n';
+  assert.equal(maskFoundMs(rows), '{"t":"<T>","event":"gate-lost","pid":7,"ranMs":0,"foundMs":"<MS>","timeoutMs":1}\n{"event":"x","foundMs":3}\n');
+  assert.equal(maskFoundMs('{"event":"gate-lost","foundMs":null}\n'), '{"event":"gate-lost","foundMs":null}\n', 'NaN stays');
+});
+
+test('maskD17Lines (D16(w)): only the TEMPER_BIN and PATH lines after 1.x\'s', () => {
+  const env = 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\nexport TEMPER_BIN="/t/temper"\nexport PATH="/t:$PATH"\n';
+  assert.equal(maskD17Lines(env), 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n');
+  for (const kept of ['export TEMPER_CLI="/p"\n', 'export PATH="/t"\n', 'x export TEMPER_BIN="/t"\n']) assert.equal(maskD17Lines(kept), kept);
+});
+
+test('maskConfigLine (OC-5 A) and maskTreeIds (port 3d)', () => {
+  const said = '{"hookSpecificOutput":{"additionalContext":"- Session base revision: x. Current state: y.\\n- Config: unreadable (unreadable JSON: \\"x\\" at 1): defaults in use."}}';
+  assert.equal(maskConfigLine(said), '{"hookSpecificOutput":{"additionalContext":"- Session base revision: x. Current state: y."}}');
+  assert.equal(maskConfigLine('- Config: unreadable'), '- Config: unreadable');
+  assert.deepEqual(maskTreeIds({ 'tree/.git/temper/sessions/s1/tree-0123456789ab-session.json': '{}', 'tree/tree-x-session.json': 'k' }),
+    { 'tree/.git/temper/sessions/s1/tree-<ID>-session.json': '{}', 'tree/tree-x-session.json': 'k' });
 });
 
 test('maskFailureText (OC-3 (p)): the text after "failed: " in a whole systemMessage, counted', () => {

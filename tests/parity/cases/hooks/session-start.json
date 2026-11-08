@@ -1,0 +1,807 @@
+[
+  {
+    "name": "startup in a committed tree records the base, start time and fingerprint, and says no changes",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "startup with a changed Rust file: gate not run, review none, with the fingerprint",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "crates/core/src/lib.rs": "//! Core.\npub fn changed() {}\n"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "resume keeps a recorded base that still resolves",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "crates/core/src/lib.rs": "//! Core.\npub fn two() {}\n"
+        }
+      },
+      {
+        "git": [
+          "commit",
+          "-qam",
+          "two"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1\n"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+  },
+  {
+    "name": "compact keeps the base too",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "crates/core/src/lib.rs": "//! Core.\npub fn two() {}\n"
+        }
+      },
+      {
+        "git": [
+          "commit",
+          "-qam",
+          "two"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"compact\"}"
+  },
+  {
+    "name": "clear resets the base",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "crates/core/src/lib.rs": "//! Core.\npub fn two() {}\n"
+        }
+      },
+      {
+        "git": [
+          "commit",
+          "-qam",
+          "two"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"clear\"}"
+  },
+  {
+    "name": "fork resets the base",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          "crates/core/src/lib.rs": "//! Core.\npub fn two() {}\n"
+        }
+      },
+      {
+        "git": [
+          "commit",
+          "-qam",
+          "two"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "HEAD~1"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"fork\"}"
+  },
+  {
+    "name": "a recorded base that no longer resolves reads as HEAD",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/sessions/s1/base": "0123456789abcdef0123456789abcdef01234567"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+  },
+  {
+    "name": "a source that is not a string resumes, and the row writes it as given",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":5}"
+  },
+  {
+    "name": "no source resumes, and the row leaves source out",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\"}"
+  },
+  {
+    "name": "no session id is the unknown session",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"source\":\"startup\",\"cwd\":\"<ROOT>\"}"
+  },
+  {
+    "name": "a session id with unsafe characters names a safe directory",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"a/b c\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "outside a Rust project it does nothing",
+    "fixture": "empty",
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "without git the base is none and nothing is recorded in .git",
+    "fixture": "workspace",
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "null input fails as 1.x's first read throws",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "null"
+  },
+  {
+    "name": "the env file gains 1.x's TEMPER_CLI and TEMPER_BASE lines (D17's are D16(w)'s)",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin",
+      "CLAUDE_ENV_FILE": "<ROOT>/.temper/env.sh"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".temper/env.sh": ""
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "an env file that cannot be appended to is ignored",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin",
+      "CLAUDE_ENV_FILE": "<ROOT>/crates"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "an env file without git gets TEMPER_CLI only",
+    "fixture": "workspace",
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin",
+      "CLAUDE_ENV_FILE": "<ROOT>/.temper/env.sh"
+    },
+    "setup": [
+      {
+        "write": {
+          ".temper/env.sh": "old\n"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "startup prunes aged records, sessions, markers and progress files, and keeps young ones",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": ".data",
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/gate/0000000000000001.json": "{}",
+          ".git/temper/logs/0000000000000001-test.log": "x",
+          ".git/temper/gate/0000000000000002.json": "{}",
+          ".git/temper/verdicts/0000000000000003.json": "{}",
+          ".git/temper/verdicts/0000000000000004.json": "{}",
+          ".git/temper/sessions/old/base": "abc",
+          ".git/temper/sessions/young/base": "abc",
+          ".git/temper/gate-progress-00000000000000aa.json": "{}",
+          ".git/temper/gate-progress-00000000000000bb.json": "{}",
+          ".data/sessions/old-marks/skill-main": "x",
+          ".data/sessions/young-marks/skill-main": "x"
+        }
+      },
+      {
+        "age": {
+          ".git/temper/gate/0000000000000001.json": 2678400000,
+          ".git/temper/logs/0000000000000001-test.log": 2678400000,
+          ".git/temper/gate/0000000000000002.json": 2505600000,
+          ".git/temper/verdicts/0000000000000003.json": 5270400000,
+          ".git/temper/verdicts/0000000000000004.json": 5097600000,
+          ".git/temper/sessions/old": 1296000000,
+          ".git/temper/sessions/young": 1123200000,
+          ".git/temper/gate-progress-00000000000000aa.json": 172800000,
+          ".git/temper/gate-progress-00000000000000bb.json": 3600000,
+          ".data/sessions/old-marks": 691200000,
+          ".data/sessions/young-marks": 518400000
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "resume prunes nothing",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/gate/0000000000000001.json": "{}"
+        }
+      },
+      {
+        "age": {
+          ".git/temper/gate/0000000000000001.json": 2678400000
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+  },
+  {
+    "name": "lost gates are logged once with their step, progress and heartbeat; a live or closed gate and another session's are not",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/telemetry.jsonl": "{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":<DEADPID>,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"temper:rust-implementer\",\"event\":\"gate-start\",\"agent_id\":\"im1\",\"pid\":2147483645,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"temper:rust-reviewer\",\"event\":\"gate-start\",\"agent_id\":\"rv1\",\"pid\":<PID>,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"other\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":2147483644,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":2147483643,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"stop-green\",\"pid\":2147483643}\n",
+          ".git/temper/gate-progress-00000000000000aa.json": "{\"fp\":\"00000000000000aa\",\"pid\":<DEADPID>,\"startedAt\":\"<ISO:-60000>\",\"steps\":[{\"name\":\"fmt\",\"ok\":true,\"ms\":800}],\"current\":{\"name\":\"test\",\"startedAt\":\"<ISO:-40000>\"}}",
+          ".git/temper/sessions/s1/gate-alive-agent-im1.json": "{\"pid\":2147483645,\"at\":<MS:-15000>}"
+        }
+      },
+      {
+        "age": {
+          ".git/temper/gate-progress-00000000000000aa.json": 40000
+        }
+      }
+    ],
+    "steps": [
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+      },
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+      }
+    ]
+  },
+  {
+    "name": "a lost gate another hook has claimed is not logged again",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".git/temper/telemetry.jsonl": "{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":<DEADPID>,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"temper:rust-implementer\",\"event\":\"gate-start\",\"agent_id\":\"im1\",\"pid\":2147483645,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"temper:rust-reviewer\",\"event\":\"gate-start\",\"agent_id\":\"rv1\",\"pid\":<PID>,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"other\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":2147483644,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"gate-start\",\"pid\":2147483643,\"timeoutMs\":1200000}\n{\"t\":\"<ISO:-60000>\",\"sid\":\"s1\",\"agent\":\"main\",\"event\":\"stop-green\",\"pid\":2147483643}\n",
+          ".git/temper/sessions/s1/gate-lost-2147483646-<MS:-60000>": "",
+          ".git/temper/sessions/s1/gate-lost-2147483645-<MS:-60000>": ""
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"resume\"}"
+  },
+  {
+    "name": "an unreadable config adds OC-5's line (masked) and uses the defaults",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "write": {
+          ".claude/temper.json": "not json"
+        }
+      }
+    ],
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "the skill loaded in the session says so",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "event": "post-tool",
+        "stdin": "{\"tool_name\":\"Skill\",\"session_id\":\"s1\",\"tool_input\":{\"skill\":\"temper:rust-craft\"}}"
+      },
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>\",\"source\":\"startup\"}"
+      }
+    ]
+  },
+  {
+    "name": "a linked worktree records the session's checkout on startup",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "-b",
+          "wt-b",
+          "wt"
+        ]
+      }
+    ],
+    "cwd": "wt",
+    "event": "session-start",
+    "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/wt\",\"source\":\"startup\"}"
+  },
+  {
+    "name": "a linked worktree on resume keeps an existing record of its checkout",
+    "fixture": "workspace",
+    "git": true,
+    "pluginData": true,
+    "env": {
+      "CLAUDE_PLUGIN_ROOT": "/plugin"
+    },
+    "setup": [
+      {
+        "git": [
+          "add",
+          "-A"
+        ]
+      },
+      {
+        "git": [
+          "commit",
+          "-qm",
+          "init"
+        ]
+      },
+      {
+        "git": [
+          "worktree",
+          "add",
+          "-q",
+          "-b",
+          "wt-b",
+          "wt"
+        ]
+      }
+    ],
+    "cwd": "wt",
+    "steps": [
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/wt\",\"source\":\"startup\"}"
+      },
+      {
+        "event": "session-start",
+        "stdin": "{\"session_id\":\"s1\",\"cwd\":\"<ROOT>/wt\",\"source\":\"resume\"}"
+      }
+    ]
+  }
+]
