@@ -241,6 +241,45 @@ fn the_paths_subagent_start_lists_as_given_or_absolute_cover_the_changed_files()
     Ok(())
 }
 
+/// Ported from 1.x `telemetry.test.mjs` "verdict-invalid rows name the problem kinds; verdict
+/// rows carry the reviewer's agent_id".
+#[test]
+fn verdict_invalid_rows_name_the_problem_kinds_and_verdict_rows_carry_the_agent_id() -> TestResult {
+    let r = repo()?;
+    let dir = r.path();
+    fs::write(dir.join(LIB), LIB_RS_2)?;
+    let who = r#""agent_type":"temper:rust-reviewer","agent_id":"rv7""#;
+    let empty = r#"{"files_read":[],"commands_run":[]}"#;
+    let bad = verdict("nothex", &[("gate", "{}"), ("evidence", empty)]);
+    let out = handback(dir, "s-kinds", who, &fenced(&bad))?;
+    let (_, reason) = decision(&out).ok_or("denied")?;
+    assert!(
+        reason.contains(":\n- \"fingerprint\" must be the 16-hex fingerprint given in your review ticket\n- evidence.files_read must list"),
+        "{reason}"
+    );
+    let fp = fingerprint(dir, "s-kinds")?;
+    let good = verdict(&fp, &[("gate", "{}")]);
+    assert_eq!(
+        handback(dir, "s-kinds", who, &fenced(&good))?,
+        JsValue::Null
+    );
+    let invalid = rows(dir, "s-kinds", "verdict-invalid")?;
+    let row = invalid.first().ok_or("a verdict-invalid row")?;
+    assert_eq!(row.get("problems"), Some(&JsValue::Number(4.0)));
+    assert_eq!(
+        row.get("kinds").map(JsValue::to_json).as_deref(),
+        Some(r#"["fingerprint","files-read","commands-run","files-unreviewed"]"#)
+    );
+    assert_eq!(row.get("agent_id").and_then(JsValue::as_str), Some("rv7"));
+    let verdicts = rows(dir, "s-kinds", "verdict")?;
+    let id = verdicts
+        .first()
+        .and_then(|row| row.get("agent_id"))
+        .and_then(JsValue::as_str);
+    assert_eq!(id, Some("rv7"));
+    Ok(())
+}
+
 #[test]
 fn a_record_that_cannot_be_written_fails_open_as_1x_throws() -> TestResult {
     let r = repo()?;
