@@ -54,7 +54,8 @@ const JS_WORD_SET: &str = "0-9A-Za-z_";
 const JS_DOT: &str = r"[^\n\r\x{2028}\x{2029}]";
 
 /// Is `c` in JS's `\s` set, the set `String.prototype.trim` strips?
-pub(crate) fn is_js_space(c: char) -> bool {
+#[must_use]
+pub fn is_js_space(c: char) -> bool {
     matches!(
         c,
         '\t' | '\n' | '\u{B}' | '\u{C}' | '\r' | ' ' | '\u{A0}' | '\u{1680}' | '\u{2000}'

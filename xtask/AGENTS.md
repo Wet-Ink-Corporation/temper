@@ -3,6 +3,7 @@
 ## Purpose
 temper's repository tooling, run as `cargo xtask <task>` (the alias is in `.cargo/config.toml`). Never published. Tasks:
 - `check-licenses`: every crate under `crates/` holds `LICENSE-MIT` and `LICENSE-APACHE` equal to the root `LICENSE` and `LICENSE-APACHE`, because `cargo package` packs only files inside the crate (port plan §1.2).
+- `check-seams`: the modules bound for redkiln's kits (wi-59cb6e) name, outside their own module, only what `seams.rs` lists for their crate. It scans each kit-bound file, tests included, for `crate::`, `temper_domain::` and `super::` paths: comments and literals are skipped, `use` groups expanded, `super::` resolved against the file's module and its inline `mod` blocks, and a renamed root (`use temper_domain as d`) refused. A path built by a macro, or reached through a glob of a listed module that re-exports more, escapes it: a tripwire for review, not a proof.
 - `versions --check [X]` and `versions --set X`: the version sites agree (port plan §4, "Versioning"). The sites are the workspace and sibling versions in `Cargo.toml`, the members in `Cargo.lock`, `package.json` and its six pins once it exists, `.claude-plugin/plugin.json` and `plugins/temper-lens/.claude-plugin/plugin.json`, both only once `package.json` exists and both then required (until the cutover the plugins ship 1.x), and the templates' `.claude/temper-version` once present. `--set` of a release (not a pre-release) needs a `## X` heading in `CHANGELOG.md`, and writes nothing without it. A version operand must be exact semver (exit 2 otherwise), and a missing pin counts as a disagreeing site.
 - `check-npm-lock`: `package.json` and `package-lock.json` install exactly one engine safely (invariant 6). `package.json` needs exact pins for the six packages and no other dependency, `scripts` or `overrides`. The lockfile must be format 3, with one entry per package: the package's own tarball from the npm registry over HTTPS, a sha512 integrity, and its target's `os` and `cpu`. Nothing else may be in it.
 - `npm-pack X --bins DIR`: writes the six `@wet-ink/temper-<os>-<cpu>` packages under `target/npm/` from `DIR/<target>/temper[.exe]`, with both licences and the binary at mode 0755. It reads every input before it writes, and it replaces each package directory whole.
@@ -18,7 +19,7 @@ tooling, `publish = false`.
 None: a binary. Exit codes: `0` the task passed, `1` a check failed or a file could not be read, `2` usage error. Success goes to stdout, problems to stderr.
 
 ## Invariants
-- The logic is pure, text in and text out (`licenses.rs`, `versions.rs`, `npm.rs`); the file system is touched only in `main.rs` and `pack.rs`.
+- The logic is pure, text in and text out (`licenses.rs`, `versions.rs`, `npm.rs`, `seams.rs`); the file system is touched only in `main.rs` and `pack.rs`.
 - `versions --set` computes every new text before it writes any file, and spawns no process: it rewrites the members' `Cargo.lock` entries itself.
 - Paths are found from `CARGO_MANIFEST_DIR`, so a task gives the same answer from any working directory.
 
@@ -27,7 +28,7 @@ A private `XtaskError` (read, write, JSON, missing binary), each with its path; 
 
 ## Test strategy
 - Unit tests beside the pure logic; `tempfile` trees for `versions` and `npm-pack`.
-- CI and `tests/ci.sh` run `cargo xtask check-licenses` and `cargo xtask versions --check` on the committed tree.
+- CI and `tests/ci.sh` run `cargo xtask check-licenses`, `cargo xtask check-seams` and `cargo xtask versions --check` on the committed tree.
 - Run: `cargo test -p xtask`.
 
 ## Do not
@@ -39,3 +40,4 @@ A private `XtaskError` (read, write, JSON, missing binary), each with its path; 
 | 2026-10-02 | Hand-written release tooling in `xtask`, not cargo-dist (D7). | H-16 | two-way default (wi-f22cef) |
 | 2026-10-02 | Crates carry plain copies of both licences, checked by `check-licenses`. | H-16 | owner (wi-4679b3) |
 | 2026-10-31 | `plugin.json` joins the version check only once `package.json` exists (the cutover); a pre-release `--set` needs no CHANGELOG heading; `--set` rewrites `Cargo.lock` itself instead of running `cargo update`; packages' `package.json` keys come out sorted (serde_json without `preserve_order`), checked by an exact-text test instead of `insta`. | H-16 | two-way default (wi-654352) |
+| 2026-11-08 | `check-seams` keeps the kit cut (wi-59cb6e) along module lines with a text scan, not `syn` (no new dependency); the seam lists live in `seams.rs`. | ARC-12, H-16 | owner (wi-59cb6e); scan two-way |

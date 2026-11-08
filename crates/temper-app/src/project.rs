@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use temper_domain::{Config, ConfigProblem, LibTarget, js_trim};
+use temper_domain::{Config, ConfigProblem, LibTarget, is_js_space, js_trim};
 
 use crate::engine::RunEnv;
 use crate::git;
@@ -220,11 +220,6 @@ pub(crate) fn after_line_start(text: &str, at: usize) -> bool {
     let rest = before.trim_end_matches(is_js_space);
     let spaces = before.get(rest.len()..).unwrap_or("");
     rest.is_empty() || spaces.contains(['\n', '\r', '\u{2028}', '\u{2029}'])
-}
-
-/// Is `c` in JS's `\s`? The set is defined once, by the domain's `js_trim`.
-pub(crate) fn is_js_space(c: char) -> bool {
-    js_trim(c.encode_utf8(&mut [0; 4])).is_empty()
 }
 
 #[cfg(test)]

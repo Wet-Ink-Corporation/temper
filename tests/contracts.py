@@ -36,17 +36,30 @@ def type_ok(value: object, name: str) -> bool:
 
 
 def same(a: object, b: object) -> bool:
-    """JSON equality: unlike Python's ==, true is not 1 and false is not 0."""
+    """JSON equality: unlike Python's ==, true is not 1 and false is not 0, at any depth."""
     if isinstance(a, bool) or isinstance(b, bool):
         return type(a) is type(b) and a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same(a[k], b[k]) for k in a)
     return a == b
 
 
 def pattern_ok(pattern: str, value: str) -> bool:
     """ECMA-262's `$` matches only at the end, where Python's also matches before a final newline.
 
-    Every unescaped `$` becomes `\\Z`; the schemas use `$` only as the end anchor."""
-    return re.search(re.sub(r"(?<!\\)\$", r"\\Z", pattern), value) is not None
+    A final `$` becomes `\\Z`. `unsupported` refuses any other `$`, so no other form needs care."""
+    if pattern.endswith("$"):
+        pattern = pattern[:-1] + r"\Z"
+    return re.search(pattern, value) is not None
+
+
+def end_anchor_only(pattern: str) -> bool:
+    """`$` appears only as the pattern's last character, not escaped (an even run of `\\` before it)."""
+    body = pattern[:-1] if pattern.endswith("$") else pattern
+    trailing = len(body) - len(body.rstrip("\\"))
+    return "$" not in body and (not pattern.endswith("$") or trailing % 2 == 0)
 
 
 def unsupported(schema: dict, path: str = "$") -> list[str]:
@@ -55,6 +68,12 @@ def unsupported(schema: dict, path: str = "$") -> list[str]:
     unknown = set(schema) - SUPPORTED
     if unknown:
         errors.append(f"{path}: schema uses unsupported keywords {sorted(unknown)}")
+    if "additionalProperties" in schema and schema["additionalProperties"] is not False:
+        errors.append(f"{path}: only additionalProperties: false is supported")
+    if "items" in schema and not isinstance(schema["items"], dict):
+        errors.append(f"{path}: only a single items schema is supported")
+    if "pattern" in schema and not end_anchor_only(schema["pattern"]):
+        errors.append(f"{path}: `$` is supported only as the pattern's final end anchor")
     for key, sub in schema.get("properties", {}).items():
         errors += unsupported(sub, f"{path}.{key}")
     if isinstance(schema.get("items"), dict):
@@ -140,8 +159,12 @@ def self_test() -> int:
     bad = [doc for doc, want in cases if (not validate(doc, schema)) != want]
     if not unsupported({"properties": {"a": {"minimun": 1}}}):
         bad.append("unsupported keyword in an unreached subschema accepted")
-    if same(False, 0) or same(1, True):
+    if same(False, 0) or same(1, True) or same([1], [True]) or same({"a": 1}, {"a": True}):
         bad.append("a boolean equal to a number")
+    for odd in ({"additionalProperties": {}}, {"items": [{}]}, {"pattern": "^[$]$"},
+                {"pattern": "a\\$"}):
+        if not unsupported(odd):
+            bad.append(f"unsupported schema form accepted: {odd}")
     for b in bad:
         print(f"contracts self-test: wrong answer for {b!r}")
     if not bad:

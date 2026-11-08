@@ -58,7 +58,10 @@ pub use hooks::{
     session_start_context, skill_gate_denial, skill_load_via, skill_preloaded,
     subagent_start_context, tree_gate_command, with_runtime_warnings,
 };
-pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
+pub use js::{
+    JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, is_js_space, js_sort,
+    js_trim,
+};
 pub use manifest::{
     Before, DepKind, DepName, GoverningRoot, Manifest, ManifestEditFacts, ManifestFindings,
     ManifestParseError, ManifestProblem, OwnLints, RootRelation, SplitProblems, WatchedKey,

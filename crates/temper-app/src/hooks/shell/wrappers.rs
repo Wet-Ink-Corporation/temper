@@ -780,7 +780,7 @@ struct SystemCall {
 
 /// The matches of 1.x `AWK_SYSTEM`, in order (see [`awk_systems`]).
 fn awk_system_calls(text: &str) -> Vec<SystemCall> {
-    use crate::project::is_js_space;
+    use temper_domain::is_js_space;
     let line_end = |c: char| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}');
     let mut out = Vec::new();
     let mut from = 0;

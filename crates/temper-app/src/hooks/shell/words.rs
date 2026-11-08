@@ -12,7 +12,7 @@ pub(crate) use super::dir::{Dir, Guard};
 use super::lex::{Part, PartKind, name_len};
 use super::text::Text;
 use crate::paths::{self, PathEnv};
-use crate::project::is_js_space;
+use temper_domain::is_js_space;
 
 /// V8's `String::kMaxLength` on a 64-bit host, in UTF-16 units: 1.x throws `RangeError:
 /// Invalid string length` when a word's text would grow past it (`X=$X$X` repeated), and its
