@@ -15,7 +15,8 @@ import { runHookCase } from './lib/cases.mjs';
 import { nodeEngine, rustEngine } from './lib/engines.mjs';
 import { HOOK_FIXTURES, writeTree } from './lib/fixtures.mjs';
 import {
-  maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeIds,
+  maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskStartedTime, maskTelemetryTimes, maskTreeAt,
+  maskGitIndex, maskTreeIds,
 } from './lib/normalise.mjs';
 
 // Invariant 5 (H-12): without the binary the file fails; it never skips.
@@ -48,8 +49,8 @@ after(() => {
 
 /**
  * A written file after §2.2's masks: telemetry row times (and a gate-lost row's `foundMs`), a skill
- * marker's time, a session's start time (port 3d), and D16(w)'s lines in an env file, which
- * `counts.d17` counts (OC-6 A).
+ * marker's time, a session's start time (port 3d), a tree record's time and a git index a case's
+ * `before` git call rewrote (port 3e), and D16(w)'s lines in an env file, which `counts.d17` counts (OC-6 A).
  */
 function fileMask() {
   const counts = { d17: 0 };
@@ -57,6 +58,8 @@ function fileMask() {
     if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
     if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
     if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
+    if (/\/sessions\/[^/]+\/tree-[^/]+\.json$/.test(rel)) return maskTreeAt(text);
+    if (/^tree\/\.git\/(worktrees\/[^/]+\/)?index$/.test(rel)) return maskGitIndex(text);
     if (/(^|\/)env\.sh$/.test(rel)) {
       const m = maskD17Lines(text);
       counts.d17 += m.count;
@@ -94,11 +97,11 @@ function assertD17(rust, node, writes) {
   assert.equal(rust.d17, 2 * writes, `D17: two lines per env-file write (${writes})`);
 }
 
-test('the hook cases: unique names, known fixtures, and the 3d floor of 154 (protocol, post-tool and user-prompt: 31, pre-edit: 31, pre-bash: 67, session-start: 25)', () => {
+test('the hook cases: unique names, known fixtures, and the 3e floor of 191 (protocol, post-tool and user-prompt: 34, pre-edit: 31 and 13 with git, pre-bash: 67, session-start: 26, subagent-start: 20)', () => {
   const names = cases.map((c) => c.name);
   assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], 'duplicate names');
   assert.deepEqual(cases.filter((c) => !(c.fixture in HOOK_FIXTURES)).map((c) => c.name), [], 'unknown fixtures');
-  assert.ok(cases.length >= 154, `${cases.length} cases`);
+  assert.ok(cases.length >= 191, `${cases.length} cases`);
 });
 
 for (const c of cases) {

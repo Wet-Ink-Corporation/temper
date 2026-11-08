@@ -18,7 +18,7 @@ import { listRsFiles, overBudget, registryDirs, renderSummary, runCorpus } from 
 import { UsageError, parseArgs } from './corpus.mjs';
 import {
   byteOrderHits, dropLoneSurrogateTail, maskConfigLine, maskD17Lines, maskFailureText, maskFoundMs, maskMarkerTime, maskRoots,
-  maskStartedTime, maskTelemetryTimes, maskTreeIds,
+  maskGitIndex, maskStartedTime, maskTelemetryTimes, maskTreeAt, maskTreeIds,
 } from './lib/normalise.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -303,6 +303,29 @@ test('maskConfigLine (OC-5 A) and maskTreeIds (port 3d)', () => {
   assert.equal(maskConfigLine('- Config: unreadable'), '- Config: unreadable');
   assert.deepEqual(maskTreeIds({ 'tree/.git/temper/sessions/s1/tree-0123456789ab-session.json': '{}', 'tree/tree-x-session.json': 'k' }),
     { 'tree/.git/temper/sessions/s1/tree-<ID>-session.json': '{}', 'tree/tree-x-session.json': 'k' });
+});
+
+test('runHookCase: a step\'s before actions shape the copy just before it runs (port 3e)', (t) => {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-tree-'));
+  t.after(() => fs.rmSync(src, { recursive: true, force: true }));
+  writeTree(src, { 'Cargo.toml': '' });
+  const script = 'const fs = require("node:fs"); process.stdout.write(fs.existsSync("late.txt") ? fs.readFileSync("late.txt", "utf8") : "none");';
+  const steps = [{ event: 'a' }, { event: 'b', before: [{ write: { 'late.txt': '<MS:-0>' } }] }];
+  const now = 1_000_000;
+  const r = runHookCase(stub(script), src, { steps, now });
+  assert.deepEqual(r.steps.map((s) => s.stdout), ['none', String(now)]);
+  assert.equal(r.files['tree/late.txt'], String(now), 'a before action is a change the comparison sees');
+});
+
+test('maskTreeAt (port 3e): a tree record\'s Date.now() time, not the session record\'s 0', () => {
+  assert.equal(maskTreeAt('{"root":"/w","head":null,"branch":null,"startFp":null,"at":1794097889864}'),
+    '{"root":"/w","head":null,"branch":null,"startFp":null,"at":"<MS>"}');
+  for (const kept of ['{"root":"/w","at":0}', '{"at":1}\n', 'x']) assert.equal(maskTreeAt(kept), kept);
+});
+
+test('maskGitIndex (port 3e): a git index, and nothing else', () => {
+  assert.equal(maskGitIndex('DIRC\x00\x00\x00\x02stat times'), '<GIT INDEX>');
+  for (const kept of ['', 'dirc', 'x DIRC']) assert.equal(maskGitIndex(kept), kept);
 });
 
 test('maskFailureText (OC-3 (p)): the text after "failed: " in a whole systemMessage, counted', () => {

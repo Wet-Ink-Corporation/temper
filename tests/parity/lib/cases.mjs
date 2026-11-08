@@ -83,11 +83,12 @@ const gitDate = (n) => `${1767225600 + n} +0000`;
  * second apart per git call, so both copies get the same commit ids), `{ write: { rel: text |
  * { base64 } } }` (parents created), `{ remove: [rel] }` and `{ age: { rel: ms } }` (mtime and
  * atime set to `now - ms`). Strings and paths go through `expandPlaceholders`. A failing action is a
- * HarnessError.
+ * HarnessError. `gitCalls` is the number of git calls made before (by earlier setups of the same
+ * copy), so dates keep climbing; the new total is returned.
  */
-export function applySetup(copy, actions = [], { now, ceiling }) {
+export function applySetup(copy, actions = [], { now, ceiling, gitCalls = 0 }) {
   const expand = (s) => expandPlaceholders(s, { root: copy, now });
-  let calls = 0;
+  let calls = gitCalls;
   for (const action of actions) {
     if (action.git) {
       calls += 1;
@@ -112,6 +113,7 @@ export function applySetup(copy, actions = [], { now, ceiling }) {
       throw new HarnessError(`unknown setup action ${JSON.stringify(action)}`);
     }
   }
+  return calls;
 }
 
 /**
@@ -120,7 +122,8 @@ export function applySetup(copy, actions = [], { now, ceiling }) {
  * a bare `hook`) from `cwd`. Stdin is the null device when `stdin` is not a string. Beside the
  * copy is a scratch directory whose `tmp/` is TMPDIR, TMP and TEMP. `pluginData` is `true`
  * for a fresh CLAUDE_PLUGIN_DATA (`<scratch>/data`), a path relative to the copy, or absent for
- * none (the tmpdir fallback). `setup` actions are applied first (`applySetup`), and a step with
+ * none (the tmpdir fallback). `setup` actions are applied first (`applySetup`), a step's `before`
+ * actions just before it runs (port 3e: a change the case makes between two hooks), and a step with
  * `args` runs `temper <args>` instead of a hook. In `stdin`, `env` and `args`, the placeholders
  * of `expandPlaceholders` are expanded (with `now`), `<ROOT>` JSON-escaped in `stdin`. Returns `{ steps: [{ exit, stdout, stderr, ms }], files }`: the streams decoded as
  * UTF-8 with the copy and scratch roots masked, and `files` the copy's changed files as
@@ -132,7 +135,7 @@ export function runHookCase(engine, src, { steps, cwd = '.', git = false, plugin
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-parity-scratch-'));
   try {
     if (git) gitInit(copy);
-    applySetup(copy, setup, { now, ceiling: path.dirname(copy) });
+    let gitCalls = applySetup(copy, setup, { now, ceiling: path.dirname(copy) });
     const tmp = path.join(scratch, 'tmp');
     fs.mkdirSync(tmp);
     const base = { TMPDIR: tmp, TMP: tmp, TEMP: tmp, ...env };
@@ -144,6 +147,7 @@ export function runHookCase(engine, src, { steps, cwd = '.', git = false, plugin
     const roots = [copy, scratch];
     const mask = (buf) => maskRoots(buf.toString('utf8'), roots);
     const out = steps.map((step) => {
+      gitCalls = applySetup(copy, step.before, { now, ceiling: path.dirname(copy), gitCalls });
       const stepEnv = Object.fromEntries(Object.entries({ ...base, ...step.env }).map(([k, v]) => [k, expandPlaceholders(v, { root: copy, now })]));
       const input = typeof step.stdin === 'string' ? expandPlaceholders(step.stdin, { root: jsonEscaped(copy), now }) : undefined;
       // A CLI step (`args`) runs `temper <args>`; a hook step runs `temper hook <event>`.

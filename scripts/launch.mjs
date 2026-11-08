@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 // Graduated: --version (Phase 0b); hook post-tool and hook user-prompt (Phase 2b, port-phase-2 2-20);
 // hook pre-bash (Phase 2f); status, text and --json (Phase 3c, port-phase-3 item 27); hook
 // session-start (Phase 3d, port-phase-3 item 37).
-export const RUST_READY = new Set(['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status', 'hook session-start']);
+export const RUST_READY = new Set(['--version', 'hook post-tool', 'hook user-prompt', 'hook pre-bash', 'status', 'hook session-start', 'hook pre-edit', 'hook subagent-start']);
 
 /** Subcommands that exist only in 2.0, so they go to the engine without TEMPER_ENGINE (D16(g)). */
 const NEW_IN_2 = new Set(['--version']);

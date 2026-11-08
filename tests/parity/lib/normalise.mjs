@@ -160,3 +160,21 @@ export function maskConfigLine(text) {
 export function maskTreeIds(files) {
   return Object.fromEntries(Object.entries(files).map(([rel, text]) => [rel.replace(/\/tree-[0-9a-f]{12}-([^/]*)$/, '/tree-<ID>-$1'), text]));
 }
+
+/**
+ * Port 3e: a tree record's `at` is `Date.now()` when the hook ran, so each engine's own clock; a
+ * whole record ending in `"at":<n>}` with `n` not 0 has it become `"at":"<MS>"`. The session
+ * record's `"at":0` (the session base's, port 3d) and every other key are compared.
+ */
+export function maskTreeAt(text) {
+  return text.replace(/^(\{.*"at":)[1-9]\d*\}$/s, '$1"<MS>"}');
+}
+
+/**
+ * Port 3e: a git index holds each file's stat times, so one that a case's `before` git call
+ * rewrote, after the snapshot, differs between the two copies; an index (`DIRC` first) becomes
+ * `<GIT INDEX>`. The engines only read git, and the work trees and refs are still compared.
+ */
+export function maskGitIndex(text) {
+  return text.startsWith('DIRC') ? '<GIT INDEX>' : text;
+}
