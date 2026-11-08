@@ -5,11 +5,13 @@ mod lost_gates;
 mod plans;
 mod pre_bash;
 mod pre_edit;
+mod pre_handback;
 mod session_start;
 mod shell;
 mod skill;
 mod subagent_start;
 mod transcript;
+mod verdicts;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
@@ -45,9 +47,8 @@ pub(crate) fn run<P: Ports>(
         HookEvent::PreBash => pre_bash::pre_bash(call, scanner),
         HookEvent::SessionStart => session_start::session_start(call),
         HookEvent::SubagentStart => subagent_start::subagent_start(call),
-        HookEvent::PreHandback | HookEvent::Stop | HookEvent::SubagentStop => {
-            Err(HookError::NotPorted { event })
-        }
+        HookEvent::PreHandback => pre_handback::pre_handback(call),
+        HookEvent::Stop | HookEvent::SubagentStop => Err(HookError::NotPorted { event }),
     }
 }
 

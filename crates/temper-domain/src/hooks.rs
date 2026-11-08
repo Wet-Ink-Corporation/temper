@@ -40,7 +40,8 @@ pub use subagent::{
     tree_gate_command,
 };
 pub use telemetry::{
-    ProtectedChange, ShellAskVia, ShellDenyVia, ShellWriteFile, TelemetryEvent, TelemetryRow,
+    InvalidVerdict, ProtectedChange, ShellAskVia, ShellDenyVia, ShellWriteFile, TelemetryEvent,
+    TelemetryRow, VerdictRow, VerdictVia,
 };
 
 #[cfg(test)]

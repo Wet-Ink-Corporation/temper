@@ -3,6 +3,7 @@
 mod cli;
 mod hooks;
 mod pre_edit_trees;
+mod pre_handback;
 mod scan;
 mod session_start;
 mod status;

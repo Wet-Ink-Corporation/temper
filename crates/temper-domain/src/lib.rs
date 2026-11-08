@@ -48,14 +48,15 @@ pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
     BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
     EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome, IRON_RULES,
-    InterpreterCode, LazyExemptions, LostGate, LostGateFacts, LostReason, ManifestEdit, OpaqueKind,
-    OtherTree, PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange, RaiseFlag,
-    Replacements, ReviewerExtras, RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL,
-    SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia, ShellWriteFile, SkillVia,
-    SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState, UnknownHookEvent, Unread,
-    apply_edit, edit_policy, env_file_lines, is_reviewer, lockfile_denial, lost_gate_claim,
-    lost_gate_row, open_gate_starts, session_start_context, skill_gate_denial, skill_load_via,
-    skill_preloaded, subagent_start_context, tree_gate_command, with_runtime_warnings,
+    InterpreterCode, InvalidVerdict, LazyExemptions, LostGate, LostGateFacts, LostReason,
+    ManifestEdit, OpaqueKind, OtherTree, PolicyDecision, PolicySetupError, ProgressSeen,
+    ProtectedChange, RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites,
+    SKILL_NOT_LOADED, STATE_DIR_DENIAL, SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia,
+    ShellWriteFile, SkillVia, SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState,
+    UnknownHookEvent, Unread, VerdictRow, VerdictVia, apply_edit, edit_policy, env_file_lines,
+    is_reviewer, lockfile_denial, lost_gate_claim, lost_gate_row, open_gate_starts,
+    session_start_context, skill_gate_denial, skill_load_via, skill_preloaded,
+    subagent_start_context, tree_gate_command, with_runtime_warnings,
 };
 pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{

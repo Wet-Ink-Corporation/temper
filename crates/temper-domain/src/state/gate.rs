@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use crate::js::{JsTypeError, Value, js_string_checked};
+use crate::verdict::GateState;
 
 /// A cached gate result as 1.x's `cachedGate` returns it: whatever JSON the file holds.
 ///
@@ -39,6 +40,27 @@ impl GateRecord {
     #[must_use]
     pub fn value(&self) -> &Value {
         &self.0
+    }
+
+    /// 1.x's `ctx.gate && ctx.gate.ok === false`, as a verdict's check reads the record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use temper_domain::{GateRecord, GateState};
+    ///
+    /// let state = |text: &str| GateRecord::from_json(text).map(|g| g.state());
+    /// assert_eq!(state(r#"{"ok":false}"#), Some(GateState::Red));
+    /// assert_eq!(state(r#"{"ok":0}"#), Some(GateState::NotRed));
+    /// assert_eq!(state("{}"), Some(GateState::NotRed));
+    /// assert_eq!(state("false"), Some(GateState::NotRed));
+    /// ```
+    #[must_use]
+    pub fn state(&self) -> GateState {
+        match self.0.get("ok") {
+            Some(Value::Bool(false)) if self.is_present() => GateState::Red,
+            _ => GateState::NotRed,
+        }
     }
 
     /// `g.ok` is truthy.

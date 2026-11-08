@@ -3,8 +3,10 @@
 use std::fmt::Write as _;
 
 mod redact;
+mod verdict;
 
 pub(crate) use redact::Redactor;
+pub use verdict::{InvalidVerdict, VerdictRow, VerdictVia};
 
 use super::{LostGate, RaiseFlag, SkillVia};
 use crate::js::{Value, js_json, json_string};
@@ -115,6 +117,34 @@ pub enum TelemetryEvent {
     SubagentStart {
         /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
         agent_type: String,
+    },
+    /// `handback`: a subagent called `SubagentHandback`, of any type, before the hook filters by
+    /// type.
+    Handback {
+        /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
+        agent_type: String,
+        /// Whether that is temper's reviewer.
+        reviewer: bool,
+    },
+    /// `verdict`: a valid review verdict was recorded.
+    Verdict(VerdictRow),
+    /// `verdict-invalid`: a review verdict was refused.
+    VerdictInvalid {
+        /// Which hook refused it.
+        via: VerdictVia,
+        /// What was wrong.
+        invalid: InvalidVerdict,
+    },
+    /// `verdict-invalid-final`: an invalid verdict let through on the `stop_hook_active` repeat.
+    VerdictInvalidFinal(InvalidVerdict),
+    /// `subagent-stop`: a subagent stopped, of any type, before the hook filters by type.
+    SubagentStop {
+        /// The input's `agent_type ?? ''` as `JSON.stringify` writes it.
+        agent_type: String,
+        /// Whether `last_assistant_message` is a string.
+        msg: bool,
+        /// Whether `agent_transcript_path` is truthy.
+        transcript: bool,
     },
 }
 
@@ -229,6 +259,11 @@ impl TelemetryEvent {
             Self::GateLost(_) => "gate-lost",
             Self::SessionStart { .. } => "session-start",
             Self::SubagentStart { .. } => "subagent-start",
+            Self::Handback { .. } => "handback",
+            Self::Verdict(_) => "verdict",
+            Self::VerdictInvalid { .. } => "verdict-invalid",
+            Self::VerdictInvalidFinal(_) => "verdict-invalid-final",
+            Self::SubagentStop { .. } => "subagent-stop",
         }
     }
 
@@ -289,6 +324,27 @@ impl TelemetryEvent {
                 }
             }
             Self::SubagentStart { agent_type } => push_field(out, "type", agent_type),
+            Self::Handback {
+                agent_type,
+                reviewer,
+            } => {
+                push_field(out, "type", agent_type);
+                push_field(out, "reviewer", js_bool(*reviewer));
+            }
+            Self::Verdict(row) => verdict::push_verdict(out, row),
+            Self::VerdictInvalid { via, invalid } => {
+                verdict::push_invalid(out, Some(*via), invalid)
+            }
+            Self::VerdictInvalidFinal(invalid) => verdict::push_invalid(out, None, invalid),
+            Self::SubagentStop {
+                agent_type,
+                msg,
+                transcript,
+            } => {
+                push_field(out, "type", agent_type);
+                push_field(out, "msg", js_bool(*msg));
+                push_field(out, "transcript", js_bool(*transcript));
+            }
         }
     }
 }
@@ -321,6 +377,11 @@ fn push_via(out: &mut String, via: ShellDenyVia, cmd: Option<&str>) {
     if let Some(cmd) = cmd {
         push_field(out, "cmd", &json_string(cmd));
     }
+}
+
+/// `JSON.stringify` of a boolean.
+const fn js_bool(b: bool) -> &'static str {
+    if b { "true" } else { "false" }
 }
 
 /// Appends `,"key":json`.

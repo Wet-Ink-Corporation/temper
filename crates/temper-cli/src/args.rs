@@ -140,11 +140,10 @@ fn hook(event: Option<OsString>) -> Command {
             | HookEvent::PreEdit
             | HookEvent::PreBash
             | HookEvent::SessionStart
-            | HookEvent::SubagentStart),
+            | HookEvent::SubagentStart
+            | HookEvent::PreHandback),
         ) => Command::Hook(Ok(event)),
-        Ok(HookEvent::PreHandback | HookEvent::Stop | HookEvent::SubagentStop) => {
-            Command::Usage(UsageExit::Unknown)
-        }
+        Ok(HookEvent::Stop | HookEvent::SubagentStop) => Command::Usage(UsageExit::Unknown),
         Err(unknown) => Command::Hook(Err(unknown)),
     }
 }
@@ -259,7 +258,7 @@ mod tests {
                 parse_strs(&["hook", "pre-edit", "extra"]),
                 parse_strs(&["hook", "pre-bash"]),
                 parse_strs(&["hook", "session-start"]),
-                parse_strs(&["hook", "pre-handback"]),
+                parse_strs(&["hook", "stop"]),
             ],
             [
                 hook("post-tool"),
