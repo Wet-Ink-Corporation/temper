@@ -18,6 +18,7 @@ use super::{HookCall, logged_then, session_segment};
 use crate::changes::{diff_stat, fingerprint, rust_changes};
 use crate::engine::HookError;
 use crate::git;
+use crate::memo::{GitMemo, MemoPorts};
 use crate::paths::{self, PathEnv};
 use crate::ports::{Ports, ProcessRequest, ProcessRunner, StderrSink, StdoutSink};
 use crate::project::Workspace;
@@ -32,7 +33,9 @@ const FMT_TIMEOUT: Duration = Duration::from_secs(120);
 /// 1.x `subagentStart(input)`, in its order: the telemetry row for any agent type, the tree
 /// record, then for temper's agents the target tree and its context. A reviewer started in the
 /// main checkout is sent to the first worktree that holds the session's changes when the main
-/// checkout holds none (#135), and has `cargo fmt --all` run in each tree it is told of.
+/// checkout holds none (#135), and has `cargo fmt --all` run in each tree it is told of. Git's
+/// answers are memoised for the run ([`GitMemo`]): each spawn is a process start, which on
+/// Windows costs tens of milliseconds (3e-16).
 ///
 /// # Errors
 ///
@@ -42,8 +45,16 @@ const FMT_TIMEOUT: Duration = Duration::from_secs(120);
 /// gate record whose `steps` is not an array, or a history row or earlier verdict 1.x's readers
 /// throw on (F5).
 pub(crate) fn subagent_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
+    call.input.require_object("agent_type")?;
+    // One memo per run: a repeated git question is answered once (3e-16).
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(call.ports, &memo);
+    let call = &HookCall {
+        ports: &ports,
+        env: call.env,
+        input: call.input,
+    };
     let input = call.input;
-    input.require_object("agent_type")?;
     let Some(ws) = call.workspace() else {
         return Ok(HookOutcome::Pass);
     };
@@ -319,3 +330,6 @@ fn format_tree(process: &impl ProcessRunner, root: &str) -> Formatted {
         Err(_) => Formatted::NotRan,
     }
 }
+
+#[cfg(test)]
+mod tests;

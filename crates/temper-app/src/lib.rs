@@ -15,6 +15,7 @@ mod fakes;
 mod git;
 mod hooks;
 mod manifests;
+mod memo;
 mod paths;
 mod ports;
 mod procs;

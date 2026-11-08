@@ -434,6 +434,8 @@ pub(crate) struct FakeProcess {
     otherwise: Option<Reply>,
     /// How many requests it has answered.
     calls: Cell<usize>,
+    /// Each request's program, arguments and directory, in order.
+    requests: RefCell<Vec<(String, Vec<OsString>, PathBuf)>>,
 }
 
 impl FakeProcess {
@@ -460,11 +462,21 @@ impl FakeProcess {
     pub(crate) fn calls(&self) -> usize {
         self.calls.get()
     }
+
+    /// Each request so far: its program, arguments and directory, in order.
+    pub(crate) fn requests(&self) -> Vec<(String, Vec<OsString>, PathBuf)> {
+        self.requests.borrow().clone()
+    }
 }
 
 impl ProcessRunner for FakeProcess {
     fn run(&self, request: ProcessRequest<'_>) -> Result<ProcessOutput, ProcessError> {
         self.calls.set(self.calls.get().saturating_add(1));
+        self.requests.borrow_mut().push((
+            request.program.to_owned(),
+            request.args.to_vec(),
+            request.cwd.to_path_buf(),
+        ));
         let program = request.program.to_owned();
         let reply = self
             .replies
