@@ -11,6 +11,8 @@ pub enum ContextEvent {
     UserPromptSubmit,
     /// `PreToolUse`.
     PreToolUse,
+    /// `SessionStart`.
+    SessionStart,
 }
 
 impl ContextEvent {
@@ -18,6 +20,7 @@ impl ContextEvent {
         match self {
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::PreToolUse => "PreToolUse",
+            Self::SessionStart => "SessionStart",
         }
     }
 }
@@ -52,6 +55,16 @@ pub enum HookOutcome {
     Notice {
         /// The message.
         message: String,
+    },
+    /// Text for the model's context and a message for the human, as 1.x's
+    /// `withRuntimeWarnings` spreads them: `hookSpecificOutput` first, then `systemMessage`.
+    ContextWithNotice {
+        /// The event answered.
+        event: ContextEvent,
+        /// The text.
+        text: String,
+        /// The message.
+        notice: String,
     },
 }
 
@@ -94,6 +107,16 @@ impl HookOutcome {
                 r#"{{"hookSpecificOutput":{{"hookEventName":"{}","additionalContext":{}}}}}"#,
                 event.name(),
                 json_string(text)
+            )),
+            Self::ContextWithNotice {
+                event,
+                text,
+                notice,
+            } => Some(format!(
+                r#"{{"hookSpecificOutput":{{"hookEventName":"{}","additionalContext":{}}},"systemMessage":{}}}"#,
+                event.name(),
+                json_string(text),
+                json_string(notice)
             )),
             Self::Deny { reason, context } => Some(decision("deny", reason, context.as_deref())),
             Self::Ask { reason, context } => Some(decision("ask", reason, context.as_deref())),

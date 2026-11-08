@@ -28,7 +28,10 @@ pub use lost_gate::{
     open_gate_starts,
 };
 pub use outcome::{ContextEvent, HookOutcome};
-pub use session::{EnvExports, env_file_lines};
+pub use session::{
+    EnvExports, SessionStartFacts, TreeState, env_file_lines, session_start_context,
+    with_runtime_warnings,
+};
 pub use setup::PolicySetupError;
 pub use skill::{SKILL_NOT_LOADED, SkillVia, is_reviewer, skill_load_via, skill_preloaded};
 pub use telemetry::{

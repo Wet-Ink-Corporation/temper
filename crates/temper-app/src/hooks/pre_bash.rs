@@ -83,7 +83,9 @@ fn merged(own: HookOutcome, rest: HookOutcome) -> HookOutcome {
         },
         (own, HookOutcome::Ask { reason, context }) => {
             let own_context = match own {
-                HookOutcome::Context { text, .. } => Some(text),
+                HookOutcome::Context { text, .. } | HookOutcome::ContextWithNotice { text, .. } => {
+                    Some(text)
+                }
                 HookOutcome::Ask { context, .. } | HookOutcome::Deny { context, .. } => context,
                 HookOutcome::Pass | HookOutcome::Notice { .. } => None,
             };
