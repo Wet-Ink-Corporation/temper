@@ -3,8 +3,11 @@
 //!
 //! 1.x asks the kernel per pid with `process.kill(pid, 0)`. With no `unsafe` and no FFI
 //! (H-01), 2.0 reads the live pids once instead: the numeric names in `/proc` where `/proc`
-//! shows this process, else one `ps -A -o pid=` (Unix) or `tasklist /FO CSV /NH` (Windows).
-//! A probe that cannot answer reads every pid as alive, so nothing is deleted on a guess.
+//! shows this process and `/proc/self` resolves to it, else one `ps -A -o pid=` (Unix) or
+//! `tasklist /FO CSV /NH` (Windows). A `/proc` with this pid's directory whose `self` is
+//! another pid belongs to another pid namespace, and `ps` would read it too, so nothing
+//! answers. A probe that cannot answer reads every pid as alive, so nothing is deleted on a
+//! guess.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -66,9 +69,12 @@ fn int32_pid(pid: &JsValue) -> Option<u32> {
 /// lists this process (a `/proc` of another pid namespace, a `ps` without `-o`, a failure).
 pub(crate) fn live_pids(ports: &impl Ports, env: &RunEnv) -> LivePids {
     let listed = match env.style {
-        PathStyle::Posix => {
-            proc_pids(ports.files(), env.pid).or_else(|| probe(ports.process(), env, &PS))
-        }
+        PathStyle::Posix => match proc_pids(ports.files(), env.pid) {
+            ProcView::Listed(pids) => Some(pids),
+            ProcView::Absent => probe(ports.process(), env, &PS),
+            // `ps` reads the same `/proc`, so it cannot answer either.
+            ProcView::Foreign => None,
+        },
         PathStyle::Windows => probe(ports.process(), env, &TASKLIST),
     };
     match listed {
@@ -78,23 +84,42 @@ pub(crate) fn live_pids(ports: &impl Ports, env: &RunEnv) -> LivePids {
     }
 }
 
-/// The numeric names in `/proc`, when `/proc/<own pid>` is a directory there.
-fn proc_pids(files: &impl Files, own: u32) -> Option<HashSet<u32>> {
+/// What `/proc` says about the live pids.
+#[derive(Debug)]
+enum ProcView {
+    /// No `/proc` that lists this process: the probe process answers instead.
+    Absent,
+    /// A `/proc` of another pid namespace that also has a directory of this pid, such as a
+    /// host `/proc` bind-mounted into a pid-unshared sandbox: `/proc/self` is not this pid,
+    /// so the pid's directory is an unrelated process's (wi-e29ccf F1).
+    Foreign,
+    /// The numeric names in `/proc`.
+    Listed(HashSet<u32>),
+}
+
+/// The numeric names in `/proc`, when `/proc/<own pid>` is a directory there and
+/// `/proc/self` resolves to it.
+fn proc_pids(files: &impl Files, own: u32) -> ProcView {
     let own_dir = format!("/proc/{own}");
     match files.stat(Path::new(&own_dir)) {
         Ok(Some(meta)) if meta.kind == EntryKind::Dir => {}
         // No `/proc` here, or not this process's: the probe process answers instead.
-        Ok(_) | Err(_) => return None,
+        Ok(_) | Err(_) => return ProcView::Absent,
     }
-    match files.read_dir(Path::new("/proc")) {
-        Ok(entries) => Some(
+    let Ok(entries) = files.read_dir(Path::new("/proc")) else {
+        // An unlistable `/proc` is no answer: the probe process answers instead.
+        return ProcView::Absent;
+    };
+    let is_own = |real: &Path| real == Path::new(&own_dir);
+    match files.real_path(Path::new("/proc/self")) {
+        Ok(Some(real)) if is_own(&real) => ProcView::Listed(
             entries
                 .iter()
                 .filter_map(|entry| entry.name.to_str().and_then(pid_digits))
                 .collect(),
         ),
-        // An unlistable `/proc` is no answer: the probe process answers instead.
-        Err(_) => None,
+        // `/proc/self` is another pid, missing or unreadable: this `/proc` cannot be trusted.
+        Ok(_) | Err(_) => ProcView::Foreign,
     }
 }
 
