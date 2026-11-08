@@ -70,7 +70,9 @@ pub use scan::{
     ScanOptions, ScanReport, Scanner, ScannerSetupError, Severity, classify_path, format_hit,
     is_build_script, new_hits, render_scan_text,
 };
-pub use state::{BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, gate_progress};
+pub use state::{
+    BaselineParseError, BaselineSummary, GateRecord, ProgressQuery, TreeRecord, gate_progress,
+};
 pub use status::{
     BaselineLine, STATUS_USAGE, StatusDoc, StatusFacts, render_no_project_json, render_status_json,
     render_status_text, temper_base_note,

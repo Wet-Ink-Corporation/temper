@@ -5,7 +5,9 @@
 mod baseline;
 mod gate;
 mod progress;
+mod tree;
 
 pub use baseline::{BaselineParseError, BaselineSummary};
 pub use gate::GateRecord;
 pub use progress::{ProgressQuery, gate_progress};
+pub use tree::TreeRecord;

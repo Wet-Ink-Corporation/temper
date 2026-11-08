@@ -135,6 +135,25 @@ pub(crate) fn is_ancestor(process: &impl ProcessRunner, git_root: &Path, a: &str
     succeeded(process, git_root, &["merge-base", "--is-ancestor", a, b]).is_some()
 }
 
+/// 1.x `coversBase`'s `count(...)`: `git rev-list --count <revs>` as a number, or `None` when
+/// git fails or its answer is not an integer (1.x's `NaN`). The answer is trimmed, and an empty
+/// one is 0, as JS's `Number('')` is.
+pub(crate) fn rev_list_count(
+    process: &impl ProcessRunner,
+    git_root: &Path,
+    revs: &[&str],
+) -> Option<u64> {
+    let mut args = vec!["rev-list", "--count"];
+    args.extend_from_slice(revs);
+    let out = succeeded(process, git_root, &args)?;
+    let count = js_trim(&out);
+    if count.is_empty() {
+        return Some(0);
+    }
+    // git writes a decimal count; anything else is 1.x's `NaN`, which never counts as covered.
+    count.parse().ok()
+}
+
 /// How a streamed git call ended. Either way, what reached the sink counts, as 1.x's
 /// `fingerprint` hashes `git diff`'s stdout without looking at the exit code, and `spawnSync`
 /// returns the output read before an error; the caller names both outcomes (#207 review F2).
