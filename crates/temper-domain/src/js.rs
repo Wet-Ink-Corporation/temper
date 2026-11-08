@@ -35,6 +35,12 @@ impl JsTypeError {
     pub(crate) const fn new(what: &'static str) -> Self {
         Self(what)
     }
+
+    /// What 1.x read and threw on, as [`Display`](std::fmt::Display) writes it.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        self.0
+    }
 }
 
 /// JS `\s` (the spec's `WhiteSpace` and `LineTerminator`) as the body of a `regex` class.

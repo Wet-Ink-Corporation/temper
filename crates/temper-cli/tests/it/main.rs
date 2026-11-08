@@ -3,6 +3,7 @@
 mod cli;
 mod hooks;
 mod scan;
+mod session_start;
 mod status;
 mod status_json;
 #[cfg(test)]

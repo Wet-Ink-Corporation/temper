@@ -40,8 +40,8 @@ pub(crate) fn run<P: Ports>(
         HookEvent::PostTool => skill::post_tool(call),
         HookEvent::PreEdit => pre_edit::pre_edit(call, scanner),
         HookEvent::PreBash => pre_bash::pre_bash(call, scanner),
-        HookEvent::SessionStart
-        | HookEvent::PreHandback
+        HookEvent::SessionStart => session_start::session_start(call),
+        HookEvent::PreHandback
         | HookEvent::Stop
         | HookEvent::SubagentStop
         | HookEvent::SubagentStart => Err(HookError::NotPorted { event }),

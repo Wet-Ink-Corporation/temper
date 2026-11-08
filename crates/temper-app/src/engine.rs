@@ -152,6 +152,14 @@ pub enum HookError {
     },
 }
 
+/// A recorded value 1.x's handler converts and throws on fails the hook as an input of the
+/// wrong type does, with Rust's text (D16(p)); `HookError` gains no variant (port Phase 3).
+impl From<JsTypeError> for HookError {
+    fn from(error: JsTypeError) -> Self {
+        Self::InputType(error.message())
+    }
+}
+
 /// The arguments of `temper status`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusArgs {
