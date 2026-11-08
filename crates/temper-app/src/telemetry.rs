@@ -92,10 +92,11 @@ pub(crate) fn session_rows(
     let mut rows = Vec::new();
     for name in [ROTATED, LOG] {
         // A missing or unreadable file has no rows (`String(readText(…) ?? '')`).
-        let text = read_js_text(files, &paths::join(style, &workspace.state_dir, name));
+        let Some(text) = read_js_text(files, &paths::join(style, &workspace.state_dir, name))
+        else {
+            continue;
+        };
         let parsed = text
-            .as_deref()
-            .unwrap_or_default()
             .split('\n')
             .filter(|line| line.contains(&id))
             // A line that does not parse is skipped (1.x's `catch { return null; }`).
