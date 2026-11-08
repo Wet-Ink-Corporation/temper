@@ -2,6 +2,7 @@
 
 mod input;
 mod lost_gates;
+mod plans;
 mod pre_bash;
 mod pre_edit;
 mod session_start;
