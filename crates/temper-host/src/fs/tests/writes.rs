@@ -94,3 +94,25 @@ fn create_dir_all_rename_and_stat() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+#[cfg_attr(miri, ignore = "Miri cannot use the file system")]
+fn create_new_makes_an_empty_file_and_fails_when_anything_is_there() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let claim = dir.path().join("gate-lost-7-0");
+
+    StdFiles.create_new(&claim)?;
+    let again = StdFiles.create_new(&claim).err().map(|error| error.op());
+    let on_dir = StdFiles
+        .create_new(dir.path())
+        .err()
+        .map(|error| error.op());
+
+    assert_eq!(fs::read_to_string(&claim)?, "", "empty");
+    assert_eq!(
+        [again, on_dir],
+        [Some(FsOp::Create), Some(FsOp::Create)],
+        "Node's openSync(path, 'wx') throws EEXIST"
+    );
+    Ok(())
+}

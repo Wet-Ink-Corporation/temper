@@ -52,8 +52,8 @@ pub use hooks::{
     PolicyDecision, PolicySetupError, ProgressSeen, ProtectedChange, RaiseFlag, Replacements,
     RustEdit, RustWrites, SKILL_NOT_LOADED, STATE_DIR_DENIAL, ShellAskVia, ShellDenyVia,
     ShellWriteFile, SkillVia, TelemetryEvent, TelemetryRow, UnknownHookEvent, Unread, apply_edit,
-    edit_policy, env_file_lines, is_reviewer, lockfile_denial, lost_gate_row, open_gate_starts,
-    skill_gate_denial, skill_load_via, skill_preloaded,
+    edit_policy, env_file_lines, is_reviewer, lockfile_denial, lost_gate_claim, lost_gate_row,
+    open_gate_starts, skill_gate_denial, skill_load_via, skill_preloaded,
 };
 pub use js::{JsTypeError, JsonParseError, Object as JsObject, Value as JsValue, js_sort, js_trim};
 pub use manifest::{

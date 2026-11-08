@@ -187,6 +187,17 @@ impl Files for StdFiles {
             Err(error) => Err(failed(error)),
         }
     }
+
+    /// `create_new` fails when anything is at the path, a directory or a dangling link
+    /// included, as `O_CREAT | O_EXCL` does; the file is closed when the handle drops.
+    fn create_new(&self, path: &Path) -> Result<(), FsError> {
+        fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map(drop)
+            .map_err(|error| FsError::new(FsOp::Create, path, error))
+    }
 }
 
 /// The entry's modification time as Node's `mtimeMs`, or `None` where the platform keeps none.

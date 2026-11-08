@@ -1,7 +1,9 @@
 //! Ported from 1.x `tests/telemetry.test.mjs` ("lostGateRow: …" and "openGateStarts: …"),
 //! with JS number rows printed by 1.x's `lostGateRow` on Node 22.
 
-use super::{LostGateFacts, LostReason, ProgressSeen, lost_gate_row, open_gate_starts};
+use super::{
+    LostGateFacts, LostReason, ProgressSeen, lost_gate_claim, lost_gate_row, open_gate_starts,
+};
 use crate::hooks::{TelemetryEvent, TelemetryRow};
 use crate::js::Value;
 use crate::{ModTime, Timestamp};
@@ -210,6 +212,32 @@ fn odd_progress_files_and_heartbeats_answer_as_1x() {
             r#"{"pid":7,"reason":"unknown","ranMs":0,"foundMs":0,"timeoutMs":null,"heartbeat":false,"progress":false,"step":null,"steps":{}}"#,
         ],
         "1.x lostGateRow"
+    );
+}
+
+#[test]
+fn the_claim_names_the_pid_and_the_start_time_as_1x() {
+    let claims = [
+        r#"{"t":"2026-10-16T23:00:00.000Z","pid":7}"#,
+        r#"{"t":"nope","pid":1e21}"#,
+        r#"{"pid":-0}"#,
+        r#"{"t":null,"pid":12}"#,
+    ]
+    .map(|row| lost_gate_claim(&json(row)).expect("no throw"));
+
+    assert_eq!(
+        claims,
+        [
+            "gate-lost-7-1792191600000",
+            "gate-lost-1e+21-0",
+            "gate-lost-0-0",
+            "gate-lost-12-0"
+        ],
+        "1.x's gate-lost-${{r.pid}}-${{Date.parse(r.t) || 0}}"
+    );
+    assert!(
+        lost_gate_claim(&json(r#"{"t":{"toString":1},"pid":7}"#)).is_err(),
+        "the template literal throws"
     );
 }
 

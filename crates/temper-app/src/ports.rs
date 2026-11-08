@@ -107,6 +107,14 @@ pub trait Files {
     ///
     /// [`FsError`] when something cannot be removed.
     fn remove_all(&self, path: &Path) -> Result<(), FsError>;
+
+    /// Creates an empty file at `path` when nothing is there, so of two callers only one
+    /// succeeds (Node's `closeSync(openSync(path, 'wx'))`).
+    ///
+    /// # Errors
+    ///
+    /// [`FsError`] when anything is at `path` already, or the file cannot be created.
+    fn create_new(&self, path: &Path) -> Result<(), FsError>;
 }
 
 /// What [`Files::read_into`] did.
@@ -213,6 +221,8 @@ pub enum FsOp {
     ReadInto,
     /// [`Files::remove_file`] and [`Files::remove_all`].
     Remove,
+    /// [`Files::create_new`].
+    Create,
 }
 
 impl fmt::Display for FsOp {
@@ -227,6 +237,7 @@ impl fmt::Display for FsOp {
             Self::CreateDir => "create directory",
             Self::Rename => "rename",
             Self::Remove => "remove",
+            Self::Create => "create",
         })
     }
 }

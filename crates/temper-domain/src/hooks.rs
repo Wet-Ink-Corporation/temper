@@ -24,7 +24,8 @@ pub use edit::{
 pub use event::{HookEvent, UnknownHookEvent};
 pub use iron_rules::{IRON_RULES, skill_gate_denial};
 pub use lost_gate::{
-    LostGate, LostGateFacts, LostReason, ProgressSeen, lost_gate_row, open_gate_starts,
+    LostGate, LostGateFacts, LostReason, ProgressSeen, lost_gate_claim, lost_gate_row,
+    open_gate_starts,
 };
 pub use outcome::{ContextEvent, HookOutcome};
 pub use session::{EnvExports, env_file_lines};

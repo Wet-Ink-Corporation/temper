@@ -9,8 +9,8 @@ mod skill;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
-pub(crate) use input::session_segment;
 pub use input::{HookInput, HookInputError};
+pub(crate) use input::{agent_key_of, given, session_segment};
 pub(crate) use skill::markers_root;
 
 use crate::engine::{HookError, RunEnv};

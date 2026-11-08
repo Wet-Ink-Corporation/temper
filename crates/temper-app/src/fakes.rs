@@ -402,6 +402,16 @@ impl Files for FakeFiles {
         self.mtimes.borrow_mut().retain(|p, _| !gone(p));
         Ok(())
     }
+
+    fn create_new(&self, path: &Path) -> Result<(), FsError> {
+        let real = self.unlinked(&text_of(path));
+        self.check_writable(FsOp::Create, &real)?;
+        if self.exists(&real) {
+            return Err(failure(FsOp::Create, &real, io::ErrorKind::AlreadyExists));
+        }
+        self.files.borrow_mut().insert(real, Some(String::new()));
+        Ok(())
+    }
 }
 
 /// What a [`FakeProcess`] answers to one request.

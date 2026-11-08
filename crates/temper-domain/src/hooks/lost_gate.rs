@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::js::{JsMap, JsTypeError, Object, Value, js_json, js_string_checked, json_string};
+use crate::js::{
+    JsMap, JsTypeError, Object, Value, js_json, js_string, js_string_checked, json_string,
+};
 use crate::{ModTime, Timestamp};
 
 /// The outcome rows that close a `gate-start` (1.x `STOP_OUTCOMES`), and `gate-lost`.
@@ -220,6 +222,24 @@ pub fn lost_gate_row(facts: &LostGateFacts<'_>) -> Result<LostGate, JsTypeError>
     })
 }
 
+/// The marker file a hook creates to claim the lost gate of `start` before it logs it (1.x
+/// `logLostGates`): `` `gate-lost-${r.pid}-${Date.parse(r.t) || 0}` ``.
+///
+/// # Errors
+///
+/// [`JsTypeError`] where the template literal throws: a `pid` or `t` that is an object with
+/// its own `toString` key.
+pub fn lost_gate_claim(start: &Value) -> Result<String, JsTypeError> {
+    let pid = match start.get("pid") {
+        Some(pid) => js_string_checked(pid)?.into_owned(),
+        None => "undefined".to_owned(),
+    };
+    let t0 = date_parse(start.get("t"))?;
+    // `|| 0`: NaN reads as 0, and -0 prints as 0 anyway.
+    let t0 = if t0.is_nan() { 0.0 } else { t0 };
+    Ok(format!("gate-lost-{pid}-{}", js_string(&Value::Number(t0))))
+}
+
 /// `Object.fromEntries(steps.map((s) => [s.name, s.ms]))` over the progress file's `steps`
 /// when it is an array: a repeated name keeps its first place and its last value, a missing
 /// `ms` is `undefined` (left out), and integer-like names come first, as JS orders them.
@@ -264,14 +284,11 @@ fn finite(value: Option<&Value>) -> Option<f64> {
     }
 }
 
-/// JS `===` on two read values, a missing one being `undefined`: objects and arrays are never
-/// equal, since each read parses its own.
+/// JS `===` on two read values, a missing one being `undefined`.
 fn strict_eq(a: Option<&Value>, b: Option<&Value>) -> bool {
     match (a, b) {
-        (None, None) | (Some(Value::Null), Some(Value::Null)) => true,
-        (Some(Value::Bool(x)), Some(Value::Bool(y))) => x == y,
-        (Some(Value::Number(x)), Some(Value::Number(y))) => x == y,
-        (Some(Value::String(x)), Some(Value::String(y))) => x == y,
+        (None, None) => true,
+        (Some(a), Some(b)) => a.strict_equals(b),
         _ => false,
     }
 }

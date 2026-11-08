@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use temper_domain::{JsObject, JsValue, JsonParseError};
+use temper_domain::{JsObject, JsTypeError, JsValue, JsonParseError};
 
 use crate::engine::HookError;
 
@@ -71,6 +71,15 @@ pub(crate) fn agent_key(input: &HookInput) -> String {
     match input.raw("agent_id").filter(|id| id.is_truthy()) {
         Some(id) => format!("agent-{}", file_safe(&id.to_js_string())),
         None => "main".to_owned(),
+    }
+}
+
+/// [`agent_key`] of a `who` whose `agent_id` is `agent_id` (a telemetry row's), failing where
+/// 1.x's `String(agent_id)` throws.
+pub(crate) fn agent_key_of(agent_id: Option<&JsValue>) -> Result<String, JsTypeError> {
+    match agent_id.filter(|id| id.is_truthy()) {
+        Some(id) => Ok(format!("agent-{}", file_safe(&id.to_js_string_checked()?))),
+        None => Ok("main".to_owned()),
     }
 }
 
