@@ -108,6 +108,15 @@ impl Value {
         js_string(self)
     }
 
+    /// The number when it is an integer (`Number.isInteger`, which converts nothing).
+    #[must_use]
+    pub fn as_integer(&self) -> Option<f64> {
+        match *self {
+            Self::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(n),
+            _ => None,
+        }
+    }
+
     /// JS `===` between two values parsed from JSON: objects and arrays are never equal,
     /// since each parse makes its own, and NaN is not itself.
     #[must_use]

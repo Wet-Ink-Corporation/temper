@@ -1,14 +1,16 @@
 //! Reads of the files temper keeps, with 1.x's fallbacks (`readText` and the readers on it).
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use temper_domain::{
-    BaselineParseError, BaselineSummary, Fingerprint, GateRecord, JsValue, PathStyle,
+    BaselineParseError, BaselineSummary, Fingerprint, GateRecord, JsValue, ModTime, PathStyle,
 };
 
 use crate::paths;
 use crate::ports::Files;
 use crate::project::Workspace;
+use crate::retention::is_progress_file;
 
 /// 1.x `readText(p)`: the file's text, or `None` for any failure, which 1.x's `catch` turns
 /// into `null`. The `Files` port already refuses a text past V8's longest string (3-24), so a
@@ -65,4 +67,70 @@ pub(crate) fn read_baseline(
 fn record_text(files: &impl Files, style: PathStyle, dir: &str, fp: Fingerprint) -> Option<String> {
     let path = paths::join(style, dir, &format!("{fp}.json"));
     read_js_text(files, &path).filter(|text| !text.is_empty())
+}
+
+/// A gate progress file as 1.x's `gateProgressFiles` keeps it: its JSON, path and `mtimeMs`.
+#[derive(Debug)]
+pub(crate) struct ProgressFile {
+    pub(crate) record: JsValue,
+    pub(crate) path: String,
+    pub(crate) modified: ModTime,
+}
+
+/// 1.x `gateProgressFiles(proj)`'s `Map`: the progress files by their record's integer `pid`.
+#[derive(Debug, Default)]
+pub(crate) struct ProgressFiles(HashMap<u64, ProgressFile>);
+
+impl ProgressFiles {
+    /// `progress.get(pid)`: a JS `Map` key, where `-0` and `0` are one (`SameValueZero`).
+    pub(crate) fn get(&self, pid: &JsValue) -> Option<&ProgressFile> {
+        self.0.get(&map_key(pid.as_integer()?))
+    }
+}
+
+fn map_key(integer: f64) -> u64 {
+    if integer == 0.0 { 0.0_f64 } else { integer }.to_bits()
+}
+
+/// 1.x `gateProgressFiles(proj)`: the state dir's progress files by their record's integer
+/// `pid`, in directory order, so a later file of the same pid replaces an earlier one. A file
+/// that cannot be read, parsed or stat'ed is skipped (1.x's `catch { /* unreadable */ }`).
+pub(crate) fn progress_files(
+    files: &impl Files,
+    style: PathStyle,
+    ws: &Workspace,
+) -> ProgressFiles {
+    let mut out = ProgressFiles::default();
+    let Ok(entries) = files.read_dir(Path::new(&ws.state_dir)) else {
+        // 1.x: `catch { return out; }`.
+        return out;
+    };
+    let names = entries
+        .iter()
+        .filter_map(|entry| entry.name.to_str())
+        .filter(|name| is_progress_file(name));
+    for name in names {
+        let path = paths::join(style, &ws.state_dir, name);
+        let Some(record) = read_js_text(files, &path).and_then(|t| JsValue::from_json(&t).ok())
+        else {
+            continue;
+        };
+        let Some(pid) = record.get("pid").and_then(JsValue::as_integer) else {
+            continue;
+        };
+        let Ok(Some(meta)) = files.stat(Path::new(&path)) else {
+            continue;
+        };
+        // A platform without modification times has no `mtimeMs` to judge by.
+        let Some(modified) = meta.modified else {
+            continue;
+        };
+        let file = ProgressFile {
+            record,
+            path,
+            modified,
+        };
+        out.0.insert(map_key(pid), file);
+    }
+    out
 }

@@ -11,23 +11,22 @@
 //! outer `try` catches ends the work silently, and what its inner ones catch skips a step.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::path::Path;
 
 use temper_domain::{
-    JsValue, LostGateFacts, ModTime, PathStyle, ProgressSeen, TelemetryEvent, lost_gate_claim,
+    JsValue, LostGateFacts, PathStyle, ProgressSeen, TelemetryEvent, lost_gate_claim,
     lost_gate_row, open_gate_starts,
 };
 
+use super::HookCall;
+use super::input::{agent_key_of, given, session_segment};
 use crate::engine::RunEnv;
-use crate::hooks::{HookCall, agent_key_of, given, session_segment};
 use crate::paths;
 use crate::ports::{Clock, Files, Ports};
 use crate::procs::{LivePids, live_pids};
 use crate::project::Workspace;
-use crate::retention::is_progress_file;
 use crate::session::session_dir;
-use crate::state::read_js_text;
+use crate::state::{ProgressFile, progress_files, read_js_text};
 use crate::telemetry::{log_as, session_rows};
 
 /// What [`log_lost_gates`] did.
@@ -37,14 +36,6 @@ pub(crate) struct LostGatesLogged {
     pub(crate) rows: usize,
     /// The progress files removed once their row was logged.
     pub(crate) served: usize,
-}
-
-/// A progress file as 1.x's `gateProgressFiles` keeps it: its JSON, path and `mtimeMs`.
-#[derive(Debug)]
-struct Progress {
-    record: JsValue,
-    path: String,
-    modified: ModTime,
 }
 
 /// 1.x `logLostGates(proj, input)`: a `gate-lost` row for each gate run of the call's session
@@ -82,10 +73,7 @@ pub(crate) fn log_lost_gates(call: &HookCall<'_, impl Ports>, ws: &Workspace) ->
             continue;
         }
         let beat = heartbeat(files, style, &dir, start);
-        let seen = start
-            .get("pid")
-            .and_then(integer)
-            .and_then(|pid| progress.get(&pid_key(pid)));
+        let seen = start.get("pid").and_then(|pid| progress.get(pid));
         let facts = LostGateFacts {
             start,
             progress: seen.map(|p| ProgressSeen {
@@ -119,7 +107,8 @@ fn dead_starts<'a>(ports: &impl Ports, env: &RunEnv, open: Vec<&'a JsValue>) -> 
     let mut lost = Vec::new();
     for row in open {
         let foreign = |pid: &&JsValue| {
-            integer(pid).is_some_and(|n| n.partial_cmp(&own) != Some(Ordering::Equal))
+            pid.as_integer()
+                .is_some_and(|n| n.partial_cmp(&own) != Some(Ordering::Equal))
         };
         let Some(pid) = row.get("pid").filter(foreign) else {
             continue;
@@ -134,7 +123,7 @@ fn dead_starts<'a>(ports: &impl Ports, env: &RunEnv, open: Vec<&'a JsValue>) -> 
 /// Removes the progress file `p` of the lost gate `start`, unless another gate on the same
 /// tree has written it since (its `pid` is no longer `=== r.pid`); whether it was removed. A
 /// file that is gone or cannot be read or removed stays, as 1.x's `catch { /* gone */ }`.
-fn serve(files: &impl Files, p: &Progress, start: &JsValue) -> bool {
+fn serve(files: &impl Files, p: &ProgressFile, start: &JsValue) -> bool {
     let current = read_js_text(files, &p.path).and_then(|text| JsValue::from_json(&text).ok());
     let same = match (
         current.as_ref().and_then(|c| c.get("pid")),
@@ -158,59 +147,6 @@ fn heartbeat(files: &impl Files, style: PathStyle, dir: &str, start: &JsValue) -
     read_js_text(files, &path)
         .and_then(|text| JsValue::from_json(&text).ok())
         .unwrap_or(JsValue::Null)
-}
-
-/// 1.x `gateProgressFiles(proj)`: the state dir's progress files by their record's integer
-/// `pid`, in directory order, a later file of the same pid replacing an earlier one. A file
-/// that cannot be read, parsed or stat'ed is skipped.
-fn progress_files(files: &impl Files, style: PathStyle, ws: &Workspace) -> HashMap<u64, Progress> {
-    let mut out = HashMap::new();
-    let Ok(entries) = files.read_dir(Path::new(&ws.state_dir)) else {
-        // 1.x: `catch { return out; }`.
-        return out;
-    };
-    let names = entries
-        .iter()
-        .filter_map(|entry| entry.name.to_str())
-        .filter(|name| is_progress_file(name));
-    for name in names {
-        let path = paths::join(style, &ws.state_dir, name);
-        let Some(record) = read_js_text(files, &path).and_then(|t| JsValue::from_json(&t).ok())
-        else {
-            continue;
-        };
-        let Some(pid) = record.get("pid").and_then(integer) else {
-            continue;
-        };
-        let Ok(Some(meta)) = files.stat(Path::new(&path)) else {
-            continue;
-        };
-        let Some(modified) = meta.modified else {
-            continue;
-        };
-        out.insert(
-            pid_key(pid),
-            Progress {
-                record,
-                path,
-                modified,
-            },
-        );
-    }
-    out
-}
-
-/// The value when it is an integer (`Number.isInteger`).
-fn integer(value: &JsValue) -> Option<f64> {
-    match *value {
-        JsValue::Number(n) if n.is_finite() && n.fract() == 0.0 => Some(n),
-        _ => None,
-    }
-}
-
-/// An integer as a JS `Map` key: `-0` and `0` are the same key (`SameValueZero`).
-fn pid_key(pid: f64) -> u64 {
-    if pid == 0.0 { 0.0_f64 } else { pid }.to_bits()
 }
 
 #[cfg(test)]

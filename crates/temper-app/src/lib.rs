@@ -14,7 +14,6 @@ mod engine;
 mod fakes;
 mod git;
 mod hooks;
-mod lost_gates;
 mod manifests;
 mod paths;
 mod ports;
