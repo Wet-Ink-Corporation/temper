@@ -32,8 +32,9 @@ function gitInit(dir) {
  */
 /**
  * Every file and directory under `root` with its content as UTF-8 text with `roots` masked, then
- * `maskFile(prefix + rel, text)`; a directory is `'dir'`, and a file over 4 KiB is its masked
- * text's SHA-256, so a diff stays short.
+ * `maskFile(prefix + rel, text, bytes)`, `bytes` being the file's raw content (a git index is
+ * binary); a directory is `'dir'`, and a file over 4 KiB is its masked text's SHA-256, so a diff
+ * stays short.
  */
 export function treeContents(root, roots, { prefix = '', maskFile = (_rel, text) => text } = {}) {
   const out = {};
@@ -45,7 +46,8 @@ export function treeContents(root, roots, { prefix = '', maskFile = (_rel, text)
         out[`${prefix}${r}/`] = 'dir';
         rec(p, r);
       } else {
-        const text = maskFile(`${prefix}${r}`, maskRoots(fs.readFileSync(p, 'utf8'), roots));
+        const bytes = fs.readFileSync(p);
+        const text = maskFile(`${prefix}${r}`, maskRoots(bytes.toString('utf8'), roots), bytes);
         out[`${prefix}${r}`] = text.length > 4096 ? `sha256:${crypto.createHash('sha256').update(text).digest('hex')}` : text;
       }
     }

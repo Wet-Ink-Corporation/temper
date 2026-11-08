@@ -49,17 +49,18 @@ after(() => {
 
 /**
  * A written file after §2.2's masks: telemetry row times (and a gate-lost row's `foundMs`), a skill
- * marker's time, a session's start time (port 3d), a tree record's time and a git index a case's
- * `before` git call rewrote (port 3e), and D16(w)'s lines in an env file, which `counts.d17` counts (OC-6 A).
+ * marker's time, a session's start time (port 3d), a tree record's time and the stat data of a git
+ * index a case's git call rewrote (port 3e; only the stat data since the #210 review), and D16(w)'s
+ * lines in an env file, which `counts.d17` counts (OC-6 A).
  */
 function fileMask() {
   const counts = { d17: 0 };
-  const mask = (rel, text) => {
+  const mask = (rel, text, bytes) => {
     if (/(^|\/)telemetry(\.1)?\.jsonl$/.test(rel)) return maskFoundMs(maskTelemetryTimes(text));
     if (/\/skill-[^/]+$/.test(rel)) return maskMarkerTime(text);
     if (/\/sessions\/[^/]+\/started$/.test(rel)) return maskStartedTime(text);
     if (/\/sessions\/[^/]+\/tree-[^/]+\.json$/.test(rel)) return maskTreeAt(text);
-    if (/^tree\/\.git\/(worktrees\/[^/]+\/)?index$/.test(rel)) return maskGitIndex(text);
+    if (/^tree\/\.git\/(worktrees\/[^/]+\/)?index$/.test(rel)) return maskGitIndex(bytes);
     if (/(^|\/)env\.sh$/.test(rel)) {
       const m = maskD17Lines(text);
       counts.d17 += m.count;
