@@ -9,6 +9,7 @@ mod session_start;
 mod shell;
 mod skill;
 mod subagent_start;
+mod transcript;
 
 use temper_domain::{HookEvent, HookOutcome, PolicyDecision, Scanner, TelemetryEvent};
 
