@@ -38,7 +38,7 @@ pub use skill::{
     SKILL_NOT_LOADED, SkillVia, is_implementer, is_reviewer, skill_load_via, skill_preloaded,
 };
 pub use subagent::{
-    OtherTree, ReviewerExtras, SubagentStartFacts, Target, subagent_start_context,
+    CachedGate, OtherTree, ReviewerExtras, SubagentStartFacts, Target, subagent_start_context,
     tree_gate_command,
 };
 pub use telemetry::{

@@ -46,11 +46,11 @@ pub use fingerprint::{
 };
 pub use glob::{Glob, GlobError, LazyGlobs};
 pub use hooks::{
-    BashPolicy, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck, EditFacts,
-    EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome, IRON_RULES,
-    InterpreterCode, InvalidVerdict, LazyExemptions, LostGate, LostGateFacts, LostReason,
-    ManifestEdit, OpaqueKind, OtherTree, PolicyDecision, PolicySetupError, ProgressSeen,
-    ProtectedChange, RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites,
+    BashPolicy, CachedGate, ConfigAsk, ConfigChanges, ContextEvent, CopiedFile, DependencyCheck,
+    EditFacts, EditOp, EditStep, EditTarget, EditTool, EnvExports, HookEvent, HookOutcome,
+    IRON_RULES, InterpreterCode, InvalidVerdict, LazyExemptions, LostGate, LostGateFacts,
+    LostReason, ManifestEdit, OpaqueKind, OtherTree, PolicyDecision, PolicySetupError,
+    ProgressSeen, ProtectedChange, RaiseFlag, Replacements, ReviewerExtras, RustEdit, RustWrites,
     SKILL_NOT_LOADED, STATE_DIR_DENIAL, SessionStartFacts, SessionState, ShellAskVia, ShellDenyVia,
     ShellWriteFile, SkillVia, SubagentStartFacts, Target, TelemetryEvent, TelemetryRow, TreeState,
     UnknownHookEvent, Unread, VerdictRow, VerdictVia, apply_edit, edit_policy, env_file_lines,

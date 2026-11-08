@@ -7,17 +7,44 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use temper_domain::{PathStyle, unverbatim};
+
 /// Outcome of a test; `?` works on every error type.
 pub(crate) type TestResult = Result<(), Box<dyn Error>>;
 
-/// `path`'s real path as the engine spells it: canonicalized, without the `\\?\` prefix that
+/// `path`'s real path as the engine spells it: canonicalized, without the verbatim prefix that
 /// `fs::canonicalize` adds on Windows and 1.x's `unverbatim` strips.
 pub(crate) fn real_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let real = fs::canonicalize(path)?;
-    let text = real.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if cfg!(windows) => Ok(PathBuf::from(rest)),
-        _ => Ok(real),
+    if cfg!(windows) {
+        Ok(engine_spelling(&real.to_string_lossy()))
+    } else {
+        Ok(real)
+    }
+}
+
+/// A Windows path without its verbatim prefix, as 1.x's `unverbatim` (the domain's) spells it:
+/// `\\?\UNC\server\share` becomes `\\server\share`, and `\\?\C:\x` becomes `C:\x`.
+fn engine_spelling(path: &str) -> PathBuf {
+    PathBuf::from(unverbatim(path, PathStyle::Windows).as_ref())
+}
+
+/// #210 review F4: a verbatim UNC path is the share's own `\\server\share` spelling, not
+/// `UNC\server\share` with the `\\?\` cut off; a verbatim drive path loses the prefix only.
+#[test]
+fn a_verbatim_path_is_spelled_as_the_engine_spells_it() {
+    let cases = [
+        (r"\\?\UNC\server\share\dir", r"\\server\share\dir"),
+        (r"\\?\C:\Users\u", r"C:\Users\u"),
+        (r"C:\plain", r"C:\plain"),
+    ];
+
+    for (verbatim, spelled) in cases {
+        assert_eq!(
+            engine_spelling(verbatim),
+            PathBuf::from(spelled),
+            "{verbatim}"
+        );
     }
 }
 

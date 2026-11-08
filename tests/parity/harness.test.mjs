@@ -357,9 +357,67 @@ test('maskTreeAt (port 3e): a tree record\'s Date.now() time, not the session re
   for (const kept of ['{"root":"/w","at":0}', '{"at":1}\n', 'x']) assert.equal(maskTreeAt(kept), kept);
 });
 
-test('maskGitIndex (port 3e): a git index, and nothing else', () => {
-  assert.equal(maskGitIndex('DIRC\x00\x00\x00\x02stat times'), '<GIT INDEX>');
-  for (const kept of ['', 'dirc', 'x DIRC']) assert.equal(maskGitIndex(kept), kept);
+/** A git repository in a new temp dir with `a.txt` (executable in the index) and `src/lib.rs` added. */
+function indexedRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-index-'));
+  const git = (...args) => {
+    const r = spawnSync('git', args, { cwd: dir, env: hermeticEnv(), encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout;
+  };
+  git('init', '-q');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'lib.rs'), '//! L.\n');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a');
+  git('add', '-A');
+  git('update-index', '--chmod=+x', 'a.txt');
+  return { dir, git, index: () => fs.readFileSync(path.join(dir, '.git', 'index')) };
+}
+
+/** `git ls-files -s`'s entries as maskGitIndex writes them: mode, oid, flags (stage and name length), path. */
+function lsFilesEntries(git) {
+  return git('ls-files', '-s').trim().split('\n').map((line) => {
+    const [meta, name] = line.split('\t');
+    const [mode, oid, stage] = meta.split(' ');
+    const flags = ((Number(stage) << 12) | Math.min(Buffer.byteLength(name), 0xfff)).toString(16).padStart(4, '0');
+    return `${mode} ${oid} ${flags} ${name}`;
+  });
+}
+
+test('maskGitIndex (#210 review F1): each entry\'s mode, oid, flags and path, in versions 2 and 4, without the stat fields', () => {
+  const { dir, git, index } = indexedRepo();
+  try {
+    const entries = lsFilesEntries(git);
+    assert.equal(entries.length, 2);
+    git('update-index', '--index-version', '2');
+    assert.equal(maskGitIndex(index()), ['<GIT INDEX v2>', ...entries].join('\n'));
+    git('update-index', '--index-version', '4');
+    assert.equal(maskGitIndex(index()), ['<GIT INDEX v4>', ...entries].join('\n'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('maskGitIndex (#210 review F1): a changed stat field is masked, a changed oid, mode or path is not, and an undecodable index is kept whole', () => {
+  const { dir, git, index } = indexedRepo();
+  try {
+    git('update-index', '--index-version', '2');
+    const raw = index();
+    const masked = maskGitIndex(raw);
+    // The first entry starts after the 12-byte header: ctime, mtime, dev, ino (24 bytes), mode at 24, uid, gid, size, oid at 40.
+    const changed = (offset) => {
+      const copy = Buffer.from(raw);
+      copy[12 + offset] ^= 0xff;
+      return maskGitIndex(copy);
+    };
+    for (const stat of [0, 7, 8, 15, 16, 20, 28, 32, 36]) assert.equal(changed(stat), masked, `stat byte ${stat}`);
+    for (const kept of [27, 40, 59, 62]) assert.notEqual(changed(kept), masked, `entry byte ${kept}`);
+    const truncated = raw.subarray(0, 50);
+    assert.equal(maskGitIndex(truncated), truncated.toString('utf8'), 'compared as it is');
+    assert.equal(maskGitIndex(Buffer.from('not an index')), 'not an index');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('maskFailureText (OC-3 (p)): the text after "failed: " in a whole systemMessage, counted', () => {

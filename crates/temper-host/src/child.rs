@@ -8,8 +8,8 @@ use std::thread::{self, Scope, ScopedJoinHandle};
 use std::time::Duration;
 
 use temper_app::{
-    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink,
-    Stream,
+    ByteCap, ExitKind, ProcessError, ProcessOutput, ProcessRequest, ProcessRunner, StderrSink,
+    StdoutSink, Stream,
 };
 use wait_timeout::ChildExt;
 
@@ -17,11 +17,12 @@ use wait_timeout::ChildExt;
 /// 'pipe']`, `maxBuffer` and `timeout`.
 ///
 /// Two named reader threads drain stdout and stderr inside a `thread::scope`, so both are
-/// joined before `run` returns. A reader past its cap stops reading and closes its pipe; the
+/// joined before `run` returns; a null stream goes to the null device and its reader has no
+/// pipe to read. A reader past its cap stops reading and closes its pipe; the
 /// child then fails its next write or meets its timeout, so neither memory nor time is
 /// unbounded, unless the child cannot be killed or a grandchild holds a pipe. `kill` reaches
 /// only the child, not its own children: a grandchild that inherits a pipe keeps its reader
-/// waiting (Phase 4 brings process groups for cargo).
+/// waiting (Phase 4 brings process groups for cargo), unless both its streams are null.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct StdProcess;
 
@@ -32,22 +33,26 @@ impl ProcessRunner for StdProcess {
             args,
             cwd,
             stdout: sink,
-            stderr_cap,
+            stderr: err_sink,
             timeout,
         } = request;
         let program = || name.to_owned();
-        let mut child = spawn(name, args, cwd)?;
+        let mut child = spawn(name, args, cwd, (&sink, err_sink))?;
+        // A null stream has no pipe: its reader below sees none and finishes at once.
         let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
-        let stdout_cap = match &sink {
-            StdoutSink::Capture(cap) => Some(*cap),
-            StdoutSink::Stream(_) => None,
-        };
+        let (stdout_cap, stderr_cap) = caps_of(&sink, err_sink);
         let (status, out, err) = thread::scope(|scope| {
             let out = match sink {
                 StdoutSink::Capture(cap) => spawn_reader(scope, "temper-stdout", stdout, cap),
                 StdoutSink::Stream(sink) => spawn_streamer(scope, "temper-stdout", stdout, sink),
+                StdoutSink::Null => spawn_reader(scope, "temper-stdout", stdout, ByteCap::new(0)),
             };
-            let err = spawn_reader(scope, "temper-stderr", stderr, stderr_cap);
+            let err = spawn_reader(
+                scope,
+                "temper-stderr",
+                stderr,
+                stderr_cap.unwrap_or(ByteCap::new(0)),
+            );
             let status = if out.is_ok() && err.is_ok() {
                 wait(&mut child, timeout)
             } else {
@@ -64,18 +69,20 @@ impl ProcessRunner for StdProcess {
         };
         let (out, err) = (out.map_err(lost)?, err.map_err(lost)?);
         let status = status.map_err(lost)?;
-        for (captured, stream, cap) in [
+        let caps = [
             (&out, Stream::Stdout, stdout_cap),
-            (&err, Stream::Stderr, Some(stderr_cap)),
-        ] {
-            // A streamed stdout has no cap and never overflows.
-            if let (true, Some(cap)) = (captured.overflowed, cap) {
-                return Err(ProcessError::Overflow {
-                    program: program(),
-                    stream,
-                    cap: cap.get(),
-                });
-            }
+            (&err, Stream::Stderr, stderr_cap),
+        ];
+        // A streamed or null stream has no cap and never overflows.
+        if let Some((_, stream, Some(cap))) = caps
+            .into_iter()
+            .find(|(captured, _, cap)| captured.overflowed && cap.is_some())
+        {
+            return Err(ProcessError::Overflow {
+                program: program(),
+                stream,
+                cap: cap.get(),
+            });
         }
         Ok(ProcessOutput {
             status,
@@ -85,15 +92,38 @@ impl ProcessRunner for StdProcess {
     }
 }
 
-/// Starts `program` in `cwd` with stdin null and both outputs piped.
-fn spawn(program: &str, args: &[OsString], cwd: &Path) -> Result<Child, ProcessError> {
+/// The caps of a captured stdout and stderr; a streamed or null stream has none.
+fn caps_of(stdout: &StdoutSink<'_>, stderr: StderrSink) -> (Option<ByteCap>, Option<ByteCap>) {
+    let out = match stdout {
+        StdoutSink::Capture(cap) => Some(*cap),
+        StdoutSink::Stream(_) | StdoutSink::Null => None,
+    };
+    let err = match stderr {
+        StderrSink::Capture(cap) => Some(cap),
+        StderrSink::Null => None,
+    };
+    (out, err)
+}
+
+/// Starts `program` in `cwd` with stdin null, and each output piped unless its sink is null.
+fn spawn(
+    program: &str,
+    args: &[OsString],
+    cwd: &Path,
+    (stdout, stderr): (&StdoutSink<'_>, StderrSink),
+) -> Result<Child, ProcessError> {
+    let piped_unless = |null| if null { Stdio::null() } else { Stdio::piped() };
+    let (stdout, stderr) = (
+        piped_unless(matches!(stdout, StdoutSink::Null)),
+        piped_unless(stderr == StderrSink::Null),
+    );
     let mut command = Command::new(program);
     command
         .args(args)
         .current_dir(cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(stdout)
+        .stderr(stderr);
     hide_window(&mut command);
     command.spawn().map_err(|source| ProcessError::Spawn {
         program: program.to_owned(),

@@ -3,14 +3,13 @@
 
 use std::borrow::Cow;
 use std::ffi::OsString;
-use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 use temper_domain::{
-    ContextEvent, Fingerprint, HookOutcome, JsValue, OtherTree, ReviewerExtras, SubagentStartFacts,
-    Target, TelemetryEvent, earlier_review, is_reviewer, skill_preloaded, subagent_start_context,
-    tree_gate_command,
+    CachedGate, ContextEvent, Fingerprint, HookOutcome, JsValue, OtherTree, ReviewerExtras,
+    SubagentStartFacts, Target, TelemetryEvent, earlier_review, is_reviewer, skill_preloaded,
+    subagent_start_context, tree_gate_command,
 };
 
 use super::plans::list_plans;
@@ -19,8 +18,9 @@ use super::{HookCall, logged_then, session_segment};
 use crate::changes::{diff_stat, fingerprint, rust_changes};
 use crate::engine::HookError;
 use crate::git;
+use crate::memo::{GitMemo, MemoPorts};
 use crate::paths::{self, PathEnv};
-use crate::ports::{ByteCap, Ports, ProcessRequest, ProcessRunner, StdoutSink};
+use crate::ports::{Ports, ProcessRequest, ProcessRunner, StderrSink, StdoutSink};
 use crate::project::Workspace;
 use crate::relpath::rel_to;
 use crate::session::base_rev;
@@ -29,13 +29,13 @@ use crate::trees::{Checkout, DueTree, Scope, Tree, Widen, due_trees, note_tree, 
 
 /// `cargo fmt --all`'s timeout for a reviewer's tree (1.x's `timeoutMs: 120000`).
 const FMT_TIMEOUT: Duration = Duration::from_secs(120);
-/// The cap on `cargo fmt`'s stderr: 1.x `run`'s `maxBuffer`.
-const FMT_CAP: ByteCap = ByteCap::new(256 * 1024 * 1024);
 
 /// 1.x `subagentStart(input)`, in its order: the telemetry row for any agent type, the tree
 /// record, then for temper's agents the target tree and its context. A reviewer started in the
 /// main checkout is sent to the first worktree that holds the session's changes when the main
-/// checkout holds none (#135), and has `cargo fmt --all` run in each tree it is told of.
+/// checkout holds none (#135), and has `cargo fmt --all` run in each tree it is told of. Git's
+/// answers are memoised for the run ([`GitMemo`]): each spawn is a process start, which on
+/// Windows costs tens of milliseconds (3e-16).
 ///
 /// # Errors
 ///
@@ -45,8 +45,16 @@ const FMT_CAP: ByteCap = ByteCap::new(256 * 1024 * 1024);
 /// gate record whose `steps` is not an array, or a history row or earlier verdict 1.x's readers
 /// throw on (F5).
 pub(crate) fn subagent_start(call: &HookCall<'_, impl Ports>) -> Result<HookOutcome, HookError> {
+    call.input.require_object("agent_type")?;
+    // One memo per run: a repeated git question is answered once (3e-16).
+    let memo = GitMemo::default();
+    let ports = MemoPorts::new(call.ports, &memo);
+    let call = &HookCall {
+        ports: &ports,
+        env: call.env,
+        input: call.input,
+    };
     let input = call.input;
-    input.require_object("agent_type")?;
     let Some(ws) = call.workspace() else {
         return Ok(HookOutcome::Pass);
     };
@@ -81,6 +89,17 @@ enum Role {
     Reviewer,
     /// `rust-implementer` or `rust-architect`.
     Worker,
+}
+
+impl Role {
+    /// The role of temper's agent `agent_type`.
+    fn of(agent_type: &str) -> Self {
+        if is_reviewer(agent_type) {
+            Self::Reviewer
+        } else {
+            Self::Worker
+        }
+    }
 }
 
 /// What every tree's gate command depends on (1.x `gateIn`'s closure).
@@ -121,11 +140,7 @@ fn context(
 ) -> Result<String, HookError> {
     let HookCall { ports, env, input } = *call;
     let (files, process, style) = (ports.files(), ports.process(), env.style);
-    let role = if is_reviewer(agent_type) {
-        Role::Reviewer
-    } else {
-        Role::Worker
-    };
+    let role = Role::of(agent_type);
     let linked = ws
         .git_root()
         .is_some_and(|root| git::is_linked(process, style, root));
@@ -145,6 +160,9 @@ fn context(
         linked,
         role,
     };
+    // Where 1.x builds the gate line, so a red record it cannot read throws before the other
+    // worktrees, the earlier verdict and the diff stat are read (#210 review F3).
+    let gate = CachedGate::of(gate.as_ref())?;
     let listed = listed(call, ws, &also, &gate_in);
     let others = other_trees(&also, &listed);
     let (earlier, stat) = match role {
@@ -169,7 +187,7 @@ fn context(
         base,
         fingerprint: fp,
         changes: &changes,
-        gate: gate.as_ref(),
+        gate: &gate,
         gate_command: &target_gate,
         plans: &plans,
         also: &others,
@@ -178,7 +196,7 @@ fn context(
             diff_stat: &stat,
         }),
     };
-    Ok(subagent_start_context(&facts)?)
+    Ok(subagent_start_context(&facts))
 }
 
 /// 1.x `treeLabel(main, tree)`: `t`'s path relative to this checkout when inside it, else its
@@ -304,16 +322,17 @@ fn format_trees(process: &impl ProcessRunner, target: &Tree<'_>, also: &[DueTree
     }
 }
 
-/// `cargo fmt --all` in `root`, its output discarded, with 1.x's 120 s timeout.
+/// `cargo fmt --all` in `root`, with 1.x's 120 s timeout. 1.x never reads its output, so both
+/// streams go to the null device: past the timeout, a `rustfmt` that outlives the killed
+/// `cargo` holds no pipe a reader waits on (review F2, H-13).
 fn format_tree(process: &impl ProcessRunner, root: &str) -> Formatted {
     let args = [OsString::from("fmt"), OsString::from("--all")];
-    let mut discard = io::sink();
     let request = ProcessRequest {
         program: "cargo",
         args: &args,
         cwd: Path::new(root),
-        stdout: StdoutSink::Stream(&mut discard),
-        stderr_cap: FMT_CAP,
+        stdout: StdoutSink::Null,
+        stderr: StderrSink::Null,
         timeout: FMT_TIMEOUT,
     };
     match process.run(request) {
@@ -321,3 +340,6 @@ fn format_tree(process: &impl ProcessRunner, root: &str) -> Formatted {
         Err(_) => Formatted::NotRan,
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -19,7 +19,7 @@ use temper_domain::{JsValue, PathStyle};
 use crate::engine::RunEnv;
 use crate::ports::{
     ByteCap, EntryKind, ExitKind, Files, Ports, ProcessOutput, ProcessRequest, ProcessRunner,
-    StdoutSink,
+    StderrSink, StdoutSink,
 };
 
 /// The probe's timeout (Invariant 6).
@@ -153,7 +153,7 @@ fn probe(process: &impl ProcessRunner, env: &RunEnv, probe: &Probe) -> Option<Ha
         args: &args,
         cwd: &env.cwd,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {

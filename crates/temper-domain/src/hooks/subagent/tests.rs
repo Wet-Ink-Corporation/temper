@@ -1,6 +1,6 @@
 use super::{
-    OtherTree, ReviewerExtras, SubagentStartFacts, Target, last_lines, subagent_start_context,
-    tree_gate_command,
+    CachedGate, OtherTree, ReviewerExtras, SubagentStartFacts, Target, last_lines,
+    subagent_start_context, tree_gate_command,
 };
 use crate::{Fingerprint, GateRecord};
 
@@ -10,7 +10,7 @@ fn fp(hex: &str) -> Fingerprint {
     hex.parse().expect("16 hex")
 }
 
-fn facts<'a>(gate: Option<&'a GateRecord>, changes: &'a [String]) -> SubagentStartFacts<'a> {
+fn facts<'a>(gate: &'a CachedGate, changes: &'a [String]) -> SubagentStartFacts<'a> {
     SubagentStartFacts {
         agent_type: "rust-implementer",
         target: Target::Here,
@@ -35,12 +35,12 @@ fn the_implementer_gets_the_tree_its_scope_fingerprint_gate_and_plans() {
     ];
     let text = subagent_start_context(&SubagentStartFacts {
         plans: &plans,
-        ..facts(None, &changes)
+        ..facts(&CachedGate::NotRun, &changes)
     });
 
     assert_eq!(
-        text.as_deref(),
-        Ok(concat!(
+        text,
+        concat!(
             "temper context for rust-implementer:\n",
             "- Project root: /w\n",
             "- Base revision: 1111111111111111111111111111111111111111; review scope: `git diff 1111111111111111111111111111111111111111` plus untracked files.\n",
@@ -48,7 +48,7 @@ fn the_implementer_gets_the_tree_its_scope_fingerprint_gate_and_plans() {
             "- Changed Rust files (1): crates/core/src/lib.rs\n",
             "- Gate for this fingerprint: not run yet. Gate command: node \"/p/scripts/temper.mjs\" gate\n",
             "- Plans: .temper/plans/a.md, .temper/plans/b.md",
-        ))
+        )
     );
 }
 
@@ -56,9 +56,8 @@ fn the_implementer_gets_the_tree_its_scope_fingerprint_gate_and_plans() {
 fn without_git_or_changes_the_lines_say_so() {
     let text = subagent_start_context(&SubagentStartFacts {
         base: None,
-        ..facts(None, &[])
-    })
-    .expect("text");
+        ..facts(&CachedGate::NotRun, &[])
+    });
 
     assert!(
         text.contains(
@@ -79,7 +78,7 @@ fn without_git_or_changes_the_lines_say_so() {
 #[test]
 fn only_the_first_forty_changes_are_named() {
     let changes: Vec<String> = (0..45).map(|i| format!("f{i}.rs")).collect();
-    let text = subagent_start_context(&facts(None, &changes)).expect("text");
+    let text = subagent_start_context(&facts(&CachedGate::NotRun, &changes));
 
     assert!(
         text.contains("- Changed Rust files (45): f0.rs, "),
@@ -108,8 +107,9 @@ fn a_gate_record_reads_green_red_with_its_failed_steps_or_not_run() {
         ("0", "not run yet"),
     ];
     for (json, said) in rows {
-        let gate = GateRecord::from_json(json).expect("JSON");
-        let text = subagent_start_context(&facts(Some(&gate), &[])).expect("text");
+        let record = GateRecord::from_json(json).expect("JSON");
+        let gate = CachedGate::of(Some(&record)).expect("1.x reads it");
+        let text = subagent_start_context(&facts(&gate, &[]));
         let want = format!("- Gate for this fingerprint: {said}. Gate command: ");
         assert!(text.contains(&want), "{json}: {text}");
     }
@@ -124,11 +124,11 @@ fn a_red_gate_whose_steps_1x_cannot_filter_is_an_error() {
         (r#"{"steps":{"filter":1}}"#, "not an array"),
         (r#"{"steps":[{"name":{"toString":1}}]}"#, "toString"),
     ] {
-        let gate = GateRecord::from_json(json).expect("JSON");
-        let text = subagent_start_context(&facts(Some(&gate), &[]));
+        let record = GateRecord::from_json(json).expect("JSON");
+        let gate = CachedGate::of(Some(&record));
         assert!(
-            matches!(&text, Err(error) if error.message().contains(why)),
-            "{json}: {text:?}"
+            matches!(&gate, Err(error) if error.message().contains(why)),
+            "{json}: {gate:?}"
         );
     }
 }
@@ -159,9 +159,8 @@ fn a_worktree_target_and_the_other_worktrees_are_spelled_out() {
             earlier: Some("- An earlier review of this same tree is recorded: x"),
             diff_stat: " a.rs | 2 +-\n 1 file changed",
         }),
-        ..facts(None, &[])
-    })
-    .expect("text");
+        ..facts(&CachedGate::NotRun, &[])
+    });
 
     assert_eq!(
         text,
@@ -189,9 +188,8 @@ fn a_reviewer_alone_must_give_this_fingerprint_and_an_empty_stat_is_left_out() {
             earlier: None,
             diff_stat: "",
         }),
-        ..facts(None, &[])
-    })
-    .expect("text");
+        ..facts(&CachedGate::NotRun, &[])
+    });
 
     assert!(text.ends_with("\n- Your verdict's \"fingerprint\" field must be 00000000000000aa. If the tree changes during your review the verdict is recorded as stale and a new review will be needed."), "{text}");
 }

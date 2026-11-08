@@ -270,8 +270,8 @@ pub struct ProcessRequest<'a> {
     pub cwd: &'a Path,
     /// Where stdout goes.
     pub stdout: StdoutSink<'a>,
-    /// The most stderr may hold.
-    pub stderr_cap: ByteCap,
+    /// Where stderr goes.
+    pub stderr: StderrSink,
     /// How long the child may run before it is killed.
     pub timeout: Duration,
 }
@@ -285,6 +285,9 @@ pub enum StdoutSink<'a> {
     /// memory (OC-1 A (a), wi-50fc9a); [`ProcessOutput::stdout`] is then empty. It is written
     /// from another thread, hence `Send`.
     Stream(&'a mut (dyn io::Write + Send)),
+    /// To the null device: nothing reads it, so a grandchild that inherits it keeps no reader
+    /// waiting (H-13); [`ProcessOutput::stdout`] is then empty.
+    Null,
 }
 
 impl fmt::Debug for StdoutSink<'_> {
@@ -292,8 +295,19 @@ impl fmt::Debug for StdoutSink<'_> {
         match self {
             Self::Capture(cap) => f.debug_tuple("Capture").field(cap).finish(),
             Self::Stream(_) => f.write_str("Stream(..)"),
+            Self::Null => f.write_str("Null"),
         }
     }
+}
+
+/// Where a child's stderr goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StderrSink {
+    /// Into [`ProcessOutput::stderr`], up to the cap; past it the run is
+    /// [`ProcessError::Overflow`] (OC-3 A).
+    Capture(ByteCap),
+    /// To the null device, as [`StdoutSink::Null`]; [`ProcessOutput::stderr`] is then empty.
+    Null,
 }
 
 /// The most bytes a captured stream may hold.
@@ -319,9 +333,9 @@ impl ByteCap {
 pub struct ProcessOutput {
     /// How it ended.
     pub status: ExitKind,
-    /// Its stdout, at most the request's cap; empty when it was streamed.
+    /// Its stdout, at most the request's cap; empty when it was streamed or null.
     pub stdout: Vec<u8>,
-    /// Its stderr, at most the request's cap.
+    /// Its stderr, at most the request's cap; empty when it was null.
     pub stderr: Vec<u8>,
 }
 

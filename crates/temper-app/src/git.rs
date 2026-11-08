@@ -8,7 +8,9 @@ use std::time::Duration;
 use temper_domain::{EXCLUDED_DIRS, PathStyle, js_trim};
 
 use crate::paths;
-use crate::ports::{ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StdoutSink};
+use crate::ports::{
+    ByteCap, ExitKind, ProcessOutput, ProcessRequest, ProcessRunner, StderrSink, StdoutSink,
+};
 
 /// Every git call's timeout. 1.x set none; 2.0 bounds every child (D16(f), H-13).
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -51,7 +53,7 @@ pub(crate) fn short(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> 
         args: &args,
         cwd,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: SHORT,
     };
     match process.run(request) {
@@ -179,7 +181,7 @@ pub(crate) fn stream_into(
         args: &args,
         cwd: git_root,
         stdout: StdoutSink::Stream(sink),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {
@@ -253,7 +255,7 @@ pub(crate) fn diff_stat(
         args: &args,
         cwd: git_root,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {
@@ -280,7 +282,7 @@ fn succeeded(process: &impl ProcessRunner, cwd: &Path, args: &[&str]) -> Option<
         args: &args,
         cwd,
         stdout: StdoutSink::Capture(CAP),
-        stderr_cap: CAP,
+        stderr: StderrSink::Capture(CAP),
         timeout: TIMEOUT,
     };
     match process.run(request) {
