@@ -15,6 +15,7 @@ mod deps;
 mod flags;
 mod heredoc;
 mod next;
+mod opaque;
 mod prose;
 mod raise;
 mod reviewer;
@@ -24,8 +25,8 @@ mod writes;
 pub use self::code::InterpreterCode;
 pub use config::{ConfigAsk, ConfigChanges};
 pub use copies::{CopiedFile, RustWrites, Unread};
+pub use opaque::OpaqueKind;
 pub use raise::RaiseFlag;
-pub use reviewer::OpaqueKind;
 
 use self::deps::DepPatterns;
 use self::flags::FlagPatterns;

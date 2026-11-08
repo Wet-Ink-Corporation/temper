@@ -4,8 +4,13 @@
 //! the engine goes to the `redkiln-craft` and `redkiln-guard` kits, and the Rust policy stays in
 //! Redkiln Rust's crates. This check keeps that a cut along module lines. Each kit-bound file may
 //! name, outside its own module, only the modules and items listed for its crate; any other
-//! `crate::` or `temper_domain::` path is a violation. It is a text scan (comments skipped, `use`
-//! groups expanded), so a path built by a macro escapes it: a tripwire for review, not a proof.
+//! `crate::`, `temper_domain::` or resolved `super::` path is a violation, and so is renaming a
+//! root. It is a text scan (comments and literals skipped, `use` groups expanded, inline modules
+//! tracked), so a path built by a macro, or one reached through a `use` glob of a listed module
+//! that re-exports more, escapes it: a tripwire for review, not a proof. A kit-bound module's
+//! tests are scanned too, because they move with it.
+
+mod lex;
 
 use std::fmt;
 
@@ -37,15 +42,16 @@ pub(crate) struct Seam {
     pub(crate) krate: &'static str,
     /// Each kit-bound module, as a path under `src/` without `.rs`.
     pub(crate) modules: &'static [(&'static str, Kit)],
-    /// First segments a `crate::` path may start with: kit-bound modules, and items `lib.rs`
-    /// re-exports from them.
+    /// First segments a `crate::` path may start with besides the kit-bound modules themselves:
+    /// items `lib.rs` re-exports from them.
     pub(crate) crate_paths: &'static [&'static str],
     /// First segments a `temper_domain::` path may start with.
     pub(crate) domain_paths: &'static [&'static str],
 }
 
 /// The domain's kit-bound modules reach only each other, through module paths or the items
-/// `lib.rs` re-exports from them.
+/// `lib.rs` re-exports from them. `hooks/bash/opaque` holds `OpaqueKind`, which the app's shell
+/// reader names; the reviewer's texts that use it stay in `hooks/bash/reviewer`.
 const DOMAIN: Seam = Seam {
     krate: "temper-domain",
     modules: &[
@@ -54,24 +60,13 @@ const DOMAIN: Seam = Seam {
         ("state", Kit::Craft),
         ("glob", Kit::Guard),
         ("hooks/bash/code", Kit::Guard),
+        ("hooks/bash/opaque", Kit::Guard),
         ("hooks/setup", Kit::Support),
         ("time", Kit::Support),
         ("js", Kit::Support),
         ("paths", Kit::Support),
     ],
-    crate_paths: &[
-        "fingerprint",
-        "verdict",
-        "state",
-        "glob",
-        "hooks::setup",
-        "time",
-        "js",
-        "js_sort",
-        "paths",
-        "Fingerprint",
-        "Timestamp",
-    ],
+    crate_paths: &["js_sort", "Fingerprint", "Timestamp"],
     domain_paths: &[],
 };
 
@@ -87,7 +82,7 @@ const APP: Seam = Seam {
     ],
     // `fakes` is `#[cfg(test)]` in `lib.rs`: the in-file tests of kit-bound modules use it, and
     // it goes with them as test support.
-    crate_paths: &["hooks::shell", "memo", "paths", "relpath", "ports", "fakes"],
+    crate_paths: &["fakes"],
     domain_paths: &[
         "GlobError",
         "InterpreterCode",
@@ -127,19 +122,6 @@ impl fmt::Display for Violation {
     }
 }
 
-/// Whether `rel` (a path under the crate's `src/`, `/`-separated) is test-only: a `tests.rs` or
-/// a file under a `tests/` directory. Fakes and fixtures there are test support, not kit code.
-pub(crate) fn is_test_file(rel: &str) -> bool {
-    let mut parts = rel.split('/').peekable();
-    while let Some(part) = parts.next() {
-        let is_dir = parts.peek().is_some();
-        if part == "tests.rs" || (is_dir && part == "tests") {
-            return true;
-        }
-    }
-    false
-}
-
 /// The kit of the module `rel` belongs to, if it is kit-bound (`rel` is under `src/`, without
 /// the `src/` prefix, `/`-separated).
 pub(crate) fn kit_of(seam: &Seam, rel: &str) -> Option<Kit> {
@@ -155,13 +137,17 @@ pub(crate) fn kit_of(seam: &Seam, rel: &str) -> Option<Kit> {
         .map(|&(_, kit)| kit)
 }
 
-/// The violations in one kit-bound file's text.
-pub(crate) fn check_file(seam: &Seam, file: &str, kit: Kit, text: &str) -> Vec<Violation> {
-    references(text)
+/// The violations in the text of one kit-bound file, `rel` under its crate's `src/`
+/// (`/`-separated). Its tests are checked too: they move with the kit.
+pub(crate) fn check_file(seam: &Seam, rel: &str, kit: Kit, text: &str) -> Vec<Violation> {
+    let file = format!("crates/{}/src/{rel}", seam.krate);
+    let module: Vec<&str> = rel.strip_suffix(".rs").unwrap_or(rel).split('/').collect();
+    references(text, &module)
         .into_iter()
         .filter(|(_, path)| !allowed(seam, path))
         .map(|(line, path)| Violation {
-            file: file.to_owned(),
+            // Each violation owns its file name: genuine duplication, one per finding.
+            file: file.clone(),
             line,
             path,
             kit,
@@ -170,62 +156,192 @@ pub(crate) fn check_file(seam: &Seam, file: &str, kit: Kit, text: &str) -> Vec<V
 }
 
 fn allowed(seam: &Seam, path: &str) -> bool {
-    if path == "crate" || path == "temper_domain" {
+    if path == "crate" || path == "temper_domain" || path.starts_with("super") {
         return false;
     }
-    let (list, rest) = if let Some(rest) = path.strip_prefix("crate::") {
-        (seam.crate_paths, rest)
-    } else if let Some(rest) = path.strip_prefix("temper_domain::") {
-        (seam.domain_paths, rest)
-    } else {
-        return true;
-    };
-    list.iter().any(|allowed| {
-        rest == *allowed
+    let under = |rest: &str, allowed: &str| {
+        rest == allowed
             || rest
                 .strip_prefix(allowed)
                 .is_some_and(|tail| tail.starts_with("::"))
-    })
+    };
+    if let Some(rest) = path.strip_prefix("crate::") {
+        seam.crate_paths.iter().any(|allowed| under(rest, allowed))
+            || seam
+                .modules
+                .iter()
+                .any(|(module, _)| under(rest, &module.replace('/', "::")))
+    } else if let Some(rest) = path.strip_prefix("temper_domain::") {
+        seam.domain_paths.iter().any(|allowed| under(rest, allowed))
+    } else {
+        true
+    }
 }
 
-/// Every `crate::` and `temper_domain::` path in `text`, with its line, comments skipped and
-/// `use` groups expanded (`crate::{a, b::{c, self}}` gives `crate::a`, `crate::b::c` and
-/// `crate::b`).
-pub(crate) fn references(text: &str) -> Vec<(usize, String)> {
-    let code: Vec<char> = text
-        .lines()
-        .flat_map(|line| {
-            let code = line.split_once("//").map_or(line, |(code, _)| code);
-            code.chars().chain(['\n'])
-        })
-        .collect();
+/// Every `crate::`, `temper_domain::` and `super::` path in `text`, the source of the module
+/// `module` (its segments under `src/`), with its line. Comments and literals are skipped
+/// ([`lex::code_only`]), `use` groups expanded (`crate::{a, b::{c, self}}` gives `crate::a`,
+/// `crate::b::c` and `crate::b`), and `super::` resolved against `module` and the inline
+/// `mod name { .. }` blocks around it into a `crate::` path; one that climbs past the crate root
+/// stays `super::..`. A renamed root (`use temper_domain as d;`) gives the bare root, which no
+/// seam allows, since paths through the new name would escape the scan.
+pub(crate) fn references(text: &str, module: &[&str]) -> Vec<(usize, String)> {
+    let code = lex::code_only(text);
     let mut out = Vec::new();
-    let mut line = 1;
+    let mut scope = Scope::default();
+    let mut line = 1_usize;
     let mut i = 0;
     while let Some(&c) = code.get(i) {
-        let boundary = i == 0 || code.get(i - 1).is_some_and(|p| !is_ident(*p) && *p != ':');
-        let root = ["crate::", "temper_domain::"]
-            .into_iter()
-            .find(|root| boundary && starts_with(&code, i, root));
-        if let Some(root) = root {
-            let (paths, end) = parse_path(&code, i + root.len());
-            let prefix = root.trim_end_matches("::");
-            out.extend(paths.into_iter().map(|p| (line, join(prefix, &p))));
-            line += code
-                .iter()
-                .take(end)
-                .skip(i)
-                .filter(|&&ch| ch == '\n')
-                .count();
+        let at_root = at_boundary(&code, i);
+        if let Some((paths, end)) = at_root
+            .then(|| root_paths(&code, i, module, &scope))
+            .flatten()
+        {
+            out.extend(paths.into_iter().map(|p| (line, p)));
+            line = line.saturating_add(newlines(&code, i, end));
             i = end;
             continue;
         }
-        if c == '\n' {
-            line += 1;
+        if at_root && starts_word(&code, i, "mod") {
+            scope.note_mod(&code, i);
         }
-        i += 1;
+        match c {
+            '{' => scope.open(),
+            '}' => scope.close(),
+            '\n' => line = line.saturating_add(1),
+            _ => {}
+        }
+        i = i.saturating_add(1);
     }
     out
+}
+
+/// The inline modules open around the scan: each `mod name {` block's name and the brace depth
+/// inside it.
+#[derive(Debug, Default)]
+struct Scope {
+    depth: usize,
+    pending: Option<String>,
+    open: Vec<(String, usize)>,
+}
+
+impl Scope {
+    /// Records `mod name` at `at`; it becomes an open module if a `{` follows its name.
+    fn note_mod(&mut self, code: &[char], at: usize) {
+        let start = skip_space(code, at.saturating_add(3));
+        let name = ident_at(code, start);
+        let after = skip_space(code, start.saturating_add(name.chars().count()));
+        if !name.is_empty() && code.get(after) == Some(&'{') {
+            self.pending = Some(name);
+        }
+    }
+
+    fn open(&mut self) {
+        self.depth = self.depth.saturating_add(1);
+        if let Some(name) = self.pending.take() {
+            self.open.push((name, self.depth));
+        }
+    }
+
+    fn close(&mut self) {
+        if self
+            .open
+            .last()
+            .is_some_and(|&(_, depth)| depth == self.depth)
+        {
+            self.open.pop();
+        }
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    fn names(&self) -> impl Iterator<Item = &str> {
+        self.open.iter().map(|(name, _)| name.as_str())
+    }
+}
+
+/// The paths a root at `at` starts (`crate::`, `temper_domain::`, a `super::` chain, or a root
+/// renamed with `as`), and the index past them; `None` when no root starts there.
+fn root_paths(
+    code: &[char],
+    at: usize,
+    module: &[&str],
+    scope: &Scope,
+) -> Option<(Vec<String>, usize)> {
+    for root in ["crate", "temper_domain"] {
+        if !starts_word(code, at, root) {
+            continue;
+        }
+        let after = skip_space(code, at.saturating_add(root.len()));
+        if starts_with(code, after, "::") {
+            let (paths, end) = parse_path(code, after.saturating_add(2));
+            return Some((paths.iter().map(|p| join(root, p)).collect(), end));
+        }
+        if starts_word(code, after, "as") {
+            return Some((vec![root.to_owned()], after.saturating_add(2)));
+        }
+    }
+    let mut supers = 0_usize;
+    let mut i = at;
+    while starts_word(code, i, "super") {
+        let after = skip_space(code, i.saturating_add(5));
+        if !starts_with(code, after, "::") {
+            break;
+        }
+        supers = supers.saturating_add(1);
+        i = skip_space(code, after.saturating_add(2));
+    }
+    if supers == 0 {
+        return None;
+    }
+    let (paths, end) = parse_path(code, i);
+    let base: Vec<&str> = module.iter().copied().chain(scope.names()).collect();
+    let resolved = base
+        .len()
+        .checked_sub(supers)
+        .and_then(|keep| base.get(..keep))
+        .map(|kept| {
+            ["crate"]
+                .iter()
+                .chain(kept)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("::")
+        });
+    let prefix = resolved.unwrap_or_else(|| vec!["super"; supers].join("::"));
+    Some((paths.iter().map(|p| join(&prefix, p)).collect(), end))
+}
+
+/// Whether a path may start at `at`: not inside an identifier, and not after `::` unless that
+/// `::` is itself a path's start (`::temper_domain::x`).
+fn at_boundary(code: &[char], at: usize) -> bool {
+    let before = |back: usize| at.checked_sub(back).and_then(|p| code.get(p)).copied();
+    match before(1) {
+        None => true,
+        Some(':') => {
+            before(2) == Some(':') && before(3).is_none_or(|p| !is_ident(p) && p != ':' && p != '>')
+        }
+        Some(p) => !is_ident(p),
+    }
+}
+
+/// Whether the identifier `word` stands at `at` (not followed by more identifier characters).
+fn starts_word(code: &[char], at: usize, word: &str) -> bool {
+    starts_with(code, at, word)
+        && code
+            .get(at.saturating_add(word.chars().count()))
+            .is_none_or(|&c| !is_ident(c))
+}
+
+fn ident_at(code: &[char], at: usize) -> String {
+    code.iter().skip(at).take_while(|&&c| is_ident(c)).collect()
+}
+
+fn newlines(code: &[char], from: usize, to: usize) -> usize {
+    code.iter()
+        .take(to)
+        .skip(from)
+        .filter(|&&ch| ch == '\n')
+        .count()
 }
 
 fn join(prefix: &str, rest: &str) -> String {

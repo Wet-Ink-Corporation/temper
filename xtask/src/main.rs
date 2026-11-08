@@ -299,13 +299,9 @@ fn check_seams(root: &Path) -> Result<Outcome, XtaskError> {
             let Some(kit) = seams::kit_of(seam, &rel) else {
                 continue;
             };
-            if seams::is_test_file(&rel) {
-                continue;
-            }
             files = files.saturating_add(1);
             let text = read(&src.join(&rel))?;
-            let shown = format!("crates/{}/src/{rel}", seam.krate);
-            violations.extend(seams::check_file(seam, &shown, kit, &text));
+            violations.extend(seams::check_file(seam, &rel, kit, &text));
         }
     }
     if violations.is_empty() {
