@@ -82,10 +82,24 @@ Read by 2.0 until imported, then never written again and never deleted (wi-f4c3a
 | `${CLAUDE_PLUGIN_DATA}/sessions/`, skill markers | Nothing: per-session projections are rebuilt |
 | `.claude/temper.json`, `.claude/temper-baseline.json` | Committed config, moved to `.redkiln/rust/` at the cutover (rust.md call E). Read from the old path as a fallback through 2.x |
 
+## Open issues (triaged 2026-11-08)
+
+| Issue | Call | Why |
+|---|---|---|
+| #21 2.0 tracking | Keep, transfer | Re-scoped to Redkiln Rust 2.0; its phase list continues in redkiln |
+| #101 evals for the orchestration loop | Keep, transfer | Moves with `evals/` |
+| #103 setup recognises older templates | Keep, transfer | Part of 2.0's `setup --migrate` (D15) |
+| #172 check subcommands with a findings contract | Keep, transfer | Contracts in `docs/contracts/`; the subcommands are built in 1.x or in 2.0 (wi-0924e6) |
+| #173 `gate --base --findings-out`, compare blobs | Keep, transfer | The same CI-oracle work as #172 |
+| #190 forbid H-rule lints on the rustc command line | Keep, transfer | assay ships the backstop first; Redkiln Rust takes it over |
+| #23 release environment and trusted publishing | Close once D1 and D2 are answered | Publishing moves to the suite's release flow (wi-02195d, wi-0eea27) |
+| #193 OCI artifact on GHCR for assay | Close once answered | Review pins temper inside the monorepo (wi-39f19a) |
+| #24 tiered CI and required checks | Closed 2026-11-08 | Workflows are not imported; redkiln's `ok` check governs |
+
 ## While the move waits
 
 The move waits for Core 1.0 (after Move 2). Until then:
 - temper keeps shipping 1.x from this repository. The last 1.x release prints a SessionStart notice naming `rk-rust`, and Ryan schedules it.
 - redkiln vendors temper 1.4.0 at its root. Bumping that copy to a later 1.x release is the redkiln side's change.
 - Changes go to `main` through PRs with green CI, as `AGENTS.md` says. Nothing on `main` is squashed, rebased or force-pushed, because the import cites its hashes.
-- Open issues are triaged (keep, close) before the move, and the keepers transfer to redkiln when temper is archived. Ryan does the transfer and the archive.
+- The keepers above transfer to redkiln when temper is archived. Ryan does the transfer and the archive.
