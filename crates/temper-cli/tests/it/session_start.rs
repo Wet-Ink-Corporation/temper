@@ -241,13 +241,28 @@ fn the_env_file_gains_temper_cli_and_temper_base_then_d17_s_lines() -> TestResul
         Some(format!("export TEMPER_BASE=\"{}\"", head(dir)?).as_str())
     );
     let (bin, path) = d17_lines()?;
-    assert_eq!(
-        lines.get(2..4),
-        Some([bin.as_str(), path.as_str()].as_slice()),
-        "{text}"
-    );
+    let written: Option<Vec<String>> = lines
+        .get(2..4)
+        .map(|got| got.iter().map(|line| drive_folded(line)).collect());
+    assert_eq!(written, Some(vec![drive_folded(&bin), path]), "{text}");
     assert_eq!(lines.get(4).copied(), Some(""), "one newline after each");
     Ok(())
+}
+
+/// `line` with a Windows drive letter after `export TEMPER_BIN="` in lower case:
+/// `current_exe` and `canonicalize` may spell the drive in different cases there. The `PATH`
+/// line's `/c/x` form is lower case already.
+fn drive_folded(line: &str) -> String {
+    const HEAD: &str = "export TEMPER_BIN=\"";
+    match line.strip_prefix(HEAD).map(str::as_bytes) {
+        Some([drive, b':', ..]) if cfg!(windows) && drive.is_ascii_alphabetic() => {
+            let mut out = line.to_owned();
+            out.get_mut(HEAD.len()..=HEAD.len())
+                .map(str::make_ascii_lowercase);
+            out
+        }
+        _ => line.to_owned(),
+    }
 }
 
 /// D17's two lines (OC-6 A) for this test's binary: `TEMPER_BIN` is its real path and `PATH`
