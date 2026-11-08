@@ -5,7 +5,8 @@ use super::{Force, set_base, start_fingerprint};
 use crate::changes::fingerprint;
 use crate::engine::RunEnv;
 use crate::fakes::{FakeFiles, FakePorts, FakeProcess, NOW, Reply};
-use crate::ports::{ExitKind, FsOp, Ports};
+use crate::hooks::{HookCall, HookInput};
+use crate::ports::{ExitKind, FsError, FsOp, Ports};
 use crate::project::Workspace;
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
@@ -50,13 +51,27 @@ fn file(ports: &FakePorts, name: &str) -> Option<String> {
     ports.files.text(&format!("{SESSION}/{name}"))
 }
 
+fn session_input() -> HookInput {
+    HookInput::parse(r#"{"session_id":"s1"}"#).expect("JSON")
+}
+
+/// [`set_base`] for session `s1`, run from `/w`.
+fn set(ports: &FakePorts, ws: &Workspace, force: Force) -> Result<(), FsError> {
+    let input = session_input();
+    let call = HookCall {
+        ports,
+        env: &RunEnv::at("/w", Posix),
+        input: &input,
+    };
+    set_base(&call, ws, force)
+}
+
 #[test]
 fn if_absent_keeps_an_existing_base_and_writes_nothing() {
     let files = FakeFiles::new(Posix).with_file(&format!("{SESSION}/base"), "abc");
     let ports = repo(files, Some(HEAD));
-    let env = RunEnv::at("/w", Posix);
 
-    set_base(&ports, &env, &workspace(), "s1", Force::IfAbsent).expect("nothing to write");
+    set(&ports, &workspace(), Force::IfAbsent).expect("nothing to write");
 
     assert_eq!(file(&ports, "base").as_deref(), Some("abc"), "kept");
     assert_eq!(file(&ports, "started"), None, "no start time");
@@ -74,7 +89,7 @@ fn always_rewrites_the_base_the_start_time_and_the_start_fingerprint() {
     let env = RunEnv::at("/w", Posix);
     let ws = workspace();
 
-    set_base(&ports, &env, &ws, "s1", Force::Always).expect("written");
+    set(&ports, &ws, Force::Always).expect("written");
 
     let expected = fingerprint(&ports, &env, &ws, Some(HEAD)).to_string();
     let started = NOW.unix_millis().to_string();
@@ -98,11 +113,14 @@ fn always_rewrites_the_base_the_start_time_and_the_start_fingerprint() {
 #[test]
 fn if_absent_writes_a_session_that_has_no_base_yet() {
     let ports = repo(FakeFiles::new(Posix), Some(HEAD));
-    let env = RunEnv::at("/w", Posix);
 
-    set_base(&ports, &env, &workspace(), "s1", Force::IfAbsent).expect("written");
+    set(&ports, &workspace(), Force::IfAbsent).expect("written");
 
-    assert_eq!(file(&ports, "base").as_deref(), Some(HEAD), "the base is HEAD");
+    assert_eq!(
+        file(&ports, "base").as_deref(),
+        Some(HEAD),
+        "the base is HEAD"
+    );
 }
 
 #[test]
@@ -111,7 +129,7 @@ fn a_missing_head_writes_an_empty_base() {
     let env = RunEnv::at("/w", Posix);
     let ws = workspace();
 
-    set_base(&ports, &env, &ws, "s1", Force::Always).expect("written");
+    set(&ports, &ws, Force::Always).expect("written");
 
     assert_eq!(file(&ports, "base").as_deref(), Some(""), "`head ?? ''`");
     assert_eq!(
@@ -125,12 +143,14 @@ fn a_missing_head_writes_an_empty_base() {
 fn a_write_failure_is_an_error_with_nothing_after_it_written() {
     let files = FakeFiles::new(Posix).with_read_only(&format!("{SESSION}/started"));
     let ports = repo(files, Some(HEAD));
-    let env = RunEnv::at("/w", Posix);
 
-    let error =
-        set_base(&ports, &env, &workspace(), "s1", Force::Always).expect_err("started fails");
+    let error = set(&ports, &workspace(), Force::Always).expect_err("started fails");
 
     assert_eq!(error.op(), FsOp::Write, "1.x's writeAtomic throws");
-    assert_eq!(file(&ports, "base").as_deref(), Some(HEAD), "written before");
+    assert_eq!(
+        file(&ports, "base").as_deref(),
+        Some(HEAD),
+        "written before"
+    );
     assert_eq!(file(&ports, "start-fp"), None, "never reached");
 }

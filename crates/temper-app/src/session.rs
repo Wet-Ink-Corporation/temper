@@ -7,8 +7,8 @@ use std::path::Path;
 use temper_domain::{PathStyle, js_trim, temper_base_note};
 
 use crate::changes::fingerprint;
-use crate::engine::RunEnv;
 use crate::git;
+use crate::hooks::{HookCall, session_segment};
 use crate::paths;
 use crate::ports::{Clock, Files, FsError, Ports, ProcessRunner};
 use crate::project::{Workspace, exists};
@@ -58,16 +58,16 @@ pub(crate) enum Force {
 /// the time now as `started`, and the tree's fingerprint against HEAD as `start-fp`, in that
 /// order; with [`Force::IfAbsent`], nothing when a base is recorded.
 ///
-/// Each write is 1.x's `writeAtomic`, which throws, so the first that fails ends it.
+/// The session is the call's `session_id` ([`session_segment`]). Each write is 1.x's
+/// `writeAtomic`, which throws, so the first that fails ends it.
 pub(crate) fn set_base(
-    ports: &impl Ports,
-    env: &RunEnv,
+    call: &HookCall<'_, impl Ports>,
     ws: &Workspace,
-    sid: &str,
     force: Force,
 ) -> Result<(), FsError> {
+    let HookCall { ports, env, input } = *call;
     let style = env.style;
-    let dir = session_dir(style, ws, sid);
+    let dir = session_dir(style, ws, &session_segment(input));
     let base = paths::join(style, &dir, "base");
     if force == Force::IfAbsent && exists(ports.files(), &base) {
         return Ok(());

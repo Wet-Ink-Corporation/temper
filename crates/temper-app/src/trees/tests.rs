@@ -39,7 +39,11 @@ fn failed() -> Reply {
 
 /// A checkout at [`ROOT`] whose git dirs are `dirs`, with HEAD at [`HEAD`] when `head`.
 fn ports(files: FakeFiles, dirs: &str, head: bool) -> FakePorts {
-    let rev_parse = if head { ran(&format!("{HEAD}\n")) } else { failed() };
+    let rev_parse = if head {
+        ran(&format!("{HEAD}\n"))
+    } else {
+        failed()
+    };
     FakePorts {
         process: FakeProcess::new()
             .answering(
@@ -59,8 +63,12 @@ fn record_path() -> String {
     format!("{SESSION}/tree-{}-session.json", tree_id(ROOT))
 }
 
+fn parsed(input: &str) -> HookInput {
+    HookInput::parse(input).expect("JSON")
+}
+
 fn note(ports: &FakePorts, ws: &Workspace, input: &str, force: Force) -> Result<(), FsOp> {
-    let input = HookInput::parse(input).expect("JSON");
+    let input = parsed(input);
     let env = RunEnv::at(ROOT, Posix);
     let call = HookCall {
         ports,
@@ -82,9 +90,7 @@ fn a_linked_worktree_records_the_session_base_and_start_fingerprint() {
     let record = ports.files.text(&record_path()).expect("the record");
     assert_eq!(
         record,
-        format!(
-            r#"{{"root":"{ROOT}","head":"{HEAD}","branch":null,"startFp":"abcd","at":0}}"#
-        ),
+        format!(r#"{{"root":"{ROOT}","head":"{HEAD}","branch":null,"startFp":"abcd","at":0}}"#),
         "1.x's JSON.stringify of the record"
     );
 }
@@ -95,9 +101,13 @@ fn without_a_start_fingerprint_the_record_says_null() {
 
     note(&ports, &workspace(true), SID, Force::Always).expect("written");
 
-    let record = JsValue::from_json(&ports.files.text(&record_path()).expect("written"))
-        .expect("JSON");
-    assert_eq!(record.get("startFp"), Some(&JsValue::Null), "startFingerprint is null");
+    let record =
+        JsValue::from_json(&ports.files.text(&record_path()).expect("written")).expect("JSON");
+    assert_eq!(
+        record.get("startFp"),
+        Some(&JsValue::Null),
+        "startFingerprint is null"
+    );
 }
 
 #[test]
@@ -126,7 +136,11 @@ fn git_dirs_that_fail_read_as_not_linked() {
 
     note(&ports, &workspace(true), SID, Force::Always).expect("nothing to write");
 
-    assert_eq!(ports.files.paths(), Vec::<String>::new(), "isLinked is false");
+    assert_eq!(
+        ports.files.paths(),
+        Vec::<String>::new(),
+        "isLinked is false"
+    );
 }
 
 #[test]
@@ -136,10 +150,18 @@ fn a_resume_writes_only_when_no_record_names_this_checkout() {
 
     let ports_with = ports(FakeFiles::new(Posix).with_file(&other, "{}"), LINKED, true);
     note(&ports_with, &workspace(true), SID, Force::IfAbsent).expect("nothing to write");
-    let ports_without = ports(FakeFiles::new(Posix).with_file(&elsewhere, "{}"), LINKED, true);
+    let ports_without = ports(
+        FakeFiles::new(Posix).with_file(&elsewhere, "{}"),
+        LINKED,
+        true,
+    );
     note(&ports_without, &workspace(true), SID, Force::IfAbsent).expect("written");
 
-    assert_eq!(ports_with.files.text(&record_path()), None, "an agent's record came first");
+    assert_eq!(
+        ports_with.files.text(&record_path()),
+        None,
+        "an agent's record came first"
+    );
     assert!(
         ports_without.files.text(&record_path()).is_some(),
         "another checkout's record does not count"
@@ -153,7 +175,11 @@ fn a_fresh_start_always_rewrites_the_record() {
 
     note(&ports, &workspace(true), SID, Force::Always).expect("written");
 
-    assert_ne!(ports.files.text(&record_path()).as_deref(), Some("old"), "rewritten");
+    assert_ne!(
+        ports.files.text(&record_path()).as_deref(),
+        Some("old"),
+        "rewritten"
+    );
 }
 
 #[test]

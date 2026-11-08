@@ -19,8 +19,9 @@ pub struct EnvExports<'a> {
     pub style: PathStyle,
 }
 
-/// The text `SessionStart` appends to `CLAUDE_ENV_FILE`, each line ending in `\n`: 1.x's
-/// `export TEMPER_CLI="…"` and `export TEMPER_BASE="…"` byte for byte, then D17's
+/// The text `SessionStart` appends to `CLAUDE_ENV_FILE`, each line ending in `\n`.
+///
+/// The lines are 1.x's `export TEMPER_CLI="…"` and `export TEMPER_BASE="…"` byte for byte, then D17's
 /// `export TEMPER_BIN="…"` and `export PATH="<dir>:$PATH"` (owner, wi-1d4cd6; from port Phase
 /// 3d, OC-6 A, wi-168ff8; D16(w)). The D17 values use `/` separators, the directory is in MSYS
 /// form on Windows (`/c/…`, as Git Bash splits `PATH` on `:`), and `\`, `"`, `$` and `` ` ``
@@ -55,7 +56,12 @@ pub fn env_file_lines(exports: &EnvExports<'_>) -> String {
         export(&mut out, "TEMPER_BASE", base, "");
     }
     if let Some(bin) = exports.bin {
-        export(&mut out, "TEMPER_BIN", &shell_quoted(&bin.replace('\\', "/")), "");
+        export(
+            &mut out,
+            "TEMPER_BIN",
+            &shell_quoted(&bin.replace('\\', "/")),
+            "",
+        );
     }
     if let Some(dir) = exports.bin_dir {
         let dir = dir.replace('\\', "/");

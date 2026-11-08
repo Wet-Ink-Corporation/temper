@@ -4,8 +4,9 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-/// A checkout's id: the first 6 bytes of the SHA-256 of its resolved root with `\` written
-/// `/`, as 12 lowercase hex digits. Every worktree of a repository shares one state dir, so
+/// A checkout's id, written as 12 lowercase hex digits.
+///
+/// It is the first 6 bytes of the SHA-256 of the resolved root with `\` written `/`. Every worktree of a repository shares one state dir, so
 /// the session records each checkout it changes as `tree-<id>-<agent>.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TreeId([u8; 6]);
@@ -43,7 +44,12 @@ mod tests {
     fn the_id_is_1x_s_on_posix_and_windows_roots() {
         assert_eq!(
             ["/w", "/a/c", r"C:\x\y", "/tmp/\u{e9}"].map(|root| tree_id(root).to_string()),
-            ["d1bb8ca35467", "61f97427d954", "457c4f96f476", "ed2fd1a3eec8"],
+            [
+                "d1bb8ca35467",
+                "61f97427d954",
+                "457c4f96f476",
+                "ed2fd1a3eec8"
+            ],
             "1.x treeId"
         );
     }

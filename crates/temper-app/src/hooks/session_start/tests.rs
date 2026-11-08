@@ -42,8 +42,14 @@ fn without_an_env_file_or_anything_to_export_nothing_is_written() {
         ..env(Some("/p"), None)
     };
 
-    assert!(!write_env_file(&ports, &unset, Some("1111")), "no CLAUDE_ENV_FILE");
-    assert!(!write_env_file(&ports, &env(None, None), None), "nothing to export");
+    assert!(
+        !write_env_file(&ports, &unset, Some("1111")),
+        "no CLAUDE_ENV_FILE"
+    );
+    assert!(
+        !write_env_file(&ports, &env(None, None), None),
+        "nothing to export"
+    );
     assert!(ports.files.paths().is_empty(), "no file");
 }
 
@@ -51,7 +57,10 @@ fn without_an_env_file_or_anything_to_export_nothing_is_written() {
 fn an_unwritable_env_file_is_ignored() {
     let ports = FakePorts::new(FakeFiles::new(Posix).with_read_only("/w/.temper"));
 
-    assert!(!write_env_file(&ports, &env(Some("/p"), None), None), "1.x's catch");
+    assert!(
+        !write_env_file(&ports, &env(Some("/p"), None), None),
+        "1.x's catch"
+    );
 }
 
 #[test]

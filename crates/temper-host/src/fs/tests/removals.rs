@@ -4,6 +4,7 @@ use std::fs;
 use std::time::{Duration, SystemTime};
 
 use temper_app::{Files, FsOp};
+use temper_domain::ModTime;
 
 use super::{StdFiles, TestResult, symlink_dir};
 
@@ -14,12 +15,15 @@ fn stat_reports_the_modification_time_as_node_s_mtime_ms() -> TestResult {
     let file = dir.path().join("f");
     fs::write(&file, "x")?;
     let when = SystemTime::UNIX_EPOCH + Duration::from_millis(1_700_000_000_250);
-    fs::File::options().write(true).open(&file)?.set_modified(when)?;
+    fs::File::options()
+        .write(true)
+        .open(&file)?
+        .set_modified(when)?;
 
     let meta = StdFiles.stat(&file)?.ok_or("the file is there")?;
 
     assert_eq!(
-        meta.modified.map(|t| t.millis()),
+        meta.modified.map(ModTime::millis),
         Some(1_700_000_000_250.0),
         "sec * 1e3 + nsec / 1e6"
     );
@@ -45,7 +49,11 @@ fn remove_file_removes_a_file_or_a_link_and_ignores_a_missing_one() -> TestResul
     let on_dir = StdFiles.remove_file(&target).map_err(|error| error.op());
 
     assert!(!file.exists(), "removed");
-    assert_eq!(on_dir, Err(FsOp::Remove), "rmSync without recursive throws on a directory");
+    assert_eq!(
+        on_dir,
+        Err(FsOp::Remove),
+        "rmSync without recursive throws on a directory"
+    );
     assert!(target.join("kept").exists(), "the directory is untouched");
     #[cfg(unix)]
     {
@@ -78,7 +86,10 @@ fn remove_all_removes_a_tree_without_following_a_link() -> TestResult {
 
     assert!(fs::symlink_metadata(&tree).is_err(), "the tree is gone");
     assert!(!file.exists(), "a file goes too");
-    assert!(fs::symlink_metadata(&link).is_err(), "a link to a directory goes");
+    assert!(
+        fs::symlink_metadata(&link).is_err(),
+        "a link to a directory goes"
+    );
     assert!(outside.join("kept").exists(), "no link was followed");
     Ok(())
 }

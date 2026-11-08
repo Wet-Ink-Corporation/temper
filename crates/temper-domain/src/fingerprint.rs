@@ -9,12 +9,12 @@ mod relevant;
 mod tree_id;
 
 pub use gate_config::gate_config;
-pub use tree_id::{TreeId, tree_id};
 pub use hasher::{ContentSink, DiffSink, FingerprintHasher};
 pub use relevant::{
     BASELINE_FILE, EXCLUDED_DIRS, FINGERPRINT_PATHSPECS, RELEVANT_PATHSPECS, TEMPER_CONFIG_FILE,
     in_fingerprint, is_rust_relevant,
 };
+pub use tree_id::{TreeId, tree_id};
 
 /// A tree fingerprint, as 1.x writes it into gate, verdict and session files: 16 lowercase hex
 /// digits, the first 8 bytes of a SHA-256.

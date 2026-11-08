@@ -91,8 +91,7 @@ fn d17_values_are_escaped_for_double_quotes() {
     });
 
     assert_eq!(
-        lines,
-        "export TEMPER_BIN=\"/a \\$b/\\\"c\\`/t\"\nexport PATH=\"/a \\$b/\\\"c\\`:$PATH\"\n",
+        lines, "export TEMPER_BIN=\"/a \\$b/\\\"c\\`/t\"\nexport PATH=\"/a \\$b/\\\"c\\`:$PATH\"\n",
         "the shell reads the path back unchanged"
     );
 }

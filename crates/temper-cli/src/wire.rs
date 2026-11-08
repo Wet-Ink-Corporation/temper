@@ -37,11 +37,8 @@ pub(crate) fn engine() -> Result<Engine<HostPorts>, WireError> {
             .or_else(|| non_empty("TEMPER_PLUGIN_ROOT"))
             .map(PathBuf::from),
         env_file: non_empty("CLAUDE_ENV_FILE").map(PathBuf::from),
-        temper_bin: match std::env::current_exe() {
-            Ok(exe) => Some(exe),
-            // The OS cannot say where this binary is: D17's exports are left out.
-            Err(_unknown) => None,
-        },
+        // When the OS cannot say where this binary is, D17's exports are left out.
+        temper_bin: std::env::current_exe().ok(),
         runtime_warnings: runtime_warnings(var("TEMPER_RUNTIME_WARNINGS").as_deref()),
     };
     let scanner = Scanner::new().map_err(WireError::Scanner)?;
@@ -152,7 +149,11 @@ mod tests {
                 runtime_warnings(Some("")),
                 runtime_warnings(Some("a\n\nb\n")),
             ],
-            [Vec::<String>::new(), vec![], vec!["a".to_owned(), "b".to_owned()]],
+            [
+                Vec::<String>::new(),
+                vec![],
+                vec!["a".to_owned(), "b".to_owned()]
+            ],
             "the launcher's lines"
         );
     }

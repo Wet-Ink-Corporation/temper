@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 
-use temper_domain::{PathStyle, Timestamp};
+use temper_domain::{ModTime, PathStyle, Timestamp};
 
 use crate::engine::RunEnv;
 use crate::hooks::markers_root;
@@ -74,8 +74,17 @@ pub(crate) fn prune_fingerprint_state(
     protect: Option<&str>,
 ) -> usize {
     let dir = |name: &str| paths::join(style, &ws.state_dir, name);
-    let verdicts = prune_groups(ports, style, &[dir("verdicts")], VERDICTS, protect);
-    let gate = prune_groups(ports, style, &[dir("gate"), dir("logs")], GATE, protect);
+    // 1.x's `!protect || g.key !== protect`: an empty or missing start fingerprint protects
+    // nothing.
+    let protect = protect.filter(|key| !key.is_empty());
+    let unprotected = |dirs: &[String]| -> Vec<Group> {
+        groups(ports.files(), style, dirs)
+            .into_iter()
+            .filter(|group| protect.is_none_or(|key| group.key != key))
+            .collect()
+    };
+    let verdicts = prune_groups(ports, unprotected(&[dir("verdicts")]), VERDICTS);
+    let gate = prune_groups(ports, unprotected(&[dir("gate"), dir("logs")]), GATE);
     let progress = prune_gate_progress(ports, style, ws);
     verdicts.saturating_add(gate).saturating_add(progress)
 }
@@ -150,24 +159,12 @@ fn groups(files: &impl Files, style: PathStyle, dirs: &[String]) -> Vec<Group> {
 
 /// 1.x `pruneGroups(dirs, limits, protect)`: newest first, a group goes when it is older than
 /// the grace period and older than the age limit, past the count, or (after the first) past
-/// the byte budget, every file of it at once. The protected group counts toward nothing.
-fn prune_groups(
-    ports: &impl Ports,
-    style: PathStyle,
-    dirs: &[String],
-    limits: Limits,
-    protect: Option<&str>,
-) -> usize {
+/// the byte budget, every file of it at once. `groups` leaves out the protected group, which
+/// counts toward nothing.
+fn prune_groups(ports: &impl Ports, mut groups: Vec<Group>, limits: Limits) -> usize {
     let files = ports.files();
     let cutoff = before_now(ports, limits.max_age_days.saturating_mul(DAY_MS));
     let recent = before_now(ports, GRACE_MINUTES.saturating_mul(60_000));
-    // 1.x's `!protect || g.key !== protect`: an empty or missing start fingerprint protects
-    // nothing.
-    let protect = protect.filter(|key| !key.is_empty());
-    let mut groups: Vec<Group> = groups(files, style, dirs)
-        .into_iter()
-        .filter(|group| protect.is_none_or(|key| group.key != key))
-        .collect();
     // A stable sort, newest first, as 1.x's `sort((a, b) => b.t - a.t)`.
     groups.sort_by(|a, b| b.newest.partial_cmp(&a.newest).unwrap_or(Ordering::Equal));
     let keep = usize::try_from(limits.keep).unwrap_or(usize::MAX);
@@ -228,7 +225,7 @@ fn before_now(ports: &impl Ports, ms: i64) -> f64 {
 /// the platform has no modification time.
 fn modified(files: &impl Files, path: &str) -> Option<f64> {
     match files.stat(Path::new(path)) {
-        Ok(Some(meta)) => meta.modified.map(|t| t.millis()),
+        Ok(Some(meta)) => meta.modified.map(ModTime::millis),
         // Gone or unreadable: skipped, as 1.x's `catch { /* ignore */ }`.
         Ok(None) | Err(_) => None,
     }
