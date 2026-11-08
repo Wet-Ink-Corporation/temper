@@ -84,7 +84,7 @@ fn finding_line(f: &Value) -> Result<String, JsTypeError> {
 }
 
 /// 1.x `overturns(v)`: whether `v`, read as an approval, has a reason to overturn one.
-fn overturns(v: &Value) -> Result<bool, JsTypeError> {
+pub(super) fn overturns(v: &Value) -> Result<bool, JsTypeError> {
     let ctx = VerdictContext {
         changed_rust: &[],
         gate: GateState::NotRed,

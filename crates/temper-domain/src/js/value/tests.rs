@@ -411,3 +411,24 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn insert_assigns_as_js_does() {
+    // Node 22: `o = {b:1,"5":1,a:1}; o["3"]=2; o["9"]=3; o.b=4; o.c=5; o["4294967295"]=6`.
+    let Value::Object(mut o) = Value::from_json(r#"{"b":1,"5":1,"a":1}"#).expect("JSON") else {
+        panic!("an object");
+    };
+    for (key, n) in [
+        ("3", 2.0),
+        ("9", 3.0),
+        ("b", 4.0),
+        ("c", 5.0),
+        ("4294967295", 6.0),
+    ] {
+        o.insert(key, Value::Number(n));
+    }
+    assert_eq!(
+        Value::Object(o).to_json(),
+        r#"{"3":2,"5":1,"9":3,"b":4,"a":1,"c":5,"4294967295":6}"#
+    );
+}

@@ -82,6 +82,6 @@ pub use time::{ModTime, Timestamp};
 pub use verdict::{
     ALWAYS_SCORED, DIMENSIONS, ExtractedVerdict, GateState, ProblemKind, ValidVerdict,
     VerdictContext, VerdictOutcome, VerdictProblem, VerdictRejected, earlier_review,
-    extract_verdict, handback_denial, problem_kinds, recorded_after, summarize_findings,
-    verdict_block, verdict_hash, verdict_problems,
+    extract_verdict, handback_denial, kept_record, problem_kinds, recorded_after,
+    summarize_findings, verdict_block, verdict_hash, verdict_problems, verdict_record,
 };

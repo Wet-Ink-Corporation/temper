@@ -1,5 +1,7 @@
 //! Reads of the files temper keeps, with 1.x's fallbacks (`readText` and the readers on it).
 
+mod verdicts;
+
 use std::collections::HashMap;
 use std::path::Path;
 

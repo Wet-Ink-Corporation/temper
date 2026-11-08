@@ -6,6 +6,7 @@ mod extract;
 mod hash;
 mod js_semantics;
 mod problems;
+mod record;
 mod summary;
 mod valid;
 
