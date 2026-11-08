@@ -20,7 +20,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,8 @@ use crate::ports::{
     ProcessRequest, ProcessRunner, ReadInto, StderrSink, StdoutSink,
 };
 
-/// The git subcommands that read only refs and objects.
+/// The git subcommands that read only refs and objects, unless an argument names the index
+/// (`:path` or `:<stage>:path`, see [`names_index`]), which a run's writes can change.
 const LASTING: [&str; 5] = [
     "rev-parse",
     "symbolic-ref",
@@ -38,6 +39,12 @@ const LASTING: [&str; 5] = [
     "rev-list",
     "show",
 ];
+
+/// Whether a git argument is an index revision (`:path`, `:<stage>:path`; gitrevisions(7)),
+/// which reads the index and not only refs and objects.
+fn names_index(arg: &OsStr) -> bool {
+    arg.as_encoded_bytes().first() == Some(&b':')
+}
 
 /// The answers of one hook run. Create one per run and lend it to [`MemoPorts::new`].
 #[derive(Default)]
@@ -91,7 +98,8 @@ impl GitMemo {
         let lasting = key
             .args
             .first()
-            .is_some_and(|sub| LASTING.iter().any(|kept| sub == kept));
+            .is_some_and(|sub| LASTING.iter().any(|kept| sub == kept))
+            && !key.args.iter().any(|arg| names_index(arg));
         if lasting {
             answers.lasting.insert(key, output);
         } else {
@@ -186,7 +194,8 @@ impl<R: ProcessRunner> ProcessRunner for MemoProcess<'_, R> {
             return Ok(output);
         }
         let output = self.inner.run(request)?;
-        if output.status != ExitKind::TimedOut {
+        // Only an exit code is git's answer; a run a signal ended or that timed out is not.
+        if matches!(output.status, ExitKind::Code(_)) {
             // The memo keeps a copy; the caller owns the answer it was given.
             self.memo.keep(key, output.clone());
         }
