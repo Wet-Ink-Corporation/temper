@@ -129,11 +129,19 @@ export function maskFoundMs(text) {
 }
 
 /**
- * D16(w): 2.0's `CLAUDE_ENV_FILE` gains `export TEMPER_BIN="…"` and `export PATH="…:$PATH"` after
- * 1.x's lines (D17, OC-6 A). Those two lines, and only whole lines of that shape, are dropped.
+ * D16(w), OC-6 A (wi-168ff8): 2.0's `CLAUDE_ENV_FILE` gains `export TEMPER_BIN="…"` and
+ * `export PATH="…:$PATH"` after 1.x's lines (D17). Those lines, and only whole lines of that shape,
+ * are dropped and counted, so the caller can assert two per env-file write on Rust's side and none
+ * on 1.x's, as `maskFailureText`'s count is.
  */
 export function maskD17Lines(text) {
-  return text.replace(/^export TEMPER_BIN="(?:[^"\\]|\\.)*"\n/gm, '').replace(/^export PATH="(?:[^"\\]|\\.)*:\$PATH"\n/gm, '');
+  let count = 0;
+  const drop = () => {
+    count += 1;
+    return '';
+  };
+  const out = text.replace(/^export TEMPER_BIN="(?:[^"\\]|\\.)*"\n/gm, drop).replace(/^export PATH="(?:[^"\\]|\\.)*:\$PATH"\n/gm, drop);
+  return { text: out, count };
 }
 
 /**

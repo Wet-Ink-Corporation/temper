@@ -288,10 +288,13 @@ test('maskStartedTime and maskFoundMs (port 3d): a session\'s start time, and on
   assert.equal(maskFoundMs('{"event":"gate-lost","foundMs":null}\n'), '{"event":"gate-lost","foundMs":null}\n', 'NaN stays');
 });
 
-test('maskD17Lines (D16(w)): only the TEMPER_BIN and PATH lines after 1.x\'s', () => {
+test('maskD17Lines (D16(w), OC-6 A): only the TEMPER_BIN and PATH lines after 1.x\'s, counted', () => {
   const env = 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\nexport TEMPER_BIN="/t/temper"\nexport PATH="/t:$PATH"\n';
-  assert.equal(maskD17Lines(env), 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n');
-  for (const kept of ['export TEMPER_CLI="/p"\n', 'export PATH="/t"\n', 'x export TEMPER_BIN="/t"\n']) assert.equal(maskD17Lines(kept), kept);
+  assert.deepEqual(maskD17Lines(env), { text: 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n', count: 2 });
+  assert.deepEqual(maskD17Lines(env + env), { text: 'export TEMPER_CLI="/p/scripts/temper.mjs"\nexport TEMPER_BASE="abc"\n'.repeat(2), count: 4 }, 'two writes');
+  for (const kept of ['export TEMPER_CLI="/p"\n', 'export PATH="/t"\n', 'x export TEMPER_BIN="/t"\n', '']) {
+    assert.deepEqual(maskD17Lines(kept), { text: kept, count: 0 });
+  }
 });
 
 test('maskConfigLine (OC-5 A) and maskTreeIds (port 3d)', () => {
