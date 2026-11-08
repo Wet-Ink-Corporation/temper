@@ -469,7 +469,7 @@ test('expandPlaceholders: the root, the pids, and times before now as ISO text o
   assert.equal(text, `/r/x /r ${process.pid} ${DEAD_PID} 2026-01-01T00:00:00.000Z ${now - 500} <ISO:-x>`);
 });
 
-test('applySetup: same commit ids in two copies, writes with parents, base64, removals, ages; an unknown action throws', () => {
+test('applySetup: same commit ids in two copies, writes with parents, base64, removals, ages, placeholders in paths; an unknown action throws', () => {
   const now = Date.now();
   const heads = [0, 1].map(() => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'temper-harness-setup-'));
@@ -481,7 +481,11 @@ test('applySetup: same commit ids in two copies, writes with parents, base64, re
         { age: { 'a/b.txt': 60_000 } },
         { git: ['add', '-A'] },
         { git: ['commit', '-qm', 'one'] },
+        { write: { 'claim-<MS:-60000>': '', 'drop-<DEADPID>': '' } },
+        { remove: ['drop-<DEADPID>'] },
       ], { now, ceiling: path.dirname(dir) });
+      assert.equal(fs.existsSync(path.join(dir, `claim-${now - 60_000}`)), true);
+      assert.equal(fs.existsSync(path.join(dir, `drop-${DEAD_PID}`)), false);
       assert.equal(fs.readFileSync(path.join(dir, 'a/b.txt'), 'utf8'), String(now));
       assert.deepEqual([...fs.readFileSync(path.join(dir, 'bin'))], [0xff, 0]);
       assert.equal(fs.existsSync(path.join(dir, 'gone')), false);

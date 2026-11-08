@@ -82,7 +82,7 @@ const gitDate = (n) => `${1767225600 + n} +0000`;
  * `{ git: [args] }` (run with a fixed identity, no signing, `core.autocrlf` off and dates one
  * second apart per git call, so both copies get the same commit ids), `{ write: { rel: text |
  * { base64 } } }` (parents created), `{ remove: [rel] }` and `{ age: { rel: ms } }` (mtime and
- * atime set to `now - ms`). Strings go through `expandPlaceholders`. A failing action is a
+ * atime set to `now - ms`). Strings and paths go through `expandPlaceholders`. A failing action is a
  * HarnessError.
  */
 export function applySetup(copy, actions = [], { now, ceiling }) {
@@ -97,16 +97,16 @@ export function applySetup(copy, actions = [], { now, ceiling }) {
       if (r.error || r.status !== 0) throw new HarnessError(`setup git ${args.join(' ')} failed: ${r.error?.message ?? r.stderr}`);
     } else if (action.write) {
       for (const [rel, value] of Object.entries(action.write)) {
-        const file = path.join(copy, rel);
+        const file = path.join(copy, expand(rel));
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, typeof value === 'string' ? expand(value) : Buffer.from(value.base64, 'base64'));
       }
     } else if (action.remove) {
-      for (const rel of action.remove) fs.rmSync(path.join(copy, rel), { recursive: true, force: true });
+      for (const rel of action.remove) fs.rmSync(path.join(copy, expand(rel)), { recursive: true, force: true });
     } else if (action.age) {
       for (const [rel, ms] of Object.entries(action.age)) {
         const t = new Date(now - ms);
-        fs.utimesSync(path.join(copy, rel), t, t);
+        fs.utimesSync(path.join(copy, expand(rel)), t, t);
       }
     } else {
       throw new HarnessError(`unknown setup action ${JSON.stringify(action)}`);
